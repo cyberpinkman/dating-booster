@@ -57,9 +57,7 @@ class ConversationObservation:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ConversationObservation":
         return cls(
-            visible_messages=[
-                _normalize_visible_message(message) for message in data.get("visible_messages", [])
-            ],
+            visible_messages=[dict(message) for message in data.get("visible_messages", [])],
             input_state=data.get("input_state", ""),
             thread_cues=list(data.get("thread_cues", [])),
         )
@@ -149,11 +147,3 @@ class AppObservation:
             provenance={},
             raw_ref=None,
         )
-
-
-def _normalize_visible_message(message: dict[str, str]) -> dict[str, str]:
-    normalized = dict(message)
-    text = normalized.get("text")
-    if text and "? " not in text and ". " in text and text.endswith("?"):
-        normalized["text"] = text.rsplit(". ", 1)[-1]
-    return normalized
