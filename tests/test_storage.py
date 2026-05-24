@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from dating_boost.core.storage import (
+    InvalidStoragePathError,
     JsonStorage,
     SchemaVersionError,
     StorageCorruptionError,
@@ -19,6 +20,64 @@ class StorageTests(unittest.TestCase):
             result = storage.read_json(Path("user_profile.json"), expected_schema_version=1)
 
             self.assertEqual(result["name"], "local")
+
+    def test_nested_relative_paths_work(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = JsonStorage(Path(temp_dir))
+            storage.write_json(Path("matches/local/user_profile.json"), {"schema_version": 1, "name": "nested"})
+            storage.append_jsonl(Path("events/feedback.jsonl"), {"event_id": "fb_nested"})
+
+            result = storage.read_json(Path("matches/local/user_profile.json"), expected_schema_version=1)
+            lines = (Path(temp_dir) / "events" / "feedback.jsonl").read_text(encoding="utf-8").splitlines()
+
+            self.assertEqual(result["name"], "nested")
+            self.assertEqual(json.loads(lines[0])["event_id"], "fb_nested")
+
+    def test_write_json_rejects_parent_escape_without_creating_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "storage"
+            outside_path = Path(temp_dir) / "outside.json"
+            storage = JsonStorage(root)
+
+            with self.assertRaises(InvalidStoragePathError):
+                storage.write_json(Path("../outside.json"), {"schema_version": 1})
+
+            self.assertFalse(outside_path.exists())
+
+    def test_write_json_rejects_absolute_path_without_creating_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "storage"
+            outside_path = Path(temp_dir) / "absolute-outside.json"
+            storage = JsonStorage(root)
+
+            with self.assertRaises(InvalidStoragePathError):
+                storage.write_json(outside_path, {"schema_version": 1})
+
+            self.assertFalse(outside_path.exists())
+
+    def test_read_json_rejects_paths_outside_root(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "storage"
+            outside_path = Path(temp_dir) / "outside.json"
+            outside_path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
+            storage = JsonStorage(root)
+
+            with self.assertRaises(InvalidStoragePathError):
+                storage.read_json(Path("../outside.json"), expected_schema_version=1)
+
+            with self.assertRaises(InvalidStoragePathError):
+                storage.read_json(outside_path, expected_schema_version=1)
+
+    def test_append_jsonl_rejects_parent_escape_without_creating_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "storage"
+            outside_path = Path(temp_dir) / "outside.jsonl"
+            storage = JsonStorage(root)
+
+            with self.assertRaises(InvalidStoragePathError):
+                storage.append_jsonl(Path("../outside.jsonl"), {"event_id": "fb_escape"})
+
+            self.assertFalse(outside_path.exists())
 
     def test_unknown_schema_version_raises(self):
         with tempfile.TemporaryDirectory() as temp_dir:
