@@ -14,8 +14,8 @@ This design covers memory, profile analysis, context assembly, and reply generat
 1. The agent should improve dating conversations by using real context, not generic pickup lines.
 2. The agent must distinguish facts from guesses.
 3. Profile photos may produce observable cues and conversation hooks, but not unsupported claims about personality, protected traits, income, politics, religion, mental state, or sexual orientation.
-4. The agent must not invent user facts, user experiences, promises, availability, or values.
-5. Factual identity and commitments are hard constraints. Conversational persona is a controllable variable.
+4. The agent must not invent or rewrite hard facts, past experiences, already-sent messages, or consent.
+5. Hard facts and historical events are constraints. Interests, value framing, future availability, future intent, future commitments, and conversational persona are controllable variables unless the user sets them as boundaries.
 6. The default mode should be useful and authentic rather than maximally persuasive.
 
 ## Core Data Model
@@ -28,11 +28,12 @@ Fields:
 
 - `facts`: stable facts the user has confirmed.
 - `preferences`: dating preferences, communication preferences, and desired relationship style.
-- `boundaries`: topics, behaviors, and commitments the agent must avoid.
+- `boundaries`: non-negotiable topics, behaviors, facts, or commitments the agent must avoid or preserve.
 - `style_examples`: user-written messages or approved drafts used to learn tone.
 - `goals`: current dating goals, such as casual dating, serious relationship, or practice.
 - `persona_baseline`: the user's normal conversational style.
 - `persona_range`: user-approved style range, such as more direct, warmer, more playful, or more outgoing.
+- `stance_range`: user-approved flexibility around interests, value framing, availability, intent, and future commitments.
 - `updated_at`: last user-confirmed update time.
 
 Facts and boundaries override all generation modes.
@@ -92,12 +93,12 @@ Fields:
 - `recent_messages`: recent extracted messages with speaker, timestamp when visible, and source screen.
 - `running_summary`: concise summary of the full conversation.
 - `open_threads`: unanswered questions, pending topics, and callbacks.
-- `commitments`: anything the user or match has agreed to or proposed.
+- `commitments`: anything the user or match has agreed to, proposed, or already said.
 - `sensitive_context`: topics requiring caution.
 - `stage`: relationship stage such as new match, icebreaker, light rapport, deeper rapport, ready to invite, scheduled, cooled, or stop.
 - `last_refreshed_at`: last extraction time.
 
-The running summary must preserve concrete details such as names, places, plans, and commitments. It should not compress away facts needed for future replies.
+The running summary must preserve concrete details such as names, places, plans, and what each side has already said or promised. It should not compress away facts needed for future replies.
 
 ### Strategy State
 
@@ -148,7 +149,7 @@ When context is too large, include items in this priority order:
 
 1. User boundaries and hard facts.
 2. The match's latest visible message and the user's pending reply context.
-3. Open questions, commitments, and scheduled plans.
+3. Open questions, historical commitments, and scheduled plans.
 4. Recent messages.
 5. Conversation running summary.
 6. High-confidence match interests and conversation hooks.
@@ -157,15 +158,16 @@ When context is too large, include items in this priority order:
 
 The context pack should preserve provenance and confidence labels for any fact or inference that may affect a draft.
 
-## Persona Modulation Boundary
+## Persona and Stance Modulation Boundary
 
-The agent may adjust conversational persona. This is part of the product's value: a user who is normally quiet, awkward, or overly cautious may ask the agent to write in a more outgoing, playful, warm, or confident style.
+The agent may adjust conversational persona and strategic stance. This is part of the product's value: a user who is normally quiet, awkward, overly cautious, undecided, or under-expressive may ask the agent to write in a more outgoing, playful, warm, confident, flexible, or committed style.
 
 Hard constraints that must not be changed:
 
 - factual identity, such as education, nationality, location, job, age, and relationship status.
-- real experiences, social circle, travel history, hobbies, and lifestyle claims.
-- values, intentions, availability, consent, and commitments.
+- historical facts, such as past experiences, places lived, travel history, social circle, and messages already sent.
+- already-made commitments as historical facts. The agent may help renegotiate them, but it must not pretend they were never made.
+- consent, safety boundaries, and user-declared non-negotiables.
 - user boundaries and topics the user has rejected.
 
 Soft variables that may be adjusted:
@@ -174,9 +176,13 @@ Soft variables that may be adjusted:
 - warmth, confidence, directness, teasing, flirtation, and humor.
 - message length and rhythm.
 - initiative level, such as asking a question or suggesting a next step.
-- emotional expressiveness, as long as it does not make false commitments.
+- emotional expressiveness.
+- interests to emphasize, explore, or express curiosity about, as long as the draft does not claim established experience the user lacks.
+- value framing and relationship framing.
+- future availability, future intent, and future commitments.
+- willingness to change course, clarify, or renegotiate prior statements.
 
-If a draft is far from the user's baseline style, the output should mark `persona_divergence` as medium or high and explain the tradeoff in `mode_notes`.
+If a draft is far from the user's baseline style or previous stance, the output should mark `persona_divergence` or `stance_divergence` as medium or high and explain the tradeoff in `mode_notes`.
 
 ## Reply Modes
 
@@ -187,7 +193,7 @@ Self Mode optimizes for authenticity.
 Rules:
 
 - Strongly preserve the user's tone and known preferences.
-- Use only user-confirmed facts and commitments.
+- Use user-confirmed facts, prior messages, and stated boundaries as strong constraints.
 - Avoid over-optimizing for what the match wants.
 - Best for users who want the agent to sound like them.
 
@@ -199,19 +205,21 @@ Rules:
 
 - Preserve user facts, boundaries, and general voice.
 - Adapt topic, length, warmth, humor, and directness to the match and current conversation.
-- Use match interests as hooks, but do not pretend the user has interests they have not confirmed.
+- Use match interests as hooks, and allow the user to express curiosity or openness even when the interest is not part of their baseline.
 - Best for quality improvement while staying grounded.
 
 ### Recipient-Optimized Mode
 
-Recipient-Optimized Mode corresponds to the earlier user-described "no-self" mode, but with hard factual constraints and flexible conversational persona.
+Recipient-Optimized Mode corresponds to the earlier user-described "no-self" mode, but with hard factual constraints and flexible conversational persona and stance.
 
 Rules:
 
 - Optimize for the match's likely reception while preserving factual truth.
-- Still obey user facts, boundaries, and commitments.
+- Still obey hard facts, prior-message history, user boundaries, and consent constraints.
 - It may simulate a more outgoing, playful, confident, or socially fluent conversational persona when useful.
-- Do not fabricate shared interests, lifestyle, values, availability, intent, credentials, location, or experiences.
+- It may adjust expressed interests, value framing, future availability, future intent, and future commitments when useful.
+- Do not fabricate credentials, location, relationship status, past experiences, established hobbies, or messages already sent.
+- If changing a previously stated availability, intent, or commitment, acknowledge the shift or ask the user to confirm before drafting it as settled.
 - Mark drafts that may be less like the user's usual style with `persona_divergence`.
 - Best for exploring stronger alternatives, not for default autopilot.
 
@@ -229,6 +237,7 @@ Fields:
 - `missing_info`: questions the agent needs the user to answer.
 - `mode_notes`: how the selected mode shaped the result.
 - `persona_divergence`: none, low, medium, or high compared with the user's baseline.
+- `stance_divergence`: none, low, medium, or high compared with prior expressed interests, values, availability, intent, or commitments.
 
 The UI or CLI can display all three drafts and let the user choose one to paste.
 
@@ -249,7 +258,7 @@ Rules:
 1. Accepted and edited drafts can become style examples after user confirmation or a clear local setting.
 2. Rejections should not immediately rewrite the user profile; they should accumulate as feedback events.
 3. `wrong_assumption` should downgrade or reject the underlying memory item.
-4. `not_like_me` should update persona range or mode preferences, not hard facts.
+4. `not_like_me` should update persona range, stance range, or mode preferences, not hard facts.
 5. Feedback should be scoped by mode. A draft rejected in Self Mode may still be acceptable in Recipient-Optimized Mode.
 
 ## Profile Refresh Workflow
@@ -268,12 +277,13 @@ Daily refresh can be added after the manual flow is reliable. It must report fai
 
 1. Do not treat photo inferences as facts.
 2. Do not infer protected traits or sensitive traits from images.
-3. Do not invent user experience, availability, intent, or consent.
+3. Do not invent hard facts, past experiences, already-sent messages, or consent.
 4. Do not draft manipulative pressure, harassment, or deceptive claims.
 5. Do not silently overwrite match memory when evidence conflicts. Keep both the new observation and the conflict note.
 6. If the context pack lacks enough information to answer safely, ask the user or return `missing_info`.
 7. Do not present persona modulation as factual identity change.
-8. Do not infer or target protected or sensitive traits from photos or profile cues.
+8. Do not present stance modulation as a past fact or already-held belief unless the user confirmed it.
+9. Do not infer or target protected or sensitive traits from photos or profile cues.
 
 ## Storage
 
@@ -345,7 +355,7 @@ Pass criteria for the first implementation:
 - context use average at least 4.0.
 - Self Mode voice match average at least 4.0.
 - Adaptive Mode usefulness average at least 4.0.
-- Recipient-Optimized Mode must have no hard-fact violations and must mark high persona divergence when applicable.
+- Recipient-Optimized Mode must have no hard-fact violations and must mark high persona or stance divergence when applicable.
 - At least 20 fixture cases before connecting perception outputs.
 
 ## Non-Goals
