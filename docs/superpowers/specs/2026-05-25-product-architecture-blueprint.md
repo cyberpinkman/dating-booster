@@ -148,6 +148,35 @@ Responsibilities:
 
 Perception should support both live screenshots and offline screenshot fixtures using the same interface.
 
+### Observation Contract
+
+`AppObservation` is the normalized boundary between perception, memory, intelligence, and adapters. It must support both offline fixtures and live screenshots.
+
+Core fields:
+
+- `observation_id`: local stable id for this observation.
+- `source_type`: manual_fixture, screenshot_fixture, live_screenshot, or user_input.
+- `app_id`: generic app id such as tinder, bumble, hinge, instagram_dm, or generic.
+- `adapter_id`: adapter and version that produced the observation.
+- `captured_at`: observation timestamp.
+- `page_type`: normalized page taxonomy value.
+- `page_confidence`: high, medium, or low.
+- `match_identity_hints`: visible name, profile cues, conversation fingerprint, and evidence.
+- `profile_observation`: structured profile text, photo cues, and hook candidates when visible.
+- `conversation_observation`: visible messages, sender labels, timestamps when visible, input state, and thread cues when visible.
+- `element_observations`: semantic elements such as input_box, send_button, back_button, profile_button, modal_primary_button, and their bounding boxes when known.
+- `exception_state`: paywall, permission_modal, network_error, loading, empty_state, unknown_modal, or none.
+- `provenance`: evidence summary and redaction status.
+- `raw_ref`: optional local reference to a raw screenshot or fixture id. It must not be required for durable memory.
+
+Rules:
+
+1. Memory refresh consumes `AppObservation`, not app-specific screenshot blobs.
+2. Fixture observations and live observations must use the same schema.
+3. Low-confidence page or match identity must prevent destructive memory writes.
+4. Bounding boxes are hints for the local action controller, not facts for the intelligence layer.
+5. Durable memory stores structured content and provenance, not raw observations by default.
+
 ### Memory System
 
 The memory system stores and retrieves structured local state.
@@ -180,6 +209,25 @@ Responsibilities:
 - produce structured outputs for UI and eval.
 
 The intelligence layer can use different model backends but must keep stable local contracts.
+
+### ModelBackend Contract
+
+Model providers are interchangeable behind a small local contract from the first implementation.
+
+Required capabilities:
+
+- `generate_structured`: produce JSON-compatible structured output from a prompt and schema.
+- `analyze_image`: optional capability for profile-photo and screenshot analysis.
+- `summarize`: produce bounded summaries with provenance-sensitive instructions.
+- `score`: optional capability for model-assisted eval.
+
+Rules:
+
+1. Business objects must not import provider SDKs directly.
+2. Prompt contracts live in the intelligence layer; provider request formatting lives in backend adapters.
+3. A backend must declare capabilities before a workflow uses it.
+4. If a required capability is missing, the workflow fails clearly rather than falling back to a fake result.
+5. Phase 1 may implement only one provider, but the interface must not encode that provider's API shape.
 
 ### Semantic Action Controller
 
@@ -222,6 +270,54 @@ Default gated:
 - exchange contact information.
 
 Autonomous mode is an explicit local switch. It can allow high-risk actions, but it must not bypass perception verification, audit logging, app adapter checks, or privacy controls.
+
+### Content Policy Gate
+
+Action policy is not enough. Drafts must pass a content policy gate before they are shown for staging or passed to any action controller.
+
+The content policy gate checks:
+
+- hard facts are not invented or rewritten.
+- past experiences and already-sent messages are not contradicted.
+- consent and user-declared non-negotiables are preserved.
+- protected or sensitive traits are not inferred from photos or weak profile cues.
+- persona and stance divergence are labeled when medium or high.
+- unsupported assumptions appear in `risk_flags` or `missing_info`.
+
+Content policy outputs:
+
+- `allowed`: whether the draft can be shown or staged.
+- `severity`: none, low, medium, high.
+- `reasons`: structured reasons.
+- `required_user_confirmation`: whether user confirmation is needed before staging.
+- `suggested_revision`: optional safer rewrite.
+
+Content policy runs after draft generation and before display, staging, or sending. It does not replace reply quality eval; it is a runtime gate.
+
+### Confirmation Contract
+
+Human confirmation must bind to the exact high-risk action and payload.
+
+Confirmation fields:
+
+- `confirmation_id`: local stable id.
+- `action`: semantic action name.
+- `target_match_id`: match identity if applicable.
+- `payload_hash`: hash of the exact action payload, such as message text or profile action.
+- `precondition_hash`: hash of the relevant observation state, such as page type, match identity, and visible latest message.
+- `expires_at`: short expiry time.
+- `created_at`: creation time.
+- `confirmed_at`: user confirmation time.
+- `confirmed_by`: local user identity or local session id.
+
+Rules:
+
+1. If the payload changes, confirmation is invalid.
+2. If the target match changes, confirmation is invalid.
+3. If the latest visible message or page precondition changes, confirmation is invalid.
+4. Expired confirmations cannot be used.
+5. Confirmation events are written to the audit log.
+6. Autonomous mode can replace interactive confirmation, but it must still bind action, payload, target, and preconditions in the audit log.
 
 ### App Adapter Layer
 
@@ -270,8 +366,9 @@ observe screen
 -> refresh conversation memory
 -> build context pack
 -> generate structured draft options
--> run policy and safety checks
+-> run content policy checks
 -> show drafts to user
+-> run action policy before staging
 -> stage selected draft
 -> collect feedback event
 ```
@@ -293,7 +390,7 @@ observe profile page
 ```text
 semantic action requested
 -> policy check
--> human confirmation or autonomous switch check
+-> confirmation contract or autonomous audit binding
 -> adapter precondition check
 -> harness action
 -> perception verification
@@ -355,6 +452,21 @@ Mature product requirements:
 8. Audit logs avoid full message dumps by default.
 9. Redaction utilities for screenshot fixtures.
 10. Clear display of what data is sent to model providers.
+
+## Storage Atomicity and Migration
+
+Phase 1 can use local JSON files, but storage must still be robust enough to survive frequent memory updates.
+
+Requirements:
+
+1. Every stored document has `schema_version`.
+2. Writes use atomic replace: write to a temp file, flush, then rename.
+3. Feedback event streams use append-only JSONL with one complete JSON object per line.
+4. Migrations are explicit functions from one schema version to the next.
+5. Before migration, the storage layer creates a local backup of affected files.
+6. Failed writes or migrations must not leave partially written primary files.
+7. Repository interfaces hide JSON so SQLite or encrypted storage can replace it later.
+8. Tests must cover corrupt JSON, unknown schema version, migration success, and failed write handling.
 
 ## Screenshot Fixture Dataset
 
@@ -419,15 +531,19 @@ MVP should not require live iPhone Mirroring to prove intelligence quality. It s
 3. Match profile schema.
 4. Conversation memory schema.
 5. Memory provenance schema.
-6. Match identity resolver for fixture/manual data.
-7. Context pack builder.
-8. Draft generation contract.
-9. Self, Adaptive, and Recipient-Optimized modes.
-10. Persona and stance divergence fields.
-11. Feedback event storage.
-12. CLI commands for fixture/manual workflows.
-13. Offline eval fixtures and scoring.
-14. Existing action policy gate.
+6. Normalized observation contract for fixture/manual data.
+7. Match identity resolver for fixture/manual data.
+8. Context pack builder.
+9. ModelBackend interface with one concrete provider implementation.
+10. Draft generation contract.
+11. Content policy gate.
+12. Self, Adaptive, and Recipient-Optimized modes.
+13. Persona and stance divergence fields.
+14. Feedback event storage.
+15. CLI commands for fixture/manual workflows.
+16. Offline eval fixtures and scoring.
+17. Existing action policy gate.
+18. Storage atomicity and schema migration basics.
 
 ### MVP Deferred
 
@@ -465,15 +581,21 @@ dating_boost/
     repositories.py
     context_pack.py
     feedback.py
+    storage.py
   intelligence/
     profile_analyzer.py
     conversation_summarizer.py
     reply_generator.py
     prompts.py
+    backends.py
   perception/
     observations.py
     taxonomy.py
     fixture_loader.py
+  policy/
+    actions.py
+    content.py
+    confirmation.py
   adapters/
     generic.py
     tinder.py
@@ -501,9 +623,12 @@ Build the reusable intelligence vertical slice with fixture/manual inputs.
 Success criteria:
 
 - memory schemas exist.
+- normalized observation contract exists.
 - context packs are deterministic and inspectable.
 - reply generation outputs structured alternatives.
+- content policy gates drafts before staging.
 - evals compare memory-aware replies against generic baseline.
+- evals satisfy the pass criteria in `docs/superpowers/specs/2026-05-25-intelligence-layer-design.md`.
 - policy gate remains in the loop.
 
 ### Phase 2: Offline Perception
@@ -548,11 +673,10 @@ Success criteria:
 
 ## Open Design Questions
 
-1. Whether the first model backend should be OpenAI-only or provider-abstracted from day one.
-2. Whether local JSON storage is enough for Phase 1 or SQLite should be introduced immediately.
-3. Whether user profile onboarding should be CLI-only at first or fixture-file based.
-4. Whether screenshot fixtures should use synthetic UI, redacted real screenshots, or both.
-5. Whether the initial eval scorer should be human rubric only, model-assisted, or hybrid.
+1. Whether local JSON storage is enough for Phase 1 or SQLite should be introduced immediately.
+2. Whether user profile onboarding should be CLI-only at first or fixture-file based.
+3. Whether screenshot fixtures should use synthetic UI, redacted real screenshots, or both.
+4. Whether the initial eval scorer should be human rubric only, model-assisted, or hybrid.
 
 ## Non-Goals
 
