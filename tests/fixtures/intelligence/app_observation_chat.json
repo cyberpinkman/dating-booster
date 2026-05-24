@@ -1,0 +1,35 @@
+{
+  "observation_id": "obs_chat_001",
+  "source_type": "manual_fixture",
+  "app_id": "tinder",
+  "adapter_id": "manual.fixture.v1",
+  "captured_at": "2026-05-25T00:00:00Z",
+  "page_type": "chat_thread",
+  "page_confidence": "high",
+  "match_identity_hints": {
+    "visible_name": "Alex",
+    "profile_cues": ["likes live music", "has a dog"],
+    "conversation_fingerprint": "alex-weekend-question",
+    "evidence": "Visible chat header and latest message"
+  },
+  "profile_observation": {
+    "profile_text": "Live music, coffee, long walks.",
+    "photo_cues": ["dog appears in one photo"],
+    "hook_candidates": ["Ask about live music", "Ask about the dog"]
+  },
+  "conversation_observation": {
+    "visible_messages": [
+      {"sender": "user", "text": "That concert photo looks fun."},
+      {"sender": "match", "text": "It was. What are you up to this weekend?"}
+    ],
+    "input_state": "empty",
+    "thread_cues": ["weekend plan question"]
+  },
+  "element_observations": [],
+  "exception_state": "none",
+  "provenance": {
+    "evidence": "Manual fixture",
+    "redaction_status": "synthetic"
+  },
+  "raw_ref": null
+}
