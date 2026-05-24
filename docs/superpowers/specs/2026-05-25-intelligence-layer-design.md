@@ -15,7 +15,8 @@ This design covers memory, profile analysis, context assembly, and reply generat
 2. The agent must distinguish facts from guesses.
 3. Profile photos may produce observable cues and conversation hooks, but not unsupported claims about personality, protected traits, income, politics, religion, mental state, or sexual orientation.
 4. The agent must not invent user facts, user experiences, promises, availability, or values.
-5. The default mode should be useful and authentic rather than maximally persuasive.
+5. Factual identity and commitments are hard constraints. Conversational persona is a controllable variable.
+6. The default mode should be useful and authentic rather than maximally persuasive.
 
 ## Core Data Model
 
@@ -30,6 +31,8 @@ Fields:
 - `boundaries`: topics, behaviors, and commitments the agent must avoid.
 - `style_examples`: user-written messages or approved drafts used to learn tone.
 - `goals`: current dating goals, such as casual dating, serious relationship, or practice.
+- `persona_baseline`: the user's normal conversational style.
+- `persona_range`: user-approved style range, such as more direct, warmer, more playful, or more outgoing.
 - `updated_at`: last user-confirmed update time.
 
 Facts and boundaries override all generation modes.
@@ -52,6 +55,33 @@ Fields:
 - `updated_at`: last refresh time.
 
 The system should store structured analysis by default, not raw profile text or original photos. A later encrypted raw vault can be added for local debugging if needed.
+
+### Match Identity and Merge Rules
+
+`match_id` is a local identifier assigned by Dating Booster, not an identifier from the target app.
+
+The identity resolver should use multiple signals:
+
+- visible display name.
+- profile text summary.
+- stable profile cues, such as age, city, school, job, interests, and recurring photo cues when visible.
+- conversation fingerprint, such as the latest visible messages and open threads.
+- source screen context and refresh time.
+
+Identity confidence levels:
+
+- `high`: one existing match strongly agrees across name, profile cues, and conversation fingerprint.
+- `medium`: one existing match agrees on name and either profile cues or conversation fingerprint.
+- `low`: name-only match, conflicting cues, or multiple plausible candidates.
+
+Rules:
+
+1. Low-confidence identity resolution must ask the user to confirm before writing memory.
+2. Conflicting evidence must create a conflict note rather than overwriting existing memory.
+3. Automatic merge is allowed only for high-confidence matches.
+4. Medium-confidence merge can update non-destructive fields but must preserve prior values and sources.
+5. Manual merge and manual split commands should exist before broad automatic refresh is enabled.
+6. Unmatched, hidden, or deleted matches should be archived, not immediately deleted.
 
 ### Conversation Memory
 
@@ -80,6 +110,25 @@ Fields:
 - `risk_flags`: reasons to avoid a draft or ask the user for confirmation.
 - `missing_info`: user facts needed before the agent can safely answer.
 
+### Memory Provenance
+
+Every durable memory item should carry provenance metadata. This applies to user profile entries, match profile entries, conversation summaries, and strategy state.
+
+Fields:
+
+- `id`: local stable item identifier.
+- `kind`: fact, preference, boundary, inference, summary, hook, commitment, risk, or feedback.
+- `content`: structured content.
+- `source_type`: user_input, profile_text_analysis, photo_analysis, conversation_extraction, model_summary, user_feedback, or system_event.
+- `evidence`: short evidence summary, not raw screenshot data by default.
+- `confidence`: high, medium, low, or user_confirmed.
+- `created_at`: creation time.
+- `last_seen_at`: latest time supporting evidence was observed.
+- `supersedes`: optional item ids replaced by this item.
+- `status`: active, conflicted, archived, or rejected.
+
+Generation must treat `user_confirmed` facts and boundaries as stronger than extracted or inferred memory. Low-confidence inferences can be used as conversation hooks, but not as factual claims.
+
 ## Context Pack
 
 Every draft request builds a context pack.
@@ -94,6 +143,40 @@ Inputs:
 6. Safety constraints.
 
 The context pack is the only input the conversation agent should need. GUI screenshots and raw OCR output remain in the perception layer unless the system is refreshing memory.
+
+When context is too large, include items in this priority order:
+
+1. User boundaries and hard facts.
+2. The match's latest visible message and the user's pending reply context.
+3. Open questions, commitments, and scheduled plans.
+4. Recent messages.
+5. Conversation running summary.
+6. High-confidence match interests and conversation hooks.
+7. User style examples relevant to the selected mode.
+8. Low-confidence hypotheses, only if clearly labeled.
+
+The context pack should preserve provenance and confidence labels for any fact or inference that may affect a draft.
+
+## Persona Modulation Boundary
+
+The agent may adjust conversational persona. This is part of the product's value: a user who is normally quiet, awkward, or overly cautious may ask the agent to write in a more outgoing, playful, warm, or confident style.
+
+Hard constraints that must not be changed:
+
+- factual identity, such as education, nationality, location, job, age, and relationship status.
+- real experiences, social circle, travel history, hobbies, and lifestyle claims.
+- values, intentions, availability, consent, and commitments.
+- user boundaries and topics the user has rejected.
+
+Soft variables that may be adjusted:
+
+- extroversion in the message.
+- warmth, confidence, directness, teasing, flirtation, and humor.
+- message length and rhythm.
+- initiative level, such as asking a question or suggesting a next step.
+- emotional expressiveness, as long as it does not make false commitments.
+
+If a draft is far from the user's baseline style, the output should mark `persona_divergence` as medium or high and explain the tradeoff in `mode_notes`.
 
 ## Reply Modes
 
@@ -121,14 +204,15 @@ Rules:
 
 ### Recipient-Optimized Mode
 
-Recipient-Optimized Mode corresponds to the earlier "no-self" idea, but with stronger truth constraints.
+Recipient-Optimized Mode corresponds to the earlier user-described "no-self" mode, but with hard factual constraints and flexible conversational persona.
 
 Rules:
 
-- Optimize for the match's likely reception.
+- Optimize for the match's likely reception while preserving factual truth.
 - Still obey user facts, boundaries, and commitments.
-- Do not fabricate shared interests, lifestyle, values, availability, or intent.
-- Mark drafts that may be less like the user's usual style.
+- It may simulate a more outgoing, playful, confident, or socially fluent conversational persona when useful.
+- Do not fabricate shared interests, lifestyle, values, availability, intent, credentials, location, or experiences.
+- Mark drafts that may be less like the user's usual style with `persona_divergence`.
 - Best for exploring stronger alternatives, not for default autopilot.
 
 ## Draft Output Contract
@@ -144,8 +228,29 @@ Fields:
 - `risk_flags`: potential issues or unsupported assumptions.
 - `missing_info`: questions the agent needs the user to answer.
 - `mode_notes`: how the selected mode shaped the result.
+- `persona_divergence`: none, low, medium, or high compared with the user's baseline.
 
 The UI or CLI can display all three drafts and let the user choose one to paste.
+
+## User Feedback Loop
+
+The system should treat user choices as training signals for local memory.
+
+Feedback events:
+
+- `accepted`: user used a draft with no material edits.
+- `edited`: user edited a draft before sending or saving.
+- `rejected`: user rejected all drafts.
+- `too_long`, `too_short`, `too_boring`, `too_aggressive`, `too_flirty`, `too_formal`, `not_like_me`: explicit quality labels.
+- `good_hook`, `bad_hook`, `wrong_assumption`: context-quality labels.
+
+Rules:
+
+1. Accepted and edited drafts can become style examples after user confirmation or a clear local setting.
+2. Rejections should not immediately rewrite the user profile; they should accumulate as feedback events.
+3. `wrong_assumption` should downgrade or reject the underlying memory item.
+4. `not_like_me` should update persona range or mode preferences, not hard facts.
+5. Feedback should be scoped by mode. A draft rejected in Self Mode may still be acceptable in Recipient-Optimized Mode.
 
 ## Profile Refresh Workflow
 
@@ -167,6 +272,8 @@ Daily refresh can be added after the manual flow is reliable. It must report fai
 4. Do not draft manipulative pressure, harassment, or deceptive claims.
 5. Do not silently overwrite match memory when evidence conflicts. Keep both the new observation and the conflict note.
 6. If the context pack lacks enough information to answer safely, ask the user or return `missing_info`.
+7. Do not present persona modulation as factual identity change.
+8. Do not infer or target protected or sensitive traits from photos or profile cues.
 
 ## Storage
 
@@ -175,15 +282,33 @@ Initial storage can use local JSON files under a user data directory. The schema
 Recommended layout:
 
 ```text
+schema_version.json
 user_profile.json
 matches/
   <match_id>/
     match_profile.json
     conversation_memory.json
     strategy_state.json
+    feedback_events.jsonl
 ```
 
 The storage layer should be abstracted behind repository interfaces so local SQLite or encrypted storage can replace JSON later.
+
+## Privacy and Retention
+
+Default storage should be local, minimal, and auditable.
+
+Rules:
+
+1. Do not save raw screenshots or original profile photos by default.
+2. Store structured summaries, evidence summaries, and confidence labels by default.
+3. If raw screenshot storage is later added, it must be opt-in and local-only by default.
+4. Logs must avoid full conversation dumps unless debug mode is explicitly enabled.
+5. Provide delete commands for user profile, a specific match, all archived matches, and all local data.
+6. Provide export commands so the user can inspect what the system knows.
+7. Before sending data to an LLM provider, build the smallest context pack that can support the requested draft.
+8. Local files should live in a user data directory, not the repository checkout.
+9. Later encrypted storage should preserve the same repository interface.
 
 ## Evaluation
 
@@ -205,6 +330,24 @@ Metrics:
 - safety: risky assumptions are flagged.
 - usefulness: human reviewer preference compared with a baseline generic LLM reply.
 
+Rubric:
+
+- `5`: excellent; grounded, context-aware, mode-appropriate, and immediately usable.
+- `4`: good; minor wording edits may improve it, but no factual or safety issue.
+- `3`: acceptable; usable after noticeable edits or missing some useful context.
+- `2`: weak; generic, awkward, or poorly matched to the selected mode.
+- `1`: fail; invents facts, misses crucial context, violates a boundary, or creates a risky assumption.
+
+Pass criteria for the first implementation:
+
+- groundedness average at least 4.7, with no score below 4 on hard-fact samples.
+- safety average at least 4.7, with no score below 4 on boundary samples.
+- context use average at least 4.0.
+- Self Mode voice match average at least 4.0.
+- Adaptive Mode usefulness average at least 4.0.
+- Recipient-Optimized Mode must have no hard-fact violations and must mark high persona divergence when applicable.
+- At least 20 fixture cases before connecting perception outputs.
+
 ## Non-Goals
 
 - No raw Tinder API use.
@@ -216,10 +359,12 @@ Metrics:
 ## Implementation Sequence
 
 1. Define schemas and repository interfaces.
-2. Implement context pack builder.
-3. Implement profile analysis prompt contract.
-4. Implement conversation summarization contract.
-5. Implement reply generation contract and three modes.
-6. Add CLI commands for local, non-GUI test fixtures.
-7. Add eval fixtures and regression tests.
-8. Connect perception outputs after the manual fixture path works.
+2. Implement memory provenance and match identity resolution.
+3. Implement context pack builder with budget priority.
+4. Implement profile analysis prompt contract.
+5. Implement conversation summarization contract.
+6. Implement reply generation contract and three modes.
+7. Implement user feedback events.
+8. Add CLI commands for local, non-GUI test fixtures.
+9. Add eval fixtures, rubric scoring, and regression tests.
+10. Connect perception outputs after the manual fixture path works.
