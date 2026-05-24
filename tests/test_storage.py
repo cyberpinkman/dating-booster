@@ -38,6 +38,15 @@ class StorageTests(unittest.TestCase):
             with self.assertRaises(StorageCorruptionError):
                 storage.read_json(Path("broken.json"), expected_schema_version=1)
 
+    def test_valid_json_non_object_raises_storage_error(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "not_an_object.json"
+            path.write_text("[]", encoding="utf-8")
+            storage = JsonStorage(Path(temp_dir))
+
+            with self.assertRaises(StorageCorruptionError):
+                storage.read_json(Path("not_an_object.json"), expected_schema_version=1)
+
     def test_jsonl_append_writes_one_object_per_line(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             storage = JsonStorage(Path(temp_dir))

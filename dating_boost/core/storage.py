@@ -29,6 +29,8 @@ class JsonStorage:
             data = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise StorageCorruptionError(f"corrupt JSON: {relative_path}") from exc
+        if not isinstance(data, dict):
+            raise StorageCorruptionError(f"expected JSON object: {relative_path}")
         if data.get("schema_version") != expected_schema_version:
             raise SchemaVersionError(
                 f"expected schema_version {expected_schema_version} for {relative_path}, "
