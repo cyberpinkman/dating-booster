@@ -44,11 +44,7 @@ class Decision:
     autonomous: bool = False
 
 
-def authorize_action(
-    action: Action,
-    *,
-    autonomous: bool = False,
-) -> Decision:
+def authorize_action(action: Action, *, autonomous: bool = False) -> Decision:
     if action in ASSISTIVE_ACTIONS:
         return Decision(
             allowed=True,
