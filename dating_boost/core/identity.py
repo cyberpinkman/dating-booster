@@ -32,7 +32,7 @@ def resolve_match_identity(observation: Any, existing_matches: Iterable[dict[str
     candidates = list(existing_matches)
     if not candidates:
         return IdentityResult(
-            match_id=_new_match_id(hints.visible_name, fingerprint),
+            match_id=_new_match_id(observation),
             confidence=IdentityConfidence.NEW,
             requires_user_confirmation=False,
             reason="No existing match candidates were available.",
@@ -98,7 +98,7 @@ def resolve_match_identity(observation: Any, existing_matches: Iterable[dict[str
         )
 
     return IdentityResult(
-        match_id=_new_match_id(hints.visible_name, fingerprint),
+        match_id=_new_match_id(observation),
         confidence=IdentityConfidence.NEW,
         requires_user_confirmation=False,
         reason="No existing match matched the observed identity hints.",
@@ -113,8 +113,17 @@ def _fingerprint_matches(candidate: dict[str, Any], fingerprint: str) -> bool:
     return bool(fingerprint and candidate.get("conversation_fingerprint") == fingerprint)
 
 
-def _new_match_id(visible_name: str | None, fingerprint: str) -> str:
-    stable_text = "|".join(part for part in [visible_name or "", fingerprint] if part) or "unknown"
+def _new_match_id(observation: Any) -> str:
+    hints = observation.match_identity_hints
+    stable_text = "|".join(
+        part
+        for part in [
+            hints.visible_name or "",
+            hints.conversation_fingerprint or "",
+        ]
+        if part
+    )
+    stable_text = stable_text or observation.observation_id or "unknown"
     slug = re.sub(r"[^a-z0-9]+", "_", stable_text.lower()).strip("_") or "unknown"
     digest = hashlib.sha256(stable_text.encode("utf-8")).hexdigest()[:8]
     return f"match_{slug[:32]}_{digest}"
