@@ -7,10 +7,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.action_audit import ActionAuditRepository
+from dating_boost.core.capabilities import build_capabilities
 from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.feedback import create_feedback_event
 from dating_boost.core.identity import resolve_match_identity
-from dating_boost.core.models import MemoryItem, ReplyMode, UserProfile
+from dating_boost.core.models import Divergence, MemoryItem, ReplyMode, UserProfile
 from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
 from dating_boost.intelligence.backends import ModelBackend, OpenAIBackend, ScriptedBackend
 from dating_boost.intelligence.reply_generator import DraftResponse, generate_reply
@@ -35,6 +37,14 @@ def main(argv: list[str] | None = None) -> int:
         description="Local-first dating workflow copilot.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    capabilities_parser = subparsers.add_parser(
+        "capabilities",
+        help="Print machine-readable CLI and schema compatibility metadata.",
+    )
+    capabilities_parser.add_argument("--json", action="store_true", help="Print JSON output.")
+    capabilities_parser.add_argument("--data-dir", type=Path)
+    capabilities_parser.set_defaults(handler=_handle_capabilities)
 
     authorize_parser = subparsers.add_parser(
         "authorize",
@@ -62,6 +72,23 @@ def main(argv: list[str] | None = None) -> int:
     import_parser.add_argument("--input", required=True, type=Path)
     import_parser.set_defaults(handler=_handle_import_observation)
 
+    memory_parser = subparsers.add_parser("memory", help="Agent-native memory commands.")
+    memory_subparsers = memory_parser.add_subparsers(dest="memory_command", required=True)
+    memory_ingest_parser = memory_subparsers.add_parser(
+        "ingest-observation",
+        help="Import an app observation into local match memory.",
+    )
+    memory_ingest_parser.add_argument("--data-dir", required=True, type=Path)
+    memory_ingest_parser.add_argument("--input", required=True, type=Path)
+    memory_ingest_parser.set_defaults(handler=_handle_import_observation)
+    memory_get_parser = memory_subparsers.add_parser(
+        "get-match",
+        help="Read a match identity record from local memory.",
+    )
+    memory_get_parser.add_argument("--data-dir", required=True, type=Path)
+    memory_get_parser.add_argument("--match-id", required=True)
+    memory_get_parser.set_defaults(handler=_handle_memory_get_match)
+
     screenshot_parser = subparsers.add_parser(
         "observe-screenshot",
         help="Import a screenshot plus manual/OCR/VLM analysis as an observation.",
@@ -81,7 +108,46 @@ def main(argv: list[str] | None = None) -> int:
     draft_parser.add_argument("--debug-context", action="store_true")
     draft_parser.set_defaults(handler=_handle_draft)
 
+    context_parser = subparsers.add_parser("context", help="Agent-native context commands.")
+    context_subparsers = context_parser.add_subparsers(dest="context_command", required=True)
+    context_build_parser = context_subparsers.add_parser(
+        "build",
+        help="Build a context pack for a host-agent workflow.",
+    )
+    context_build_parser.add_argument("--data-dir", required=True, type=Path)
+    context_build_parser.add_argument("--match-id", required=True)
+    context_build_parser.add_argument("--mode", required=True, choices=[mode.value for mode in ReplyMode])
+    context_build_parser.set_defaults(handler=_handle_context_build)
+
+    policy_parser = subparsers.add_parser("policy", help="Agent-native policy commands.")
+    policy_subparsers = policy_parser.add_subparsers(dest="policy_command", required=True)
+    policy_check_action_parser = policy_subparsers.add_parser(
+        "check-action",
+        help="Authorize a host-agent action before execution.",
+    )
+    policy_check_action_parser.add_argument("action", choices=[action.value for action in Action])
+    policy_check_action_parser.add_argument("--autonomous", action="store_true")
+    policy_check_action_parser.set_defaults(handler=_handle_policy_check_action)
+    policy_check_draft_parser = policy_subparsers.add_parser(
+        "check-draft",
+        help="Check a host-generated draft against content policy.",
+    )
+    policy_check_draft_parser.add_argument("--input", required=True, type=Path)
+    policy_check_draft_parser.add_argument("--context", required=True, type=Path)
+    policy_check_draft_parser.set_defaults(handler=_handle_policy_check_draft)
+
+    action_parser = subparsers.add_parser("action", help="Agent-native host action audit commands.")
+    action_subparsers = action_parser.add_subparsers(dest="action_command", required=True)
+    action_record_parser = action_subparsers.add_parser(
+        "record-result",
+        help="Record host-executed action verification evidence.",
+    )
+    action_record_parser.add_argument("--data-dir", required=True, type=Path)
+    action_record_parser.add_argument("--input", required=True, type=Path)
+    action_record_parser.set_defaults(handler=_handle_action_record_result)
+
     feedback_parser = subparsers.add_parser("feedback", help="Append local feedback for a draft.")
+    feedback_parser.add_argument("feedback_action", nargs="?", choices=["record"])
     feedback_parser.add_argument("--data-dir", required=True, type=Path)
     feedback_parser.add_argument("--match-id", required=True)
     feedback_parser.add_argument("--draft-id", required=True)
@@ -112,7 +178,20 @@ def _run_authorization(argv: list[str]) -> int:
     return _handle_authorize(args)
 
 
+def _handle_capabilities(args: argparse.Namespace) -> int:
+    _print_json(build_capabilities(args.data_dir))
+    return 0
+
+
 def _handle_authorize(args: argparse.Namespace) -> int:
+    return _print_action_decision(args)
+
+
+def _handle_policy_check_action(args: argparse.Namespace) -> int:
+    return _print_action_decision(args)
+
+
+def _print_action_decision(args: argparse.Namespace) -> int:
     decision = authorize_action(
         Action(args.action),
         autonomous=args.autonomous,
@@ -192,6 +271,27 @@ def _persist_observation(data_dir: Path, observation: AppObservation) -> int:
     return 0
 
 
+def _handle_memory_get_match(args: argparse.Namespace) -> int:
+    for record in MatchRepository(args.data_dir).list_match_candidates():
+        if record.get("match_id") == args.match_id:
+            _print_json(
+                {
+                    "schema_version": 1,
+                    "status": "ok",
+                    "match": record,
+                }
+            )
+            return 0
+    _print_json(
+        {
+            "schema_version": 1,
+            "status": "not_found",
+            "match_id": args.match_id,
+        }
+    )
+    return 2
+
+
 def _handle_draft(args: argparse.Namespace) -> int:
     repo = JsonMemoryRepository(args.data_dir)
     profile = repo.load_user_profile()
@@ -224,6 +324,69 @@ def _handle_draft(args: argparse.Namespace) -> int:
     if args.debug_context:
         payload["context_pack"] = context_pack
     _print_json(payload)
+    return 0
+
+
+def _handle_context_build(args: argparse.Namespace) -> int:
+    profile = JsonMemoryRepository(args.data_dir).load_user_profile()
+    reply_mode = ReplyMode(args.mode)
+    observation = ObservationRepository(args.data_dir).load_latest_observation(args.match_id)
+    context_pack = _build_mvp_context_pack(profile, args.match_id, reply_mode, observation)
+    _print_json(
+        {
+            "schema_version": 1,
+            "status": "ok",
+            "match_id": args.match_id,
+            "mode": reply_mode.value,
+            "context_pack": context_pack,
+        }
+    )
+    return 0
+
+
+def _handle_policy_check_draft(args: argparse.Namespace) -> int:
+    draft = _draft_from_dict(_read_json_object(args.input))
+    context_payload = _read_json_object(args.context)
+    context_pack = context_payload.get("context_pack", context_payload)
+    if not isinstance(context_pack, dict):
+        raise ValueError("--context must contain a JSON object or a context_pack object")
+    policy = evaluate_draft_content(draft, context_pack)
+    _print_json(
+        {
+            "schema_version": 1,
+            "status": "ok" if policy.allowed else "blocked",
+            "policy": _policy_to_dict(policy),
+        }
+    )
+    return 0 if policy.allowed else 2
+
+
+def _handle_action_record_result(args: argparse.Namespace) -> int:
+    payload = _read_json_object(args.input)
+    try:
+        event = ActionAuditRepository(args.data_dir).append_action_result(
+            payload,
+            created_at=MVP_TIMESTAMP,
+        )
+    except ValueError as exc:
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "error",
+                "reason": str(exc),
+            }
+        )
+        return 2
+
+    _print_json(
+        {
+            "schema_version": 1,
+            "status": "ok",
+            "event_id": event["event_id"],
+            "result_status": event["result_status"],
+            "path": "audit/action_results.jsonl",
+        }
+    )
     return 0
 
 
@@ -362,6 +525,20 @@ def _draft_to_dict(draft: DraftResponse) -> dict[str, Any]:
     data["persona_divergence"] = draft.persona_divergence.value
     data["stance_divergence"] = draft.stance_divergence.value
     return data
+
+
+def _draft_from_dict(data: dict[str, Any]) -> DraftResponse:
+    return DraftResponse(
+        best_reply=str(data["best_reply"]),
+        safer_reply=str(data["safer_reply"]),
+        bolder_reply=str(data["bolder_reply"]),
+        why_this_works=str(data["why_this_works"]),
+        risk_flags=[str(item) for item in data["risk_flags"]],
+        missing_info=[str(item) for item in data["missing_info"]],
+        mode_notes=str(data["mode_notes"]),
+        persona_divergence=Divergence(str(data["persona_divergence"])),
+        stance_divergence=Divergence(str(data["stance_divergence"])),
+    )
 
 
 def _policy_to_dict(policy: ContentPolicyDecision) -> dict[str, Any]:

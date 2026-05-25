@@ -28,6 +28,44 @@ python3 -m dating_boost.cli send_message --autonomous
 The action gate does not execute GUI actions. It only reports whether a local
 workflow is allowed to proceed.
 
+## Agent-native Codex workflow
+
+Dating Booster can also be used as a lightweight local tool layer for a host
+agent such as Codex. In this mode, Codex can use computer use plus iPhone
+Mirroring after the user authorizes the Mac to operate the iPhone screen.
+Dating Booster does not need to own the LLM call; it provides local
+memory/context/policy/workflow contracts and host-executed action audit.
+
+Before any host agent observes visible dating app content, run:
+
+```bash
+python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
+```
+
+The host agent may process visible dating app content, screenshots, profile
+text, conversation text, and generated drafts. Users should only run this mode
+if they accept that privacy boundary. High-risk actions still require explicit
+policy checks and user confirmation unless autonomous mode is deliberately
+enabled.
+
+The Codex-first skill package lives at `skills/dating-booster-codex/`.
+Its required commands are:
+
+```bash
+python3 -m dating_boost.cli memory ingest-observation --data-dir .local/dating-boost --input observation.json
+python3 -m dating_boost.cli memory get-match --data-dir .local/dating-boost --match-id match_alex
+python3 -m dating_boost.cli context build --data-dir .local/dating-boost --match-id match_alex --mode adaptive
+python3 -m dating_boost.cli policy check-draft --input draft.json --context context.json
+python3 -m dating_boost.cli policy check-action send_message --autonomous
+python3 -m dating_boost.cli action record-result --data-dir .local/dating-boost --input action_result.json
+python3 -m dating_boost.cli feedback record --data-dir .local/dating-boost --match-id match_alex --draft-id draft_1 --mode adaptive --label accepted
+```
+
+Host-executed action results are appended to
+`.local/dating-boost/audit/action_results.jsonl`. If a sent message or other
+high-risk action cannot be verified from a fresh post-action observation, record
+the result as `unknown`, not `succeeded`.
+
 ## MVP intelligence workflow
 
 The current MVP can run a local fixture/manual-observation workflow end to end:

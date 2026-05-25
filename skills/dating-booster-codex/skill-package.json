@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "name": "dating-booster-codex",
+  "package_version": "0.1.0",
+  "dating_boost_min_version": "0.1.0",
+  "required_schema_versions": {
+    "capabilities": 1,
+    "context_pack": 1,
+    "content_policy": 1,
+    "action_policy": 1,
+    "action_result": 1,
+    "skill_package": 1
+  },
+  "source_spec_commit": "22f57de",
+  "source_specs": [
+    "docs/superpowers/specs/2026-05-25-agent-native-launch-strategy.md",
+    "docs/superpowers/specs/2026-05-25-product-architecture-blueprint.md",
+    "docs/superpowers/specs/2026-05-25-intelligence-layer-design.md"
+  ],
+  "required_commands": [
+    "capabilities",
+    "memory ingest-observation",
+    "memory get-match",
+    "context build",
+    "policy check-draft",
+    "policy check-action",
+    "action record-result",
+    "feedback record"
+  ]
+}
