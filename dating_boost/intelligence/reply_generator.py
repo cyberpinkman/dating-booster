@@ -1,0 +1,96 @@
+"""Structured reply generation contract."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any, Mapping
+
+from dating_boost.core.models import Divergence, ReplyMode
+from dating_boost.intelligence.backends import ModelBackend
+from dating_boost.intelligence.prompts import REPLY_SCHEMA
+
+
+@dataclass(frozen=True)
+class DraftResponse:
+    best_reply: str
+    safer_reply: str
+    bolder_reply: str
+    why_this_works: str
+    risk_flags: list[str]
+    missing_info: list[str]
+    mode_notes: str
+    persona_divergence: Divergence
+    stance_divergence: Divergence
+
+
+def generate_reply(context_pack: Mapping[str, Any], reply_mode: ReplyMode, backend: ModelBackend) -> DraftResponse:
+    """Generate structured reply drafts from a context pack."""
+
+    payload = backend.generate_structured(
+        system_prompt=_build_system_prompt(),
+        user_prompt=_build_user_prompt(context_pack, reply_mode),
+        schema=REPLY_SCHEMA,
+    )
+    return _parse_draft_response(payload)
+
+
+def _build_system_prompt() -> str:
+    return (
+        "You generate dating-app reply drafts as structured JSON. "
+        "Return only fields required by the provided schema. "
+        "Respect safety constraints and do not invent hard facts."
+    )
+
+
+def _build_user_prompt(context_pack: Mapping[str, Any], reply_mode: ReplyMode) -> str:
+    context_json = json.dumps(context_pack, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "\n".join(
+        [
+            f"reply_mode: {reply_mode.value}",
+            "context_pack_json:",
+            context_json,
+        ]
+    )
+
+
+def _parse_draft_response(payload: Mapping[str, object]) -> DraftResponse:
+    required = tuple(REPLY_SCHEMA["required"])
+    missing = [key for key in required if key not in payload]
+    if missing:
+        raise ValueError(f"Reply generation output missing required field(s): {', '.join(missing)}")
+
+    return DraftResponse(
+        best_reply=_require_string(payload, "best_reply"),
+        safer_reply=_require_string(payload, "safer_reply"),
+        bolder_reply=_require_string(payload, "bolder_reply"),
+        why_this_works=_require_string(payload, "why_this_works"),
+        risk_flags=_require_string_list(payload, "risk_flags"),
+        missing_info=_require_string_list(payload, "missing_info"),
+        mode_notes=_require_string(payload, "mode_notes"),
+        persona_divergence=_require_divergence(payload, "persona_divergence"),
+        stance_divergence=_require_divergence(payload, "stance_divergence"),
+    )
+
+
+def _require_string(payload: Mapping[str, object], key: str) -> str:
+    value = payload[key]
+    if not isinstance(value, str):
+        raise ValueError(f"Reply generation field '{key}' must be a string.")
+    return value
+
+
+def _require_string_list(payload: Mapping[str, object], key: str) -> list[str]:
+    value = payload[key]
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"Reply generation field '{key}' must be a list of strings.")
+    return list(value)
+
+
+def _require_divergence(payload: Mapping[str, object], key: str) -> Divergence:
+    value = _require_string(payload, key)
+    try:
+        return Divergence(value)
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in Divergence)
+        raise ValueError(f"Reply generation field '{key}' must be one of: {allowed}.") from exc
