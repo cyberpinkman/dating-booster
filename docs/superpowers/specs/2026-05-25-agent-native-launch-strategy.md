@@ -46,6 +46,7 @@ Agent-native flow:
 
 ```text
 user opens iPhone Mirroring
+-> user accepts that the host agent may process visible dating-app context
 -> user asks host agent to use Dating Booster workflow
 -> host agent observes the dating app through its own computer-use tools
 -> host agent calls Dating Booster local tools to update memory or build context
@@ -167,6 +168,19 @@ Dating Booster provides:
 
 Dating Booster should not assume it owns the model loop in agent-native mode.
 
+## Host-Agent Privacy Notice
+
+Agent-native mode intentionally relies on the user's chosen host agent. The host agent may see and process dating-app screen content, profile details, and conversation context while performing the workflow.
+
+First-version CLI and skill support should not build heavy privacy enforcement around this. They should provide clear notice and let the user choose whether to run the experiment.
+
+Rules:
+
+1. The skill must tell the user that visible dating-app context may be processed by the host agent and its model provider.
+2. Dating Booster should still minimize the structured context it writes to local memory and passes through local tools.
+3. Dating Booster should not claim that host-agent processing is private unless the host agent's own terms and settings support that claim.
+4. Stronger privacy controls belong to the standalone agent and daemon phase.
+
 ## First Skill Workflows
 
 ### Draft Reply Workflow
@@ -201,8 +215,32 @@ Dating Booster should not assume it owns the model loop in agent-native mode.
 2. Run local tool: action policy check.
 3. If confirmation is required, ask the user to explicitly confirm.
 4. Host agent stages or sends only the confirmed payload.
-5. Record audit and feedback events.
+5. Host agent observes the screen again after the action.
+6. Run local tool: record action result with post-action evidence.
+7. Record audit and feedback events.
 ```
+
+### Host-Executed Action Verification
+
+In agent-native mode, the host agent performs GUI actions. Dating Booster must not assume those actions succeeded.
+
+For each staged or high-risk host-executed action, the host should provide:
+
+- `action`: semantic action name.
+- `target_match_id`: target match when known.
+- `payload_hash`: hash of the confirmed payload.
+- `pre_action_observation_id`: observation used for confirmation.
+- `post_action_observation`: fresh observation after the host action.
+- `result_status`: succeeded, failed, or unknown.
+- `evidence`: visible post-action evidence, such as draft text in input box, sent bubble, latest message, or unchanged screen.
+
+Rules:
+
+1. If the host cannot re-observe the screen, result status is `unknown`.
+2. If target match or latest visible message changed unexpectedly, result status is `unknown` or `failed`.
+3. Memory must not record a send as successful unless post-action evidence supports it.
+4. Audit logs should include failed and unknown results, not just successes.
+5. Unknown results should stop the workflow and ask the user what happened.
 
 ## Local Tool Contract
 
@@ -210,6 +248,7 @@ Agent-native tools should be small and composable.
 
 Initial CLI commands:
 
+- `dating-boost capabilities --json`
 - `dating-boost memory ingest-observation`
 - `dating-boost memory get-match`
 - `dating-boost memory update-match`
@@ -225,6 +264,29 @@ All commands should support JSON input and JSON output.
 
 The command names can change during implementation, but the capability boundaries should remain.
 
+### Capability Discovery and Versioning
+
+The skill must check local tool compatibility before starting a workflow.
+
+`dating-boost capabilities --json` should return:
+
+- `tool_version`: Dating Booster CLI version.
+- `schema_versions`: supported input and output schema versions.
+- `supported_commands`: commands available in this checkout.
+- `data_dir`: local data directory path.
+- `policy_capabilities`: content policy, action policy, confirmation, and action-result recording support.
+- `memory_capabilities`: observation ingest, match profile, conversation memory, feedback, export, and delete support.
+- `agent_native_capabilities`: features intended for host-agent workflows.
+- `warnings`: setup, migration, or compatibility warnings.
+
+Rules:
+
+1. The skill should call capabilities before relying on any command.
+2. If the required command or schema version is missing, the skill should stop and report the mismatch.
+3. Skill packages should declare `dating_boost_min_version`.
+4. Skill packages should record the source spec commit or release they were generated from.
+5. CLI JSON output should include `schema_version` for machine-readable commands.
+
 ## Skill Packaging
 
 The first skill package should contain:
@@ -237,6 +299,24 @@ The first skill package should contain:
 - `examples/`: example context packs, draft outputs, and policy check outputs.
 
 The skill should instruct host agents to prefer local Dating Booster tools when available and to fail clearly when a required tool is missing. Reference files are operational summaries; core code and committed specs remain the source of truth.
+
+## Skill Target Decision
+
+The workflow concepts should remain host-agnostic, but the first packaged skill should be Codex-first.
+
+Rationale:
+
+1. The current concrete user path is Codex plus iPhone Mirroring plus computer use.
+2. Host skill formats, tool names, permission models, and computer-use affordances differ.
+3. A Codex-first package can validate the real workflow faster.
+4. The underlying CLI JSON contracts and workflow vocabulary remain reusable for Claude Code, Hermes, OpenClaw, and MCP adapters.
+
+Decision:
+
+- Build the first package for Codex.
+- Write workflow references in generic language where possible.
+- Keep host-specific instructions isolated in the package entrypoint.
+- Treat other host packages as adapters over the same local tools, not as separate product logic.
 
 ## Relationship to Product Blueprint
 
@@ -272,6 +352,7 @@ Deliverables:
 
 - skill/workflow documentation.
 - CLI JSON contracts for context, policy, memory, and feedback.
+- `dating-boost capabilities --json`.
 - examples for draft and profile refresh workflows.
 - README section explaining agent-native mode.
 
@@ -308,7 +389,6 @@ Deliverables:
 
 ## Open Questions
 
-1. Whether the first skill should target Codex only or use generic language for multiple host agents.
-2. Whether CLI JSON contracts should be finalized before writing the skill.
-3. Whether examples should use synthetic dating data, redacted real data, or both.
-4. Whether the first MCP adapter should be built before or after screenshot fixture perception.
+1. Whether CLI JSON contracts should be finalized before writing the skill.
+2. Whether examples should use synthetic dating data, redacted real data, or both.
+3. Whether the first MCP adapter should be built before or after screenshot fixture perception.
