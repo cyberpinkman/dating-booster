@@ -16,6 +16,7 @@ from dating_boost.core.storage import JsonStorage
 from dating_boost.intelligence.backends import ScriptedBackend
 from dating_boost.intelligence.reply_generator import DraftResponse, generate_reply
 from dating_boost.perception.fixture_loader import load_observation
+from dating_boost.perception.observations import AppObservation
 from dating_boost.policy import Action, authorize_action
 from dating_boost.policy.content import ContentPolicyDecision, evaluate_draft_content
 
@@ -160,7 +161,8 @@ def _handle_draft(args: argparse.Namespace) -> int:
     profile = repo.load_user_profile()
     reply_mode = ReplyMode(args.mode)
     backend_payload = _read_json_object(args.scripted_backend_output)
-    context_pack = _build_mvp_context_pack(profile, args.match_id, reply_mode)
+    observation = _load_latest_observation(args.data_dir, args.match_id)
+    context_pack = _build_mvp_context_pack(profile, args.match_id, reply_mode, observation)
     draft = generate_reply(context_pack, reply_mode, ScriptedBackend(backend_payload))
     policy = evaluate_draft_content(draft, context_pack)
 
@@ -170,6 +172,7 @@ def _handle_draft(args: argparse.Namespace) -> int:
             "match_id": args.match_id,
             "mode": reply_mode.value,
             "best_reply": draft.best_reply,
+            "context_pack": context_pack,
             "draft": _draft_to_dict(draft),
             "policy": _policy_to_dict(policy),
         }
@@ -198,21 +201,29 @@ def _handle_feedback(args: argparse.Namespace) -> int:
     return 0
 
 
-def _build_mvp_context_pack(profile: UserProfile, match_id: str, reply_mode: ReplyMode) -> dict[str, Any]:
+def _build_mvp_context_pack(
+    profile: UserProfile,
+    match_id: str,
+    reply_mode: ReplyMode,
+    observation: AppObservation | None,
+) -> dict[str, Any]:
     user_profile = _profile_to_context_dict(profile)
-    match_profile = {
-        "match_id": match_id,
-        "conversation_hooks": ["live music"],
-        "possible_interests": [{"name": "live music", "confidence": "medium"}],
-    }
-    conversation_memory = {
-        "recent_messages": [
-            {"sender": "match", "text": "What are you up to this weekend?"},
-        ],
-        "open_threads": ["weekend plans"],
-        "commitments": [],
-        "running_summary": "A light dating-app chat with an opening for curiosity.",
-    }
+    if observation is None:
+        match_profile = {
+            "match_id": match_id,
+            "conversation_hooks": [],
+            "possible_interests": [],
+        }
+        conversation_memory = {
+            "recent_messages": [],
+            "open_threads": [],
+            "commitments": [],
+            "running_summary": "No imported observation was available for this match.",
+        }
+    else:
+        match_profile = _match_profile_from_observation(match_id, observation)
+        conversation_memory = _conversation_memory_from_observation(observation)
+
     return build_context_pack(
         user_profile=user_profile,
         match_profile=match_profile,
@@ -220,6 +231,64 @@ def _build_mvp_context_pack(profile: UserProfile, match_id: str, reply_mode: Rep
         reply_mode=reply_mode,
         max_items=None,
     )
+
+
+def _match_profile_from_observation(match_id: str, observation: AppObservation) -> dict[str, Any]:
+    profile = observation.profile_observation
+    possible_interest_cues = [*profile.photo_cues, *profile.hook_candidates]
+    return {
+        "match_id": match_id,
+        "display_name": observation.match_identity_hints.visible_name,
+        "profile_text": profile.profile_text,
+        "conversation_hooks": list(profile.hook_candidates),
+        "possible_interests": [
+            {"name": cue, "confidence": "medium"}
+            for cue in possible_interest_cues
+        ],
+    }
+
+
+def _conversation_memory_from_observation(observation: AppObservation) -> dict[str, Any]:
+    conversation = observation.conversation_observation
+    visible_messages = [dict(message) for message in conversation.visible_messages]
+    return {
+        "recent_messages": visible_messages,
+        "open_threads": list(conversation.thread_cues),
+        "commitments": [],
+        "running_summary": _observation_summary(observation),
+    }
+
+
+def _observation_summary(observation: AppObservation) -> str:
+    profile_text = observation.profile_observation.profile_text.strip()
+    messages = observation.conversation_observation.visible_messages
+    latest_message = messages[-1].get("text", "").strip() if messages else ""
+    parts = [part for part in [profile_text, latest_message] if part]
+    if parts:
+        return " ".join(parts)
+    return "Imported observation contained no visible conversation text."
+
+
+def _load_latest_observation(data_dir: Path, match_id: str) -> AppObservation | None:
+    _validate_storage_id(match_id, "match_id")
+    root = data_dir.resolve()
+    observations_dir = (root / "matches" / match_id / "observations").resolve()
+    if not observations_dir.is_relative_to(root) or not observations_dir.exists():
+        return None
+
+    observation_files = sorted(
+        path
+        for path in observations_dir.glob("*.json")
+        if path.is_file() and path.resolve().is_relative_to(observations_dir)
+    )
+    if not observation_files:
+        return None
+
+    observations = [
+        AppObservation.from_dict(_read_json_object(path))
+        for path in observation_files
+    ]
+    return max(observations, key=lambda observation: (observation.captured_at, observation.observation_id))
 
 
 def _profile_from_dict(data: dict[str, Any]) -> UserProfile:
