@@ -115,15 +115,13 @@ def _fingerprint_matches(candidate: dict[str, Any], fingerprint: str) -> bool:
 
 def _new_match_id(observation: Any) -> str:
     hints = observation.match_identity_hints
-    stable_text = "|".join(
-        part
-        for part in [
-            hints.visible_name or "",
-            hints.conversation_fingerprint or "",
-        ]
-        if part
-    )
-    stable_text = stable_text or observation.observation_id or "unknown"
+    stable_parts = [hints.visible_name or ""]
+    if hints.conversation_fingerprint:
+        stable_parts.append(hints.conversation_fingerprint)
+    else:
+        stable_parts.extend(hints.profile_cues)
+        stable_parts.append(observation.observation_id or "")
+    stable_text = "|".join(part for part in stable_parts if part) or "unknown"
     slug = re.sub(r"[^a-z0-9]+", "_", stable_text.lower()).strip("_") or "unknown"
     digest = hashlib.sha256(stable_text.encode("utf-8")).hexdigest()[:8]
     return f"match_{slug[:32]}_{digest}"

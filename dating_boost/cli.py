@@ -166,6 +166,17 @@ def _handle_draft(args: argparse.Namespace) -> int:
     draft = generate_reply(context_pack, reply_mode, ScriptedBackend(backend_payload))
     policy = evaluate_draft_content(draft, context_pack)
 
+    if not policy.allowed:
+        _print_json(
+            {
+                "status": "blocked",
+                "match_id": args.match_id,
+                "mode": reply_mode.value,
+                "policy": _policy_to_dict(policy),
+            }
+        )
+        return 2
+
     _print_json(
         {
             "status": "ok",

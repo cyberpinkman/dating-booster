@@ -1,9 +1,10 @@
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from dating_boost.core.identity import IdentityConfidence, resolve_match_identity
 from dating_boost.perception.fixture_loader import load_observation
-from dating_boost.perception.observations import AppObservation
+from dating_boost.perception.observations import AppObservation, MatchIdentityHints
 from dating_boost.perception.taxonomy import PageType, SourceType
 
 
@@ -61,6 +62,45 @@ class IdentityTests(unittest.TestCase):
             app_id="generic",
             captured_at="2026-05-25T00:00:00Z",
             page_type=PageType.CHAT_THREAD,
+        )
+
+        first_result = resolve_match_identity(first_observation, existing_matches=[])
+        second_result = resolve_match_identity(second_observation, existing_matches=[])
+
+        self.assertEqual(first_result.confidence, IdentityConfidence.NEW)
+        self.assertEqual(second_result.confidence, IdentityConfidence.NEW)
+        self.assertNotEqual(first_result.match_id, second_result.match_id)
+
+    def test_same_name_new_matches_without_fingerprint_do_not_collide(self):
+        first_observation = replace(
+            AppObservation.minimal(
+                observation_id="obs_same_name_1",
+                source_type=SourceType.USER_INPUT,
+                app_id="generic",
+                captured_at="2026-05-25T00:00:00Z",
+                page_type=PageType.CHAT_THREAD,
+            ),
+            match_identity_hints=MatchIdentityHints(
+                visible_name="Alex",
+                profile_cues=["ceramics class"],
+                conversation_fingerprint=None,
+                evidence="Visible chat header",
+            ),
+        )
+        second_observation = replace(
+            AppObservation.minimal(
+                observation_id="obs_same_name_2",
+                source_type=SourceType.USER_INPUT,
+                app_id="generic",
+                captured_at="2026-05-25T00:00:00Z",
+                page_type=PageType.CHAT_THREAD,
+            ),
+            match_identity_hints=MatchIdentityHints(
+                visible_name="Alex",
+                profile_cues=["trail running"],
+                conversation_fingerprint=None,
+                evidence="Visible chat header",
+            ),
         )
 
         first_result = resolve_match_identity(first_observation, existing_matches=[])

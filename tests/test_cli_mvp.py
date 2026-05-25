@@ -59,6 +59,91 @@ class CliMvpTests(unittest.TestCase):
             self.assertTrue((data_dir / "user_profile.json").exists())
             self.assertTrue(observation_path.exists())
 
+    def test_draft_blocks_policy_violation_without_exposing_dangerous_reply(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            profile_path = data_dir / "profile.json"
+            scripted_path = data_dir / "blocked_reply.json"
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "user_id": "user_local",
+                        "facts": [
+                            {
+                                "id": "fact_local_education",
+                                "kind": "fact",
+                                "content": {"education": "Chinese university graduate"},
+                                "source_type": "user_input",
+                                "evidence": "User confirmed local education background.",
+                                "confidence": "high",
+                                "created_at": "2026-05-25T00:00:00Z",
+                                "last_seen_at": "2026-05-25T00:00:00Z",
+                            }
+                        ],
+                        "preferences": [],
+                        "boundaries": [],
+                        "style_examples": ["short, warm, dry humor"],
+                        "goals": ["practice better dating conversations"],
+                        "persona_baseline": "reserved",
+                        "persona_range": ["warmer", "more outgoing"],
+                        "stance_range": ["can express curiosity about new interests"],
+                        "updated_at": "2026-05-25T00:00:00Z",
+                        "default_reply_mode": "adaptive",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            scripted_path.write_text(
+                json.dumps(
+                    {
+                        "best_reply": "I studied overseas too. London was incredible.",
+                        "safer_reply": "I studied in London too.",
+                        "bolder_reply": "I went to university in London, so I get it.",
+                        "why_this_works": "It invents an education connection.",
+                        "risk_flags": ["contradicts hard facts"],
+                        "missing_info": [],
+                        "mode_notes": "Adaptive mode.",
+                        "persona_divergence": "low",
+                        "stance_divergence": "low",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with redirect_stdout(StringIO()):
+                init_exit = main([
+                    "init-profile",
+                    "--data-dir",
+                    str(data_dir),
+                    "--input",
+                    str(profile_path),
+                ])
+
+            output = StringIO()
+            with redirect_stdout(output):
+                draft_exit = main([
+                    "draft",
+                    "--data-dir",
+                    str(data_dir),
+                    "--match-id",
+                    "match_alex",
+                    "--mode",
+                    "adaptive",
+                    "--scripted-backend-output",
+                    str(scripted_path),
+                ])
+
+            payload = json.loads(output.getvalue())
+
+            self.assertEqual(init_exit, 0)
+            self.assertEqual(draft_exit, 2)
+            self.assertEqual(payload["status"], "blocked")
+            self.assertFalse(payload["policy"]["allowed"])
+            self.assertNotIn("best_reply", payload)
+            self.assertNotIn("draft", payload)
+            self.assertNotIn("I studied overseas too", output.getvalue())
+
     def test_authorize_subcommand_matches_legacy_action_gate(self):
         output = StringIO()
 
