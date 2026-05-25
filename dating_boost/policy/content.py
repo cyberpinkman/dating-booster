@@ -6,6 +6,20 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping
 
+OVERSEAS_STUDY_CLAIMS = (
+    "studied overseas",
+    "study overseas",
+    "studied abroad",
+    "study abroad",
+    "studied in london",
+    "study in london",
+    "went to university in london",
+    "go to university in london",
+    "went to college in london",
+    "go to college in london",
+    "university in london",
+)
+
 
 @dataclass(frozen=True)
 class ContentPolicyDecision:
@@ -18,11 +32,11 @@ class ContentPolicyDecision:
 def evaluate_draft_content(draft: Any, context_pack: Mapping[str, Any]) -> ContentPolicyDecision:
     """Evaluate generated reply variants against MVP content safety rules."""
 
-    if _forbids_overseas_study(context_pack) and _draft_contains(draft, "studied in london"):
+    if _has_overseas_study_constraint(context_pack) and _draft_contains_overseas_study_claim(draft):
         return ContentPolicyDecision(
             allowed=False,
             severity="high",
-            reason="Draft claims overseas study despite a user boundary forbidding it.",
+            reason="Draft claims overseas study despite user hard facts or boundaries.",
         )
 
     if _requires_labeled_divergence_confirmation(draft):
@@ -40,12 +54,16 @@ def evaluate_draft_content(draft: Any, context_pack: Mapping[str, Any]) -> Conte
     )
 
 
-def _forbids_overseas_study(context_pack: Mapping[str, Any]) -> bool:
+def _has_overseas_study_constraint(context_pack: Mapping[str, Any]) -> bool:
     for item in context_pack.get("items", []):
-        if not isinstance(item, Mapping) or item.get("label") != "user_boundaries":
+        if not isinstance(item, Mapping):
             continue
+        label = item.get("label")
         content = item.get("content", "")
-        if _mentions_forbidden_overseas_study(_flatten_text(content).lower()):
+        text = _flatten_text(content).lower()
+        if label == "user_boundaries" and _mentions_forbidden_overseas_study(text):
+            return True
+        if label == "user_hard_facts" and _mentions_local_chinese_education(text):
             return True
     return False
 
@@ -55,12 +73,25 @@ def _mentions_forbidden_overseas_study(text: str) -> bool:
     return any(term in text for term in forbid_terms) and "overseas study" in text
 
 
-def _draft_contains(draft: Any, needle: str) -> bool:
+def _mentions_local_chinese_education(text: str) -> bool:
+    return (
+        "chinese university graduate" in text
+        or ("chinese" in text and "university" in text)
+        or ("china" in text and "university" in text)
+    )
+
+
+def _draft_contains_overseas_study_claim(draft: Any) -> bool:
     for field_name in ("best_reply", "safer_reply", "bolder_reply"):
         value = getattr(draft, field_name, "")
-        if isinstance(value, str) and needle in value.lower():
+        if isinstance(value, str) and _contains_overseas_study_claim(value):
             return True
     return False
+
+
+def _contains_overseas_study_claim(text: str) -> bool:
+    normalized = text.lower()
+    return any(claim in normalized for claim in OVERSEAS_STUDY_CLAIMS)
 
 
 def _requires_labeled_divergence_confirmation(draft: Any) -> bool:
