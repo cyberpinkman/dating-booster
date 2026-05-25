@@ -7,7 +7,12 @@ must stay compatible with `skill-package.json`.
 Required startup command:
 
 ```bash
-dating-boost capabilities --json
+dating-boost capabilities --json --data-dir .local/dating-boost
 ```
 
 Stop before viewing dating-app content if the capability check fails.
+
+Reference files:
+
+- `workflows.md`: reusable draft, profile refresh, send, and feedback flows.
+- `contracts.md`: minimal JSON contracts for observations, drafts, and action results.

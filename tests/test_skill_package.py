@@ -25,23 +25,60 @@ class SkillPackageTests(unittest.TestCase):
         capabilities = json.loads(output.getvalue())
 
         self.assertEqual(exit_code, 0)
+        self.assertEqual(metadata["package_name"], "dating-booster-codex-skill")
+        self.assertEqual(metadata["target_host"], "codex")
         self.assertLessEqual(_version_tuple(metadata["dating_boost_min_version"]), _version_tuple(__version__))
         self.assertTrue(set(metadata["required_commands"]).issubset(set(capabilities["supported_commands"])))
         for schema_name, schema_version in metadata["required_schema_versions"].items():
             self.assertEqual(capabilities["schema_versions"][schema_name], schema_version)
         for spec_path in metadata["source_specs"]:
             self.assertTrue(Path(spec_path).exists(), spec_path)
+        for reference_path in metadata["references"]:
+            self.assertTrue((SKILL_DIR / reference_path).exists(), reference_path)
 
     def test_skill_markdown_contains_required_operational_guards(self):
         skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower()
 
-        self.assertIn("dating-boost capabilities --json", skill_text)
+        self.assertIn("dating-boost capabilities --json --data-dir", skill_text)
+        self.assertIn("skill-package.json", skill_text)
+        self.assertIn("dating_boost_min_version", skill_text)
+        self.assertIn("required_schema_versions", skill_text)
+        self.assertIn("required_commands", skill_text)
+        self.assertIn("source_spec_commit", skill_text)
+        self.assertIn("warning", skill_text)
         self.assertIn("stop", skill_text)
         self.assertIn("privacy", skill_text)
         self.assertIn("visible dating app content", skill_text)
         self.assertIn("high-risk", skill_text)
         self.assertIn("post-action verification", skill_text)
         self.assertIn("record-result", skill_text)
+
+    def test_skill_reference_files_describe_reusable_workflows_and_contracts(self):
+        workflows_text = (SKILL_DIR / "references" / "workflows.md").read_text(encoding="utf-8").lower()
+        contracts_text = (SKILL_DIR / "references" / "contracts.md").read_text(encoding="utf-8").lower()
+
+        for workflow_name in ("draft", "profile refresh", "send", "feedback"):
+            self.assertIn(workflow_name, workflows_text)
+        for command in (
+            "memory ingest-observation",
+            "context build",
+            "policy check-draft",
+            "policy check-action",
+            "action record-result",
+            "feedback record",
+        ):
+            self.assertIn(command, workflows_text)
+        for field_name in (
+            "observation_id",
+            "match_identity_hints",
+            "profile_observation",
+            "conversation_observation",
+            "best_reply",
+            "payload_hash",
+            "result_status",
+            "evidence",
+        ):
+            self.assertIn(field_name, contracts_text)
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:

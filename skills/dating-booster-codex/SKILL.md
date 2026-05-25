@@ -9,13 +9,21 @@ Use this skill when the user asks Codex to assist with dating-app workflows thro
 
 ## Mandatory Capability Check
 
-Before observing any dating app screen, visible dating app content, screenshots, or conversation text, run:
+Before observing any dating app screen, visible dating app content, screenshots, or conversation text, choose a local data directory for this workflow. Prefer `.local/dating-boost` unless the user gives another path. Then run:
 
 ```bash
-dating-boost capabilities --json
+dating-boost capabilities --json --data-dir .local/dating-boost
 ```
 
-If the command is missing, returns invalid JSON, has an incompatible `schema_version`, lacks a required schema version, or does not list the required commands, stop before observing dating app content and tell the user the local Dating Booster tool is incompatible.
+Load this package's `skill-package.json` and compare it with the capabilities JSON before continuing:
+
+- `tool_version` must be greater than or equal to `dating_boost_min_version`.
+- Every `required_schema_versions` entry must exist in `schema_versions` with the same version.
+- Every `required_commands` entry must exist in `supported_commands`.
+- `schema_version` for capabilities must be supported by this skill package.
+- If `source_spec_commit` differs from the local repo commit, report a warning. Continue only if version, schema, and command checks pass.
+
+If the command is missing, returns invalid JSON, has an incompatible `schema_version`, is too old, lacks a required schema version, or does not list the required commands, stop before observing dating app content and tell the user the local Dating Booster tool is incompatible.
 
 ## Privacy Boundary
 
@@ -42,7 +50,7 @@ Do not treat autonomous mode as permission to bypass app rules, rate limits, ver
 
 ## Workflow
 
-1. Run `dating-boost capabilities --json` and verify compatibility.
+1. Run `dating-boost capabilities --json --data-dir .local/dating-boost` and verify compatibility against `skill-package.json`.
 2. Ingest or update observations with `dating-boost memory ingest-observation` after screen content is available.
 3. Retrieve match memory with `dating-boost memory get-match`.
 4. Build the context pack with `dating-boost context build`.
@@ -52,6 +60,8 @@ Do not treat autonomous mode as permission to bypass app rules, rate limits, ver
 8. After the host executes an action, perform post-action verification from a fresh observation.
 9. Record the result with `dating-boost action record-result`.
 10. Record user feedback with `dating-boost feedback record` when useful.
+
+Use `references/workflows.md` for reusable workflow details and `references/contracts.md` for JSON input/output contract examples. These reference files are summaries; core code and committed specs remain the source of truth.
 
 ## Post-Action Verification
 
