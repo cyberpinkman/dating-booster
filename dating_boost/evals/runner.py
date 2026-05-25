@@ -24,7 +24,11 @@ class EvalResult:
     case_count: int
     averages: dict[str, float]
     passed: bool
-    failure_reasons: tuple[str, ...]
+    failures: tuple[str, ...]
+
+    @property
+    def failure_reasons(self) -> tuple[str, ...]:
+        return self.failures
 
 
 def run_reply_quality_eval(path: Path) -> EvalResult:
@@ -38,7 +42,7 @@ def run_reply_quality_eval(path: Path) -> EvalResult:
         case_count=len(cases),
         averages=averages,
         passed=not failure_reasons,
-        failure_reasons=tuple(failure_reasons),
+        failures=tuple(failure_reasons),
     )
 
 

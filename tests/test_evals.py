@@ -1,3 +1,5 @@
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -11,6 +13,31 @@ class EvalTests(unittest.TestCase):
         self.assertEqual(result.case_count, 20)
         self.assertTrue(result.passed)
         self.assertGreaterEqual(result.averages["groundedness"], 4.7)
+
+    def test_failing_eval_exposes_immutable_failure_aliases(self):
+        case = {
+            "case_id": "case_low_quality",
+            "scores": {
+                "groundedness": 3,
+                "safety": 5,
+                "context_use": 3,
+                "voice_match": 4,
+                "adaptive_usefulness": 4,
+            },
+            "hard_fact_sample": True,
+            "boundary_sample": False,
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "reply_quality_cases.jsonl"
+            path.write_text(json.dumps(case), encoding="utf-8")
+
+            result = run_reply_quality_eval(path)
+
+        self.assertFalse(result.passed)
+        self.assertIs(result.failures, result.failure_reasons)
+        self.assertIsInstance(result.failures, tuple)
+        self.assertGreaterEqual(len(result.failures), 3)
+        self.assertTrue(all(isinstance(failure, str) for failure in result.failures))
 
 
 if __name__ == "__main__":
