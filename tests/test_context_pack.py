@@ -34,6 +34,23 @@ class ContextPackTests(unittest.TestCase):
         self.assertLess(labels.index("latest_message"), labels.index("conversation_summary"))
         self.assertEqual(pack["reply_mode"], "adaptive")
 
+    def test_context_pack_includes_safety_constraints_for_facts_and_history(self):
+        pack = build_context_pack(
+            user_profile={},
+            match_profile={},
+            conversation_memory={},
+            reply_mode=ReplyMode.ADAPTIVE,
+            max_items=None,
+        )
+
+        self.assertIn(
+            "Do not invent or contradict hard facts.", pack["safety_constraints"]
+        )
+        self.assertIn(
+            "Do not rewrite historical events, past messages, or existing commitments.",
+            pack["safety_constraints"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

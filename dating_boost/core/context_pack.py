@@ -6,7 +6,10 @@ from typing import Any
 from dating_boost.core.models import ReplyMode
 
 
-SAFETY_CONSTRAINTS = ["Do not invent or contradict hard facts."]
+SAFETY_CONSTRAINTS = [
+    "Do not invent or contradict hard facts.",
+    "Do not rewrite historical events, past messages, or existing commitments.",
+]
 
 
 def build_context_pack(
