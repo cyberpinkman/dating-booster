@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import re
 from typing import Any, Mapping
 
 OVERSEAS_STUDY_CLAIMS = (
@@ -39,6 +40,14 @@ def evaluate_draft_content(draft: Any, context_pack: Mapping[str, Any]) -> Conte
             reason="Draft claims overseas study despite user hard facts or boundaries.",
         )
 
+    hard_fact_violation = _hard_fact_contradiction_reason(draft, context_pack)
+    if hard_fact_violation:
+        return ContentPolicyDecision(
+            allowed=False,
+            severity="high",
+            reason=hard_fact_violation,
+        )
+
     if _requires_labeled_divergence_confirmation(draft):
         return ContentPolicyDecision(
             allowed=True,
@@ -68,6 +77,62 @@ def _has_overseas_study_constraint(context_pack: Mapping[str, Any]) -> bool:
     return False
 
 
+def _hard_fact_contradiction_reason(draft: Any, context_pack: Mapping[str, Any]) -> str | None:
+    hard_facts = _hard_fact_content(context_pack)
+    if _age_fact_contradicted(draft, hard_facts):
+        return "Draft contradicts user age hard facts."
+    if _location_fact_contradicted(draft, hard_facts):
+        return "Draft contradicts user location hard facts."
+    return None
+
+
+def _hard_fact_content(context_pack: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    facts: list[Mapping[str, Any]] = []
+    for item in context_pack.get("items", []):
+        if not isinstance(item, Mapping) or item.get("label") != "user_hard_facts":
+            continue
+        content = item.get("content")
+        if isinstance(content, Mapping):
+            facts.append(content)
+        elif isinstance(content, list):
+            facts.extend(entry for entry in content if isinstance(entry, Mapping))
+    return facts
+
+
+def _age_fact_contradicted(draft: Any, hard_facts: list[Mapping[str, Any]]) -> bool:
+    known_ages = {
+        int(content["age"])
+        for content in hard_facts
+        if str(content.get("age", "")).isdigit()
+    }
+    if not known_ages:
+        return False
+    for text in _draft_texts(draft):
+        for match in re.finditer(r"\b(?:i(?:'m| am)|my age is)\s+(\d{1,3})\b", text.lower()):
+            if int(match.group(1)) not in known_ages:
+                return True
+    return False
+
+
+def _location_fact_contradicted(draft: Any, hard_facts: list[Mapping[str, Any]]) -> bool:
+    known_locations = {
+        str(content[key]).strip().lower()
+        for content in hard_facts
+        for key in ("city", "location", "residence", "home_city", "based_in")
+        if content.get(key)
+    }
+    if not known_locations:
+        return False
+    claim_markers = ("i live in ", "i'm in ", "i am in ", "based in ", "i'm based in ", "from ")
+    for text in _draft_texts(draft):
+        normalized = text.lower()
+        if any(marker in normalized for marker in claim_markers) and not any(
+            location in normalized for location in known_locations
+        ):
+            return True
+    return False
+
+
 def _mentions_forbidden_overseas_study(text: str) -> bool:
     forbid_terms = ("do not", "don't", "dont", "never", "avoid", "forbid", "forbids", "forbidden")
     return any(term in text for term in forbid_terms) and "overseas study" in text
@@ -82,11 +147,19 @@ def _mentions_local_chinese_education(text: str) -> bool:
 
 
 def _draft_contains_overseas_study_claim(draft: Any) -> bool:
-    for field_name in ("best_reply", "safer_reply", "bolder_reply"):
-        value = getattr(draft, field_name, "")
-        if isinstance(value, str) and _contains_overseas_study_claim(value):
+    for value in _draft_texts(draft):
+        if _contains_overseas_study_claim(value):
             return True
     return False
+
+
+def _draft_texts(draft: Any) -> list[str]:
+    values: list[str] = []
+    for field_name in ("best_reply", "safer_reply", "bolder_reply"):
+        value = getattr(draft, field_name, "")
+        if isinstance(value, str):
+            values.append(value)
+    return values
 
 
 def _contains_overseas_study_claim(text: str) -> bool:

@@ -73,3 +73,21 @@ class JsonStorage:
             handle.write(json.dumps(data, sort_keys=True) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+
+    def read_jsonl(self, relative_path: Path) -> list[dict[str, Any]]:
+        path = self._resolve_path(relative_path)
+        if not path.exists():
+            return []
+
+        items: list[dict[str, Any]] = []
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                if not isinstance(item, dict):
+                    raise StorageCorruptionError(f"expected JSON object in JSONL: {relative_path}")
+                items.append(item)
+        except json.JSONDecodeError as exc:
+            raise StorageCorruptionError(f"corrupt JSONL: {relative_path}") from exc
+        return items

@@ -4,8 +4,10 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from dating_boost.cli import main
+from dating_boost.core.repositories import ObservationRepository
 
 
 class CliMvpTests(unittest.TestCase):
@@ -33,9 +35,6 @@ class CliMvpTests(unittest.TestCase):
                 ])
             import_payload = json.loads(import_output.getvalue())
             match_id = import_payload["match_id"]
-            observation_path = (
-                data_dir / "matches" / match_id / "observations" / "obs_chat_001.json"
-            )
 
             with redirect_stdout(output):
                 draft_exit = main([
@@ -46,8 +45,11 @@ class CliMvpTests(unittest.TestCase):
                     match_id,
                     "--mode",
                     "adaptive",
+                    "--backend",
+                    "scripted",
                     "--scripted-backend-output",
                     "tests/fixtures/intelligence/scripted_reply.json",
+                    "--debug-context",
                 ])
 
             self.assertEqual(init_exit, 0)
@@ -57,7 +59,156 @@ class CliMvpTests(unittest.TestCase):
             self.assertIn("What are you up to this weekend?", output.getvalue())
             self.assertIn("Ask about live music", output.getvalue())
             self.assertTrue((data_dir / "user_profile.json").exists())
-            self.assertTrue(observation_path.exists())
+            self.assertEqual(
+                ObservationRepository(data_dir).load_latest_observation(match_id).observation_id,
+                "obs_chat_001",
+            )
+
+    def test_draft_omits_context_pack_unless_debug_context_is_enabled(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+
+            with redirect_stdout(StringIO()):
+                main([
+                    "init-profile",
+                    "--data-dir",
+                    str(data_dir),
+                    "--input",
+                    "tests/fixtures/intelligence/user_profile.json",
+                ])
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = main([
+                    "draft",
+                    "--data-dir",
+                    str(data_dir),
+                    "--match-id",
+                    "match_alex",
+                    "--mode",
+                    "adaptive",
+                    "--backend",
+                    "scripted",
+                    "--scripted-backend-output",
+                    "tests/fixtures/intelligence/scripted_reply.json",
+                ])
+
+            payload = json.loads(output.getvalue())
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("best_reply", payload)
+            self.assertNotIn("context_pack", payload)
+
+    def test_draft_can_use_openai_backend_without_scripted_output(self):
+        class FakeOpenAIBackend:
+            created_models: list[str] = []
+
+            def __init__(self, model: str):
+                self.created_models.append(model)
+
+            def generate_structured(self, system_prompt, user_prompt, schema):
+                return {
+                    "best_reply": "OpenAI path reply.",
+                    "safer_reply": "OpenAI safer reply.",
+                    "bolder_reply": "OpenAI bolder reply.",
+                    "why_this_works": "Uses the real backend interface.",
+                    "risk_flags": [],
+                    "missing_info": [],
+                    "mode_notes": "Adaptive mode.",
+                    "persona_divergence": "low",
+                    "stance_divergence": "low",
+                }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            with redirect_stdout(StringIO()):
+                main([
+                    "init-profile",
+                    "--data-dir",
+                    str(data_dir),
+                    "--input",
+                    "tests/fixtures/intelligence/user_profile.json",
+                ])
+
+            output = StringIO()
+            with patch("dating_boost.cli.OpenAIBackend", FakeOpenAIBackend):
+                with redirect_stdout(output):
+                    exit_code = main([
+                        "draft",
+                        "--data-dir",
+                        str(data_dir),
+                        "--match-id",
+                        "match_alex",
+                        "--mode",
+                        "adaptive",
+                        "--backend",
+                        "openai",
+                        "--model",
+                        "test-model",
+                    ])
+
+            payload = json.loads(output.getvalue())
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["best_reply"], "OpenAI path reply.")
+            self.assertEqual(FakeOpenAIBackend.created_models, ["test-model"])
+
+    def test_observe_screenshot_imports_analysis_as_observation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            screenshot_path = Path(temp_dir) / "screen.png"
+            analysis_path = Path(temp_dir) / "analysis.json"
+            screenshot_path.write_bytes(b"fake image bytes")
+            analysis_path.write_text(
+                json.dumps(
+                    {
+                        "observation_id": "obs_screen_001",
+                        "app_id": "tinder",
+                        "captured_at": "2026-05-25T00:00:00Z",
+                        "page_type": "chat_thread",
+                        "page_confidence": "medium",
+                        "match_identity_hints": {
+                            "visible_name": "Riley",
+                            "profile_cues": ["likes climbing"],
+                            "conversation_fingerprint": "riley-climbing",
+                            "evidence": "Manual screenshot analysis",
+                        },
+                        "profile_observation": {
+                            "profile_text": "Climbing gym regular.",
+                            "photo_cues": ["bouldering wall"],
+                            "hook_candidates": ["Ask about climbing routes"],
+                        },
+                        "conversation_observation": {
+                            "visible_messages": [
+                                {"sender": "match", "text": "Do you climb too?"}
+                            ],
+                            "input_state": "empty",
+                            "thread_cues": ["climbing question"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = main([
+                    "observe-screenshot",
+                    "--data-dir",
+                    str(data_dir),
+                    "--screenshot",
+                    str(screenshot_path),
+                    "--analysis",
+                    str(analysis_path),
+                ])
+
+            payload = json.loads(output.getvalue())
+            observation = ObservationRepository(data_dir).load_latest_observation(payload["match_id"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(observation.source_type.value, "screenshot_fixture")
+            self.assertEqual(observation.raw_ref, str(screenshot_path))
 
     def test_draft_blocks_policy_violation_without_exposing_dangerous_reply(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -130,6 +281,8 @@ class CliMvpTests(unittest.TestCase):
                     "match_alex",
                     "--mode",
                     "adaptive",
+                    "--backend",
+                    "scripted",
                     "--scripted-backend-output",
                     str(scripted_path),
                 ])
@@ -160,19 +313,20 @@ class CliMvpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir)
 
-            exit_code = main([
-                "feedback",
-                "--data-dir",
-                str(data_dir),
-                "--match-id",
-                "match_alex",
-                "--draft-id",
-                "draft_1",
-                "--mode",
-                "adaptive",
-                "--label",
-                "accepted",
-            ])
+            with redirect_stdout(StringIO()):
+                exit_code = main([
+                    "feedback",
+                    "--data-dir",
+                    str(data_dir),
+                    "--match-id",
+                    "match_alex",
+                    "--draft-id",
+                    "draft_1",
+                    "--mode",
+                    "adaptive",
+                    "--label",
+                    "accepted",
+                ])
 
             events_path = data_dir / "matches" / "match_alex" / "feedback_events.jsonl"
             events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]

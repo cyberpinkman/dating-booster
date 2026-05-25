@@ -53,6 +53,50 @@ class ContentPolicyTests(unittest.TestCase):
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.severity, "high")
 
+    def test_blocks_age_and_location_hard_fact_contradictions(self):
+        context_pack = {
+            "items": [
+                {
+                    "label": "user_hard_facts",
+                    "content": {
+                        "age": 30,
+                        "city": "Shanghai",
+                    },
+                },
+            ]
+        }
+        cases = (
+            DraftResponse(
+                best_reply="I'm 25, so I still have time.",
+                safer_reply="That sounds interesting.",
+                bolder_reply="Tell me more.",
+                why_this_works="Invents age.",
+                risk_flags=[],
+                missing_info=[],
+                mode_notes="",
+                persona_divergence=Divergence.LOW,
+                stance_divergence=Divergence.LOW,
+            ),
+            DraftResponse(
+                best_reply="I live in London too.",
+                safer_reply="That sounds interesting.",
+                bolder_reply="Tell me more.",
+                why_this_works="Invents location.",
+                risk_flags=[],
+                missing_info=[],
+                mode_notes="",
+                persona_divergence=Divergence.LOW,
+                stance_divergence=Divergence.LOW,
+            ),
+        )
+
+        for draft in cases:
+            with self.subTest(reply=draft.best_reply):
+                decision = evaluate_draft_content(draft, context_pack)
+
+                self.assertFalse(decision.allowed)
+                self.assertEqual(decision.severity, "high")
+
     def test_blocks_overseas_study_synonyms_in_any_reply_variant(self):
         context_pack = {
             "items": [

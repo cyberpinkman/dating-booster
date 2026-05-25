@@ -116,6 +116,18 @@ class StorageTests(unittest.TestCase):
 
             self.assertEqual([json.loads(line)["event_id"] for line in lines], ["fb_1", "fb_2"])
 
+    def test_jsonl_read_returns_objects_and_missing_file_returns_empty_list(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = JsonStorage(Path(temp_dir))
+            storage.append_jsonl(Path("feedback_events.jsonl"), {"event_id": "fb_1"})
+            storage.append_jsonl(Path("feedback_events.jsonl"), {"event_id": "fb_2"})
+
+            events = storage.read_jsonl(Path("feedback_events.jsonl"))
+            missing_events = storage.read_jsonl(Path("missing.jsonl"))
+
+            self.assertEqual([event["event_id"] for event in events], ["fb_1", "fb_2"])
+            self.assertEqual(missing_events, [])
+
 
 if __name__ == "__main__":
     unittest.main()

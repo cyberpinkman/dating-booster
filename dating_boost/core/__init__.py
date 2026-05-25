@@ -8,6 +8,7 @@ from dating_boost.core.models import (
     ReplyMode,
     UserProfile,
 )
+from dating_boost.core.repositories import MatchRepository, ObservationRepository
 
 __all__ = [
     "Confidence",
@@ -16,6 +17,8 @@ __all__ = [
     "MemoryItem",
     "MemoryKind",
     "MemoryStatus",
+    "MatchRepository",
+    "ObservationRepository",
     "ReplyMode",
     "UserProfile",
     "create_feedback_event",

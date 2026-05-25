@@ -11,12 +11,12 @@ from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.feedback import create_feedback_event
 from dating_boost.core.identity import resolve_match_identity
 from dating_boost.core.models import MemoryItem, ReplyMode, UserProfile
-from dating_boost.core.repositories import JsonMemoryRepository
-from dating_boost.core.storage import JsonStorage
-from dating_boost.intelligence.backends import ScriptedBackend
+from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
+from dating_boost.intelligence.backends import ModelBackend, OpenAIBackend, ScriptedBackend
 from dating_boost.intelligence.reply_generator import DraftResponse, generate_reply
 from dating_boost.perception.fixture_loader import load_observation
 from dating_boost.perception.observations import AppObservation
+from dating_boost.perception.screenshot_loader import build_observation_from_screenshot_analysis
 from dating_boost.policy import Action, authorize_action
 from dating_boost.policy.content import ContentPolicyDecision, evaluate_draft_content
 
@@ -62,11 +62,23 @@ def main(argv: list[str] | None = None) -> int:
     import_parser.add_argument("--input", required=True, type=Path)
     import_parser.set_defaults(handler=_handle_import_observation)
 
-    draft_parser = subparsers.add_parser("draft", help="Generate a local scripted reply draft.")
+    screenshot_parser = subparsers.add_parser(
+        "observe-screenshot",
+        help="Import a screenshot plus manual/OCR/VLM analysis as an observation.",
+    )
+    screenshot_parser.add_argument("--data-dir", required=True, type=Path)
+    screenshot_parser.add_argument("--screenshot", required=True, type=Path)
+    screenshot_parser.add_argument("--analysis", required=True, type=Path)
+    screenshot_parser.set_defaults(handler=_handle_observe_screenshot)
+
+    draft_parser = subparsers.add_parser("draft", help="Generate a reply draft.")
     draft_parser.add_argument("--data-dir", required=True, type=Path)
     draft_parser.add_argument("--match-id", required=True)
     draft_parser.add_argument("--mode", required=True, choices=[mode.value for mode in ReplyMode])
-    draft_parser.add_argument("--scripted-backend-output", required=True, type=Path)
+    draft_parser.add_argument("--backend", choices=["openai", "scripted"])
+    draft_parser.add_argument("--model", default="gpt-4.1-mini")
+    draft_parser.add_argument("--scripted-backend-output", type=Path)
+    draft_parser.add_argument("--debug-context", action="store_true")
     draft_parser.set_defaults(handler=_handle_draft)
 
     feedback_parser = subparsers.add_parser("feedback", help="Append local feedback for a draft.")
@@ -134,15 +146,39 @@ def _handle_init_profile(args: argparse.Namespace) -> int:
 
 def _handle_import_observation(args: argparse.Namespace) -> int:
     observation = load_observation(args.input)
-    identity = resolve_match_identity(observation, existing_matches=[])
+    return _persist_observation(args.data_dir, observation)
+
+
+def _handle_observe_screenshot(args: argparse.Namespace) -> int:
+    if not args.screenshot.exists():
+        raise ValueError(f"screenshot does not exist: {args.screenshot}")
+    observation = build_observation_from_screenshot_analysis(
+        screenshot_path=args.screenshot,
+        analysis=_read_json_object(args.analysis),
+    )
+    return _persist_observation(args.data_dir, observation)
+
+
+def _persist_observation(data_dir: Path, observation: AppObservation) -> int:
+    match_repo = MatchRepository(data_dir)
+    identity = resolve_match_identity(observation, existing_matches=match_repo.list_match_candidates())
     _validate_storage_id(identity.match_id, "match_id")
     _validate_storage_id(observation.observation_id, "observation_id")
 
-    storage = JsonStorage(args.data_dir)
-    observation_path = (
-        Path("matches") / identity.match_id / "observations" / f"{observation.observation_id}.json"
+    ObservationRepository(data_dir).save_observation(identity.match_id, observation)
+    match_repo.upsert_match_from_observation(
+        match_id=identity.match_id,
+        observation=observation,
+        confidence=identity.confidence.value,
+        requires_user_confirmation=identity.requires_user_confirmation,
     )
-    storage.write_json(observation_path, observation.to_dict())
+    if identity.requires_user_confirmation:
+        match_repo.append_identity_confirmation(
+            match_id=identity.match_id,
+            observation_id=observation.observation_id,
+            confidence=identity.confidence.value,
+            reason=identity.reason,
+        )
 
     _print_json(
         {
@@ -160,10 +196,10 @@ def _handle_draft(args: argparse.Namespace) -> int:
     repo = JsonMemoryRepository(args.data_dir)
     profile = repo.load_user_profile()
     reply_mode = ReplyMode(args.mode)
-    backend_payload = _read_json_object(args.scripted_backend_output)
-    observation = _load_latest_observation(args.data_dir, args.match_id)
+    backend = _select_backend(args)
+    observation = ObservationRepository(args.data_dir).load_latest_observation(args.match_id)
     context_pack = _build_mvp_context_pack(profile, args.match_id, reply_mode, observation)
-    draft = generate_reply(context_pack, reply_mode, ScriptedBackend(backend_payload))
+    draft = generate_reply(context_pack, reply_mode, backend)
     policy = evaluate_draft_content(draft, context_pack)
 
     if not policy.allowed:
@@ -177,18 +213,29 @@ def _handle_draft(args: argparse.Namespace) -> int:
         )
         return 2
 
-    _print_json(
-        {
-            "status": "ok",
-            "match_id": args.match_id,
-            "mode": reply_mode.value,
-            "best_reply": draft.best_reply,
-            "context_pack": context_pack,
-            "draft": _draft_to_dict(draft),
-            "policy": _policy_to_dict(policy),
-        }
-    )
+    payload: dict[str, Any] = {
+        "status": "ok",
+        "match_id": args.match_id,
+        "mode": reply_mode.value,
+        "best_reply": draft.best_reply,
+        "draft": _draft_to_dict(draft),
+        "policy": _policy_to_dict(policy),
+    }
+    if args.debug_context:
+        payload["context_pack"] = context_pack
+    _print_json(payload)
     return 0
+
+
+def _select_backend(args: argparse.Namespace) -> ModelBackend:
+    backend_name = args.backend or ("scripted" if args.scripted_backend_output else "openai")
+    if backend_name == "scripted":
+        if args.scripted_backend_output is None:
+            raise ValueError("--backend scripted requires --scripted-backend-output")
+        return ScriptedBackend(_read_json_object(args.scripted_backend_output))
+    if args.scripted_backend_output is not None:
+        raise ValueError("--scripted-backend-output can only be used with --backend scripted")
+    return OpenAIBackend(model=args.model)
 
 
 def _handle_feedback(args: argparse.Namespace) -> int:
@@ -278,28 +325,6 @@ def _observation_summary(observation: AppObservation) -> str:
     if parts:
         return " ".join(parts)
     return "Imported observation contained no visible conversation text."
-
-
-def _load_latest_observation(data_dir: Path, match_id: str) -> AppObservation | None:
-    _validate_storage_id(match_id, "match_id")
-    root = data_dir.resolve()
-    observations_dir = (root / "matches" / match_id / "observations").resolve()
-    if not observations_dir.is_relative_to(root) or not observations_dir.exists():
-        return None
-
-    observation_files = sorted(
-        path
-        for path in observations_dir.glob("*.json")
-        if path.is_file() and path.resolve().is_relative_to(observations_dir)
-    )
-    if not observation_files:
-        return None
-
-    observations = [
-        AppObservation.from_dict(_read_json_object(path))
-        for path in observation_files
-    ]
-    return max(observations, key=lambda observation: (observation.captured_at, observation.observation_id))
 
 
 def _profile_from_dict(data: dict[str, Any]) -> UserProfile:

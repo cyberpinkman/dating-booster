@@ -3,7 +3,8 @@ import unittest
 from pathlib import Path
 
 from dating_boost.core.models import Confidence, MemoryItem, MemoryKind, ReplyMode, UserProfile
-from dating_boost.core.repositories import JsonMemoryRepository
+from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
+from dating_boost.perception.fixture_loader import load_observation
 
 
 class RepositoryTests(unittest.TestCase):
@@ -86,6 +87,48 @@ class RepositoryTests(unittest.TestCase):
             self.assertIn('"default_reply_mode": "self"', raw_profile)
             self.assertEqual(loaded.default_reply_mode, ReplyMode.SELF)
             self.assertEqual(loaded.facts[0], fact)
+
+    def test_observation_repository_saves_and_loads_latest_observation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            observation = load_observation(Path("tests/fixtures/intelligence/app_observation_chat.json"))
+            repo = ObservationRepository(Path(temp_dir))
+
+            repo.save_observation("match_alex", observation)
+            loaded = repo.load_latest_observation("match_alex")
+
+            self.assertIsNotNone(loaded)
+            self.assertEqual(loaded.observation_id, "obs_chat_001")
+            self.assertEqual(
+                loaded.conversation_observation.visible_messages[-1]["text"],
+                "It was. What are you up to this weekend?",
+            )
+
+    def test_match_repository_indexes_candidates_and_merge_records(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            observation = load_observation(Path("tests/fixtures/intelligence/app_observation_chat.json"))
+            repo = MatchRepository(Path(temp_dir))
+
+            repo.upsert_match_from_observation(
+                match_id="match_alex_old",
+                observation=observation,
+                confidence="low",
+                requires_user_confirmation=True,
+            )
+            repo.upsert_match_from_observation(
+                match_id="match_alex_new",
+                observation=observation,
+                confidence="high",
+                requires_user_confirmation=False,
+            )
+            repo.merge_matches(source_match_id="match_alex_old", target_match_id="match_alex_new")
+
+            candidates = repo.list_match_candidates()
+            merged = [candidate for candidate in candidates if candidate["match_id"] == "match_alex_new"][0]
+
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(merged["display_name"], "Alex")
+            self.assertIn("likes live music", merged["profile_cues"])
+            self.assertIn("match_alex_old", merged["merged_match_ids"])
 
 
 if __name__ == "__main__":

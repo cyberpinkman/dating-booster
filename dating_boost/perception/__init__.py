@@ -5,6 +5,7 @@ from dating_boost.perception.observations import (
     MatchIdentityHints,
     ProfileObservation,
 )
+from dating_boost.perception.screenshot_loader import build_observation_from_screenshot_analysis
 from dating_boost.perception.taxonomy import ExceptionState, PageType, SourceType
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "PageType",
     "ProfileObservation",
     "SourceType",
+    "build_observation_from_screenshot_analysis",
     "load_observation",
 ]
