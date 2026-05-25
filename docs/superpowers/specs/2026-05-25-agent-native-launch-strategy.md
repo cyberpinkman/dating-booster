@@ -271,6 +271,7 @@ The skill must check local tool compatibility before starting a workflow.
 `dating-boost capabilities --json` should return:
 
 - `tool_version`: Dating Booster CLI version.
+- `git_commit`: current Dating Booster source commit when available.
 - `schema_versions`: supported input and output schema versions.
 - `supported_commands`: commands available in this checkout.
 - `data_dir`: local data directory path.
@@ -292,6 +293,7 @@ Rules:
 The first skill package should contain:
 
 - `SKILL.md`: workflow instructions for host agents.
+- `skill-package.json`: package metadata and compatibility requirements.
 - `references/boundary-statement.md`: product and platform-risk language, kept in sync with README.
 - `references/reply-modes.md`: concise Self, Adaptive, and Recipient-Optimized guidance that points back to the intelligence spec as source of truth.
 - `references/safety-policy.md`: concise hard facts, consent, persona, stance, and content policy guidance that points back to core policy contracts.
@@ -299,6 +301,25 @@ The first skill package should contain:
 - `examples/`: example context packs, draft outputs, and policy check outputs.
 
 The skill should instruct host agents to prefer local Dating Booster tools when available and to fail clearly when a required tool is missing. Reference files are operational summaries; core code and committed specs remain the source of truth.
+
+`skill-package.json` should include:
+
+- `package_name`: dating-booster-codex-skill.
+- `package_version`: skill package version.
+- `target_host`: codex for the first package.
+- `dating_boost_min_version`: minimum compatible Dating Booster CLI version.
+- `required_schema_versions`: schema versions required by the skill.
+- `source_spec_commit`: git commit or release tag used to generate the skill package.
+- `source_specs`: spec files used as source of truth.
+- `required_commands`: CLI commands the skill expects.
+
+Compatibility rules:
+
+1. At workflow startup, the skill calls `dating-boost capabilities --json`.
+2. The skill compares `tool_version`, `schema_versions`, and `supported_commands` against `skill-package.json`.
+3. If the local tool is too old, missing commands, or missing required schema versions, the skill stops before observing dating-app content.
+4. If `source_spec_commit` differs from the local repo commit, the skill reports a warning. It can continue only if version and schema checks pass.
+5. Generated skill packages should update `skill-package.json` in the same commit as any workflow reference changes.
 
 ## Skill Target Decision
 
