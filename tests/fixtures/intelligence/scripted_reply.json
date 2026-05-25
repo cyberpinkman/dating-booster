@@ -1,0 +1,11 @@
+{
+  "best_reply": "Sounds fun. Any good live music spots you recommend?",
+  "safer_reply": "Nice. Any live music places you like around here?",
+  "bolder_reply": "Now I need your best live music recommendation.",
+  "why_this_works": "It uses the match's live music cue and answers with curiosity.",
+  "risk_flags": [],
+  "missing_info": [],
+  "mode_notes": "Adaptive mode keeps the user's concise style while adding warmth.",
+  "persona_divergence": "low",
+  "stance_divergence": "low"
+}
