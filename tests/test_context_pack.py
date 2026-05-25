@@ -51,6 +51,50 @@ class ContextPackTests(unittest.TestCase):
             pack["safety_constraints"],
         )
 
+    def test_context_pack_includes_safety_constraints_for_persona_modulation(self):
+        pack = build_context_pack(
+            user_profile={},
+            match_profile={},
+            conversation_memory={},
+            reply_mode=ReplyMode.ADAPTIVE,
+            max_items=None,
+        )
+
+        self.assertIn(
+            (
+                "Persona and stance may be modulated, but must not be presented as "
+                "past fact, identity change, or contradiction of user boundaries."
+            ),
+            pack["safety_constraints"],
+        )
+        self.assertIn(
+            (
+                "Medium or high persona/stance divergence must be labeled and "
+                "explainable for downstream policy and generation."
+            ),
+            pack["safety_constraints"],
+        )
+
+    def test_context_pack_item_content_is_a_snapshot(self):
+        user_profile = {
+            "boundaries": [{"content": {"text": "Do not claim overseas study"}}]
+        }
+
+        pack = build_context_pack(
+            user_profile=user_profile,
+            match_profile={},
+            conversation_memory={},
+            reply_mode=ReplyMode.ADAPTIVE,
+            max_items=None,
+        )
+
+        user_profile["boundaries"][0]["content"]["text"] = "Changed later"
+
+        self.assertEqual(
+            pack["items"][0]["content"][0]["content"]["text"],
+            "Do not claim overseas study",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

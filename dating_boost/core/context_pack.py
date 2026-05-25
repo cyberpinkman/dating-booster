@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from enum import Enum
 from typing import Any
 
@@ -9,6 +10,14 @@ from dating_boost.core.models import ReplyMode
 SAFETY_CONSTRAINTS = [
     "Do not invent or contradict hard facts.",
     "Do not rewrite historical events, past messages, or existing commitments.",
+    (
+        "Persona and stance may be modulated, but must not be presented as "
+        "past fact, identity change, or contradiction of user boundaries."
+    ),
+    (
+        "Medium or high persona/stance divergence must be labeled and "
+        "explainable for downstream policy and generation."
+    ),
 ]
 
 
@@ -55,7 +64,7 @@ def build_context_pack(
 
 def _append(items: list[dict[str, Any]], label: str, content: Any) -> None:
     if content:
-        items.append({"label": label, "content": content})
+        items.append({"label": label, "content": deepcopy(content)})
 
 
 def _reply_mode_value(reply_mode: ReplyMode | str) -> str:
