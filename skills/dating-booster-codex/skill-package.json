@@ -20,9 +20,11 @@
     "docs/superpowers/specs/2026-05-25-intelligence-layer-design.md"
   ],
   "references": [
+    "INSTALL.md",
     "references/README.md",
     "references/workflows.md",
-    "references/contracts.md"
+    "references/contracts.md",
+    "references/observation-authoring.md"
   ],
   "required_commands": [
     "capabilities",

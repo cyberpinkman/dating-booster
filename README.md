@@ -49,6 +49,8 @@ policy checks and user confirmation unless autonomous mode is deliberately
 enabled.
 
 The Codex-first skill package lives at `skills/dating-booster-codex/`.
+Installation and startup instructions live at
+`skills/dating-booster-codex/INSTALL.md`.
 Its required commands are:
 
 ```bash

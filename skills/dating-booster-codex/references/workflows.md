@@ -18,6 +18,7 @@ policy, and audit tools. They do not replace the repository specs.
 Use this when the user wants a reply suggestion for a known match.
 
 1. Convert visible profile/chat context into the observation contract.
+   Use `observation-authoring.md` when converting screen content to JSON.
 2. Run `dating-boost memory ingest-observation --data-dir .local/dating-boost --input observation.json`.
 3. Run `dating-boost memory get-match --data-dir .local/dating-boost --match-id MATCH_ID`.
 4. Run `dating-boost context build --data-dir .local/dating-boost --match-id MATCH_ID --mode adaptive`.
@@ -33,7 +34,7 @@ Use this when the user wants match memory updated from a profile page or fresh
 chat screen.
 
 1. Capture visible profile text, photo cues, hook candidates, messages, and page
-   type into an observation JSON object.
+   type into an observation JSON object using `observation-authoring.md`.
 2. Run `dating-boost memory ingest-observation --data-dir .local/dating-boost --input observation.json`.
 3. If the result requires user confirmation, ask the user whether this is the
    same match before relying on the merged memory.

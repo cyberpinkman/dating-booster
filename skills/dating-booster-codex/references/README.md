@@ -16,3 +16,5 @@ Reference files:
 
 - `workflows.md`: reusable draft, profile refresh, send, and feedback flows.
 - `contracts.md`: minimal JSON contracts for observations, drafts, and action results.
+- `observation-authoring.md`: rules for converting visible screen content into
+  observation JSON without over-inference.
