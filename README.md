@@ -25,4 +25,24 @@ python3 -m dating_boost.cli send_message
 python3 -m dating_boost.cli send_message --autonomous
 ```
 
-The current CLI only authorizes actions. It does not execute GUI actions and does not include a mock dating-app harness.
+The action gate does not execute GUI actions. It only reports whether a local
+workflow is allowed to proceed.
+
+## MVP intelligence workflow
+
+The current MVP can run a local fixture/manual-observation workflow end to end:
+
+```bash
+python3 -m dating_boost.cli init-profile --data-dir .local/dating-boost --input tests/fixtures/intelligence/user_profile.json
+MATCH_ID=$(python3 -m dating_boost.cli import-observation --data-dir .local/dating-boost --input tests/fixtures/intelligence/app_observation_chat.json | python3 -c 'import json, sys; print(json.load(sys.stdin)["match_id"])')
+python3 -m dating_boost.cli draft --data-dir .local/dating-boost --match-id "$MATCH_ID" --mode adaptive --scripted-backend-output tests/fixtures/intelligence/scripted_reply.json
+python3 -m dating_boost.cli feedback --data-dir .local/dating-boost --match-id "$MATCH_ID" --draft-id draft_1 --mode adaptive --label accepted
+python3 -m unittest discover -s tests
+```
+
+`--scripted-backend-output` is for deterministic local tests and fixture demos.
+It is not the production LLM path; production drafting should use a real
+`ModelBackend`.
+
+This MVP still does not execute GUI actions, send messages, operate iPhone
+Mirroring, or include a mock dating-app harness.
