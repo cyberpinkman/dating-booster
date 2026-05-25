@@ -18,6 +18,42 @@ class BackendTests(unittest.TestCase):
 
         self.assertEqual(result["best_reply"], "Sounds fun. Any good live music spots you recommend?")
 
+    def test_scripted_backend_isolated_from_original_payload_mutation(self):
+        payload = {"reply": {"text": "Original"}, "risk_flags": []}
+        backend = ScriptedBackend(payload)
+
+        payload["reply"]["text"] = "Changed"
+        payload["risk_flags"].append("mutated")
+
+        result = backend.generate_structured(
+            system_prompt="Return draft JSON.",
+            user_prompt="Draft a reply.",
+            schema={"type": "object"},
+        )
+
+        self.assertEqual(result["reply"]["text"], "Original")
+        self.assertEqual(result["risk_flags"], [])
+
+    def test_scripted_backend_returns_isolated_results(self):
+        backend = ScriptedBackend({"reply": {"text": "Original"}, "risk_flags": []})
+
+        result = backend.generate_structured(
+            system_prompt="Return draft JSON.",
+            user_prompt="Draft a reply.",
+            schema={"type": "object"},
+        )
+        result["reply"]["text"] = "Changed"
+        result["risk_flags"].append("mutated")
+
+        next_result = backend.generate_structured(
+            system_prompt="Return draft JSON.",
+            user_prompt="Draft a reply.",
+            schema={"type": "object"},
+        )
+
+        self.assertEqual(next_result["reply"]["text"], "Original")
+        self.assertEqual(next_result["risk_flags"], [])
+
     def test_backend_declares_capabilities(self):
         backend = ScriptedBackend({"ok": True})
 

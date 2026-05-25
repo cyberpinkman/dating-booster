@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from collections.abc import Collection, Mapping
 from enum import Enum
 from typing import Any, Protocol
@@ -29,14 +30,14 @@ class ScriptedBackend:
     """Deterministic backend for tests and local scripted flows."""
 
     def __init__(self, payload: Mapping[str, object]):
-        self._payload = dict(payload)
+        self._payload = deepcopy(dict(payload))
 
     @property
     def capabilities(self) -> Collection[BackendCapability]:
         return frozenset({BackendCapability.GENERATE_STRUCTURED})
 
     def generate_structured(self, system_prompt: str, user_prompt: str, schema: Mapping[str, object]) -> dict[str, object]:
-        return dict(self._payload)
+        return deepcopy(self._payload)
 
 
 class OpenAIBackend:
