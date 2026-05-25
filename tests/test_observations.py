@@ -4,7 +4,7 @@ from pathlib import Path
 from dating_boost.perception.fixture_loader import load_observation
 from dating_boost.perception.observations import AppObservation
 from dating_boost.perception.screenshot_loader import build_observation_from_screenshot_analysis
-from dating_boost.perception.taxonomy import PageType, SourceType
+from dating_boost.perception.taxonomy import ExceptionState, PageType, SourceType
 
 
 class ObservationTests(unittest.TestCase):
@@ -106,6 +106,67 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(observation.source_type, SourceType.SCREENSHOT_FIXTURE)
         self.assertEqual(observation.raw_ref, "/tmp/tinder-screen.png")
         self.assertEqual(observation.match_identity_hints.visible_name, "Riley")
+
+    def test_authoring_guide_page_and_exception_values_are_supported(self):
+        for page_type in (
+            "home_card",
+            "profile_detail",
+            "match_list",
+            "chat_thread",
+            "new_match",
+            "paywall",
+            "permission",
+            "error",
+            "unknown",
+        ):
+            self.assertEqual(PageType(page_type).value, page_type)
+
+        for exception_state in (
+            "none",
+            "partial_capture",
+            "redacted",
+            "paywall",
+            "permission_blocked",
+            "network_error",
+            "login_required",
+            "unknown",
+        ):
+            self.assertEqual(ExceptionState(exception_state).value, exception_state)
+
+        observation = AppObservation.from_dict(
+            {
+                "observation_id": "obs_profile_detail",
+                "source_type": "manual_fixture",
+                "app_id": "tinder",
+                "adapter_id": "codex.manual.v1",
+                "captured_at": "2026-05-26T00:00:00Z",
+                "page_type": "profile_detail",
+                "page_confidence": "medium",
+                "match_identity_hints": {
+                    "visible_name": "Alex",
+                    "profile_cues": ["live music"],
+                    "conversation_fingerprint": "alex-profile",
+                    "evidence": "Visible profile detail page.",
+                },
+                "profile_observation": {
+                    "profile_text": "Mentions live music.",
+                    "photo_cues": ["concert photo"],
+                    "hook_candidates": ["Ask about recent shows"],
+                },
+                "conversation_observation": {
+                    "visible_messages": [],
+                    "input_state": "unknown",
+                    "thread_cues": [],
+                },
+                "element_observations": [],
+                "exception_state": "paywall",
+                "provenance": {"redaction_status": "redacted"},
+                "raw_ref": None,
+            }
+        )
+
+        self.assertEqual(observation.page_type, PageType.PROFILE_DETAIL)
+        self.assertEqual(observation.exception_state, ExceptionState.PAYWALL)
 
 
 if __name__ == "__main__":

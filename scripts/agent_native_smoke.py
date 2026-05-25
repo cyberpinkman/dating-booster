@@ -6,13 +6,14 @@ import hashlib
 import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "intelligence"
+SKILL_PACKAGE_PATH = ROOT / "skills" / "dating-booster-codex" / "skill-package.json"
+DEFAULT_DATA_DIR = ROOT / ".local" / "dating-boost-smoke"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,14 +23,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--data-dir",
         type=Path,
-        help="Local Dating Booster data directory. Defaults to a temporary directory.",
+        help="Local Dating Booster data directory. Defaults to .local/dating-boost-smoke.",
     )
     args = parser.parse_args(argv)
 
-    if args.data_dir is None:
-        with tempfile.TemporaryDirectory(prefix="dating-boost-smoke-") as temp_dir:
-            return _run_smoke(Path(temp_dir) / "data")
-    return _run_smoke(args.data_dir)
+    return _run_smoke(args.data_dir or DEFAULT_DATA_DIR)
 
 
 def _run_smoke(data_dir: Path) -> int:
@@ -45,6 +43,7 @@ def _run_smoke(data_dir: Path) -> int:
         command_key="capabilities",
         commands=commands,
     )
+    compatibility = _check_compatibility(capabilities)
     _run_cli(
         "init-profile",
         "--data-dir",
@@ -160,6 +159,7 @@ def _run_smoke(data_dir: Path) -> int:
                 "data_dir": str(data_dir),
                 "match_id": match_id,
                 "tool_version": capabilities["tool_version"],
+                "compatibility": compatibility,
                 "commands": commands,
                 "artifacts": {
                     "context": str(context_path),
@@ -191,6 +191,62 @@ def _run_cli(*args: str, command_key: str, commands: dict[str, int]) -> dict[str
             f"dating-boost {' '.join(args)} failed with exit {result.returncode}: {result.stderr or result.stdout}"
         )
     return json.loads(result.stdout)
+
+
+def _check_compatibility(capabilities: dict[str, Any]) -> dict[str, Any]:
+    metadata = _read_json(SKILL_PACKAGE_PATH)
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    if _version_tuple(str(capabilities.get("tool_version", "0.0.0"))) < _version_tuple(
+        str(metadata["dating_boost_min_version"])
+    ):
+        errors.append(
+            "tool_version is lower than dating_boost_min_version "
+            f"{metadata['dating_boost_min_version']}"
+        )
+
+    schema_versions = capabilities.get("schema_versions", {})
+    if not isinstance(schema_versions, dict):
+        errors.append("capabilities.schema_versions must be an object")
+    else:
+        for schema_name, schema_version in metadata["required_schema_versions"].items():
+            if schema_versions.get(schema_name) != schema_version:
+                errors.append(f"schema_versions.{schema_name} must equal {schema_version}")
+
+    supported_commands = capabilities.get("supported_commands", [])
+    if not isinstance(supported_commands, list):
+        errors.append("capabilities.supported_commands must be a list")
+    else:
+        missing_commands = [
+            command for command in metadata["required_commands"] if command not in supported_commands
+        ]
+        if missing_commands:
+            errors.append("missing supported_commands: " + ", ".join(missing_commands))
+
+    source_spec_commit = metadata.get("source_spec_commit")
+    git_commit = capabilities.get("git_commit")
+    if source_spec_commit and git_commit and source_spec_commit != git_commit:
+        warnings.append(
+            f"source_spec_commit {source_spec_commit} differs from current git_commit {git_commit}"
+        )
+
+    if errors:
+        raise RuntimeError("Compatibility check failed: " + "; ".join(errors))
+
+    return {
+        "status": "ok",
+        "warnings": warnings,
+    }
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    parts = version.split(".")
+    values: list[int] = []
+    for part in parts:
+        digits = "".join(character for character in part if character.isdigit())
+        values.append(int(digits or "0"))
+    return tuple(values)
 
 
 def _payload_hash(payload: dict[str, Any]) -> str:

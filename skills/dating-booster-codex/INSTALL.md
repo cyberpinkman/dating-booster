@@ -44,10 +44,13 @@ Run the complete local fixture workflow:
 python3 scripts/agent_native_smoke.py --data-dir .local/dating-boost-smoke
 ```
 
+If `--data-dir` is omitted, the smoke test writes to `.local/dating-boost-smoke`
+so the generated artifacts remain inspectable after the script exits.
+
 The smoke test runs capability discovery, profile initialization, observation
-ingest, match lookup, context build, host-draft policy check, action-result
-audit, and feedback recording. It does not open Tinder, use iPhone Mirroring,
-send messages, or call an LLM.
+ingest, match lookup, context build, host-draft policy check, skill-package
+compatibility checks, action-result audit, and feedback recording. It does not
+open Tinder, use iPhone Mirroring, send messages, or call an LLM.
 
 ## First Real Manual Workflow
 

@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,7 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload["status"], "ok")
             self.assertEqual(payload["data_dir"], str(data_dir.resolve()))
+            self.assertEqual(payload["compatibility"]["status"], "ok")
             self.assertEqual(payload["commands"]["capabilities"], 0)
             self.assertEqual(payload["commands"]["policy_check_draft"], 0)
             self.assertTrue((data_dir / "context.json").exists())
@@ -37,6 +39,27 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
             self.assertTrue((data_dir / "action_result.json").exists())
             self.assertTrue((data_dir / "audit" / "action_results.jsonl").exists())
             self.assertTrue((data_dir / "matches" / payload["match_id"] / "feedback_events.jsonl").exists())
+
+    def test_smoke_script_default_data_dir_keeps_artifacts_after_exit(self):
+        data_dir = ROOT / ".local" / "dating-boost-smoke"
+        shutil.rmtree(data_dir, ignore_errors=True)
+        try:
+            result = subprocess.run(
+                [sys.executable, "scripts/agent_native_smoke.py"],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["data_dir"], str(data_dir.resolve()))
+            self.assertTrue(Path(payload["artifacts"]["context"]).exists())
+            self.assertTrue(Path(payload["artifacts"]["action_audit"]).exists())
+        finally:
+            shutil.rmtree(data_dir, ignore_errors=True)
 
     def test_installation_and_startup_docs_exist_and_are_actionable(self):
         install_text = (ROOT / "skills" / "dating-booster-codex" / "INSTALL.md").read_text(
