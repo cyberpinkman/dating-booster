@@ -35,7 +35,8 @@ Allowed by default:
 
 - Observe visible screen content after the capability check and user intent are clear.
 - Summarize profile or conversation context.
-- Build context with `dating-boost context build`.
+- Run `dating-boost workflow draft` after the host agent has authored an observation JSON and draft JSON.
+- Build context with `dating-boost context build` when debugging or using lower-level commands.
 - Draft replies inside the host agent.
 - Check drafts with `dating-boost policy check-draft`.
 - Paste a draft only when the user requested it.
@@ -61,18 +62,18 @@ the user explicitly asks for explanation, critique, review, or debug output.
 ## Workflow
 
 1. Run `dating-boost capabilities --json --data-dir .local/dating-boost` and verify compatibility against `skill-package.json`.
-2. Ingest or update observations with `dating-boost memory ingest-observation` after screen content is available.
-3. Retrieve match memory with `dating-boost memory get-match`.
-4. Build the context pack with `dating-boost context build`.
-5. Read `references/drafting-framework.md`, then generate the draft in Codex using the user profile, match profile, and conversation context.
-6. Before showing the draft, silently apply `references/naturalness-checklist.md` and revise anything that reads like AI-written Chinese.
-7. Run `dating-boost policy check-draft` before showing or using the draft.
+2. Convert visible screen content to an observation JSON using `references/observation-authoring.md`.
+3. Read `references/drafting-framework.md`, then generate the draft JSON in Codex using the visible profile/chat context.
+4. Before using the draft, silently apply `references/naturalness-checklist.md` and revise anything that reads like AI-written Chinese.
+5. Run `dating-boost workflow draft --data-dir .local/dating-boost --observation observation.json --draft draft.json --mode adaptive`.
+6. If the workflow returns `blocked`, do not show or paste the blocked draft.
+7. If the workflow returns `ok`, show only the final draft or paste it when the user requested paste.
 8. For any high-risk action, run `dating-boost policy check-action` and ask for explicit confirmation.
 9. After the host executes an action, perform post-action verification from a fresh observation.
 10. Record the result with `dating-boost action record-result`.
 11. Record user feedback with `dating-boost feedback record` when useful.
 
-Use `references/workflows.md` for reusable workflow details, `references/contracts.md` for JSON input/output contract examples, and the drafting/naturalness references for Chinese reply quality. These reference files are summaries; core code and committed specs remain the source of truth.
+Use `references/workflows.md` for reusable workflow details and lower-level command fallbacks, `references/contracts.md` for JSON input/output contract examples, and the drafting/naturalness references for Chinese reply quality. These reference files are summaries; core code and committed specs remain the source of truth.
 
 ## Post-Action Verification
 

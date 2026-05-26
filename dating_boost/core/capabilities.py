@@ -20,6 +20,7 @@ SCHEMA_VERSIONS: dict[str, int] = {
     "feedback_event": 1,
     "action_result": 1,
     "reply_draft": 2,
+    "workflow_result": 1,
     "skill_package": 1,
 }
 
@@ -38,6 +39,7 @@ SUPPORTED_COMMANDS: list[str] = [
     "policy check-action",
     "action record-result",
     "feedback record",
+    "workflow draft",
 ]
 
 
@@ -64,6 +66,7 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
         },
         "agent_native_capabilities": {
             "host_executed_action_audit": True,
+            "workflow_draft_runner": True,
             "post_action_verification_required": True,
             "llm_owned_by_host_agent": True,
             "live_gui_harness": False,

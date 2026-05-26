@@ -155,6 +155,20 @@ def main(argv: list[str] | None = None) -> int:
     feedback_parser.add_argument("--label", required=True)
     feedback_parser.set_defaults(handler=_handle_feedback)
 
+    workflow_parser = subparsers.add_parser("workflow", help="Agent-native workflow runners.")
+    workflow_subparsers = workflow_parser.add_subparsers(dest="workflow_command", required=True)
+    workflow_draft_parser = workflow_subparsers.add_parser(
+        "draft",
+        help="Run the host-agent draft workflow without calling an LLM.",
+    )
+    workflow_draft_parser.add_argument("--data-dir", required=True, type=Path)
+    workflow_draft_parser.add_argument("--observation", required=True, type=Path)
+    workflow_draft_parser.add_argument("--draft", required=True, type=Path)
+    workflow_draft_parser.add_argument("--mode", required=True, choices=[mode.value for mode in ReplyMode])
+    workflow_draft_parser.add_argument("--feedback-label")
+    workflow_draft_parser.add_argument("--draft-id")
+    workflow_draft_parser.set_defaults(handler=_handle_workflow_draft)
+
     args = parser.parse_args(argv_list)
     return args.handler(args)
 
@@ -239,6 +253,11 @@ def _handle_observe_screenshot(args: argparse.Namespace) -> int:
 
 
 def _persist_observation(data_dir: Path, observation: AppObservation) -> int:
+    _print_json(_store_observation(data_dir, observation))
+    return 0
+
+
+def _store_observation(data_dir: Path, observation: AppObservation) -> dict[str, Any]:
     match_repo = MatchRepository(data_dir)
     identity = resolve_match_identity(observation, existing_matches=match_repo.list_match_candidates())
     _validate_storage_id(identity.match_id, "match_id")
@@ -259,16 +278,13 @@ def _persist_observation(data_dir: Path, observation: AppObservation) -> int:
             reason=identity.reason,
         )
 
-    _print_json(
-        {
-            "status": "ok",
-            "match_id": identity.match_id,
-            "confidence": identity.confidence.value,
-            "requires_user_confirmation": identity.requires_user_confirmation,
-            "observation_id": observation.observation_id,
-        }
-    )
-    return 0
+    return {
+        "status": "ok",
+        "match_id": identity.match_id,
+        "confidence": identity.confidence.value,
+        "requires_user_confirmation": identity.requires_user_confirmation,
+        "observation_id": observation.observation_id,
+    }
 
 
 def _handle_memory_get_match(args: argparse.Namespace) -> int:
@@ -361,6 +377,67 @@ def _handle_policy_check_draft(args: argparse.Namespace) -> int:
     return 0 if policy.allowed else 2
 
 
+def _handle_workflow_draft(args: argparse.Namespace) -> int:
+    reply_mode = ReplyMode(args.mode)
+    steps: dict[str, str] = {
+        "capabilities": "ok",
+    }
+    capabilities = build_capabilities(args.data_dir)
+
+    observation = load_observation(args.observation)
+    ingest = _store_observation(args.data_dir, observation)
+    steps["ingest_observation"] = "ok"
+
+    match_id = str(ingest["match_id"])
+    profile = JsonMemoryRepository(args.data_dir).load_user_profile()
+    latest_observation = ObservationRepository(args.data_dir).load_latest_observation(match_id)
+    context_pack = _build_mvp_context_pack(profile, match_id, reply_mode, latest_observation)
+    steps["context_build"] = "ok"
+
+    draft = _draft_from_dict(_read_json_object(args.draft))
+    policy = evaluate_draft_content(draft, context_pack)
+    steps["policy_check_draft"] = "ok" if policy.allowed else "blocked"
+
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "workflow": "draft",
+        "status": "ok" if policy.allowed else "blocked",
+        "data_dir": str(args.data_dir.resolve()),
+        "tool_version": capabilities["tool_version"],
+        "steps": steps,
+        "match_id": match_id,
+        "observation_id": observation.observation_id,
+        "identity_confidence": ingest["confidence"],
+        "requires_user_confirmation": ingest["requires_user_confirmation"],
+        "mode": reply_mode.value,
+        "context_pack": context_pack,
+        "policy": _policy_to_dict(policy),
+    }
+
+    if not policy.allowed:
+        payload["feedback"] = None
+        _print_json(payload)
+        return 2
+
+    payload["draft"] = _draft_to_dict(draft)
+    if args.feedback_label:
+        draft_id = args.draft_id or args.draft.stem
+        payload["feedback"] = _record_feedback(
+            data_dir=args.data_dir,
+            match_id=match_id,
+            draft_id=draft_id,
+            mode=reply_mode,
+            label=args.feedback_label,
+        )
+        steps["feedback_record"] = "ok"
+    else:
+        payload["feedback"] = None
+        steps["feedback_record"] = "skipped"
+
+    _print_json(payload)
+    return 0
+
+
 def _handle_action_record_result(args: argparse.Namespace) -> int:
     payload = _read_json_object(args.input)
     try:
@@ -402,24 +479,41 @@ def _select_backend(args: argparse.Namespace) -> ModelBackend:
 
 
 def _handle_feedback(args: argparse.Namespace) -> int:
-    event = create_feedback_event(
-        event_id=f"feedback_{args.match_id}_{args.draft_id}_{args.label}",
+    event_payload = _record_feedback(
+        data_dir=args.data_dir,
         match_id=args.match_id,
         draft_id=args.draft_id,
         mode=ReplyMode(args.mode),
         label=args.label,
+    )
+    _print_json(event_payload)
+    return 0
+
+
+def _record_feedback(
+    *,
+    data_dir: Path,
+    match_id: str,
+    draft_id: str,
+    mode: ReplyMode,
+    label: str,
+) -> dict[str, Any]:
+    event = create_feedback_event(
+        event_id=f"feedback_{match_id}_{draft_id}_{label}",
+        match_id=match_id,
+        draft_id=draft_id,
+        mode=mode,
+        label=label,
         created_at=MVP_TIMESTAMP,
     )
-    JsonMemoryRepository(args.data_dir).append_feedback_event(args.match_id, event)
-
-    _print_json(
-        {
-            "status": "ok",
-            "match_id": args.match_id,
-            "event_id": event["event_id"],
-        }
-    )
-    return 0
+    JsonMemoryRepository(data_dir).append_feedback_event(match_id, event)
+    return {
+        "status": "ok",
+        "match_id": match_id,
+        "event_id": event["event_id"],
+        "draft_id": draft_id,
+        "label": label,
+    }
 
 
 def _build_mvp_context_pack(

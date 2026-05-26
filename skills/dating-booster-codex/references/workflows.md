@@ -17,6 +17,22 @@ policy, and audit tools. They do not replace the repository specs.
 
 Use this when the user wants a reply suggestion for a known match.
 
+Preferred runner path:
+
+1. Convert visible profile/chat context into the observation contract.
+   Use `observation-authoring.md` when converting screen content to JSON.
+2. Read `drafting-framework.md` and choose the conversation move.
+3. Generate the draft in the host agent using the expanded draft contract.
+4. Apply `naturalness-checklist.md` as an internal QA step; revise AI-sounding Chinese before using the draft.
+5. Save the observation JSON and draft JSON locally.
+6. Run `dating-boost workflow draft --data-dir .local/dating-boost --observation observation.json --draft draft.json --mode adaptive`.
+7. Add `--feedback-label accepted --draft-id DRAFT_ID` only when the user has accepted or rated the draft.
+8. If the workflow returns `blocked`, do not show or paste the blocked draft.
+9. If the workflow returns `ok`, show only the final draft to the user or paste it when the user requested paste.
+   Do not list checklist results unless the user explicitly asks for explanation, critique, review, or debug output.
+
+Lower-level fallback path:
+
 1. Convert visible profile/chat context into the observation contract.
    Use `observation-authoring.md` when converting screen content to JSON.
 2. Run `dating-boost memory ingest-observation --data-dir .local/dating-boost --input observation.json`.

@@ -81,6 +81,44 @@ Use this shape with `dating-boost policy check-draft`.
 }
 ```
 
+## Workflow Draft Output
+
+Use this shape from `dating-boost workflow draft` as the preferred host-agent
+result contract. The command returns `status: "blocked"` and omits `draft` when
+policy blocks the draft.
+
+```json
+{
+  "schema_version": 1,
+  "workflow": "draft",
+  "status": "ok",
+  "match_id": "match_alex",
+  "observation_id": "obs_chat_001",
+  "mode": "adaptive",
+  "steps": {
+    "capabilities": "ok",
+    "ingest_observation": "ok",
+    "context_build": "ok",
+    "policy_check_draft": "ok",
+    "feedback_record": "skipped"
+  },
+  "context_pack": {
+    "reply_mode": "adaptive",
+    "items": []
+  },
+  "policy": {
+    "allowed": true,
+    "severity": "low",
+    "reason": "Draft content passed MVP policy checks.",
+    "requires_user_confirmation": false
+  },
+  "draft": {
+    "best_reply": "That sounds fun."
+  },
+  "feedback": null
+}
+```
+
 ## Action Result Input
 
 Use this shape with `dating-boost action record-result`.

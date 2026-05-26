@@ -49,8 +49,10 @@ so the generated artifacts remain inspectable after the script exits.
 
 The smoke test runs capability discovery, profile initialization, observation
 ingest, match lookup, context build, host-draft policy check, skill-package
-compatibility checks, action-result audit, and feedback recording. It does not
-open Tinder, use iPhone Mirroring, send messages, or call an LLM.
+compatibility checks, action-result audit, and feedback recording. The preferred
+manual workflow uses `dating-boost workflow draft` to combine observation
+ingest, context build, host-draft policy check, and optional feedback recording.
+It does not open Tinder, use iPhone Mirroring, send messages, or call an LLM.
 
 ## First Real Manual Workflow
 
@@ -58,9 +60,7 @@ open Tinder, use iPhone Mirroring, send messages, or call an LLM.
 2. Ask the user to confirm that Codex may process visible dating app content.
 3. Convert visible profile/chat content into the observation contract in
    `references/observation-authoring.md`.
-4. Run `dating-boost memory ingest-observation`.
-5. Run `dating-boost context build`.
-6. Draft in the host agent.
-7. Run `dating-boost policy check-draft`.
-8. Paste or send only according to the user's chosen experiment mode.
-9. Record post-action evidence with `dating-boost action record-result`.
+4. Draft in the host agent and save the draft JSON.
+5. Run `dating-boost workflow draft --data-dir .local/dating-boost --observation observation.json --draft draft.json --mode adaptive`.
+6. Paste or send only according to the user's chosen experiment mode.
+7. Record post-action evidence with `dating-boost action record-result`.

@@ -107,6 +107,55 @@ class AgentNativeManualWorkflowTests(unittest.TestCase):
             self.assertEqual(feedback_events[0]["label"], "accepted")
             self.assertEqual(feedback_events[0]["draft_id"], "reward_delegation_draft_1")
 
+    def test_workflow_draft_runner_orchestrates_reward_fixture(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+
+            init_exit, _, _ = self._run([
+                "init-profile",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                "tests/fixtures/intelligence/user_profile.json",
+            ])
+            workflow_exit, workflow_payload, workflow_text = self._run([
+                "workflow",
+                "draft",
+                "--data-dir",
+                str(data_dir),
+                "--observation",
+                str(FIXTURE_DIR / "reward_delegation_observation.json"),
+                "--draft",
+                str(FIXTURE_DIR / "reward_delegation_draft.json"),
+                "--mode",
+                "adaptive",
+                "--feedback-label",
+                "accepted",
+                "--draft-id",
+                "reward_delegation_draft_1",
+            ])
+
+            self.assertEqual(init_exit, 0)
+            self.assertEqual(workflow_exit, 0)
+            self.assertEqual(workflow_payload["schema_version"], 1)
+            self.assertEqual(workflow_payload["workflow"], "draft")
+            self.assertEqual(workflow_payload["status"], "ok")
+            self.assertEqual(workflow_payload["steps"]["capabilities"], "ok")
+            self.assertEqual(workflow_payload["steps"]["ingest_observation"], "ok")
+            self.assertEqual(workflow_payload["steps"]["context_build"], "ok")
+            self.assertEqual(workflow_payload["steps"]["policy_check_draft"], "ok")
+            self.assertEqual(workflow_payload["steps"]["feedback_record"], "ok")
+            self.assertEqual(workflow_payload["observation_id"], "obs_reward_delegation_001")
+            self.assertEqual(workflow_payload["context_pack"]["reply_mode"], "adaptive")
+            self.assertEqual(self._context_item(workflow_payload, "latest_message")["text"], "你定")
+            self.assertTrue(workflow_payload["policy"]["allowed"])
+            self.assertEqual(workflow_payload["draft"]["conversation_move"], "take_the_lead")
+            self.assertEqual(workflow_payload["feedback"]["label"], "accepted")
+            self.assertNotIn("亲亲", workflow_text)
+
+            feedback_path = data_dir / "matches" / workflow_payload["match_id"] / "feedback_events.jsonl"
+            self.assertTrue(feedback_path.exists())
+
     def _run(self, argv):
         output = StringIO()
         with redirect_stdout(output):

@@ -54,6 +54,7 @@ Installation and startup instructions live at
 Its required commands are:
 
 ```bash
+python3 -m dating_boost.cli workflow draft --data-dir .local/dating-boost --observation observation.json --draft draft.json --mode adaptive
 python3 -m dating_boost.cli memory ingest-observation --data-dir .local/dating-boost --input observation.json
 python3 -m dating_boost.cli memory get-match --data-dir .local/dating-boost --match-id match_alex
 python3 -m dating_boost.cli context build --data-dir .local/dating-boost --match-id match_alex --mode adaptive
@@ -62,6 +63,11 @@ python3 -m dating_boost.cli policy check-action send_message --autonomous
 python3 -m dating_boost.cli action record-result --data-dir .local/dating-boost --input action_result.json
 python3 -m dating_boost.cli feedback record --data-dir .local/dating-boost --match-id match_alex --draft-id draft_1 --mode adaptive --label accepted
 ```
+
+`workflow draft` is the preferred Codex-first path. The host agent still owns
+screen understanding and draft generation; Dating Booster ingests the
+observation, builds context, checks the host draft against policy, and can
+record feedback in one local command.
 
 Host-executed action results are appended to
 `.local/dating-boost/audit/action_results.jsonl`. If a sent message or other

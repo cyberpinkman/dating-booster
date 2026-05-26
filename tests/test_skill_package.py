@@ -27,11 +27,12 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(metadata["package_name"], "dating-booster-codex-skill")
         self.assertEqual(metadata["target_host"], "codex")
-        self.assertEqual(metadata["package_version"], "0.1.1")
-        self.assertEqual(metadata["dating_boost_min_version"], "0.1.1")
+        self.assertEqual(metadata["package_version"], "0.1.2")
+        self.assertEqual(metadata["dating_boost_min_version"], "0.1.2")
         self.assertLessEqual(_version_tuple(metadata["dating_boost_min_version"]), _version_tuple(__version__))
         self.assertTrue(set(metadata["required_commands"]).issubset(set(capabilities["supported_commands"])))
         self.assertEqual(metadata["required_schema_versions"]["reply_draft"], 2)
+        self.assertEqual(metadata["required_schema_versions"]["workflow_result"], 1)
         for schema_name, schema_version in metadata["required_schema_versions"].items():
             self.assertEqual(capabilities["schema_versions"][schema_name], schema_version)
         for spec_path in metadata["source_specs"]:
@@ -79,6 +80,7 @@ class SkillPackageTests(unittest.TestCase):
             "policy check-action",
             "action record-result",
             "feedback record",
+            "workflow draft",
         ):
             self.assertIn(command, workflows_text)
         for field_name in (

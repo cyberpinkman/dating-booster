@@ -53,6 +53,29 @@ Fill `profile_observation` from visible profile content:
   ethnicity, health, or intent from images.
 - `hook_candidates`: possible conversation hooks grounded in visible content.
 
+## Facts, Cues, And Inferences
+
+Keep source types separate:
+
+- `visible fact`: text directly visible in the app, such as profile prompts,
+  interests, education, city, stated intent, and visible chat messages.
+- `photo cue`: neutral visual content, such as `winter coat selfie`, `dog
+  photo`, `restaurant table`, or `concert stage`.
+- `inference`: a tentative reading derived from visible facts or photo cues,
+  such as a possible conversation hook or low-confidence vibe.
+
+Rules:
+
+- A photo cue must not be promoted to fact. Seeing a dog in a photo can support
+  `dog photo`; it cannot prove dog ownership unless text says so.
+- An inference must not be promoted to fact. If it is useful as a hook, mark it
+  with `low_confidence` in the hook text or evidence.
+- Put directly visible profile/chat text in `profile_text` or
+  `visible_messages`; put neutral image descriptions in `photo_cues`; put
+  possible conversation openings in `hook_candidates`.
+- Do not infer protected traits, health, income, sexuality, religion, or intent
+  from photos. Use `unknown` when unsure.
+
 ## Conversation Observation
 
 Fill `conversation_observation` from visible messages:
