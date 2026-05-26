@@ -21,6 +21,12 @@ SCHEMA_VERSIONS: dict[str, int] = {
     "action_result": 1,
     "reply_draft": 2,
     "workflow_result": 1,
+    "scan_batch": 1,
+    "automation_authorization": 1,
+    "automation_state": 1,
+    "automation_session": 1,
+    "appointment_ledger": 1,
+    "progress_report": 1,
     "skill_package": 1,
 }
 
@@ -40,6 +46,16 @@ SUPPORTED_COMMANDS: list[str] = [
     "action record-result",
     "feedback record",
     "workflow draft",
+    "automation session start",
+    "automation session step",
+    "automation session stop",
+    "automation report latest",
+    "automation get-state",
+    "automation pause",
+    "automation resume",
+    "automation record-authorization",
+    "automation availability set",
+    "automation goal set",
 ]
 
 
@@ -67,6 +83,11 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
         "agent_native_capabilities": {
             "host_executed_action_audit": True,
             "workflow_draft_runner": True,
+            "automation_session": True,
+            "automation_dry_run_default": True,
+            "automation_external_scheduler": True,
+            "appointment_ledger": True,
+            "progress_report": True,
             "post_action_verification_required": True,
             "llm_owned_by_host_agent": True,
             "live_gui_harness": False,

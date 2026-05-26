@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "availability": [
+    {
+      "availability_id": "avail_sat_evening",
+      "date": "2026-05-30",
+      "time_window": "evening",
+      "area": "朝阳或海淀",
+      "meeting_types": ["coffee", "meal"],
+      "constraints": ["no exact venue without user confirmation"],
+      "confidence": "user_confirmed",
+      "expires_at": "2026-05-31T00:00:00Z"
+    }
+  ]
+}

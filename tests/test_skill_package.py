@@ -27,12 +27,15 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(metadata["package_name"], "dating-booster-codex-skill")
         self.assertEqual(metadata["target_host"], "codex")
-        self.assertEqual(metadata["package_version"], "0.1.2")
-        self.assertEqual(metadata["dating_boost_min_version"], "0.1.2")
+        self.assertEqual(metadata["package_version"], "0.1.3")
+        self.assertEqual(metadata["dating_boost_min_version"], "0.1.3")
         self.assertLessEqual(_version_tuple(metadata["dating_boost_min_version"]), _version_tuple(__version__))
         self.assertTrue(set(metadata["required_commands"]).issubset(set(capabilities["supported_commands"])))
         self.assertEqual(metadata["required_schema_versions"]["reply_draft"], 2)
         self.assertEqual(metadata["required_schema_versions"]["workflow_result"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["automation_session"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["appointment_ledger"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["progress_report"], 1)
         for schema_name, schema_version in metadata["required_schema_versions"].items():
             self.assertEqual(capabilities["schema_versions"][schema_name], schema_version)
         for spec_path in metadata["source_specs"]:
@@ -58,6 +61,8 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("high-risk", skill_text)
         self.assertIn("post-action verification", skill_text)
         self.assertIn("record-result", skill_text)
+        self.assertIn("automation session", skill_text)
+        self.assertIn("host agent", skill_text)
         self.assertIn("drafting-framework.md", skill_text)
         self.assertIn("naturalness-checklist.md", skill_text)
 
@@ -81,6 +86,10 @@ class SkillPackageTests(unittest.TestCase):
             "action record-result",
             "feedback record",
             "workflow draft",
+            "automation session start",
+            "automation session step",
+            "automation session stop",
+            "automation report latest",
         ):
             self.assertIn(command, workflows_text)
         for field_name in (
@@ -97,6 +106,9 @@ class SkillPackageTests(unittest.TestCase):
             "payload_hash",
             "result_status",
             "evidence",
+            "scan_batch",
+            "action_request_id",
+            "machine_report",
         ):
             self.assertIn(field_name, contracts_text)
         for phrase in (

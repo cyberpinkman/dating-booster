@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "session_id": "session_fixture_nudge",
+  "app_id": "tinder",
+  "captured_at": "2026-05-26T11:00:00Z",
+  "scan_cursor": "page_nudge_1",
+  "scan_budget": 5,
+  "provenance": {
+    "author": "host_agent",
+    "evidence": "Fixture scan batch for a thread where the host judged one gentle nudge may be useful."
+  },
+  "message_list_snapshot": {
+    "entries": [
+      {
+        "candidate_key": "row_gia",
+        "visible_name": "Gia",
+        "latest_preview": "昨天晚上聊到电影后没回",
+        "latest_preview_hash": "preview_gia",
+        "timestamp_cue": "昨天",
+        "unread_cue": "absent",
+        "position": 1,
+        "match_identity_hints": {
+          "visible_name": "Gia",
+          "profile_cues": ["电影"],
+          "conversation_fingerprint": "gia-movie-thread"
+        },
+        "evidence": "Visible row without a new inbound reply."
+      }
+    ]
+  },
+  "thread_observations": [
+    {
+      "candidate_key": "row_gia",
+      "assessment": {
+        "schema_version": 1,
+        "latest_match_message": "我喜欢那种有点荒诞的喜剧",
+        "latest_user_message": "那我感觉你会喜欢黑色幽默那一挂",
+        "latest_inbound_fingerprint": "gia:in:absurd-comedy",
+        "reply_window_status": "open",
+        "continuation_opportunity": "yes",
+        "appointment_stage": "none",
+        "recommended_next": "nudge_later",
+        "confidence": "medium",
+        "evidence": "The host judged the match did not close the conversation and one delayed nudge is allowed.",
+        "risk_flags": []
+      },
+      "observation": {
+        "observation_id": "obs_gia_001",
+        "source_type": "manual_fixture",
+        "app_id": "tinder",
+        "adapter_id": "codex.manual.v1",
+        "captured_at": "2026-05-26T11:00:00Z",
+        "page_type": "chat_thread",
+        "page_confidence": "high",
+        "match_identity_hints": {
+          "visible_name": "Gia",
+          "profile_cues": ["电影"],
+          "conversation_fingerprint": "gia-movie-thread",
+          "evidence": "Visible chat thread for Gia."
+        },
+        "profile_observation": {
+          "profile_text": "喜欢电影和喜剧。",
+          "photo_cues": [],
+          "hook_candidates": ["movie taste"]
+        },
+        "conversation_observation": {
+          "visible_messages": [
+            {"sender": "match", "text": "我喜欢那种有点荒诞的喜剧"},
+            {"sender": "user", "text": "那我感觉你会喜欢黑色幽默那一挂"}
+          ],
+          "input_state": "empty",
+          "thread_cues": ["no inbound after user message"]
+        },
+        "element_observations": [],
+        "exception_state": "none",
+        "provenance": {
+          "evidence": "Fixture thread observation.",
+          "redaction_status": "redacted"
+        },
+        "raw_ref": null
+      }
+    }
+  ]
+}

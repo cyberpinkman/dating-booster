@@ -83,3 +83,23 @@ Use this when the user accepts, edits, rejects, or rates a draft.
 2. Run `dating-boost feedback record --data-dir .local/dating-boost --match-id MATCH_ID --draft-id DRAFT_ID --mode adaptive --label accepted`.
 3. Keep labels short and stable, such as `accepted`, `edited`, `rejected`, or
    `sent`.
+
+## Automation Session
+
+Use this when the user explicitly asks the host agent to manage multiple matches
+toward a goal such as meeting in person.
+
+1. Run `dating-boost capabilities --json --data-dir .local/dating-boost` and verify compatibility.
+2. Save the user's goal with `dating-boost automation goal set --data-dir .local/dating-boost --input goal.json`.
+3. Save availability with `dating-boost automation availability set --data-dir .local/dating-boost --input availability.json`.
+4. Start the session with `dating-boost automation session start --data-dir .local/dating-boost --authorization auth.json`.
+5. The host agent scans the visible message list and opens a bounded set of relevant threads.
+6. Convert the scan into a `scan_batch` JSON. Include host-authored `assessment` and `draft` objects for threads that are ready for ordinary replies.
+7. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
+8. Execute only ordinary `send_message` action requests. Do not execute `handoffs`.
+9. After each send, verify the sent state from a fresh observation and run `dating-boost action record-result --data-dir .local/dating-boost --input action_result.json`.
+10. Stop with `dating-boost automation session stop --data-dir .local/dating-boost`.
+11. Resume later by reading `dating-boost automation report latest --data-dir .local/dating-boost` and continuing from local state.
+
+Do not use automation session output to commit to exact meeting details, contact
+exchange, likes, unmatches, reports, or profile edits.

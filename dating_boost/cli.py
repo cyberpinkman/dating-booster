@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.action_audit import ActionAuditRepository
+from dating_boost.core.automation import AutomationRepository
 from dating_boost.core.capabilities import build_capabilities
 from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.feedback import create_feedback_event
@@ -168,6 +169,71 @@ def main(argv: list[str] | None = None) -> int:
     workflow_draft_parser.add_argument("--feedback-label")
     workflow_draft_parser.add_argument("--draft-id")
     workflow_draft_parser.set_defaults(handler=_handle_workflow_draft)
+
+    automation_parser = subparsers.add_parser("automation", help="Host-orchestrated automation commands.")
+    automation_subparsers = automation_parser.add_subparsers(dest="automation_command", required=True)
+
+    automation_session_parser = automation_subparsers.add_parser("session", help="Automation session commands.")
+    automation_session_subparsers = automation_session_parser.add_subparsers(
+        dest="automation_session_command",
+        required=True,
+    )
+    session_start_parser = automation_session_subparsers.add_parser("start")
+    session_start_parser.add_argument("--data-dir", required=True, type=Path)
+    session_start_parser.add_argument("--authorization", required=True, type=Path)
+    session_start_parser.set_defaults(handler=_handle_automation_session_start)
+    session_step_parser = automation_session_subparsers.add_parser("step")
+    session_step_parser.add_argument("--data-dir", required=True, type=Path)
+    session_step_parser.add_argument("--scan-batch", required=True, type=Path)
+    session_step_parser.set_defaults(handler=_handle_automation_session_step)
+    session_stop_parser = automation_session_subparsers.add_parser("stop")
+    session_stop_parser.add_argument("--data-dir", required=True, type=Path)
+    session_stop_parser.set_defaults(handler=_handle_automation_session_stop)
+
+    automation_report_parser = automation_subparsers.add_parser("report", help="Automation report commands.")
+    automation_report_subparsers = automation_report_parser.add_subparsers(
+        dest="automation_report_command",
+        required=True,
+    )
+    report_latest_parser = automation_report_subparsers.add_parser("latest")
+    report_latest_parser.add_argument("--data-dir", required=True, type=Path)
+    report_latest_parser.set_defaults(handler=_handle_automation_report_latest)
+
+    automation_get_state_parser = automation_subparsers.add_parser("get-state")
+    automation_get_state_parser.add_argument("--data-dir", required=True, type=Path)
+    automation_get_state_parser.set_defaults(handler=_handle_automation_get_state)
+
+    automation_record_auth_parser = automation_subparsers.add_parser("record-authorization")
+    automation_record_auth_parser.add_argument("--data-dir", required=True, type=Path)
+    automation_record_auth_parser.add_argument("--input", required=True, type=Path)
+    automation_record_auth_parser.set_defaults(handler=_handle_automation_record_authorization)
+
+    automation_pause_parser = automation_subparsers.add_parser("pause")
+    automation_pause_parser.add_argument("--data-dir", required=True, type=Path)
+    automation_pause_parser.set_defaults(handler=_handle_automation_pause)
+    automation_resume_parser = automation_subparsers.add_parser("resume")
+    automation_resume_parser.add_argument("--data-dir", required=True, type=Path)
+    automation_resume_parser.set_defaults(handler=_handle_automation_resume)
+
+    automation_availability_parser = automation_subparsers.add_parser("availability")
+    automation_availability_subparsers = automation_availability_parser.add_subparsers(
+        dest="automation_availability_command",
+        required=True,
+    )
+    availability_set_parser = automation_availability_subparsers.add_parser("set")
+    availability_set_parser.add_argument("--data-dir", required=True, type=Path)
+    availability_set_parser.add_argument("--input", required=True, type=Path)
+    availability_set_parser.set_defaults(handler=_handle_automation_availability_set)
+
+    automation_goal_parser = automation_subparsers.add_parser("goal")
+    automation_goal_subparsers = automation_goal_parser.add_subparsers(
+        dest="automation_goal_command",
+        required=True,
+    )
+    goal_set_parser = automation_goal_subparsers.add_parser("set")
+    goal_set_parser.add_argument("--data-dir", required=True, type=Path)
+    goal_set_parser.add_argument("--input", required=True, type=Path)
+    goal_set_parser.set_defaults(handler=_handle_automation_goal_set)
 
     args = parser.parse_args(argv_list)
     return args.handler(args)
@@ -455,15 +521,69 @@ def _handle_action_record_result(args: argparse.Namespace) -> int:
         )
         return 2
 
+    AutomationRepository(args.data_dir).apply_action_result(event)
+
     _print_json(
         {
             "schema_version": 1,
             "status": "ok",
             "event_id": event["event_id"],
+            "action_request_id": event.get("action_request_id"),
             "result_status": event["result_status"],
             "path": "audit/action_results.jsonl",
         }
     )
+    return 0
+
+
+def _handle_automation_goal_set(args: argparse.Namespace) -> int:
+    _print_json(AutomationRepository(args.data_dir).save_goal(_read_json_object(args.input)))
+    return 0
+
+
+def _handle_automation_availability_set(args: argparse.Namespace) -> int:
+    _print_json(AutomationRepository(args.data_dir).save_availability(_read_json_object(args.input)))
+    return 0
+
+
+def _handle_automation_record_authorization(args: argparse.Namespace) -> int:
+    _print_json(AutomationRepository(args.data_dir).save_authorization(_read_json_object(args.input)))
+    return 0
+
+
+def _handle_automation_session_start(args: argparse.Namespace) -> int:
+    _print_json(AutomationRepository(args.data_dir).start_session(_read_json_object(args.authorization)))
+    return 0
+
+
+def _handle_automation_session_step(args: argparse.Namespace) -> int:
+    _print_json(AutomationRepository(args.data_dir).step(_read_json_object(args.scan_batch)))
+    return 0
+
+
+def _handle_automation_session_stop(args: argparse.Namespace) -> int:
+    _print_json(AutomationRepository(args.data_dir).stop_session())
+    return 0
+
+
+def _handle_automation_report_latest(args: argparse.Namespace) -> int:
+    payload = AutomationRepository(args.data_dir).latest_report()
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_automation_get_state(args: argparse.Namespace) -> int:
+    _print_json(AutomationRepository(args.data_dir).get_state_payload())
+    return 0
+
+
+def _handle_automation_pause(args: argparse.Namespace) -> int:
+    _print_json(AutomationRepository(args.data_dir).pause_session())
+    return 0
+
+
+def _handle_automation_resume(args: argparse.Namespace) -> int:
+    _print_json(AutomationRepository(args.data_dir).resume_session())
     return 0
 
 

@@ -60,6 +60,7 @@ def validate_action_result(payload: dict[str, Any], *, created_at: str) -> dict[
         "schema_version": ACTION_RESULT_SCHEMA_VERSION,
         "action": action,
         "target_match_id": target_match_id,
+        "action_request_id": payload.get("action_request_id"),
         "payload_hash": payload_hash,
         "pre_action_observation_id": pre_observation_id,
         "post_action_observation_id": post_observation_id,

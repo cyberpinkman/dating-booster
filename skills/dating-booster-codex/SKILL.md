@@ -36,6 +36,7 @@ Allowed by default:
 - Observe visible screen content after the capability check and user intent are clear.
 - Summarize profile or conversation context.
 - Run `dating-boost workflow draft` after the host agent has authored an observation JSON and draft JSON.
+- Run `dating-boost automation session` commands after the user has explicitly authorized a host-orchestrated automation session.
 - Build context with `dating-boost context build` when debugging or using lower-level commands.
 - Draft replies inside the host agent.
 - Check drafts with `dating-boost policy check-draft`.
@@ -72,6 +73,27 @@ the user explicitly asks for explanation, critique, review, or debug output.
 9. After the host executes an action, perform post-action verification from a fresh observation.
 10. Record the result with `dating-boost action record-result`.
 11. Record user feedback with `dating-boost feedback record` when useful.
+
+## Host-Orchestrated Automation Session
+
+Use this mode only after explicit user authorization. Codex remains the host
+agent: it observes the dating app screen, opens message threads, authors
+`scan_batch` JSON, and executes ordinary send requests. Dating Booster CLI is
+the local state engine; it does not scan the screen or click the app.
+
+1. Run the mandatory capability check.
+2. Record goal and availability JSON with `dating-boost automation goal set` and `dating-boost automation availability set`.
+3. Start with `dating-boost automation session start --data-dir .local/dating-boost --authorization auth.json`.
+4. Scan the visible message list and a bounded set of relevant threads, then create a `scan_batch` JSON.
+5. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
+6. Execute only allowed ordinary `send_message` action requests.
+7. After each send, perform post-action verification and call `dating-boost action record-result`.
+8. Stop with `dating-boost automation session stop --data-dir .local/dating-boost` and show the human report.
+9. On a later run, use `dating-boost automation report latest` and local state to continue without relying on host-agent memory.
+
+If the step output contains `handoffs`, appointment details, contact exchange,
+or high-risk content, stop automation for that match and ask the user to take
+over.
 
 Use `references/workflows.md` for reusable workflow details and lower-level command fallbacks, `references/contracts.md` for JSON input/output contract examples, and the drafting/naturalness references for Chinese reply quality. These reference files are summaries; core code and committed specs remain the source of truth.
 

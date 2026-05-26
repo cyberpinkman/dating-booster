@@ -69,6 +69,21 @@ screen understanding and draft generation; Dating Booster ingests the
 observation, builds context, checks the host draft against policy, and can
 record feedback in one local command.
 
+Host-orchestrated multi-match sessions use the same boundary: the host agent
+observes Tinder and executes ordinary sends, while Dating Booster owns local
+state, scheduling, duplicate prevention, appointment handoff, and progress
+reports.
+
+```bash
+python3 -m dating_boost.cli automation session start --data-dir .local/dating-boost --authorization auth.json
+python3 -m dating_boost.cli automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json
+python3 -m dating_boost.cli automation session stop --data-dir .local/dating-boost
+python3 -m dating_boost.cli automation report latest --data-dir .local/dating-boost
+```
+
+This mode does not include a live iPhone Mirroring harness. After each ordinary
+send, the host agent must verify the result and call `action record-result`.
+
 Host-executed action results are appended to
 `.local/dating-boost/audit/action_results.jsonl`. If a sent message or other
 high-risk action cannot be verified from a fresh post-action observation, record

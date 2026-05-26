@@ -12,6 +12,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "intelligence"
+AUTOMATION_FIXTURE_DIR = ROOT / "tests" / "fixtures" / "automation"
 SKILL_PACKAGE_PATH = ROOT / "skills" / "dating-booster-codex" / "skill-package.json"
 DEFAULT_DATA_DIR = ROOT / ".local" / "dating-boost-smoke"
 
@@ -152,6 +153,98 @@ def _run_smoke(data_dir: Path) -> int:
         commands=commands,
     )
 
+    _run_cli(
+        "automation",
+        "goal",
+        "set",
+        "--data-dir",
+        str(data_dir),
+        "--input",
+        str(AUTOMATION_FIXTURE_DIR / "goal_meet.json"),
+        command_key="automation_goal_set",
+        commands=commands,
+    )
+    _run_cli(
+        "automation",
+        "availability",
+        "set",
+        "--data-dir",
+        str(data_dir),
+        "--input",
+        str(AUTOMATION_FIXTURE_DIR / "availability_weekend.json"),
+        command_key="automation_availability_set",
+        commands=commands,
+    )
+    _run_cli(
+        "automation",
+        "session",
+        "start",
+        "--data-dir",
+        str(data_dir),
+        "--authorization",
+        str(AUTOMATION_FIXTURE_DIR / "auth_send.json"),
+        command_key="automation_session_start",
+        commands=commands,
+    )
+    automation_step = _run_cli(
+        "automation",
+        "session",
+        "step",
+        "--data-dir",
+        str(data_dir),
+        "--scan-batch",
+        str(AUTOMATION_FIXTURE_DIR / "scan_batch_initial.json"),
+        command_key="automation_session_step",
+        commands=commands,
+    )
+    automation_action_path = None
+    if automation_step.get("action_requests"):
+        request = automation_step["action_requests"][0]
+        automation_action_path = data_dir / "automation_action_result.json"
+        _write_json(
+            automation_action_path,
+            {
+                "action_request_id": request["action_request_id"],
+                "action": "send_message",
+                "target_match_id": request["match_id"],
+                "payload_hash": request["payload_hash"],
+                "pre_action_observation_id": request["pre_action_observation_id"],
+                "post_action_observation_id": "obs_automation_sent_001",
+                "result_status": "succeeded",
+                "evidence": {
+                    "verification": "Fixture smoke test records automation send success.",
+                },
+            },
+        )
+        _run_cli(
+            "action",
+            "record-result",
+            "--data-dir",
+            str(data_dir),
+            "--input",
+            str(automation_action_path),
+            command_key="automation_action_record_result",
+            commands=commands,
+        )
+    automation_stop = _run_cli(
+        "automation",
+        "session",
+        "stop",
+        "--data-dir",
+        str(data_dir),
+        command_key="automation_session_stop",
+        commands=commands,
+    )
+    _run_cli(
+        "automation",
+        "report",
+        "latest",
+        "--data-dir",
+        str(data_dir),
+        command_key="automation_report_latest",
+        commands=commands,
+    )
+
     print(
         json.dumps(
             {
@@ -167,6 +260,9 @@ def _run_smoke(data_dir: Path) -> int:
                     "action_result": str(action_result_path),
                     "action_audit": str(data_dir / "audit" / "action_results.jsonl"),
                     "feedback": str(data_dir / "matches" / match_id / "feedback_events.jsonl"),
+                    "automation_action_result": str(automation_action_path) if automation_action_path else None,
+                    "automation_machine_report": str(data_dir / automation_stop["machine_report_path"]),
+                    "automation_human_report": str(data_dir / automation_stop["human_report_path"]),
                 },
             },
             ensure_ascii=False,

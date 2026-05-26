@@ -1,0 +1,287 @@
+{
+  "schema_version": 1,
+  "session_id": "session_fixture_1",
+  "app_id": "tinder",
+  "captured_at": "2026-05-26T10:00:00Z",
+  "scan_cursor": "page_1",
+  "scan_budget": 5,
+  "provenance": {
+    "author": "host_agent",
+    "evidence": "Fixture scan batch generated from visible Tinder list and selected threads."
+  },
+  "message_list_snapshot": {
+    "entries": [
+      {
+        "candidate_key": "row_ada",
+        "visible_name": "Ada",
+        "latest_preview": "你定",
+        "latest_preview_hash": "preview_ada",
+        "timestamp_cue": "昨天",
+        "unread_cue": "present",
+        "position": 1,
+        "match_identity_hints": {
+          "visible_name": "Ada",
+          "profile_cues": ["日料", "纯爱"],
+          "conversation_fingerprint": "ada-reward"
+        },
+        "evidence": "Visible first row with unread marker."
+      },
+      {
+        "candidate_key": "row_bea",
+        "visible_name": "Bea",
+        "latest_preview": "那周六几点在哪里",
+        "latest_preview_hash": "preview_bea",
+        "timestamp_cue": "昨天",
+        "unread_cue": "present",
+        "position": 2,
+        "match_identity_hints": {
+          "visible_name": "Bea",
+          "profile_cues": ["咖啡"],
+          "conversation_fingerprint": "bea-meeting-details"
+        },
+        "evidence": "Visible second row asking meeting details."
+      },
+      {
+        "candidate_key": "row_cora",
+        "visible_name": "Cora",
+        "latest_preview": "新匹配",
+        "latest_preview_hash": "preview_cora",
+        "timestamp_cue": "昨天",
+        "unread_cue": "absent",
+        "position": 3,
+        "match_identity_hints": {
+          "visible_name": "Cora",
+          "profile_cues": ["音乐"],
+          "conversation_fingerprint": "cora-new-match"
+        },
+        "evidence": "Visible third row but thread not opened."
+      },
+      {
+        "candidate_key": "row_dina",
+        "visible_name": "Dina",
+        "latest_preview": "周六晚上可以",
+        "latest_preview_hash": "preview_dina",
+        "timestamp_cue": "昨天",
+        "unread_cue": "present",
+        "position": 4,
+        "match_identity_hints": {
+          "visible_name": "Dina",
+          "profile_cues": ["咖啡"],
+          "conversation_fingerprint": "dina-meeting-details"
+        },
+        "evidence": "Visible fourth row near appointment."
+      },
+      {
+        "candidate_key": "row_ella",
+        "visible_name": "Ella",
+        "latest_preview": "哈哈哈",
+        "latest_preview_hash": "preview_ella",
+        "timestamp_cue": "昨天",
+        "unread_cue": "absent",
+        "position": 5,
+        "match_identity_hints": {
+          "visible_name": "Ella",
+          "profile_cues": ["喜剧"],
+          "conversation_fingerprint": "ella-light-chat"
+        },
+        "evidence": "Visible fifth row."
+      },
+      {
+        "candidate_key": "row_faye",
+        "visible_name": "Faye",
+        "latest_preview": "你好",
+        "latest_preview_hash": "preview_faye",
+        "timestamp_cue": "昨天",
+        "unread_cue": "present",
+        "position": 6,
+        "match_identity_hints": {
+          "visible_name": "Faye",
+          "profile_cues": ["旅行"],
+          "conversation_fingerprint": "faye-over-budget"
+        },
+        "evidence": "Visible sixth row over scan budget."
+      }
+    ]
+  },
+  "thread_observations": [
+    {
+      "candidate_key": "row_ada",
+      "assessment": {
+        "schema_version": 1,
+        "latest_match_message": "你定",
+        "latest_user_message": "你猜猜会有什么奖励",
+        "latest_inbound_fingerprint": "ada:in:you-pick",
+        "reply_window_status": "open",
+        "continuation_opportunity": "yes",
+        "appointment_stage": "none",
+        "recommended_next": "reply",
+        "confidence": "high",
+        "evidence": "Ada delegated the reward choice back to the user.",
+        "risk_flags": []
+      },
+      "observation": {
+        "observation_id": "obs_ada_001",
+        "source_type": "manual_fixture",
+        "app_id": "tinder",
+        "adapter_id": "codex.manual.v1",
+        "captured_at": "2026-05-26T10:00:00Z",
+        "page_type": "chat_thread",
+        "page_confidence": "high",
+        "match_identity_hints": {
+          "visible_name": "Ada",
+          "profile_cues": ["日料", "纯爱"],
+          "conversation_fingerprint": "ada-reward",
+          "evidence": "Visible chat thread for Ada."
+        },
+        "profile_observation": {
+          "profile_text": "喜欢日料，寻找长期关系。",
+          "photo_cues": [],
+          "hook_candidates": ["Ask about 日料"]
+        },
+        "conversation_observation": {
+          "visible_messages": [
+            {"sender": "user", "text": "你猜猜会有什么奖励"},
+            {"sender": "match", "text": "你定"}
+          ],
+          "input_state": "empty",
+          "thread_cues": ["match delegated choice"]
+        },
+        "element_observations": [],
+        "exception_state": "none",
+        "provenance": {
+          "evidence": "Fixture thread observation.",
+          "redaction_status": "redacted"
+        },
+        "raw_ref": null
+      },
+      "draft": {
+        "best_reply": "那先欠你一顿好吃的，具体吃啥我认真想一下",
+        "safer_reply": "那我先记一笔，回头认真兑现",
+        "bolder_reply": "那先欠你一顿日料，感觉这个奖励比较像样",
+        "why_this_works": "Takes the choice without asking another question.",
+        "situation_read": "The match gave the user permission to decide the reward.",
+        "conversation_move": "take_the_lead",
+        "hook_source": "latest_message",
+        "naturalness_notes": ["short Chinese chat style"],
+        "followup_if_match_replies": "If she accepts, lightly continue toward meeting.",
+        "risk_flags": [],
+        "missing_info": [],
+        "mode_notes": "Adaptive mode.",
+        "persona_divergence": "low",
+        "stance_divergence": "low"
+      }
+    },
+    {
+      "candidate_key": "row_bea",
+      "appointment_slot": {
+        "date": "2026-05-30",
+        "time_window": "evening",
+        "area": "朝阳或海淀"
+      },
+      "assessment": {
+        "schema_version": 1,
+        "latest_match_message": "那周六几点在哪里",
+        "latest_user_message": "周末可以找个近点的地方喝咖啡",
+        "latest_inbound_fingerprint": "bea:in:sat-where",
+        "reply_window_status": "open",
+        "continuation_opportunity": "yes",
+        "appointment_stage": "details_requested",
+        "recommended_next": "handoff",
+        "confidence": "high",
+        "evidence": "Bea asked for exact time and place.",
+        "risk_flags": ["appointment_details"]
+      },
+      "observation": {
+        "observation_id": "obs_bea_001",
+        "source_type": "manual_fixture",
+        "app_id": "tinder",
+        "adapter_id": "codex.manual.v1",
+        "captured_at": "2026-05-26T10:01:00Z",
+        "page_type": "chat_thread",
+        "page_confidence": "high",
+        "match_identity_hints": {
+          "visible_name": "Bea",
+          "profile_cues": ["咖啡"],
+          "conversation_fingerprint": "bea-meeting-details",
+          "evidence": "Visible chat thread for Bea."
+        },
+        "profile_observation": {
+          "profile_text": "喜欢咖啡。",
+          "photo_cues": [],
+          "hook_candidates": ["coffee"]
+        },
+        "conversation_observation": {
+          "visible_messages": [
+            {"sender": "user", "text": "周末可以找个近点的地方喝咖啡"},
+            {"sender": "match", "text": "那周六几点在哪里"}
+          ],
+          "input_state": "empty",
+          "thread_cues": ["specific appointment details requested"]
+        },
+        "element_observations": [],
+        "exception_state": "none",
+        "provenance": {
+          "evidence": "Fixture thread observation.",
+          "redaction_status": "redacted"
+        },
+        "raw_ref": null
+      }
+    },
+    {
+      "candidate_key": "row_dina",
+      "appointment_slot": {
+        "date": "2026-05-30",
+        "time_window": "evening",
+        "area": "朝阳或海淀"
+      },
+      "assessment": {
+        "schema_version": 1,
+        "latest_match_message": "周六晚上可以",
+        "latest_user_message": "这周末可以找个地方喝杯咖啡",
+        "latest_inbound_fingerprint": "dina:in:sat-evening",
+        "reply_window_status": "open",
+        "continuation_opportunity": "yes",
+        "appointment_stage": "details_requested",
+        "recommended_next": "handoff",
+        "confidence": "high",
+        "evidence": "Dina moved the conversation into a concrete Saturday evening slot.",
+        "risk_flags": ["appointment_details"]
+      },
+      "observation": {
+        "observation_id": "obs_dina_001",
+        "source_type": "manual_fixture",
+        "app_id": "tinder",
+        "adapter_id": "codex.manual.v1",
+        "captured_at": "2026-05-26T10:02:00Z",
+        "page_type": "chat_thread",
+        "page_confidence": "high",
+        "match_identity_hints": {
+          "visible_name": "Dina",
+          "profile_cues": ["咖啡"],
+          "conversation_fingerprint": "dina-meeting-details",
+          "evidence": "Visible chat thread for Dina."
+        },
+        "profile_observation": {
+          "profile_text": "喜欢咖啡。",
+          "photo_cues": [],
+          "hook_candidates": ["coffee"]
+        },
+        "conversation_observation": {
+          "visible_messages": [
+            {"sender": "user", "text": "这周末可以找个地方喝杯咖啡"},
+            {"sender": "match", "text": "周六晚上可以"}
+          ],
+          "input_state": "empty",
+          "thread_cues": ["specific appointment slot"]
+        },
+        "element_observations": [],
+        "exception_state": "none",
+        "provenance": {
+          "evidence": "Fixture thread observation.",
+          "redaction_status": "redacted"
+        },
+        "raw_ref": null
+      }
+    }
+  ]
+}

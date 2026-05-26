@@ -1,0 +1,12 @@
+{
+  "action_request_id": "placeholder",
+  "action": "send_message",
+  "target_match_id": "placeholder",
+  "payload_hash": "placeholder",
+  "pre_action_observation_id": "obs_ada_001",
+  "post_action_observation_id": "obs_ada_sent_001",
+  "result_status": "succeeded",
+  "evidence": {
+    "post_send_visible_text": "那先欠你一顿好吃的，具体吃啥我认真想一下"
+  }
+}
