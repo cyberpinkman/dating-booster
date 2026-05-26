@@ -1,0 +1,84 @@
+{
+  "adapter_id": "manual.screenshot.redacted.v1",
+  "app_id": "tinder",
+  "captured_at": "2026-05-26T00:00:00Z",
+  "conversation_observation": {
+    "input_state": "empty",
+    "thread_cues": [
+      "match complimented user as cute",
+      "user asked what reward match wanted",
+      "user asked match to guess the reward",
+      "match delegated the reward choice with 你定",
+      "take_the_lead trigger"
+    ],
+    "visible_messages": [
+      {
+        "sender": "user",
+        "text": "纯爱战士！"
+      },
+      {
+        "sender": "match",
+        "text": "你好可爱"
+      },
+      {
+        "sender": "user",
+        "text": "这你都看出来啦"
+      },
+      {
+        "sender": "match",
+        "text": "有奖励么"
+      },
+      {
+        "sender": "user",
+        "text": "想要什么奖励呀"
+      },
+      {
+        "sender": "user",
+        "text": "哦我应该问 你猜猜会有什么奖励"
+      },
+      {
+        "sender": "match",
+        "text": "你定"
+      }
+    ]
+  },
+  "element_observations": [],
+  "exception_state": "none",
+  "match_identity_hints": {
+    "conversation_fingerprint": "reward-delegation-you-decide",
+    "evidence": "Redacted Tinder screenshots show profile details and latest chat message.",
+    "profile_cues": [
+      "pure love",
+      "long-term partner",
+      "Japanese food",
+      "love language gifts",
+      "INFP",
+      "medical worker",
+      "Shenyang"
+    ],
+    "visible_name": null
+  },
+  "observation_id": "obs_reward_delegation_001",
+  "page_confidence": "high",
+  "page_type": "chat_thread",
+  "profile_observation": {
+    "hook_candidates": [
+      "take_the_lead: match delegated reward choice with 你定",
+      "Use Japanese food as a low-pressure reward hook",
+      "Keep reward playful and non-sexual because profile says 纯爱 and long-term partner",
+      "Avoid asking what reward she wants again",
+      "Gift love language supports a playful reward frame"
+    ],
+    "photo_cues": [
+      "winter coat close-up",
+      "soft cute selfie style"
+    ],
+    "profile_text": "About me: 朋友/恋人, ons/fwb no, 酒精过敏, 音乐会, 瑜伽, 不喝咖啡, 日料 yyds, 纯爱. Key info: 627 公里以外, 176 cm, 医院的搬砖, 中国医科大学, 居住在沈阳市, 女性, 异性恋. Interests: 瑜伽, 美食之旅, 音乐会, 音乐. Looking for: 寻找长期的伴侣. Basic info: 天秤座, 学士, 家庭计划还不确定, INFP, 沟通风格最好当面, 爱的方式礼物. Lifestyle: 宠物喜好狗狗, 饮酒不感兴趣, 不吸烟, 健身偶尔, 饮食偏好杂食动物, 社交媒体不常上网, 睡眠习惯早起的鸟儿."
+  },
+  "provenance": {
+    "evidence": "Manual extraction from user-provided redacted screenshots in testprofile-2.",
+    "redaction_status": "redacted_structured_only"
+  },
+  "raw_ref": null,
+  "source_type": "screenshot_fixture"
+}
