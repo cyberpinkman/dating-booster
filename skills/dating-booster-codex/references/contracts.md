@@ -64,6 +64,15 @@ Use this shape with `dating-boost policy check-draft`.
   "safer_reply": "Nice. Any fun plans already?",
   "bolder_reply": "If there is live music involved, I am listening.",
   "why_this_works": "It follows the open weekend thread and asks an easy question.",
+  "situation_read": "The match gave a short positive reply; the user should not over-explain.",
+  "conversation_move": "deepen_hook",
+  "hook_source": "profile_unknown_detail",
+  "naturalness_notes": [
+    "one short question",
+    "asks for an unknown detail instead of repeating known tags",
+    "avoids three-option list wording"
+  ],
+  "followup_if_match_replies": "If they name a genre or venue, ask one concrete follow-up.",
   "risk_flags": [],
   "missing_info": [],
   "mode_notes": "Adaptive mode.",

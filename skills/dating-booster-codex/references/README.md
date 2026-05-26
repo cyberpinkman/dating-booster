@@ -18,3 +18,5 @@ Reference files:
 - `contracts.md`: minimal JSON contracts for observations, drafts, and action results.
 - `observation-authoring.md`: rules for converting visible screen content into
   observation JSON without over-inference.
+- `drafting-framework.md`: Chinese host-agent drafting strategy for dating replies.
+- `naturalness-checklist.md`: human-context validation checklist and bad to better examples.

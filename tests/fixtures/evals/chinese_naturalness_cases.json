@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "zh_a_low_investment_night_owl",
+      "language": "zh-CN",
+      "context": {
+        "latest_message": "挺不错的",
+        "match_profile_hooks": [
+          "猫猫狗狗",
+          "音乐",
+          "美食",
+          "穿搭",
+          "语言交流",
+          "唱歌",
+          "咖啡",
+          "喜剧",
+          "电影",
+          "白羊座",
+          "ESFP",
+          "夜猫子"
+        ],
+        "situation_read": "Match is low-investment but not rejecting; user has already sent many messages."
+      },
+      "bad_examples": [
+        {
+          "reply": "你平时放松更偏咖啡、电影还是听歌？",
+          "issues": [
+            "uses logical-comparison wording: 偏 A 还是 B",
+            "three-option survey wording",
+            "asks known tags instead of unknown details"
+          ]
+        },
+        {
+          "reply": "下次我得听听 ESFP夜猫子的放松路线：咖啡、电影、听歌你会先选哪个？",
+          "issues": [
+            "tag stacking: ESFP夜猫子",
+            "AI-sounding abstract noun: 放松路线",
+            "three-option survey wording"
+          ]
+        }
+      ],
+      "better_examples": [
+        {
+          "reply": "还行，夜风加点酒确实挺舒服😂 你这种夜猫子晚上不睡觉的时候一般听谁的歌？",
+          "conversation_move": "deepen_hook",
+          "strategy_reason": "Bridges from the park-drinks thread and asks an unknown detail under the night-owl/music hook."
+        },
+        {
+          "reply": "哈哈是挺舒服。你不是也爱电影吗，ESFP 一般会喜欢哪种片？",
+          "conversation_move": "deepen_hook",
+          "strategy_reason": "Uses a known movie hook but asks for a specific unknown preference."
+        },
+        {
+          "reply": "主要是夜风不错。你平常更爱看电影还是出去听歌？",
+          "conversation_move": "bridge_from_latest",
+          "strategy_reason": "Uses a natural two-option question and avoids repeating the full profile tag list."
+        }
+      ]
+    }
+  ]
+}

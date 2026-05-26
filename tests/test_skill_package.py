@@ -35,6 +35,8 @@ class SkillPackageTests(unittest.TestCase):
             self.assertTrue(Path(spec_path).exists(), spec_path)
         for reference_path in metadata["references"]:
             self.assertTrue((SKILL_DIR / reference_path).exists(), reference_path)
+        self.assertIn("references/drafting-framework.md", metadata["references"])
+        self.assertIn("references/naturalness-checklist.md", metadata["references"])
 
     def test_skill_markdown_contains_required_operational_guards(self):
         skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower()
@@ -52,10 +54,18 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("high-risk", skill_text)
         self.assertIn("post-action verification", skill_text)
         self.assertIn("record-result", skill_text)
+        self.assertIn("drafting-framework.md", skill_text)
+        self.assertIn("naturalness-checklist.md", skill_text)
 
     def test_skill_reference_files_describe_reusable_workflows_and_contracts(self):
         workflows_text = (SKILL_DIR / "references" / "workflows.md").read_text(encoding="utf-8").lower()
         contracts_text = (SKILL_DIR / "references" / "contracts.md").read_text(encoding="utf-8").lower()
+        drafting_text = (SKILL_DIR / "references" / "drafting-framework.md").read_text(
+            encoding="utf-8"
+        ).lower()
+        checklist_text = (SKILL_DIR / "references" / "naturalness-checklist.md").read_text(
+            encoding="utf-8"
+        ).lower()
 
         for workflow_name in ("draft", "profile refresh", "send", "feedback"):
             self.assertIn(workflow_name, workflows_text)
@@ -74,11 +84,34 @@ class SkillPackageTests(unittest.TestCase):
             "profile_observation",
             "conversation_observation",
             "best_reply",
+            "situation_read",
+            "conversation_move",
+            "hook_source",
+            "naturalness_notes",
+            "followup_if_match_replies",
             "payload_hash",
             "result_status",
             "evidence",
         ):
             self.assertIn(field_name, contracts_text)
+        for phrase in (
+            "对方投入度",
+            "最后一句",
+            "连续输出",
+            "未知细节",
+            "一句为主",
+        ):
+            self.assertIn(phrase, drafting_text)
+        for phrase in (
+            "偏 a 还是 b",
+            "a 还是 b 还是 c",
+            "标签堆叠",
+            "抽象词",
+            "已知标签",
+            "都行",
+            "看情况",
+        ):
+            self.assertIn(phrase, checklist_text)
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:

@@ -17,6 +17,11 @@ class DraftResponse:
     safer_reply: str
     bolder_reply: str
     why_this_works: str
+    situation_read: str
+    conversation_move: str
+    hook_source: str
+    naturalness_notes: list[str]
+    followup_if_match_replies: str
     risk_flags: list[str]
     missing_info: list[str]
     mode_notes: str
@@ -65,6 +70,11 @@ def _parse_draft_response(payload: Mapping[str, object]) -> DraftResponse:
         safer_reply=_require_string(payload, "safer_reply"),
         bolder_reply=_require_string(payload, "bolder_reply"),
         why_this_works=_require_string(payload, "why_this_works"),
+        situation_read=_require_string(payload, "situation_read"),
+        conversation_move=_require_string(payload, "conversation_move"),
+        hook_source=_require_string(payload, "hook_source"),
+        naturalness_notes=_require_string_list(payload, "naturalness_notes"),
+        followup_if_match_replies=_require_string(payload, "followup_if_match_replies"),
         risk_flags=_require_string_list(payload, "risk_flags"),
         missing_info=_require_string_list(payload, "missing_info"),
         mode_notes=_require_string(payload, "mode_notes"),

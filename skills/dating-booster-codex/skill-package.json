@@ -24,7 +24,9 @@
     "references/README.md",
     "references/workflows.md",
     "references/contracts.md",
-    "references/observation-authoring.md"
+    "references/observation-authoring.md",
+    "references/drafting-framework.md",
+    "references/naturalness-checklist.md"
   ],
   "required_commands": [
     "capabilities",

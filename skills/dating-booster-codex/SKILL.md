@@ -54,14 +54,15 @@ Do not treat autonomous mode as permission to bypass app rules, rate limits, ver
 2. Ingest or update observations with `dating-boost memory ingest-observation` after screen content is available.
 3. Retrieve match memory with `dating-boost memory get-match`.
 4. Build the context pack with `dating-boost context build`.
-5. Generate the draft in Codex using the user profile, match profile, and conversation context.
-6. Run `dating-boost policy check-draft` before showing or using the draft.
-7. For any high-risk action, run `dating-boost policy check-action` and ask for explicit confirmation.
-8. After the host executes an action, perform post-action verification from a fresh observation.
-9. Record the result with `dating-boost action record-result`.
-10. Record user feedback with `dating-boost feedback record` when useful.
+5. Read `references/drafting-framework.md`, then generate the draft in Codex using the user profile, match profile, and conversation context.
+6. Before showing the draft, apply `references/naturalness-checklist.md` and revise anything that reads like AI-written Chinese.
+7. Run `dating-boost policy check-draft` before showing or using the draft.
+8. For any high-risk action, run `dating-boost policy check-action` and ask for explicit confirmation.
+9. After the host executes an action, perform post-action verification from a fresh observation.
+10. Record the result with `dating-boost action record-result`.
+11. Record user feedback with `dating-boost feedback record` when useful.
 
-Use `references/workflows.md` for reusable workflow details and `references/contracts.md` for JSON input/output contract examples. These reference files are summaries; core code and committed specs remain the source of truth.
+Use `references/workflows.md` for reusable workflow details, `references/contracts.md` for JSON input/output contract examples, and the drafting/naturalness references for Chinese reply quality. These reference files are summaries; core code and committed specs remain the source of truth.
 
 ## Post-Action Verification
 

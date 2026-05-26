@@ -3,6 +3,15 @@
   "safer_reply": "Nice. Any live music places you like around here?",
   "bolder_reply": "Now I need your best live music recommendation.",
   "why_this_works": "It uses the match's live music cue and answers with curiosity.",
+  "situation_read": "Match asked about weekend plans; user can bridge to live music.",
+  "conversation_move": "deepen_hook",
+  "hook_source": "profile_unknown_detail",
+  "naturalness_notes": [
+    "asks for a specific unknown detail",
+    "uses one low-pressure question",
+    "does not repeat the full profile tag list"
+  ],
+  "followup_if_match_replies": "If they name a venue, ask what kind of shows they like.",
   "risk_flags": [],
   "missing_info": [],
   "mode_notes": "Adaptive mode keeps the user's concise style while adding warmth.",

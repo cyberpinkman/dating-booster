@@ -5,9 +5,30 @@ from dating_boost.intelligence.reply_generator import DraftResponse
 from dating_boost.policy.content import evaluate_draft_content
 
 
+def _draft_response(**overrides):
+    payload = {
+        "best_reply": "That sounds interesting.",
+        "safer_reply": "That sounds interesting.",
+        "bolder_reply": "Tell me more.",
+        "why_this_works": "Keeps the conversation moving.",
+        "situation_read": "Policy unit test fixture.",
+        "conversation_move": "deepen_hook",
+        "hook_source": "conversation_thread",
+        "naturalness_notes": ["unit test fixture"],
+        "followup_if_match_replies": "Continue the thread.",
+        "risk_flags": [],
+        "missing_info": [],
+        "mode_notes": "",
+        "persona_divergence": Divergence.LOW,
+        "stance_divergence": Divergence.LOW,
+    }
+    payload.update(overrides)
+    return DraftResponse(**payload)
+
+
 class ContentPolicyTests(unittest.TestCase):
     def test_blocks_hard_fact_violation(self):
-        draft = DraftResponse(
+        draft = _draft_response(
             best_reply="I studied in London too.",
             safer_reply="That sounds interesting.",
             bolder_reply="London stories are always fun.",
@@ -31,7 +52,7 @@ class ContentPolicyTests(unittest.TestCase):
         self.assertEqual(decision.severity, "high")
 
     def test_blocks_hard_facts_only_overseas_study_claim(self):
-        draft = DraftResponse(
+        draft = _draft_response(
             best_reply="I studied overseas too.",
             safer_reply="That sounds interesting.",
             bolder_reply="Tell me more about your school days.",
@@ -66,7 +87,7 @@ class ContentPolicyTests(unittest.TestCase):
             ]
         }
         cases = (
-            DraftResponse(
+            _draft_response(
                 best_reply="I'm 25, so I still have time.",
                 safer_reply="That sounds interesting.",
                 bolder_reply="Tell me more.",
@@ -77,7 +98,7 @@ class ContentPolicyTests(unittest.TestCase):
                 persona_divergence=Divergence.LOW,
                 stance_divergence=Divergence.LOW,
             ),
-            DraftResponse(
+            _draft_response(
                 best_reply="I live in London too.",
                 safer_reply="That sounds interesting.",
                 bolder_reply="Tell me more.",
@@ -104,7 +125,7 @@ class ContentPolicyTests(unittest.TestCase):
             ]
         }
         cases = (
-            DraftResponse(
+            _draft_response(
                 best_reply="That sounds interesting.",
                 safer_reply="I studied overseas too.",
                 bolder_reply="London stories are always fun.",
@@ -115,7 +136,7 @@ class ContentPolicyTests(unittest.TestCase):
                 persona_divergence=Divergence.LOW,
                 stance_divergence=Divergence.LOW,
             ),
-            DraftResponse(
+            _draft_response(
                 best_reply="That sounds interesting.",
                 safer_reply="London stories are always fun.",
                 bolder_reply="I went to university in London.",
@@ -136,7 +157,7 @@ class ContentPolicyTests(unittest.TestCase):
                 self.assertEqual(decision.severity, "high")
 
     def test_unlabeled_medium_high_divergence_requires_user_confirmation(self):
-        draft = DraftResponse(
+        draft = _draft_response(
             best_reply="I am open to checking out a live show this weekend.",
             safer_reply="A live show could be fun.",
             bolder_reply="Pick a live show and I might be in.",
@@ -154,7 +175,7 @@ class ContentPolicyTests(unittest.TestCase):
         self.assertTrue(decision.requires_user_confirmation)
 
     def test_allows_labeled_stance_shift(self):
-        draft = DraftResponse(
+        draft = _draft_response(
             best_reply="I am open to checking out a live show this weekend.",
             safer_reply="A live show could be fun.",
             bolder_reply="Pick a live show and I might be in.",
