@@ -48,6 +48,16 @@ High-risk actions require explicit user confirmation and the local policy switch
 
 Do not treat autonomous mode as permission to bypass app rules, rate limits, verification, account restrictions, or user judgment.
 
+## Default Draft Output
+
+Naturalness review is an internal QA step. Before showing any draft, silently apply
+`references/naturalness-checklist.md` and revise the draft if needed.
+
+By default, show only the final draft and at most a small number of alternatives.
+Do not show checklist results, validation notes, or reasoning about why the draft
+does or does not trigger specific checklist items. Show that material only when
+the user explicitly asks for explanation, critique, review, or debug output.
+
 ## Workflow
 
 1. Run `dating-boost capabilities --json --data-dir .local/dating-boost` and verify compatibility against `skill-package.json`.
@@ -55,7 +65,7 @@ Do not treat autonomous mode as permission to bypass app rules, rate limits, ver
 3. Retrieve match memory with `dating-boost memory get-match`.
 4. Build the context pack with `dating-boost context build`.
 5. Read `references/drafting-framework.md`, then generate the draft in Codex using the user profile, match profile, and conversation context.
-6. Before showing the draft, apply `references/naturalness-checklist.md` and revise anything that reads like AI-written Chinese.
+6. Before showing the draft, silently apply `references/naturalness-checklist.md` and revise anything that reads like AI-written Chinese.
 7. Run `dating-boost policy check-draft` before showing or using the draft.
 8. For any high-risk action, run `dating-boost policy check-action` and ask for explicit confirmation.
 9. After the host executes an action, perform post-action verification from a fresh observation.

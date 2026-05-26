@@ -24,11 +24,12 @@ Use this when the user wants a reply suggestion for a known match.
 4. Run `dating-boost context build --data-dir .local/dating-boost --match-id MATCH_ID --mode adaptive`.
 5. Read `drafting-framework.md` and choose the conversation move.
 6. Generate the draft in the host agent using the expanded draft contract.
-7. Apply `naturalness-checklist.md`; revise AI-sounding Chinese before showing the draft.
+7. Apply `naturalness-checklist.md` as an internal QA step; revise AI-sounding Chinese before showing the draft.
 8. Save the draft JSON locally.
 9. Run `dating-boost policy check-draft --input draft.json --context context.json`.
 10. If blocked, do not show or paste the blocked draft.
-11. If allowed, show the draft to the user or paste it when the user requested paste.
+11. If allowed, show only the final draft to the user or paste it when the user requested paste.
+    Do not list checklist results unless the user explicitly asks for explanation, critique, review, or debug output.
 
 ## Profile Refresh
 

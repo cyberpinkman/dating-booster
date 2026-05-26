@@ -116,6 +116,23 @@ class SkillPackageTests(unittest.TestCase):
         ):
             self.assertIn(phrase, checklist_text)
 
+    def test_naturalness_check_is_internal_by_default(self):
+        skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower()
+        workflows_text = (SKILL_DIR / "references" / "workflows.md").read_text(encoding="utf-8").lower()
+        checklist_text = (SKILL_DIR / "references" / "naturalness-checklist.md").read_text(
+            encoding="utf-8"
+        ).lower()
+
+        for text in (skill_text, workflows_text, checklist_text):
+            self.assertIn("internal", text)
+            self.assertIn("do not show", text)
+            self.assertIn("explicitly asks", text)
+            self.assertIn("debug", text)
+
+        self.assertIn("show only the final draft", skill_text)
+        self.assertIn("do not list checklist results", workflows_text)
+        self.assertIn("not a default user-facing output format", checklist_text)
+
 
 def _version_tuple(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in version.split("."))

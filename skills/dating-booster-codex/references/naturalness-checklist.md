@@ -3,6 +3,13 @@
 Use this before showing a Chinese draft. This is a human-context check, not a
 mechanical banned-word list.
 
+## Output Policy
+
+This checklist is an internal QA tool, not a default user-facing output format.
+Use it to revise the draft silently. Do not show checklist results, validation
+notes, or per-item reasoning unless the user explicitly asks for explanation,
+critique, review, or debug output.
+
 ## Checklist
 
 - 真人会不会这么打字: Would a normal Chinese dating-app user send this exact sentence?
