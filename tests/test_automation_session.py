@@ -1,9 +1,11 @@
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from dating_boost.cli import main
 
@@ -12,6 +14,13 @@ FIXTURE_DIR = Path("tests/fixtures/automation")
 
 
 class AutomationSessionTests(unittest.TestCase):
+    def setUp(self):
+        self._clock_patch = patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-05-26T00:00:00Z"})
+        self._clock_patch.start()
+
+    def tearDown(self):
+        self._clock_patch.stop()
+
     def test_capabilities_expose_automation_session_contract(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             exit_code, payload, _ = self._run([
@@ -271,6 +280,62 @@ class AutomationSessionTests(unittest.TestCase):
             self.assertEqual(step_exit, 0)
             self.assertEqual(step_payload["status"], "ok")
 
+    def test_stopped_session_blocks_step_until_restarted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            self._run([
+                "automation",
+                "session",
+                "stop",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+            blocked_exit, blocked_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(FIXTURE_DIR / "scan_batch_initial.json"),
+            ])
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            resumed_exit, resumed_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(FIXTURE_DIR / "scan_batch_initial.json"),
+            ])
+
+            self.assertEqual(blocked_exit, 0)
+            self.assertEqual(blocked_payload["status"], "blocked")
+            self.assertEqual(blocked_payload["reason"], "session_stopped")
+            self.assertEqual(blocked_payload["action_requests"], [])
+            self.assertEqual(resumed_exit, 0)
+            self.assertEqual(resumed_payload["status"], "ok")
+
     def test_revoked_or_expired_authorization_blocks_automatic_send(self):
         for auth_file in ("auth_revoked.json", "auth_expired.json"):
             with self.subTest(auth_file=auth_file):
@@ -302,6 +367,295 @@ class AutomationSessionTests(unittest.TestCase):
                     self.assertEqual(step_payload["reason"], "authorization_expired_or_revoked")
                     self.assertEqual(step_payload["action_requests"], [])
                     self.assertIn("authorization_expired_or_revoked", step_payload["warnings"])
+
+    def test_authorization_expiration_uses_current_clock(self):
+        with patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-05-28T00:00:00Z"}):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                data_dir = Path(temp_dir) / "data"
+                self._init_profile(data_dir)
+                self._run([
+                    "automation",
+                    "session",
+                    "start",
+                    "--data-dir",
+                    str(data_dir),
+                    "--authorization",
+                    str(FIXTURE_DIR / "auth_send.json"),
+                ])
+
+                step_exit, step_payload, _ = self._run([
+                    "automation",
+                    "session",
+                    "step",
+                    "--data-dir",
+                    str(data_dir),
+                    "--scan-batch",
+                    str(FIXTURE_DIR / "scan_batch_initial.json"),
+                ])
+
+                self.assertEqual(step_exit, 0)
+                self.assertEqual(step_payload["status"], "blocked")
+                self.assertEqual(step_payload["reason"], "authorization_expired_or_revoked")
+
+    def test_thread_scan_merges_provisional_state_into_resolved_match(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            list_only_scan = {
+                "schema_version": 1,
+                "session_id": "session_fixture_merge",
+                "app_id": "tinder",
+                "captured_at": "2026-05-26T09:00:00Z",
+                "scan_budget": 1,
+                "message_list_snapshot": {
+                    "entries": [
+                        {
+                            "candidate_key": "row_cora",
+                            "visible_name": "Cora",
+                            "latest_preview": "新匹配",
+                            "latest_preview_hash": "preview_cora",
+                            "timestamp_cue": "昨天",
+                            "unread_cue": "absent",
+                            "position": 1,
+                        }
+                    ]
+                },
+                "thread_observations": [],
+            }
+            thread_scan = dict(list_only_scan)
+            thread_scan["thread_observations"] = [
+                {
+                    "candidate_key": "row_cora",
+                    "assessment": {
+                        "schema_version": 1,
+                        "latest_match_message": "你好",
+                        "latest_inbound_fingerprint": "cora:in:hello",
+                        "reply_window_status": "open",
+                        "continuation_opportunity": "yes",
+                        "appointment_stage": "none",
+                        "recommended_next": "wait",
+                        "confidence": "high",
+                        "evidence": "Thread opened for Cora.",
+                        "risk_flags": [],
+                    },
+                    "observation": {
+                        "observation_id": "obs_cora_001",
+                        "source_type": "manual_fixture",
+                        "app_id": "tinder",
+                        "adapter_id": "codex.manual.v1",
+                        "captured_at": "2026-05-26T09:01:00Z",
+                        "page_type": "chat_thread",
+                        "page_confidence": "high",
+                        "match_identity_hints": {
+                            "visible_name": "Cora",
+                            "profile_cues": ["音乐"],
+                            "conversation_fingerprint": "cora-new-match",
+                            "evidence": "Visible chat thread for Cora.",
+                        },
+                        "profile_observation": {
+                            "profile_text": "喜欢音乐。",
+                            "photo_cues": [],
+                            "hook_candidates": ["music"],
+                        },
+                        "conversation_observation": {
+                            "visible_messages": [{"sender": "match", "text": "你好"}],
+                            "input_state": "empty",
+                            "thread_cues": [],
+                        },
+                        "element_observations": [],
+                        "exception_state": "none",
+                        "provenance": {
+                            "evidence": "Fixture thread observation.",
+                            "redaction_status": "redacted",
+                        },
+                        "raw_ref": None,
+                    },
+                }
+            ]
+            list_scan_path = Path(temp_dir) / "list_scan.json"
+            thread_scan_path = Path(temp_dir) / "thread_scan.json"
+            self._write_json(list_scan_path, list_only_scan)
+            self._write_json(thread_scan_path, thread_scan)
+
+            self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(list_scan_path),
+            ])
+            self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(thread_scan_path),
+            ])
+            states_exit, states_payload, _ = self._run([
+                "automation",
+                "get-state",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+            self.assertEqual(states_exit, 0)
+            self.assertEqual(len(states_payload["states"]), 1)
+            state = states_payload["states"][0]
+            self.assertEqual(state["candidate_key"], "row_cora")
+            self.assertFalse(state["match_id"].startswith("provisional_"))
+            self.assertEqual(state["state"], "sent_waiting")
+
+    def test_scan_budget_prioritizes_new_candidates_before_known_continuations(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            automation_dir = data_dir / "automation"
+            automation_dir.mkdir(parents=True, exist_ok=True)
+            self._write_json(
+                automation_dir / "states.json",
+                {
+                    "schema_version": 1,
+                    "states": [
+                        {
+                            "schema_version": 1,
+                            "match_id": f"match_old_{index}",
+                            "candidate_key": f"row_old_{index}",
+                            "state": "sent_waiting",
+                            "candidate_type": "continuation_candidate",
+                            "seen_before": True,
+                            "last_session_id": "session_fixture_priority",
+                        }
+                        for index in range(1, 6)
+                    ],
+                },
+            )
+            priority_scan = {
+                "schema_version": 1,
+                "session_id": "session_fixture_priority",
+                "app_id": "tinder",
+                "captured_at": "2026-05-26T12:00:00Z",
+                "scan_budget": 1,
+                "message_list_snapshot": {
+                    "entries": [
+                        *[
+                            {
+                                "candidate_key": f"row_old_{index}",
+                                "visible_name": f"Old {index}",
+                                "latest_preview": "旧会话",
+                                "latest_preview_hash": f"old_{index}",
+                                "timestamp_cue": "昨天",
+                                "unread_cue": "absent",
+                                "position": index,
+                            }
+                            for index in range(1, 6)
+                        ],
+                        {
+                            "candidate_key": "row_new",
+                            "visible_name": "New",
+                            "latest_preview": "新匹配",
+                            "latest_preview_hash": "new_preview",
+                            "timestamp_cue": "刚刚",
+                            "unread_cue": "present",
+                            "position": 6,
+                        },
+                    ]
+                },
+                "thread_observations": [],
+            }
+            scan_path = Path(temp_dir) / "priority_scan.json"
+            self._write_json(scan_path, priority_scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+            self.assertEqual(step_exit, 0)
+            self.assertEqual(step_payload["processed_entry_count"], 1)
+            self.assertEqual(step_payload["scan_requests"][0]["candidate_key"], "row_new")
+            self.assertNotIn(
+                "row_new",
+                [item.get("candidate_key") for item in step_payload["scheduled_actions"]],
+            )
+
+    def test_mismatched_action_result_does_not_complete_pending_send(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            _, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(FIXTURE_DIR / "scan_batch_initial.json"),
+            ])
+            action_request = step_payload["action_requests"][0]
+            action_result = dict(json.loads((FIXTURE_DIR / "action_result_ada.json").read_text()))
+            action_result["action_request_id"] = action_request["action_request_id"]
+            action_result["target_match_id"] = action_request["match_id"]
+            action_result["payload_hash"] = "wrong_payload_hash"
+            mismatch_path = Path(temp_dir) / "mismatch_result.json"
+            self._write_json(mismatch_path, action_result)
+
+            result_exit, _, _ = self._run([
+                "action",
+                "record-result",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(mismatch_path),
+            ])
+            states_exit, states_payload, _ = self._run([
+                "automation",
+                "get-state",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+            self.assertEqual(result_exit, 0)
+            self.assertEqual(states_exit, 0)
+            state_by_match = {state["match_id"]: state for state in states_payload["states"]}
+            state = state_by_match[action_request["match_id"]]
+            self.assertEqual(state["state"], "send_requested")
+            self.assertEqual(state["last_action_result_error"], "payload_hash_mismatch")
 
     def test_same_inbound_is_nudged_only_once(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -369,6 +723,9 @@ class AutomationSessionTests(unittest.TestCase):
             exit_code = main(argv)
         text = output.getvalue()
         return exit_code, json.loads(text), text
+
+    def _write_json(self, path, payload):
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 if __name__ == "__main__":

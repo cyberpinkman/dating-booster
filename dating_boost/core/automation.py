@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,6 @@ from dating_boost.perception.observations import AppObservation
 from dating_boost.policy.content import evaluate_draft_content
 
 
-AUTOMATION_TIMESTAMP = "2026-05-26T00:00:00Z"
 ACTIVE_SLOT_STATUSES = {"soft_mentioned", "handoff_pending", "user_confirmed"}
 
 
@@ -24,6 +24,9 @@ class AutomationRepository:
     def __init__(self, root: Path):
         self.root = root
         self._storage = JsonStorage(root)
+
+    def _now(self) -> str:
+        return _now_iso()
 
     def save_goal(self, payload: dict[str, Any]) -> dict[str, Any]:
         goal_id = _non_empty(payload.get("goal_id"), "goal_id")
@@ -66,12 +69,13 @@ class AutomationRepository:
         auth_result = self.save_authorization(authorization)
         latest_report_path = self._latest_machine_report_path()
         session_id = f"session_{auth_result['authorization_id']}_{_digest(authorization)[:8]}"
+        now = self._now()
         session = {
             "schema_version": 1,
             "session_id": session_id,
             "authorization_id": auth_result["authorization_id"],
             "status": "active",
-            "started_at": AUTOMATION_TIMESTAMP,
+            "started_at": now,
             "stopped_at": None,
             "step_count": 0,
             "last_scan_cursor": None,
@@ -91,6 +95,7 @@ class AutomationRepository:
         states = self.load_states()
         ledger = self.load_ledger()
         summary = _build_summary(states, ledger)
+        now = self._now()
         machine_path = Path("automation") / "reports" / "machine_latest.json"
         human_path = Path("automation") / "reports" / "human_latest.md"
         machine_report = {
@@ -98,7 +103,7 @@ class AutomationRepository:
             "session_id": session["session_id"],
             "authorization_id": session.get("authorization_id"),
             "started_at": session.get("started_at"),
-            "stopped_at": AUTOMATION_TIMESTAMP,
+            "stopped_at": now,
             "summary": summary,
             "states": states,
             "appointment_ledger": ledger,
@@ -107,7 +112,7 @@ class AutomationRepository:
         self._storage.write_json(machine_path, machine_report)
         self._write_text(human_path, _human_report(machine_report))
         session["status"] = "stopped"
-        session["stopped_at"] = AUTOMATION_TIMESTAMP
+        session["stopped_at"] = now
         self._storage.write_json(Path("automation") / "session.json", session)
         return {
             "schema_version": 1,
@@ -145,7 +150,7 @@ class AutomationRepository:
     def pause_session(self) -> dict[str, Any]:
         session = self._load_session()
         session["status"] = "paused"
-        session["paused_at"] = AUTOMATION_TIMESTAMP
+        session["paused_at"] = self._now()
         self._storage.write_json(Path("automation") / "session.json", session)
         return {
             "schema_version": 1,
@@ -157,7 +162,7 @@ class AutomationRepository:
     def resume_session(self) -> dict[str, Any]:
         session = self._load_session()
         session["status"] = "active"
-        session["resumed_at"] = AUTOMATION_TIMESTAMP
+        session["resumed_at"] = self._now()
         self._storage.write_json(Path("automation") / "session.json", session)
         return {
             "schema_version": 1,
@@ -179,37 +184,49 @@ class AutomationRepository:
         action_request_id = event.get("action_request_id")
         if not action_request_id:
             return
+        now = self._now()
         states = self.load_states()
         changed = False
         for state in states:
             if state.get("last_action_request_id") != action_request_id:
                 continue
+            mismatch = _action_result_mismatch(event, state)
+            if mismatch:
+                state["last_action_result_event_id"] = event["event_id"]
+                state["last_action_result_error"] = mismatch
+                state["updated_at"] = event.get("created_at", now)
+                changed = True
+                continue
             state["last_outbound_action_id"] = event["event_id"]
+            state.pop("last_action_result_error", None)
             if event.get("result_status") == "succeeded":
                 state["state"] = "sent_waiting"
             elif event.get("result_status") == "failed":
                 state["state"] = "draft_ready"
-            state["updated_at"] = event.get("created_at", AUTOMATION_TIMESTAMP)
+            state["updated_at"] = event.get("created_at", now)
             changed = True
         if changed:
             self.save_states(states)
 
     def step(self, scan_batch: dict[str, Any]) -> dict[str, Any]:
         session = self._load_session()
+        now = self._now()
         authorization = self.load_authorization() or {}
-        if session.get("status") == "paused":
+        if session.get("status") != "active":
+            status = str(session.get("status") or "unknown")
+            reason = "session_paused" if status == "paused" else "session_stopped" if status == "stopped" else "session_not_active"
             return {
                 "schema_version": 1,
                 "status": "blocked",
-                "reason": "session_paused",
+                "reason": reason,
                 "action_requests": [],
                 "handoffs": [],
                 "scan_requests": [],
                 "scheduled_actions": [],
-                "warnings": ["session_paused"],
+                "warnings": [reason],
                 "machine_report_ref": str(Path("automation") / "reports" / "machine_latest.json"),
             }
-        if _authorization_revoked_or_expired(authorization):
+        if _authorization_revoked_or_expired(authorization, now):
             return {
                 "schema_version": 1,
                 "status": "blocked",
@@ -230,15 +247,19 @@ class AutomationRepository:
             if state.get("candidate_key")
         }
         ledger = self.load_ledger()
-        entries = list(scan_batch.get("message_list_snapshot", {}).get("entries", []))
-        budget = int(scan_batch.get("scan_budget") or 5)
-        processed_entries = entries[:budget]
-        over_budget_entries = entries[budget:]
         thread_items = {
             item.get("candidate_key"): dict(item)
             for item in scan_batch.get("thread_observations", [])
             if item.get("candidate_key")
         }
+        entries = _prioritize_entries(
+            list(scan_batch.get("message_list_snapshot", {}).get("entries", [])),
+            states_by_candidate=states_by_candidate,
+            thread_items=thread_items,
+        )
+        budget = int(scan_batch.get("scan_budget") or 5)
+        processed_entries = entries[:budget]
+        over_budget_entries = entries[budget:]
 
         action_requests: list[dict[str, Any]] = []
         handoffs: list[dict[str, Any]] = []
@@ -257,11 +278,13 @@ class AutomationRepository:
                     match_id=provisional_id,
                     candidate_key=candidate_key,
                     session_id=session["session_id"],
+                    timestamp=now,
                 )
                 state["state"] = "needs_thread_scan"
-                state["candidate_type"] = "new_match_candidate"
+                state["candidate_type"] = "continuation_candidate" if state.get("seen_before") else "new_match_candidate"
                 state["visible_name"] = entry.get("visible_name")
-                state["updated_at"] = scan_batch.get("captured_at", AUTOMATION_TIMESTAMP)
+                state["last_preview_hash"] = entry.get("latest_preview_hash")
+                state["updated_at"] = scan_batch.get("captured_at", now)
                 states_by_match[state["match_id"]] = state
                 scan_requests.append(
                     {
@@ -279,16 +302,29 @@ class AutomationRepository:
             match_id = ingest["match_id"]
             assessment = dict(thread_item.get("assessment", {}))
             latest_fingerprint = assessment.get("latest_inbound_fingerprint")
-            state = states_by_match.get(match_id) or _new_state(
-                match_id=match_id,
-                candidate_key=candidate_key,
-                session_id=session["session_id"],
-            )
+            state = states_by_match.get(match_id)
+            if state is None:
+                state = states_by_candidate.get(candidate_key)
+                if state is not None:
+                    previous_match_id = state["match_id"]
+                    if previous_match_id != match_id:
+                        states_by_match.pop(previous_match_id, None)
+                        if str(previous_match_id).startswith("provisional_"):
+                            state["previous_provisional_match_id"] = previous_match_id
+                        state["match_id"] = match_id
+                else:
+                    state = _new_state(
+                        match_id=match_id,
+                        candidate_key=candidate_key,
+                        session_id=session["session_id"],
+                        timestamp=now,
+                    )
             state["candidate_key"] = candidate_key
             state["visible_name"] = entry.get("visible_name") or observation.match_identity_hints.visible_name
             state["last_session_id"] = session["session_id"]
             state["last_inbound_observation_id"] = observation.observation_id
             state["latest_inbound_fingerprint"] = latest_fingerprint
+            state["last_preview_hash"] = entry.get("latest_preview_hash")
             state["last_assessment"] = assessment
             state["updated_at"] = scan_batch.get("captured_at", observation.captured_at)
             state["candidate_type"] = "new_match_candidate" if not state.get("seen_before") else "continuation_candidate"
@@ -302,6 +338,7 @@ class AutomationRepository:
                         match_id=match_id,
                         candidate_key=candidate_key,
                         slot_payload=dict(thread_item["appointment_slot"]),
+                        timestamp=now,
                     )
                     state["appointment_slot_id"] = slot["slot_id"]
                 state["state"] = "appointment_handoff"
@@ -349,8 +386,10 @@ class AutomationRepository:
                         }
                         action_requests.append(request)
                         state["state"] = "send_requested"
+                        state["last_action"] = "send_message"
                         state["last_action_request_id"] = action_request_id
                         state["last_outbound_payload_hash"] = payload_hash
+                        state["last_pre_action_observation_id"] = observation.observation_id
                         state["last_draft_id"] = f"draft_{payload_hash[:12]}"
                 else:
                     state["state"] = "draft_ready"
@@ -421,7 +460,7 @@ class AutomationRepository:
                 "session_id": "session_implicit",
                 "authorization_id": None,
                 "status": "active",
-                "started_at": AUTOMATION_TIMESTAMP,
+                "started_at": self._now(),
                 "stopped_at": None,
                 "step_count": 0,
                 "last_scan_cursor": None,
@@ -548,15 +587,74 @@ def _can_request_send(
     )
 
 
-def _authorization_revoked_or_expired(authorization: dict[str, Any]) -> bool:
+def _authorization_revoked_or_expired(authorization: dict[str, Any], now: str) -> bool:
     if not authorization:
         return True
     if authorization.get("revoked_at"):
         return True
     expires_at = authorization.get("expires_at")
-    if isinstance(expires_at, str) and expires_at <= AUTOMATION_TIMESTAMP:
-        return True
+    if isinstance(expires_at, str):
+        try:
+            return _parse_iso_utc(expires_at) <= _parse_iso_utc(now)
+        except ValueError:
+            return True
     return False
+
+
+def _action_result_mismatch(event: dict[str, Any], state: dict[str, Any]) -> str | None:
+    if event.get("action") != state.get("last_action"):
+        return "action_mismatch"
+    if event.get("target_match_id") != state.get("match_id"):
+        return "target_match_id_mismatch"
+    if event.get("payload_hash") != state.get("last_outbound_payload_hash"):
+        return "payload_hash_mismatch"
+    if event.get("pre_action_observation_id") != state.get("last_pre_action_observation_id"):
+        return "pre_action_observation_id_mismatch"
+    return None
+
+
+def _prioritize_entries(
+    entries: list[dict[str, Any]],
+    *,
+    states_by_candidate: dict[str | None, dict[str, Any]],
+    thread_items: dict[str | None, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    indexed_entries = list(enumerate(entries))
+    return [
+        entry
+        for _, entry in sorted(
+            indexed_entries,
+            key=lambda item: (
+                _entry_priority(
+                    item[1],
+                    states_by_candidate.get(item[1].get("candidate_key")),
+                    thread_items.get(item[1].get("candidate_key")),
+                ),
+                item[0],
+            ),
+        )
+    ]
+
+
+def _entry_priority(
+    entry: dict[str, Any],
+    state: dict[str, Any] | None,
+    thread_item: dict[str, Any] | None,
+) -> int:
+    if state is None:
+        return 0
+    assessment = dict(thread_item.get("assessment", {})) if thread_item else {}
+    latest_fingerprint = assessment.get("latest_inbound_fingerprint")
+    if latest_fingerprint and latest_fingerprint != state.get("latest_inbound_fingerprint"):
+        return 1
+    latest_preview_hash = entry.get("latest_preview_hash")
+    if entry.get("unread_cue") == "present" and latest_preview_hash != state.get("last_preview_hash"):
+        return 1
+    if state.get("state") == "appointment_handoff" or _is_handoff_assessment(assessment):
+        return 2
+    if state.get("state") == "nudge_scheduled" or assessment.get("recommended_next") == "nudge_later":
+        return 3
+    return 4
 
 
 def _is_handoff_assessment(assessment: dict[str, Any]) -> bool:
@@ -573,6 +671,7 @@ def _reserve_slot(
     match_id: str,
     candidate_key: str,
     slot_payload: dict[str, Any],
+    timestamp: str,
 ) -> tuple[dict[str, Any], bool]:
     slot_id = f"slot_{slot_payload.get('date')}_{slot_payload.get('time_window')}"
     conflict = any(
@@ -599,13 +698,13 @@ def _reserve_slot(
         "area": slot_payload.get("area"),
         "status": "handoff_pending",
         "conflict": conflict,
-        "created_at": AUTOMATION_TIMESTAMP,
+        "created_at": timestamp,
     }
     ledger.append(slot)
     return slot, conflict
 
 
-def _new_state(*, match_id: str, candidate_key: str, session_id: str) -> dict[str, Any]:
+def _new_state(*, match_id: str, candidate_key: str, session_id: str, timestamp: str) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "match_id": match_id,
@@ -619,10 +718,12 @@ def _new_state(*, match_id: str, candidate_key: str, session_id: str) -> dict[st
         "last_nudged_inbound_fingerprint": None,
         "nudge_count_since_inbound": 0,
         "next_due_at": None,
+        "last_action": None,
         "last_action_request_id": None,
+        "last_pre_action_observation_id": None,
         "handoff_reason": None,
         "last_session_id": session_id,
-        "updated_at": AUTOMATION_TIMESTAMP,
+        "updated_at": timestamp,
         "seen_before": False,
     }
 
@@ -722,3 +823,17 @@ def _unique_strings(values: list[str]) -> list[str]:
             seen.add(value)
             result.append(value)
     return result
+
+
+def _now_iso() -> str:
+    override = os.environ.get("DATING_BOOST_NOW")
+    if override:
+        return override
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _parse_iso_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
