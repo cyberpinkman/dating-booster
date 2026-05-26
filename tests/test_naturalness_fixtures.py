@@ -30,6 +30,33 @@ class NaturalnessFixtureTests(unittest.TestCase):
                 self.assertIn(avoided_issue, known_issues)
             self.assertIn(example["conversation_move"], {"deepen_hook", "bridge_from_latest"})
 
+    def test_chinese_naturalness_seed_case_covers_answer_or_riff_without_forced_question(self):
+        fixture_path = Path("tests/fixtures/evals/chinese_naturalness_cases.json")
+        payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+        case = next(item for item in payload["cases"] if item["case_id"] == "zh_news_riff_no_forced_question")
+
+        self.assertIn("咋想的啊", case["context"]["latest_message"])
+        self.assertIn("接梗", case["context"]["goal"])
+        self.assertGreaterEqual(len(case["bad_examples"]), 2)
+        self.assertGreaterEqual(len(case["better_examples"]), 3)
+
+        known_issues = {issue for example in case["bad_examples"] for issue in example["issues"]}
+        self.assertIn("forced question after the match already asked a question", known_issues)
+        self.assertIn("jumps away from the live thread to profile tags", known_issues)
+
+        better_without_question = [
+            example for example in case["better_examples"] if "？" not in example["reply"] and "?" not in example["reply"]
+        ]
+        self.assertTrue(better_without_question)
+
+        for example in case["better_examples"]:
+            self.assertIn(example["conversation_move"], {"answer_or_riff", "bridge_from_latest"})
+            self.assertTrue(example["avoids_issues"])
+            for avoided_issue in example["avoids_issues"]:
+                self.assertIn(avoided_issue, known_issues)
+            self.assertTrue(example["strategy_reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

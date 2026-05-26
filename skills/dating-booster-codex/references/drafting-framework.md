@@ -19,6 +19,7 @@ explanation. Bridge from the last message and offer one easy opening.
 
 Use one `conversation_move`:
 
+- `answer_or_riff`:对方已经提问、吐槽或惊讶时，先回答或接梗。
 - `bridge_from_latest`:接住最后一句，再轻轻转到下一个点。
 - `deepen_hook`:挖 profile 标签背后的未知细节。
 - `light_self_disclosure`:给一点自己的信息，但不抢话。
@@ -27,6 +28,10 @@ Use one `conversation_move`:
 
 For the first version, prefer `bridge_from_latest` or `deepen_hook` when the
 match is replying briefly.
+
+Use `answer_or_riff` when the match has already given you an active opening.
+Question is optional: the reply can simply answer, agree, tease, or add a funny
+take. Do not force a question just to keep the thread alive.
 
 ## Choose The Hook
 
@@ -45,7 +50,9 @@ Avoid asking the match to choose among tags they already wrote. That often gets
 ## Shape The Reply
 
 - 一句为主，最多两句。
-- One question at most.
+- One question at most; zero questions is often better when the match already asked something.
+- If the match asked a question or showed surprise, answer or riff before adding a new hook.
+- Do not force a question when a natural reaction would be stronger.
 - Ask A or B when the options are natural; avoid A/B/C list questions.
 - Use one label at most. "夜猫子" is enough; "ESFP 夜猫子" usually sounds like tag stacking.
 - Prefer concrete words over abstract planning words.
@@ -76,3 +83,31 @@ Why this works:
 - It asks for an unknown detail beneath a known profile tag.
 - It avoids three-option interview wording.
 - It keeps the voice casual and short.
+
+## Worked Example: News Riff Case
+
+Situation:
+
+- Match profile hooks include low laugh threshold, travel, coffee, food, fitness,
+  liking winter but disliking winter cold, and wanting to live more freely.
+- Latest message: "没细看，怎么会这么精彩啊 / 哈哈哈哈咋想的啊".
+- The match is actively reacting and asking a question. The user has already
+  explained the news setup, so another long explanation would drag.
+
+Weak drafts:
+
+- "你觉得他为什么会坐两个小时公交去酒吧？"
+- "哈哈你是不是也喜欢这种离谱新闻？"
+- "从心理动机来看，他可能是长期压抑后的释放。"
+
+Better direction:
+
+- "我也想知道他咋想的，感觉是那种“来都来了”精神突然烧起来了哈哈哈"
+- "可能当时脑子里只有一句：都到这了，不喝亏了哈哈哈"
+- "这哥们儿行动力有点离谱，换我坐到一半就开始后悔了哈哈哈"
+
+Why this works:
+
+- It answers or riffs on the match's question instead of forcing another question.
+- It stays on the live thread rather than jumping back to profile tags.
+- It avoids analysis voice and keeps the reply short enough for a playful chat.

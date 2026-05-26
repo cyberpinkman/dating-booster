@@ -102,6 +102,9 @@ class SkillPackageTests(unittest.TestCase):
             "最后一句",
             "连续输出",
             "未知细节",
+            "question is optional",
+            "answer_or_riff",
+            "do not force a question",
             "一句为主",
         ):
             self.assertIn(phrase, drafting_text)
@@ -111,6 +114,7 @@ class SkillPackageTests(unittest.TestCase):
             "标签堆叠",
             "抽象词",
             "已知标签",
+            "强行提问",
             "都行",
             "看情况",
         ):

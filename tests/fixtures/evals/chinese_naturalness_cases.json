@@ -71,6 +71,91 @@
           "strategy_reason": "Uses a natural two-option question and avoids repeating the full profile tag list."
         }
       ]
+    },
+    {
+      "case_id": "zh_news_riff_no_forced_question",
+      "language": "zh-CN",
+      "context": {
+        "latest_message": "没细看，怎么会这么精彩啊 / 哈哈哈哈咋想的啊",
+        "goal": "接梗，把新闻吐槽继续聊下去，不急着切到新问题。",
+        "match_profile_hooks": [
+          "笑点低",
+          "旅行",
+          "健身",
+          "吃货",
+          "咖啡",
+          "喜欢出去玩",
+          "也喜欢一个人待着",
+          "活得自在一点"
+        ],
+        "photo_hooks": [
+          "日本街景",
+          "秋天落叶照片",
+          "户外玩耍感",
+          "咖啡店或安静室内",
+          "夜晚小酌",
+          "花束",
+          "热带植物"
+        ],
+        "conversation_summary": "User told a lockdown and nightlife-news thread; match is laughing and asking how the person in the news could think that way.",
+        "situation_read": "Match is engaged and asking a playful question; user has already explained the setup, so the next reply should answer or riff briefly instead of adding another question."
+      },
+      "bad_examples": [
+        {
+          "reply": "你觉得他为什么会坐两个小时公交去酒吧？",
+          "issues": [
+            "forced question after the match already asked a question",
+            "throws the question back instead of answering or riffing"
+          ]
+        },
+        {
+          "reply": "从心理动机来看，他可能是长期压抑后的释放，所以会做出这种非理性的娱乐选择。",
+          "issues": [
+            "AI-sounding analysis voice",
+            "over-explains the joke instead of joining it"
+          ]
+        },
+        {
+          "reply": "哈哈你不是喜欢旅行和咖啡吗，平时会喜欢这种自由一点的生活方式吗？",
+          "issues": [
+            "jumps away from the live thread to profile tags",
+            "abstract lifestyle wording",
+            "forced question after the match already asked a question"
+          ]
+        }
+      ],
+      "better_examples": [
+        {
+          "reply": "我也想知道他咋想的，感觉是那种“来都来了”精神突然烧起来了哈哈哈",
+          "conversation_move": "answer_or_riff",
+          "avoids_issues": [
+            "forced question after the match already asked a question",
+            "throws the question back instead of answering or riffing",
+            "over-explains the joke instead of joining it"
+          ],
+          "strategy_reason": "Answers the match's question with a casual comic take and keeps the live news thread moving without adding a forced question."
+        },
+        {
+          "reply": "可能当时脑子里只有一句：都到这了，不喝亏了哈哈哈",
+          "conversation_move": "answer_or_riff",
+          "avoids_issues": [
+            "forced question after the match already asked a question",
+            "AI-sounding analysis voice",
+            "over-explains the joke instead of joining it"
+          ],
+          "strategy_reason": "Uses a familiar Chinese joke frame to answer the question in one line."
+        },
+        {
+          "reply": "这哥们儿行动力有点离谱，换我坐到一半就开始后悔了哈哈哈",
+          "conversation_move": "bridge_from_latest",
+          "avoids_issues": [
+            "jumps away from the live thread to profile tags",
+            "abstract lifestyle wording",
+            "over-explains the joke instead of joining it"
+          ],
+          "strategy_reason": "Adds light self-disclosure while staying on the news thread and leaving room for the match to continue joking."
+        }
+      ]
     }
   ]
 }

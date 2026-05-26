@@ -14,6 +14,7 @@ critique, review, or debug output.
 
 - 真人会不会这么打字: Would a normal Chinese dating-app user send this exact sentence?
 - Is there one clear move, or did the draft pack too many ideas into one line?
+- 如果对方已经提问、吐槽或惊讶，草稿是在接话，还是为了续聊而强行提问?
 - Does it ask about an unknown detail, or only repeat an 已知标签 from the profile?
 - Could the match easily answer only "都行" or "看情况"? If yes, ask something more specific.
 - Does it use 抽象词 or AI-sounding nouns such as "路线", "放松方式", or "选择倾向"?
@@ -63,3 +64,14 @@ Better:
 Better if the tag is already known:
 
 > 你唱歌一般唱哪种，KTV 那种还是自己听歌跟着哼？
+
+Bad:
+
+> 你觉得他为什么会坐两个小时公交去酒吧？
+
+Issue: the match already asked "咋想的啊"; returning the same question feels
+like forced interviewing instead of answering or riffing.
+
+Better:
+
+> 我也想知道他咋想的，感觉是那种“来都来了”精神突然烧起来了哈哈哈
