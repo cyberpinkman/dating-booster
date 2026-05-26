@@ -15,6 +15,7 @@ critique, review, or debug output.
 - 真人会不会这么打字: Would a normal Chinese dating-app user send this exact sentence?
 - Is there one clear move, or did the draft pack too many ideas into one line?
 - 如果对方已经提问、吐槽或惊讶，草稿是在接话，还是为了续聊而强行提问?
+- 如果对方说 "你定"/"你安排"/"听你的"，草稿是在接过选择权，还是继续反问?
 - Does it ask about an unknown detail, or only repeat an 已知标签 from the profile?
 - Could the match easily answer only "都行" or "看情况"? If yes, ask something more specific.
 - Does it use 抽象词 or AI-sounding nouns such as "路线", "放松方式", or "选择倾向"?
@@ -75,3 +76,14 @@ like forced interviewing instead of answering or riffing.
 Better:
 
 > 我也想知道他咋想的，感觉是那种“来都来了”精神突然烧起来了哈哈哈
+
+Bad:
+
+> 那你想要什么奖励？
+
+Issue: the match has already delegated the choice with "你定"; asking again
+keeps bouncing the decision back.
+
+Better:
+
+> 那我定了，奖励你一个点菜权，下次日料你挑一家

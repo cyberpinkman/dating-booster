@@ -20,6 +20,7 @@ explanation. Bridge from the last message and offer one easy opening.
 Use one `conversation_move`:
 
 - `answer_or_riff`:对方已经提问、吐槽或惊讶时，先回答或接梗。
+- `take_the_lead`:对方把选择权交给你时，接过来给一个轻量具体决定。
 - `bridge_from_latest`:接住最后一句，再轻轻转到下一个点。
 - `deepen_hook`:挖 profile 标签背后的未知细节。
 - `light_self_disclosure`:给一点自己的信息，但不抢话。
@@ -32,6 +33,11 @@ match is replying briefly.
 Use `answer_or_riff` when the match has already given you an active opening.
 Question is optional: the reply can simply answer, agree, tease, or add a funny
 take. Do not force a question just to keep the thread alive.
+
+Use `take_the_lead` when the match says things like "你定", "你安排",
+"随你", or "听你的". This is a handoff, not an invitation to keep asking.
+不要继续反问. Pick a small, low-pressure decision that fits the thread and
+their profile boundaries.
 
 ## Choose The Hook
 
@@ -53,6 +59,7 @@ Avoid asking the match to choose among tags they already wrote. That often gets
 - One question at most; zero questions is often better when the match already asked something.
 - If the match asked a question or showed surprise, answer or riff before adding a new hook.
 - Do not force a question when a natural reaction would be stronger.
+- If the match delegates a choice, make one concrete choice instead of bouncing the decision back.
 - Ask A or B when the options are natural; avoid A/B/C list questions.
 - Use one label at most. "夜猫子" is enough; "ESFP 夜猫子" usually sounds like tag stacking.
 - Prefer concrete words over abstract planning words.
@@ -111,3 +118,32 @@ Why this works:
 - It answers or riffs on the match's question instead of forcing another question.
 - It stays on the live thread rather than jumping back to profile tags.
 - It avoids analysis voice and keeps the reply short enough for a playful chat.
+
+## Worked Example: Reward Delegation Case
+
+Situation:
+
+- Match profile hooks include pure love, long-term partner, gifts as love
+  language, Japanese food, concerts, yoga, no alcohol, no smoking, dog preference,
+  INFP, and best communication in person.
+- User has been asking what reward she wants after she called him cute.
+- Latest message: "你定".
+
+Weak drafts:
+
+- "那你想要什么奖励？"
+- "你猜我会给你什么奖励？"
+- "那奖励你一个亲亲。"
+
+Better direction:
+
+- "那我定了，奖励你一个点菜权，下次日料你挑一家"
+- "那我定了，奖励你一个愿望额度，不过不能太离谱"
+- "那奖励你继续发现我的优点，发现得准还有加餐"
+
+Why this works:
+
+- It accepts the handoff instead of asking her to decide again.
+- It keeps the reward playful and specific without becoming sexually forward.
+- It uses profile-compatible hooks: Japanese food, gifts, pure-love pace, and
+  long-term/low-pressure intent.

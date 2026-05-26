@@ -57,6 +57,32 @@ class NaturalnessFixtureTests(unittest.TestCase):
                 self.assertIn(avoided_issue, known_issues)
             self.assertTrue(example["strategy_reason"])
 
+    def test_chinese_naturalness_seed_case_covers_take_the_lead_after_delegation(self):
+        fixture_path = Path("tests/fixtures/evals/chinese_naturalness_cases.json")
+        payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+        case = next(item for item in payload["cases"] if item["case_id"] == "zh_reward_delegation_take_the_lead")
+
+        self.assertEqual(case["context"]["latest_message"], "你定")
+        self.assertIn("接过选择权", case["context"]["goal"])
+        self.assertIn("纯爱", case["context"]["match_profile_hooks"])
+
+        known_issues = {issue for example in case["bad_examples"] for issue in example["issues"]}
+        self.assertIn("asks the match to decide after she delegated", known_issues)
+        self.assertIn("too sexually forward for pure-love long-term context", known_issues)
+
+        better_without_question = [
+            example for example in case["better_examples"] if "？" not in example["reply"] and "?" not in example["reply"]
+        ]
+        self.assertTrue(better_without_question)
+
+        for example in case["better_examples"]:
+            self.assertIn(example["conversation_move"], {"take_the_lead", "bridge_from_latest"})
+            self.assertTrue(example["avoids_issues"])
+            for avoided_issue in example["avoids_issues"]:
+                self.assertIn(avoided_issue, known_issues)
+            self.assertTrue(example["strategy_reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

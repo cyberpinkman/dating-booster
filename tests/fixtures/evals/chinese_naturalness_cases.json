@@ -156,6 +156,86 @@
           "strategy_reason": "Adds light self-disclosure while staying on the news thread and leaving room for the match to continue joking."
         }
       ]
+    },
+    {
+      "case_id": "zh_reward_delegation_take_the_lead",
+      "language": "zh-CN",
+      "context": {
+        "latest_message": "你定",
+        "goal": "接过选择权，给一个轻量具体的奖励，不要继续反问。",
+        "match_profile_hooks": [
+          "纯爱",
+          "寻找长期的伴侣",
+          "爱的方式：礼物",
+          "日料",
+          "音乐会",
+          "瑜伽",
+          "酒精过敏",
+          "不喝咖啡",
+          "不吸烟",
+          "INFP",
+          "最好当面沟通",
+          "早起的鸟儿",
+          "宠物偏好：狗狗"
+        ],
+        "conversation_summary": "User sent a playful pure-love-warrior opener. Match called the user cute. User asked what reward she wanted, then asked her to guess. After a long gap, match replied '你定'.",
+        "situation_read": "Match delegated the reward decision; user has already asked twice, so the next reply should take the lead with a playful low-pressure choice."
+      },
+      "bad_examples": [
+        {
+          "reply": "那你想要什么奖励？",
+          "issues": [
+            "asks the match to decide after she delegated",
+            "keeps bouncing the choice back"
+          ]
+        },
+        {
+          "reply": "那你猜猜我会给你什么奖励？",
+          "issues": [
+            "keeps bouncing the choice back",
+            "stalls after a delayed reply"
+          ]
+        },
+        {
+          "reply": "那奖励你一个亲亲。",
+          "issues": [
+            "too sexually forward for pure-love long-term context",
+            "too abrupt after low-context reward teasing"
+          ]
+        }
+      ],
+      "better_examples": [
+        {
+          "reply": "那我定了，奖励你一个点菜权，下次日料你挑一家",
+          "conversation_move": "take_the_lead",
+          "avoids_issues": [
+            "asks the match to decide after she delegated",
+            "keeps bouncing the choice back",
+            "too sexually forward for pure-love long-term context"
+          ],
+          "strategy_reason": "Accepts the handoff, uses her Japanese-food hook, and softly opens a future offline path without being explicit."
+        },
+        {
+          "reply": "那我定了，奖励你一个愿望额度，不过不能太离谱",
+          "conversation_move": "take_the_lead",
+          "avoids_issues": [
+            "asks the match to decide after she delegated",
+            "keeps bouncing the choice back",
+            "too abrupt after low-context reward teasing"
+          ],
+          "strategy_reason": "Turns the delegation into a playful decision while keeping pressure low."
+        },
+        {
+          "reply": "那奖励你继续发现我的优点，发现得准还有加餐",
+          "conversation_move": "bridge_from_latest",
+          "avoids_issues": [
+            "keeps bouncing the choice back",
+            "stalls after a delayed reply",
+            "too sexually forward for pure-love long-term context"
+          ],
+          "strategy_reason": "Bridges from the earlier 'cute' compliment and keeps the reward frame playful."
+        }
+      ]
     }
   ]
 }
