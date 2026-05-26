@@ -20,10 +20,14 @@ class NaturalnessFixtureTests(unittest.TestCase):
         self.assertIn("你平时放松更偏咖啡、电影还是听歌？", bad_text)
         self.assertIn("ESFP夜猫子的放松路线", bad_text)
 
+        known_issues = {issue for example in case["bad_examples"] for issue in example["issues"]}
         for example in case["bad_examples"]:
             self.assertTrue(example["issues"])
         for example in case["better_examples"]:
             self.assertTrue(example["strategy_reason"])
+            self.assertTrue(example["avoids_issues"])
+            for avoided_issue in example["avoids_issues"]:
+                self.assertIn(avoided_issue, known_issues)
             self.assertIn(example["conversation_move"], {"deepen_hook", "bridge_from_latest"})
 
 

@@ -44,7 +44,19 @@ def _build_system_prompt() -> str:
     return (
         "You generate dating-app reply drafts as structured JSON. "
         "Return only fields required by the provided schema. "
-        "Respect safety constraints and do not invent hard facts."
+        "Use situation_read to summarize recipient investment, the latest message, current friction, and whether the "
+        "user has already sent too much. "
+        "Use conversation_move for one clear move such as deepen_hook, bridge_from_latest, light_self_disclosure, "
+        "reset_thread, or soft_invite_probe. "
+        "Use hook_source to name the strongest source: latest_message, profile_unknown_detail, shared_overlap, or "
+        "conversation_thread. "
+        "Use naturalness_notes to self-check whether the draft sounds like a real person in Chinese private chat. "
+        "Use followup_if_match_replies to suggest the next step if the match responds. "
+        "For Chinese replies, prefer one short question, ask about unknown details behind profile hooks, and avoid "
+        "multi-option survey wording, tag stacking, abstract planning nouns, and repeating known facts as if they were "
+        "new hooks. "
+        "Respect safety constraints, respect hard facts, and do not invent identity, location, education, work, "
+        "relationship intent, or other hard facts."
     )
 
 

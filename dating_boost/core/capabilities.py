@@ -19,6 +19,7 @@ SCHEMA_VERSIONS: dict[str, int] = {
     "action_policy": 1,
     "feedback_event": 1,
     "action_result": 1,
+    "reply_draft": 2,
     "skill_package": 1,
 }
 

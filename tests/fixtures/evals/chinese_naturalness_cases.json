@@ -44,16 +44,30 @@
         {
           "reply": "还行，夜风加点酒确实挺舒服😂 你这种夜猫子晚上不睡觉的时候一般听谁的歌？",
           "conversation_move": "deepen_hook",
+          "avoids_issues": [
+            "three-option survey wording",
+            "asks known tags instead of unknown details"
+          ],
           "strategy_reason": "Bridges from the park-drinks thread and asks an unknown detail under the night-owl/music hook."
         },
         {
           "reply": "哈哈是挺舒服。你不是也爱电影吗，ESFP 一般会喜欢哪种片？",
           "conversation_move": "deepen_hook",
+          "avoids_issues": [
+            "uses logical-comparison wording: 偏 A 还是 B",
+            "three-option survey wording",
+            "asks known tags instead of unknown details"
+          ],
           "strategy_reason": "Uses a known movie hook but asks for a specific unknown preference."
         },
         {
           "reply": "主要是夜风不错。你平常更爱看电影还是出去听歌？",
           "conversation_move": "bridge_from_latest",
+          "avoids_issues": [
+            "uses logical-comparison wording: 偏 A 还是 B",
+            "tag stacking: ESFP夜猫子",
+            "AI-sounding abstract noun: 放松路线"
+          ],
           "strategy_reason": "Uses a natural two-option question and avoids repeating the full profile tag list."
         }
       ]

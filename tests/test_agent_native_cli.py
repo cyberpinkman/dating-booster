@@ -33,10 +33,11 @@ class AgentNativeCliTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(payload["schema_version"], 1)
-            self.assertEqual(payload["tool_version"], "0.1.0")
+            self.assertEqual(payload["tool_version"], "0.1.1")
             self.assertIsInstance(payload["git_commit"], str)
             self.assertEqual(payload["data_dir"], str(data_dir.resolve()))
             self.assertEqual(payload["schema_versions"]["action_result"], 1)
+            self.assertEqual(payload["schema_versions"]["reply_draft"], 2)
             self.assertTrue(REQUIRED_AGENT_NATIVE_COMMANDS.issubset(set(payload["supported_commands"])))
             self.assertIn("policy_capabilities", payload)
             self.assertIn("memory_capabilities", payload)

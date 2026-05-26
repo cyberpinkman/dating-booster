@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from dating_boost.core.models import ReplyMode
-from dating_boost.intelligence.backends import ScriptedBackend
+from dating_boost.intelligence.backends import BackendCapability, ScriptedBackend
 from dating_boost.intelligence.prompts import REPLY_SCHEMA
 from dating_boost.intelligence.reply_generator import generate_reply
 
@@ -43,6 +43,57 @@ class ReplyGeneratorTests(unittest.TestCase):
         ):
             self.assertIn(field_name, REPLY_SCHEMA["required"])
             self.assertIn(field_name, REPLY_SCHEMA["properties"])
+
+    def test_core_prompt_includes_strategy_and_chinese_naturalness_guidance(self):
+        backend = CapturingBackend(
+            json.loads(Path("tests/fixtures/intelligence/scripted_reply.json").read_text(encoding="utf-8"))
+        )
+        context_pack = {
+            "reply_mode": ReplyMode.ADAPTIVE.value,
+            "language": "zh-CN",
+            "items": [
+                {"label": "latest_message", "content": "挺不错的"},
+                {"label": "match_hooks", "content": ["电影", "唱歌", "夜猫子"]},
+            ],
+            "safety_constraints": ["Respect hard facts."],
+        }
+
+        generate_reply(context_pack, ReplyMode.ADAPTIVE, backend)
+
+        system_prompt = backend.system_prompt.lower()
+        for phrase in (
+            "situation_read",
+            "conversation_move",
+            "hook_source",
+            "naturalness_notes",
+            "followup_if_match_replies",
+            "chinese",
+            "unknown details",
+            "one short question",
+            "multi-option",
+            "tag stacking",
+            "hard facts",
+        ):
+            self.assertIn(phrase, system_prompt)
+        self.assertIs(backend.schema, REPLY_SCHEMA)
+
+
+class CapturingBackend:
+    def __init__(self, payload):
+        self._payload = dict(payload)
+        self.system_prompt = ""
+        self.user_prompt = ""
+        self.schema = {}
+
+    @property
+    def capabilities(self):
+        return frozenset({BackendCapability.GENERATE_STRUCTURED})
+
+    def generate_structured(self, system_prompt, user_prompt, schema):
+        self.system_prompt = system_prompt
+        self.user_prompt = user_prompt
+        self.schema = schema
+        return dict(self._payload)
 
 
 if __name__ == "__main__":
