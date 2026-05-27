@@ -331,6 +331,7 @@ class AutomationRepository:
             state["seen_before"] = True
 
             if _is_handoff_assessment(assessment):
+                handoff_reason = _handoff_reason(assessment)
                 slot_conflict = False
                 if thread_item.get("appointment_slot"):
                     slot, slot_conflict = _reserve_slot(
@@ -342,12 +343,12 @@ class AutomationRepository:
                     )
                     state["appointment_slot_id"] = slot["slot_id"]
                 state["state"] = "appointment_handoff"
-                state["handoff_reason"] = "appointment_details_requested"
+                state["handoff_reason"] = handoff_reason
                 handoffs.append(
                     {
                         "match_id": match_id,
                         "candidate_key": candidate_key,
-                        "reason": "appointment_details_requested",
+                        "reason": handoff_reason,
                         "slot_conflict": slot_conflict,
                         "assessment": assessment,
                     }
@@ -663,6 +664,21 @@ def _is_handoff_assessment(assessment: dict[str, Any]) -> bool:
         or assessment.get("recommended_next") == "handoff"
         or "appointment_details" in assessment.get("risk_flags", [])
     )
+
+
+def _handoff_reason(assessment: dict[str, Any]) -> str:
+    risk_flags = [str(flag) for flag in assessment.get("risk_flags", [])]
+    if "contact_exchange" in risk_flags:
+        return "contact_exchange"
+    if "appointment_details" in risk_flags:
+        return "appointment_details_requested"
+    if assessment.get("appointment_stage") in {"details_requested", "scheduled"}:
+        return "appointment_details_requested"
+    if risk_flags:
+        return f"risk_flag_{_safe_id(risk_flags[0])}"
+    if assessment.get("recommended_next") == "handoff":
+        return "host_requested_handoff"
+    return "unknown_handoff"
 
 
 def _reserve_slot(

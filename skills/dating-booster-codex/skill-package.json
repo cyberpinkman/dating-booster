@@ -2,9 +2,9 @@
   "schema_version": 1,
   "name": "dating-booster-codex",
   "package_name": "dating-booster-codex-skill",
-  "package_version": "0.1.4",
+  "package_version": "0.1.5",
   "target_host": "codex",
-  "dating_boost_min_version": "0.1.4",
+  "dating_boost_min_version": "0.1.5",
   "required_schema_versions": {
     "capabilities": 1,
     "context_pack": 1,

@@ -368,6 +368,43 @@ class AutomationSessionTests(unittest.TestCase):
                     self.assertEqual(step_payload["action_requests"], [])
                     self.assertIn("authorization_expired_or_revoked", step_payload["warnings"])
 
+    def test_contact_exchange_handoff_has_specific_reason(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            scan_path = Path(temp_dir) / "contact_exchange_scan.json"
+            self._write_json(scan_path, _contact_exchange_scan_batch())
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+            states_exit, states_payload, _ = self._run([
+                "automation",
+                "get-state",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+            self.assertEqual(step_exit, 0)
+            self.assertEqual(step_payload["handoffs"][0]["reason"], "contact_exchange")
+            self.assertEqual(states_exit, 0)
+            self.assertEqual(states_payload["states"][0]["handoff_reason"], "contact_exchange")
+
     def test_authorization_expiration_uses_current_clock(self):
         with patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-05-28T00:00:00Z"}):
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -726,6 +763,82 @@ class AutomationSessionTests(unittest.TestCase):
 
     def _write_json(self, path, payload):
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _contact_exchange_scan_batch():
+    return {
+        "schema_version": 1,
+        "session_id": "session_fixture_contact_exchange",
+        "app_id": "tinder",
+        "captured_at": "2026-05-26T10:00:00Z",
+        "scan_budget": 1,
+        "message_list_snapshot": {
+            "entries": [
+                {
+                    "candidate_key": "row_iris",
+                    "visible_name": "Iris",
+                    "latest_preview": "没换呢",
+                    "latest_preview_hash": "preview_iris_contact",
+                    "timestamp_cue": "刚刚",
+                    "unread_cue": "present",
+                    "position": 1,
+                }
+            ]
+        },
+        "thread_observations": [
+            {
+                "candidate_key": "row_iris",
+                "assessment": {
+                    "schema_version": 1,
+                    "latest_match_message": "没换呢",
+                    "latest_user_message": "你现在的 wx 是什么",
+                    "latest_inbound_fingerprint": "iris:in:wx-not-changed",
+                    "reply_window_status": "open",
+                    "continuation_opportunity": "yes",
+                    "appointment_stage": "none",
+                    "recommended_next": "handoff",
+                    "confidence": "high",
+                    "evidence": "The thread has moved into contact exchange.",
+                    "risk_flags": ["contact_exchange"],
+                },
+                "observation": {
+                    "observation_id": "obs_iris_contact_001",
+                    "source_type": "manual_fixture",
+                    "app_id": "tinder",
+                    "adapter_id": "codex.manual.v1",
+                    "captured_at": "2026-05-26T10:00:00Z",
+                    "page_type": "chat_thread",
+                    "page_confidence": "high",
+                    "match_identity_hints": {
+                        "visible_name": "Iris",
+                        "profile_cues": ["friend_test_match"],
+                        "conversation_fingerprint": "iris-contact-exchange",
+                        "evidence": "Visible Iris test thread.",
+                    },
+                    "profile_observation": {
+                        "profile_text": "",
+                        "photo_cues": [],
+                        "hook_candidates": [],
+                    },
+                    "conversation_observation": {
+                        "visible_messages": [
+                            {"sender": "user", "text": "你现在的 wx 是什么"},
+                            {"sender": "match", "text": "没换呢"},
+                        ],
+                        "input_state": "empty",
+                        "thread_cues": ["contact_exchange"],
+                    },
+                    "element_observations": [],
+                    "exception_state": "none",
+                    "provenance": {
+                        "evidence": "Fixture thread observation.",
+                        "redaction_status": "redacted",
+                    },
+                    "raw_ref": None,
+                },
+            }
+        ],
+    }
 
 
 if __name__ == "__main__":
