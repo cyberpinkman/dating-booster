@@ -25,6 +25,9 @@ SCHEMA_VERSIONS: dict[str, int] = {
     "automation_authorization": 1,
     "automation_state": 1,
     "automation_session": 1,
+    "operator_session": 1,
+    "operator_work_item": 1,
+    "operator_work_queue": 1,
     "appointment_ledger": 1,
     "progress_report": 1,
     "skill_package": 1,
@@ -68,6 +71,13 @@ SUPPORTED_COMMANDS: list[str] = [
     "automation record-authorization",
     "automation availability set",
     "automation goal set",
+    "operator session start",
+    "operator next",
+    "operator ingest-observation",
+    "operator record-action-result",
+    "operator stop",
+    "operator report latest",
+    "operator get-state",
 ]
 
 
@@ -96,6 +106,8 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "host_executed_action_audit": True,
             "workflow_draft_runner": True,
             "automation_session": True,
+            "operator_session": True,
+            "goal_oriented_operator": True,
             "automation_dry_run_default": True,
             "automation_external_scheduler": True,
             "appointment_ledger": True,

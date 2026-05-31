@@ -54,9 +54,9 @@ or `dating-boost skill doctor`.
 {
   "schema_version": 1,
   "status": "ok",
-  "skill_version": "0.1.6",
+  "skill_version": "0.1.7",
   "cli_found": true,
-  "cli_version": "0.1.6",
+  "cli_version": "0.1.7",
   "capabilities_ok": true,
   "missing_commands": [],
   "schema_mismatches": [],

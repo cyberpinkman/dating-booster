@@ -133,7 +133,36 @@ keyboard layout changes, or viewport changes, do not keep probing coordinates.
 Back out and reopen the chat thread so the input box returns to its normal
 location, then restart staging from a fresh observation.
 
-## Host-Orchestrated Automation Session
+## Goal-Oriented Operator Session
+
+Use this mode when the user asks Codex to fully manage a bounded dating session
+toward a goal such as meeting in person. Codex remains the host agent: it
+observes the app screen, opens threads, authors observations, drafts ordinary
+messages, and performs GUI actions. Dating Booster CLI is the local operator
+state engine: it decides the next work item, tracks planner state, prevents
+duplicates, gates risky actions, and writes reports.
+
+1. Run the mandatory startup check.
+2. Record goal and availability JSON with `dating-boost automation goal set` and `dating-boost automation availability set`.
+3. Start with `dating-boost operator session start --data-dir .local/dating-boost --authorization auth.json`.
+4. Call `dating-boost operator next --data-dir .local/dating-boost`.
+5. If the work item is `scan_message_list`, observe the visible message list and call `dating-boost operator ingest-observation --data-dir .local/dating-boost --input list_observation.json`.
+6. If the work item is `open_thread`, open that thread, author a thread observation, author `planner_assessment`, draft only if the planner move requires a reply, and call `dating-boost operator ingest-observation --data-dir .local/dating-boost --input thread_observation.json`.
+7. If the work item is `send_message`, execute only ordinary `send_message` requests whose planner alignment is `ok`.
+8. After each send, perform post-action verification and call `dating-boost operator record-action-result --data-dir .local/dating-boost --input action_result.json`.
+9. If the work item is `handoff`, appointment details, contact exchange, or high-risk content, stop automation for that match and ask the user to take over.
+10. Continue calling `operator next` until the user stops the session or the operator returns `wait`.
+11. Stop with `dating-boost operator stop --data-dir .local/dating-boost` and show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
+12. On a later run, use `dating-boost operator report latest` and local state to continue without relying on host-agent memory.
+
+For each opened thread, read `references/planner-authoring.md` and author
+`planner_assessment` before allowing autonomous send: include engagement,
+warmth, curiosity, comfort, momentum, topic_saturation, logistics_readiness,
+risk, recommended stage, recommended move, next milestone, avoid_next, and
+soft_invite_allowed. The naturalness checklist is internal QA; do not show it
+by default.
+
+## Host-Orchestrated Automation Session Fallback
 
 Use this mode only after explicit user authorization. Codex remains the host
 agent: it observes the dating app screen, opens message threads, authors

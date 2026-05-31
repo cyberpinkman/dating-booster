@@ -2,12 +2,12 @@
   "schema_version": 1,
   "name": "dating-booster-codex",
   "package_name": "dating-booster-codex-skill",
-  "package_version": "0.1.6",
+  "package_version": "0.1.7",
   "target_host": "codex",
-  "dating_boost_min_version": "0.1.6",
+  "dating_boost_min_version": "0.1.7",
   "source_repo": "cyberpinkman/dating-booster",
   "skill_path": "skills/dating-booster-codex",
-  "source_ref": "v0.1.6",
+  "source_ref": "v0.1.7",
   "cli_package_name": "dating-booster",
   "cli_command": "dating-boost",
   "bootstrap_script": "scripts/bootstrap_cli.py",
@@ -24,6 +24,9 @@
     "automation_authorization": 1,
     "automation_state": 1,
     "automation_session": 1,
+    "operator_session": 1,
+    "operator_work_item": 1,
+    "operator_work_queue": 1,
     "appointment_ledger": 1,
     "progress_report": 1,
     "skill_package": 1,
@@ -31,7 +34,7 @@
     "goal_plan": 1,
     "planner_recommendation": 1
   },
-  "source_spec_commit": "v0.1.6",
+  "source_spec_commit": "v0.1.7",
   "source_specs": [
     "docs/superpowers/specs/2026-05-25-agent-native-launch-strategy.md",
     "docs/superpowers/specs/2026-05-25-product-architecture-blueprint.md",
@@ -75,6 +78,13 @@
     "automation resume",
     "automation record-authorization",
     "automation availability set",
-    "automation goal set"
+    "automation goal set",
+    "operator session start",
+    "operator next",
+    "operator ingest-observation",
+    "operator record-action-result",
+    "operator stop",
+    "operator report latest",
+    "operator get-state"
   ]
 }

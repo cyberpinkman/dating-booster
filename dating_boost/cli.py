@@ -16,6 +16,7 @@ from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.feedback import create_feedback_event
 from dating_boost.core.identity import resolve_match_identity
 from dating_boost.core.models import Divergence, MemoryItem, ReplyMode, UserProfile
+from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.planner import PlannerRepository, planner_context_items
 from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
 from dating_boost.core.scan_authoring import (
@@ -309,6 +310,51 @@ def main(argv: list[str] | None = None) -> int:
     goal_set_parser.add_argument("--data-dir", required=True, type=Path)
     goal_set_parser.add_argument("--input", required=True, type=Path)
     goal_set_parser.set_defaults(handler=_handle_automation_goal_set)
+
+    operator_parser = subparsers.add_parser("operator", help="Goal-oriented managed operator session commands.")
+    operator_subparsers = operator_parser.add_subparsers(dest="operator_command", required=True)
+
+    operator_session_parser = operator_subparsers.add_parser("session", help="Operator session commands.")
+    operator_session_subparsers = operator_session_parser.add_subparsers(
+        dest="operator_session_command",
+        required=True,
+    )
+    operator_session_start_parser = operator_session_subparsers.add_parser("start")
+    operator_session_start_parser.add_argument("--data-dir", required=True, type=Path)
+    operator_session_start_parser.add_argument("--authorization", required=True, type=Path)
+    operator_session_start_parser.set_defaults(handler=_handle_operator_session_start)
+
+    operator_next_parser = operator_subparsers.add_parser("next")
+    operator_next_parser.add_argument("--data-dir", required=True, type=Path)
+    operator_next_parser.set_defaults(handler=_handle_operator_next)
+
+    operator_ingest_parser = operator_subparsers.add_parser("ingest-observation")
+    operator_ingest_parser.add_argument("--data-dir", required=True, type=Path)
+    operator_ingest_parser.add_argument("--input", required=True, type=Path)
+    operator_ingest_parser.set_defaults(handler=_handle_operator_ingest_observation)
+
+    operator_record_result_parser = operator_subparsers.add_parser("record-action-result")
+    operator_record_result_parser.add_argument("--data-dir", required=True, type=Path)
+    operator_record_result_parser.add_argument("--input", required=True, type=Path)
+    operator_record_result_parser.set_defaults(handler=_handle_operator_record_action_result)
+
+    operator_stop_parser = operator_subparsers.add_parser("stop")
+    operator_stop_parser.add_argument("--data-dir", required=True, type=Path)
+    operator_stop_parser.set_defaults(handler=_handle_operator_stop)
+
+    operator_report_parser = operator_subparsers.add_parser("report", help="Operator report commands.")
+    operator_report_subparsers = operator_report_parser.add_subparsers(
+        dest="operator_report_command",
+        required=True,
+    )
+    operator_report_latest_parser = operator_report_subparsers.add_parser("latest")
+    operator_report_latest_parser.add_argument("--data-dir", required=True, type=Path)
+    operator_report_latest_parser.add_argument("--format", choices=["json", "md"], default="json")
+    operator_report_latest_parser.set_defaults(handler=_handle_operator_report_latest)
+
+    operator_get_state_parser = operator_subparsers.add_parser("get-state")
+    operator_get_state_parser.add_argument("--data-dir", required=True, type=Path)
+    operator_get_state_parser.set_defaults(handler=_handle_operator_get_state)
 
     args = parser.parse_args(argv_list)
     return args.handler(args)
@@ -750,6 +796,69 @@ def _handle_automation_pause(args: argparse.Namespace) -> int:
 
 def _handle_automation_resume(args: argparse.Namespace) -> int:
     _print_json(AutomationRepository(args.data_dir).resume_session())
+    return 0
+
+
+def _handle_operator_session_start(args: argparse.Namespace) -> int:
+    _print_json(OperatorRepository(args.data_dir).start_session(_read_json_object(args.authorization)))
+    return 0
+
+
+def _handle_operator_next(args: argparse.Namespace) -> int:
+    try:
+        payload = OperatorRepository(args.data_dir).next_work_item()
+    except ValueError as exc:
+        _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})
+        return 2
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_operator_ingest_observation(args: argparse.Namespace) -> int:
+    try:
+        payload = OperatorRepository(args.data_dir).ingest_observation(_read_json_object(args.input))
+    except ValueError as exc:
+        _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})
+        return 2
+    _print_json(payload)
+    return 0
+
+
+def _handle_operator_record_action_result(args: argparse.Namespace) -> int:
+    try:
+        payload = OperatorRepository(args.data_dir).record_action_result(_read_json_object(args.input))
+    except ValueError as exc:
+        _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})
+        return 2
+    _print_json(payload)
+    return 0
+
+
+def _handle_operator_stop(args: argparse.Namespace) -> int:
+    try:
+        payload = OperatorRepository(args.data_dir).stop_session()
+    except ValueError as exc:
+        _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})
+        return 2
+    _print_json(payload)
+    return 0
+
+
+def _handle_operator_report_latest(args: argparse.Namespace) -> int:
+    repo = OperatorRepository(args.data_dir)
+    payload = repo.latest_report()
+    if args.format == "md":
+        if payload["status"] != "ok":
+            _print_json(payload)
+            return 2
+        sys.stdout.write(repo.latest_human_report() + "\n")
+        return 0
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_operator_get_state(args: argparse.Namespace) -> int:
+    _print_json(OperatorRepository(args.data_dir).get_state_payload())
     return 0
 
 

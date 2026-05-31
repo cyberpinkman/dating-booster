@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -339,6 +340,132 @@ def _run_smoke(data_dir: Path) -> int:
         commands=commands,
     )
 
+    operator_data_dir = data_dir / "operator-smoke"
+    shutil.rmtree(operator_data_dir, ignore_errors=True)
+    _run_cli(
+        "init-profile",
+        "--data-dir",
+        str(operator_data_dir),
+        "--input",
+        str(FIXTURE_DIR / "user_profile.json"),
+        command_key="operator_init_profile",
+        commands=commands,
+    )
+    _run_cli(
+        "automation",
+        "goal",
+        "set",
+        "--data-dir",
+        str(operator_data_dir),
+        "--input",
+        str(AUTOMATION_FIXTURE_DIR / "goal_meet.json"),
+        command_key="operator_goal_set",
+        commands=commands,
+    )
+    _run_cli(
+        "operator",
+        "session",
+        "start",
+        "--data-dir",
+        str(operator_data_dir),
+        "--authorization",
+        str(AUTOMATION_FIXTURE_DIR / "auth_send.json"),
+        command_key="operator_session_start",
+        commands=commands,
+    )
+    _run_cli(
+        "operator",
+        "next",
+        "--data-dir",
+        str(operator_data_dir),
+        command_key="operator_next_initial",
+        commands=commands,
+    )
+    operator_list_path = data_dir / "operator_message_list.json"
+    _write_json(operator_list_path, _operator_message_list_observation(automation_fixture))
+    _run_cli(
+        "operator",
+        "ingest-observation",
+        "--data-dir",
+        str(operator_data_dir),
+        "--input",
+        str(operator_list_path),
+        command_key="operator_ingest_list",
+        commands=commands,
+    )
+    _run_cli(
+        "operator",
+        "next",
+        "--data-dir",
+        str(operator_data_dir),
+        command_key="operator_next_open_thread",
+        commands=commands,
+    )
+    operator_thread_path = data_dir / "operator_thread_ada.json"
+    _write_json(operator_thread_path, _operator_thread_observation(automation_fixture, "row_ada"))
+    _run_cli(
+        "operator",
+        "ingest-observation",
+        "--data-dir",
+        str(operator_data_dir),
+        "--input",
+        str(operator_thread_path),
+        command_key="operator_ingest_thread",
+        commands=commands,
+    )
+    operator_send = _run_cli(
+        "operator",
+        "next",
+        "--data-dir",
+        str(operator_data_dir),
+        command_key="operator_next_send",
+        commands=commands,
+    )
+    operator_request = operator_send["work_item"]
+    operator_action_path = data_dir / "operator_action_result.json"
+    _write_json(
+        operator_action_path,
+        {
+            "action_request_id": operator_request["action_request_id"],
+            "action": "send_message",
+            "target_match_id": operator_request["match_id"],
+            "payload_hash": operator_request["payload_hash"],
+            "pre_action_observation_id": operator_request["pre_action_observation_id"],
+            "post_action_observation_id": "obs_operator_sent_001",
+            "result_status": "succeeded",
+            "evidence": {
+                "verification": "Fixture smoke test records operator send success.",
+            },
+        },
+    )
+    _run_cli(
+        "operator",
+        "record-action-result",
+        "--data-dir",
+        str(operator_data_dir),
+        "--input",
+        str(operator_action_path),
+        command_key="operator_record_action_result",
+        commands=commands,
+    )
+    operator_stop = _run_cli(
+        "operator",
+        "stop",
+        "--data-dir",
+        str(operator_data_dir),
+        command_key="operator_stop",
+        commands=commands,
+    )
+    _run_cli(
+        "operator",
+        "report",
+        "latest",
+        "--data-dir",
+        str(operator_data_dir),
+        command_key="operator_report_latest",
+        commands=commands,
+    )
+
     print(
         json.dumps(
             {
@@ -362,6 +489,11 @@ def _run_smoke(data_dir: Path) -> int:
                     "automation_machine_report": str(data_dir / automation_stop["machine_report_path"]),
                     "automation_human_report": str(data_dir / automation_stop["human_report_path"]),
                     "automation_human_report_preview": report_md.splitlines()[:3],
+                    "operator_data_dir": str(operator_data_dir),
+                    "operator_message_list": str(operator_list_path),
+                    "operator_thread": str(operator_thread_path),
+                    "operator_action_result": str(operator_action_path),
+                    "operator_machine_report": str(operator_data_dir / operator_stop["machine_report_path"]),
                 },
             },
             ensure_ascii=False,
@@ -487,6 +619,30 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _operator_message_list_observation(scan_batch: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "observation_type": "message_list",
+        "session_id": scan_batch["session_id"],
+        "app_id": scan_batch["app_id"],
+        "captured_at": scan_batch["captured_at"],
+        "scan_cursor": scan_batch.get("scan_cursor"),
+        "scan_budget": scan_batch.get("scan_budget", 5),
+        "provenance": scan_batch.get("provenance"),
+        "message_list_snapshot": scan_batch["message_list_snapshot"],
+    }
+
+
+def _operator_thread_observation(scan_batch: dict[str, Any], candidate_key: str) -> dict[str, Any]:
+    for item in scan_batch["thread_observations"]:
+        if item["candidate_key"] == candidate_key:
+            thread = dict(item)
+            thread["schema_version"] = 1
+            thread["observation_type"] = "thread"
+            return thread
+    raise ValueError(f"missing thread observation for {candidate_key}")
 
 
 def _planner_assessment_fixture() -> dict[str, Any]:

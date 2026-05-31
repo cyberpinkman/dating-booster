@@ -1,6 +1,6 @@
 [project]
 name = "dating-booster"
-version = "0.1.6"
+version = "0.1.7"
 description = "Local-first dating workflow copilot experiments."
 requires-python = ">=3.11"
 dependencies = []

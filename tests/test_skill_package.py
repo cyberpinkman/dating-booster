@@ -28,8 +28,8 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(metadata["package_name"], "dating-booster-codex-skill")
         self.assertEqual(metadata["target_host"], "codex")
-        self.assertEqual(metadata["package_version"], "0.1.6")
-        self.assertEqual(metadata["dating_boost_min_version"], "0.1.6")
+        self.assertEqual(metadata["package_version"], "0.1.7")
+        self.assertEqual(metadata["dating_boost_min_version"], "0.1.7")
         self.assertEqual(metadata["source_repo"], "cyberpinkman/dating-booster")
         self.assertEqual(metadata["skill_path"], "skills/dating-booster-codex")
         self.assertNotIn(metadata["source_ref"], {"main", "master", "codex/mvp-intelligence"})
@@ -129,6 +129,12 @@ class SkillPackageTests(unittest.TestCase):
             "planner update",
             "planner recommend",
             "skill doctor",
+            "operator session start",
+            "operator next",
+            "operator ingest-observation",
+            "operator record-action-result",
+            "operator stop",
+            "operator report latest",
         ):
             self.assertIn(command, workflows_text)
         for phrase in (

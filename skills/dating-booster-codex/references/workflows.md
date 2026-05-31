@@ -125,7 +125,7 @@ Use this when the user accepts, edits, rejects, or rates a draft.
 3. Keep labels short and stable, such as `accepted`, `edited`, `rejected`, or
    `sent`.
 
-## Automation Session
+## Goal-Oriented Operator Session
 
 Use this when the user explicitly asks the host agent to manage multiple matches
 toward a goal such as meeting in person.
@@ -133,20 +133,33 @@ toward a goal such as meeting in person.
 1. Run startup doctor and `dating-boost capabilities --json --data-dir .local/dating-boost`, then verify compatibility.
 2. Save the user's goal with `dating-boost automation goal set --data-dir .local/dating-boost --input goal.json`.
 3. Save availability with `dating-boost automation availability set --data-dir .local/dating-boost --input availability.json`.
-4. Start the session with `dating-boost automation session start --data-dir .local/dating-boost --authorization auth.json`.
-5. Use `dating-boost automation scan template --json` for a skeleton when needed.
-6. The host agent scans the visible message list and opens a bounded set of relevant threads.
-7. For each opened thread, read `planner-authoring.md` and author `planner_assessment`: score engagement, warmth, curiosity, comfort, momentum, topic_saturation, logistics_readiness, and risk; choose recommended stage, recommended move, next milestone, avoid_next, and soft_invite_allowed.
-8. Prefer separate files for the list and opened threads, then run `dating-boost automation scan assemble --message-list list.json --threads threads.json --session-id SESSION --captured-at TIME --json`.
-9. Run `dating-boost automation scan normalize --input scan_batch.json --json` only when safe defaults are missing.
-10. Run `dating-boost automation scan validate --input scan_batch.json --json`; stop if validation fails.
-11. Optionally run `dating-boost planner update --data-dir .local/dating-boost --match-id MATCH_ID --goal-id GOAL_ID --observation observation.json --assessment planner_assessment.json --json` and inspect `dating-boost planner recommend --data-dir .local/dating-boost --match-id MATCH_ID --json` when debugging one thread.
-12. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
-13. Execute only ordinary `send_message` action requests with `planner_alignment: ok`. Do not execute `handoffs`.
-14. After each send, verify the sent state from a fresh observation and run `dating-boost action record-result --data-dir .local/dating-boost --input action_result.json`.
-15. Stop with `dating-boost automation session stop --data-dir .local/dating-boost`.
-16. Show `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
-17. Resume later by reading `dating-boost automation report latest --data-dir .local/dating-boost` and continuing from local state.
+4. Start the session with `dating-boost operator session start --data-dir .local/dating-boost --authorization auth.json`.
+5. Call `dating-boost operator next --data-dir .local/dating-boost` and execute exactly the returned work item.
+6. For `scan_message_list`, observe the visible list and ingest it with `dating-boost operator ingest-observation --data-dir .local/dating-boost --input list_observation.json`.
+7. For `open_thread`, open that candidate's thread, read `planner-authoring.md`, author `planner_assessment`, author a draft only when the planner move requires a reply, then ingest with `dating-boost operator ingest-observation --data-dir .local/dating-boost --input thread_observation.json`.
+8. For `send_message`, execute only ordinary requests with `planner_alignment: ok`; verify the sent state from a fresh observation and run `dating-boost operator record-action-result --data-dir .local/dating-boost --input action_result.json`.
+9. For `handoff`, appointment details, contact exchange, likes, unmatches, reports, or profile edits, stop automation for that match and ask the user to take over.
+10. Continue `operator next -> observe/act -> ingest/result` until the user stops or the operator returns `wait`.
+11. Stop with `dating-boost operator stop --data-dir .local/dating-boost`.
+12. Show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
+13. Resume later by reading `dating-boost operator report latest --data-dir .local/dating-boost` and continuing from local state.
+
+## Automation Session Fallback
+
+Use lower-level `automation session` commands for batch debugging or fixture
+tests. Prefer the operator workflow for real host-managed sessions.
+
+1. Start with `dating-boost automation session start --data-dir .local/dating-boost --authorization auth.json`.
+2. Use `dating-boost automation scan template --json` for a skeleton when needed.
+3. The host agent scans the visible message list and opens a bounded set of relevant threads.
+4. For each opened thread, read `planner-authoring.md` and author `planner_assessment`.
+5. Prefer separate files for the list and opened threads, then run `dating-boost automation scan assemble --message-list list.json --threads threads.json --session-id SESSION --captured-at TIME --json`.
+6. Run `dating-boost automation scan normalize --input scan_batch.json --json` only when safe defaults are missing.
+7. Run `dating-boost automation scan validate --input scan_batch.json --json`; stop if validation fails.
+8. Optionally run `dating-boost planner update --data-dir .local/dating-boost --match-id MATCH_ID --goal-id GOAL_ID --observation observation.json --assessment planner_assessment.json --json` and inspect `dating-boost planner recommend --data-dir .local/dating-boost --match-id MATCH_ID --json` when debugging one thread.
+9. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
+10. Stop with `dating-boost automation session stop --data-dir .local/dating-boost`.
+11. Show `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
 
 Do not use automation session output to commit to exact meeting details, contact
 exchange, likes, unmatches, reports, or profile edits.
