@@ -31,9 +31,30 @@ def build_context_pack(
     items: list[dict[str, Any]] = []
     recent_messages = conversation_memory.get("recent_messages")
     previous_messages = recent_messages[:-1] if recent_messages else recent_messages
+    latest_inbound_messages = conversation_memory.get("latest_inbound_messages")
 
     _append(items, "user_boundaries", user_profile.get("boundaries"))
     _append(items, "user_hard_facts", user_profile.get("facts"))
+    _append(items, "goal_plan", conversation_memory.get("goal_plan"))
+    _append(items, "planner_recommendation", conversation_memory.get("planner_recommendation"))
+    _append(items, "conversation_scores", conversation_memory.get("conversation_scores"))
+    _append(items, "topic_lifecycle", conversation_memory.get("topic_lifecycle"))
+    _append(items, "avoid_next", conversation_memory.get("avoid_next"))
+    _append(items, "appointment_constraints", conversation_memory.get("appointment_constraints"))
+    _append(items, "global_slot_conflicts", conversation_memory.get("global_slot_conflicts"))
+    if latest_inbound_messages:
+        _append(items, "latest_inbound_messages", latest_inbound_messages)
+        _append(
+            items,
+            "turn_boundary",
+            {
+                "primary_hook": latest_inbound_messages[-1],
+                "rule": (
+                    "Draft from match messages after the user's latest outbound. "
+                    "Older visible messages are background only."
+                ),
+            },
+        )
     if recent_messages:
         _append(items, "latest_message", recent_messages[-1])
     _append(items, "open_threads", conversation_memory.get("open_threads"))

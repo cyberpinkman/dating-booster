@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.identity import resolve_match_identity
 from dating_boost.core.models import Divergence, ReplyMode
+from dating_boost.core.planner import PlannerRepository, planner_context_items
 from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
 from dating_boost.core.storage import JsonStorage
 from dating_boost.intelligence.reply_generator import DraftResponse
@@ -106,6 +107,7 @@ class AutomationRepository:
             "stopped_at": now,
             "summary": summary,
             "states": states,
+            "conversation_plans": self._planner_plans(states),
             "appointment_ledger": ledger,
             "next_priority_queue": _next_priority_queue(states),
         }
@@ -134,6 +136,13 @@ class AutomationRepository:
             "machine_report_path": str(path),
             "machine_report": report,
         }
+
+    def latest_human_report(self) -> str:
+        path = Path("automation") / "reports" / "human_latest.md"
+        absolute = (self._storage.root / path).resolve()
+        if not absolute.exists():
+            raise FileNotFoundError(path)
+        return absolute.read_text(encoding="utf-8").rstrip()
 
     def load_states(self) -> list[dict[str, Any]]:
         return list(self._load_collection(Path("automation") / "states.json", "states")["states"])
@@ -179,6 +188,24 @@ class AutomationRepository:
             Path("automation") / "appointment_ledger.json",
             {"schema_version": 1, "slots": sorted(slots, key=lambda item: str(item["slot_id"]))},
         )
+
+    def _active_goal_id(self) -> str:
+        goals = list(self._load_collection(Path("automation") / "goals.json", "goals")["goals"])
+        for goal in goals:
+            if goal.get("goal_type") == "meet_in_person":
+                return str(goal.get("goal_id") or "goal_meet")
+        if goals:
+            return str(goals[0].get("goal_id") or "goal_meet")
+        return "goal_meet"
+
+    def _planner_plans(self, states: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        planner = PlannerRepository(self.root)
+        plans: list[dict[str, Any]] = []
+        for state in states:
+            plan = planner.load_plan(str(state.get("match_id")))
+            if plan:
+                plans.append(plan)
+        return sorted(plans, key=lambda item: str(item.get("match_id")))
 
     def apply_action_result(self, event: dict[str, Any]) -> None:
         action_request_id = event.get("action_request_id")
@@ -329,6 +356,62 @@ class AutomationRepository:
             state["updated_at"] = scan_batch.get("captured_at", observation.captured_at)
             state["candidate_type"] = "new_match_candidate" if not state.get("seen_before") else "continuation_candidate"
             state["seen_before"] = True
+            planner_payload: dict[str, Any] | None = None
+            planner_recommendation: dict[str, Any] | None = None
+            planner_assessment = thread_item.get("planner_assessment")
+            if planner_assessment is not None:
+                try:
+                    planner_payload = PlannerRepository(self.root).update_plan(
+                        match_id=match_id,
+                        goal_id=str(state.get("goal_id") or self._active_goal_id()),
+                        observation=observation,
+                        assessment=dict(planner_assessment),
+                        now=now,
+                    )
+                except (TypeError, ValueError) as exc:
+                    warnings.append("planner_assessment_invalid")
+                    state["state"] = "needs_reply"
+                    state["planner_error"] = str(exc)
+                    states_by_match[match_id] = state
+                    state_updates.append(_state_update(state))
+                    continue
+                goal_plan = dict(planner_payload["goal_plan"])
+                planner_recommendation = dict(planner_payload["recommendation"])
+                state["goal_id"] = goal_plan.get("goal_id")
+                state["conversation_stage"] = goal_plan.get("stage")
+                state["planner_revision"] = goal_plan.get("plan_revision")
+                state["planner_recommended_move"] = goal_plan.get("recommended_move")
+                state["next_milestone"] = goal_plan.get("next_milestone")
+
+            if planner_recommendation and planner_recommendation.get("requires_handoff"):
+                handoff_reason = str(planner_recommendation.get("handoff_reason") or "appointment_details_requested")
+                slot_conflict = False
+                if thread_item.get("appointment_slot"):
+                    slot, slot_conflict = _reserve_slot(
+                        ledger,
+                        match_id=match_id,
+                        candidate_key=candidate_key,
+                        slot_payload=dict(thread_item["appointment_slot"]),
+                        timestamp=now,
+                    )
+                    state["appointment_slot_id"] = slot["slot_id"]
+                state["state"] = "appointment_handoff"
+                state["handoff_reason"] = handoff_reason
+                handoffs.append(
+                    {
+                        "match_id": match_id,
+                        "candidate_key": candidate_key,
+                        "reason": handoff_reason,
+                        "slot_conflict": slot_conflict,
+                        "assessment": assessment,
+                        "planner_stage": planner_recommendation.get("conversation_stage"),
+                        "planner_revision": planner_recommendation.get("planner_revision"),
+                        "suggested_user_decision": "选择具体日期、时间段、区域",
+                    }
+                )
+                states_by_match[match_id] = state
+                state_updates.append(_state_update(state))
+                continue
 
             if _is_handoff_assessment(assessment):
                 handoff_reason = _handoff_reason(assessment)
@@ -351,6 +434,8 @@ class AutomationRepository:
                         "reason": handoff_reason,
                         "slot_conflict": slot_conflict,
                         "assessment": assessment,
+                        "planner_stage": planner_recommendation.get("conversation_stage") if planner_recommendation else None,
+                        "planner_revision": planner_recommendation.get("planner_revision") if planner_recommendation else None,
                     }
                 )
                 states_by_match[match_id] = state
@@ -358,59 +443,61 @@ class AutomationRepository:
                 continue
 
             draft_payload = thread_item.get("draft")
-            if _can_request_send(authorization, ingest, assessment, state, draft_payload):
-                draft = _draft_from_dict(dict(draft_payload))
-                context_pack = self._context_pack(match_id, observation)
-                policy = evaluate_draft_content(draft, context_pack)
-                if policy.allowed:
-                    payload_hash = _text_hash(draft.best_reply)
-                    if state.get("last_outbound_payload_hash") == payload_hash:
-                        warnings.append("duplicate_send_request_suppressed")
-                    else:
-                        action_request_id = f"action_request_{match_id}_{payload_hash[:12]}"
-                        request = {
-                            "schema_version": 1,
-                            "action_request_id": action_request_id,
-                            "match_id": match_id,
-                            "candidate_key": candidate_key,
-                            "action": "send_message",
-                            "payload_text": draft.best_reply,
-                            "payload_hash": payload_hash,
-                            "pre_action_observation_id": observation.observation_id,
-                            "requires_post_action_verification": True,
-                            "policy": {
-                                "allowed": policy.allowed,
-                                "severity": policy.severity,
-                                "reason": policy.reason,
-                                "requires_user_confirmation": policy.requires_user_confirmation,
-                            },
-                        }
-                        action_requests.append(request)
-                        state["state"] = "send_requested"
-                        state["last_action"] = "send_message"
-                        state["last_action_request_id"] = action_request_id
-                        state["last_outbound_payload_hash"] = payload_hash
-                        state["last_pre_action_observation_id"] = observation.observation_id
-                        state["last_draft_id"] = f"draft_{payload_hash[:12]}"
-                else:
-                    state["state"] = "draft_ready"
-                    state["handoff_reason"] = "draft_blocked"
-                    warnings.append("draft_blocked")
+            if planner_recommendation is None and draft_payload and assessment.get("recommended_next") in {"reply", "nudge_later"}:
+                state["state"] = "needs_reply"
+                warnings.append("planner_assessment_required")
+            elif planner_recommendation and not planner_recommendation.get("auto_send_allowed"):
+                state["state"] = "needs_reply"
+                warnings.extend(str(reason) for reason in planner_recommendation.get("block_reasons", []))
+            elif planner_recommendation and draft_payload and not _draft_aligns_with_planner(dict(draft_payload), planner_recommendation):
+                state["state"] = "needs_reply"
+                warnings.append("planner_misaligned_draft")
+            elif _can_request_send(authorization, ingest, assessment, state, draft_payload):
+                self._queue_send_request(
+                    action_requests=action_requests,
+                    warnings=warnings,
+                    state=state,
+                    match_id=match_id,
+                    candidate_key=candidate_key,
+                    observation=observation,
+                    draft_payload=draft_payload,
+                    latest_fingerprint=latest_fingerprint,
+                    is_nudge=False,
+                    planner_recommendation=planner_recommendation,
+                )
             elif assessment.get("recommended_next") == "reply":
                 state["state"] = "needs_reply"
             elif assessment.get("recommended_next") == "nudge_later":
-                if state.get("last_nudged_inbound_fingerprint") == latest_fingerprint:
-                    state["state"] = "waiting_for_match"
-                else:
+                if _can_request_nudge(authorization, ingest, assessment, state, draft_payload, now):
+                    self._queue_send_request(
+                        action_requests=action_requests,
+                        warnings=warnings,
+                        state=state,
+                        match_id=match_id,
+                        candidate_key=candidate_key,
+                        observation=observation,
+                        draft_payload=draft_payload,
+                        latest_fingerprint=latest_fingerprint,
+                        is_nudge=True,
+                        planner_recommendation=planner_recommendation,
+                    )
+                elif state.get("last_nudged_inbound_fingerprint") == latest_fingerprint:
+                    if draft_payload and _draft_payload_hash(dict(draft_payload)) == state.get("last_outbound_payload_hash"):
+                        warnings.append("duplicate_send_request_suppressed")
+                    state["state"] = state.get("state") if state.get("state") == "send_requested" else "waiting_for_match"
+                elif state.get("state") == "nudge_scheduled" and state.get("latest_inbound_fingerprint") == latest_fingerprint:
                     state["state"] = "nudge_scheduled"
-                    state["last_nudged_inbound_fingerprint"] = latest_fingerprint
-                    state["nudge_count_since_inbound"] = int(state.get("nudge_count_since_inbound") or 0) + 1
+                else:
+                    due_at = (_parse_iso_utc(now) + timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+                    state["state"] = "nudge_scheduled"
+                    state["next_due_at"] = due_at
                     scheduled_actions.append(
                         {
                             "type": "nudge_later",
                             "match_id": match_id,
                             "candidate_key": candidate_key,
                             "latest_inbound_fingerprint": latest_fingerprint,
+                            "due_at": due_at,
                             "reason": "host_assessed_continuation_opportunity",
                         }
                     )
@@ -529,12 +616,25 @@ class AutomationRepository:
             ],
         }
         messages = [dict(message) for message in observation.conversation_observation.visible_messages]
+        latest_inbound_messages = [
+            dict(message)
+            for message in observation.conversation_observation.latest_inbound_messages
+        ]
         conversation_memory = {
             "recent_messages": messages,
+            "latest_inbound_messages": latest_inbound_messages,
             "open_threads": list(observation.conversation_observation.thread_cues),
             "commitments": [],
             "running_summary": " ".join(message.get("text", "") for message in messages).strip(),
         }
+        conversation_memory.update(planner_context_items(PlannerRepository(self.root).load_plan(match_id)))
+        conversation_memory["appointment_constraints"] = self._load_collection(
+            Path("automation") / "availability.json",
+            "availability",
+        ).get("availability", [])
+        conversation_memory["global_slot_conflicts"] = [
+            slot for slot in self.load_ledger() if slot.get("conflict")
+        ]
         return build_context_pack(
             user_profile=user_profile,
             match_profile=match_profile,
@@ -542,6 +642,70 @@ class AutomationRepository:
             reply_mode=ReplyMode.ADAPTIVE,
             max_items=None,
         )
+
+    def _queue_send_request(
+        self,
+        *,
+        action_requests: list[dict[str, Any]],
+        warnings: list[str],
+        state: dict[str, Any],
+        match_id: str,
+        candidate_key: str,
+        observation: AppObservation,
+        draft_payload: Any,
+        latest_fingerprint: str | None,
+        is_nudge: bool,
+        planner_recommendation: dict[str, Any] | None = None,
+    ) -> None:
+        draft = _draft_from_dict(dict(draft_payload))
+        context_pack = self._context_pack(match_id, observation)
+        policy = evaluate_draft_content(draft, context_pack)
+        if not policy.allowed:
+            state["state"] = "draft_ready"
+            state["handoff_reason"] = "draft_blocked"
+            warnings.append("draft_blocked")
+            return
+
+        payload_hash = _text_hash(draft.best_reply)
+        if state.get("last_outbound_payload_hash") == payload_hash:
+            warnings.append("duplicate_send_request_suppressed")
+            return
+
+        action_request_id = f"action_request_{match_id}_{payload_hash[:12]}"
+        action_requests.append(
+            {
+                "schema_version": 1,
+                "action_request_id": action_request_id,
+                "match_id": match_id,
+                "candidate_key": candidate_key,
+                "action": "send_message",
+                "payload_text": draft.best_reply,
+                "payload_hash": payload_hash,
+                "pre_action_observation_id": observation.observation_id,
+                "requires_post_action_verification": True,
+                "policy": {
+                    "allowed": policy.allowed,
+                    "severity": policy.severity,
+                    "reason": policy.reason,
+                    "requires_user_confirmation": policy.requires_user_confirmation,
+                },
+                "planner_revision": planner_recommendation.get("planner_revision") if planner_recommendation else None,
+                "conversation_stage": planner_recommendation.get("conversation_stage") if planner_recommendation else None,
+                "conversation_move": draft.conversation_move,
+                "planner_alignment": "ok" if planner_recommendation else "not_provided",
+                "next_milestone": planner_recommendation.get("next_milestone") if planner_recommendation else None,
+            }
+        )
+        state["state"] = "send_requested"
+        state["last_action"] = "send_message"
+        state["last_action_request_id"] = action_request_id
+        state["last_outbound_payload_hash"] = payload_hash
+        state["last_pre_action_observation_id"] = observation.observation_id
+        state["last_draft_id"] = f"draft_{payload_hash[:12]}"
+        if is_nudge:
+            state["last_nudged_inbound_fingerprint"] = latest_fingerprint
+            state["nudge_count_since_inbound"] = int(state.get("nudge_count_since_inbound") or 0) + 1
+            state["next_due_at"] = None
 
 
 def _draft_from_dict(data: dict[str, Any]) -> DraftResponse:
@@ -586,6 +750,44 @@ def _can_request_send(
         and assessment.get("reply_window_status") == "open"
         and assessment.get("confidence") in {"high", "medium"}
     )
+
+
+def _can_request_nudge(
+    authorization: dict[str, Any],
+    ingest: dict[str, Any],
+    assessment: dict[str, Any],
+    state: dict[str, Any],
+    draft_payload: Any,
+    now: str,
+) -> bool:
+    if not draft_payload:
+        return False
+    if state.get("state") == "appointment_handoff":
+        return False
+    if not authorization.get("autonomous_send") or not authorization.get("autonomous_nudge", True):
+        return False
+    if "send_message" not in authorization.get("allowed_actions", []):
+        return False
+    if ingest.get("confidence") == "low" or ingest.get("requires_user_confirmation"):
+        return False
+    if assessment.get("recommended_next") != "nudge_later":
+        return False
+    if assessment.get("continuation_opportunity") != "yes":
+        return False
+    if assessment.get("reply_window_status") != "open":
+        return False
+    if assessment.get("confidence") not in {"high", "medium"}:
+        return False
+    latest_fingerprint = assessment.get("latest_inbound_fingerprint")
+    if state.get("last_nudged_inbound_fingerprint") == latest_fingerprint:
+        return False
+    due_at = state.get("next_due_at")
+    if not isinstance(due_at, str):
+        return False
+    try:
+        return _parse_iso_utc(due_at) <= _parse_iso_utc(now)
+    except ValueError:
+        return False
 
 
 def _authorization_revoked_or_expired(authorization: dict[str, Any], now: str) -> bool:
@@ -751,6 +953,10 @@ def _state_update(state: dict[str, Any]) -> dict[str, Any]:
         "state": state["state"],
         "latest_inbound_fingerprint": state.get("latest_inbound_fingerprint"),
         "handoff_reason": state.get("handoff_reason"),
+        "conversation_stage": state.get("conversation_stage"),
+        "planner_revision": state.get("planner_revision"),
+        "planner_recommended_move": state.get("planner_recommended_move"),
+        "next_milestone": state.get("next_milestone"),
     }
 
 
@@ -790,20 +996,99 @@ def _next_priority_queue(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _human_report(report: dict[str, Any]) -> str:
     summary = report["summary"]
-    return "\n".join(
-        [
-            "# Dating Booster Session Report",
-            "",
-            f"- Session: {report['session_id']}",
-            f"- Matches tracked: {summary['match_count']}",
-            f"- New matches: {summary['new_match_count']}",
-            f"- Send requests pending: {summary['action_request_count']}",
-            f"- Waiting: {summary['waiting_count']}",
-            f"- Handoffs: {summary['handoff_count']}",
-            f"- Slot conflicts: {summary['slot_conflict_count']}",
-            "",
-        ]
-    )
+    states = list(report.get("states", []))
+    plans = list(report.get("conversation_plans", []))
+    ledger = list(report.get("appointment_ledger", []))
+    queue = list(report.get("next_priority_queue", []))
+
+    lines = [
+        "# Dating Booster Session Report",
+        "",
+        "## Summary",
+        "",
+        f"- Session: {report['session_id']}",
+        f"- Matches tracked: {summary['match_count']}",
+        f"- New matches: {summary['new_match_count']}",
+        f"- Send requests pending: {summary['action_request_count']}",
+        f"- Waiting: {summary['waiting_count']}",
+        f"- Nudge scheduled: {summary['nudge_count']}",
+        f"- Handoffs: {summary['handoff_count']}",
+        f"- Slot conflicts: {summary['slot_conflict_count']}",
+        "",
+        "## Match States",
+        "",
+    ]
+    if states:
+        for state in states:
+            lines.append(
+                "- "
+                + " | ".join(
+                    [
+                        f"match={state.get('match_id')}",
+                        f"candidate={state.get('candidate_key')}",
+                        f"state={state.get('state')}",
+                        f"handoff={state.get('handoff_reason') or 'none'}",
+                        f"next_due_at={state.get('next_due_at') or 'none'}",
+                    ]
+                )
+            )
+    else:
+        lines.append("- none")
+
+    lines.extend(["", "## Conversation Plans", ""])
+    if plans:
+        for plan in plans:
+            scores = dict(plan.get("scores", {}))
+            lines.append(
+                "- "
+                + " | ".join(
+                    [
+                        f"match={plan.get('match_id')}",
+                        f"stage={plan.get('stage')}",
+                        f"move={plan.get('recommended_move')}",
+                        f"topic={plan.get('current_topic')}",
+                        f"milestone={plan.get('next_milestone')}",
+                        f"engagement={scores.get('engagement')}",
+                        f"warmth={scores.get('warmth')}",
+                        f"logistics={scores.get('logistics_readiness')}",
+                    ]
+                )
+            )
+    else:
+        lines.append("- none")
+
+    lines.extend(["", "## Handoffs", ""])
+    handoff_states = [state for state in states if state.get("state") == "appointment_handoff"]
+    if handoff_states:
+        for state in handoff_states:
+            lines.append(
+                f"- match={state.get('match_id')} candidate={state.get('candidate_key')} "
+                f"reason={state.get('handoff_reason') or 'unknown'}"
+            )
+    else:
+        lines.append("- none")
+
+    lines.extend(["", "## Appointment Ledger", ""])
+    if ledger:
+        for slot in ledger:
+            lines.append(
+                f"- slot={slot.get('slot_id')} match={slot.get('match_id')} "
+                f"status={slot.get('status')} conflict={bool(slot.get('conflict'))}"
+            )
+    else:
+        lines.append("- none")
+
+    lines.extend(["", "## Next Priority Queue", ""])
+    if queue:
+        for item in queue:
+            lines.append(
+                f"- priority={item.get('priority')} match={item.get('match_id')} "
+                f"candidate={item.get('candidate_key')} state={item.get('state')}"
+            )
+    else:
+        lines.append("- none")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _provisional_match_id(entry: dict[str, Any]) -> str:
@@ -817,6 +1102,16 @@ def _safe_id(value: str) -> str:
 
 def _text_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _draft_payload_hash(payload: dict[str, Any]) -> str:
+    return _text_hash(str(payload.get("best_reply", "")))
+
+
+def _draft_aligns_with_planner(draft_payload: dict[str, Any], planner_recommendation: dict[str, Any]) -> bool:
+    recommended_move = str(planner_recommendation.get("recommended_move") or "")
+    draft_move = str(draft_payload.get("conversation_move") or "")
+    return bool(recommended_move and draft_move == recommended_move)
 
 
 def _digest(payload: dict[str, Any]) -> str:

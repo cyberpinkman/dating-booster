@@ -192,6 +192,67 @@ class ContentPolicyTests(unittest.TestCase):
         self.assertTrue(decision.allowed)
         self.assertEqual(decision.severity, "low")
 
+    def test_blocks_soft_invite_with_specific_time_or_contact_details(self):
+        context_pack = {
+            "items": [
+                {
+                    "label": "planner_recommendation",
+                    "content": {
+                        "recommended_move": "soft_invite_probe",
+                        "conversation_stage": "soft_invite_probe",
+                        "soft_invite_allowed": True,
+                    },
+                }
+            ]
+        }
+        cases = (
+            _draft_response(
+                best_reply="那明晚八点在三里屯见吧",
+                safer_reply="感觉这个适合当面聊。",
+                bolder_reply="明晚八点见。",
+                why_this_works="Incorrectly commits to logistics.",
+            ),
+            _draft_response(
+                best_reply="那加我微信吧，聊起来方便点",
+                safer_reply="感觉这个适合当面聊。",
+                bolder_reply="vx发你。",
+                why_this_works="Incorrectly asks for contact exchange.",
+            ),
+        )
+
+        for draft in cases:
+            with self.subTest(reply=draft.best_reply):
+                decision = evaluate_draft_content(draft, context_pack)
+
+                self.assertFalse(decision.allowed)
+                self.assertEqual(decision.severity, "high")
+
+    def test_allows_soft_invite_without_concrete_logistics(self):
+        draft = _draft_response(
+            best_reply="感觉这个还挺适合当面聊的",
+            safer_reply="感觉这个还挺适合当面聊的",
+            bolder_reply="这个话题当面聊应该更有意思",
+            why_this_works="Low-pressure soft invite without exact logistics.",
+            conversation_move="soft_invite_probe",
+        )
+        context_pack = {
+            "items": [
+                {
+                    "label": "planner_recommendation",
+                    "content": {
+                        "recommended_move": "soft_invite_probe",
+                        "conversation_stage": "soft_invite_probe",
+                        "soft_invite_allowed": True,
+                    },
+                }
+            ]
+        }
+
+        decision = evaluate_draft_content(draft, context_pack)
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.severity, "low")
+
 
 if __name__ == "__main__":
     unittest.main()

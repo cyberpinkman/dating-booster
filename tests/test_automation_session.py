@@ -203,6 +203,15 @@ class AutomationSessionTests(unittest.TestCase):
                 "--data-dir",
                 str(data_dir),
             ])
+            latest_md_exit, latest_md_text = self._run_text([
+                "automation",
+                "report",
+                "latest",
+                "--data-dir",
+                str(data_dir),
+                "--format",
+                "md",
+            ])
             restart_exit, restart_payload, _ = self._run([
                 "automation",
                 "session",
@@ -223,6 +232,10 @@ class AutomationSessionTests(unittest.TestCase):
             self.assertEqual(latest_exit, 0)
             self.assertEqual(latest_payload["status"], "ok")
             self.assertEqual(latest_payload["machine_report"]["session_id"], stop_payload["session_id"])
+            self.assertEqual(latest_md_exit, 0)
+            self.assertIn("Next Priority Queue", latest_md_text)
+            self.assertIn("Handoffs", latest_md_text)
+            self.assertNotIn("欠你一顿好吃的", latest_md_text)
             self.assertEqual(restart_exit, 0)
             self.assertEqual(restart_payload["resumed_from_report"], stop_payload["machine_report_path"])
 
@@ -737,13 +750,80 @@ class AutomationSessionTests(unittest.TestCase):
             self.assertEqual(first_payload["state_updates"][0]["state"], "nudge_scheduled")
             self.assertEqual(first_payload["scheduled_actions"][0]["type"], "nudge_later")
             self.assertEqual(first_payload["scheduled_actions"][0]["candidate_key"], "row_gia")
+            self.assertEqual(first_payload["action_requests"], [])
             self.assertEqual(repeat_exit, 0)
-            self.assertEqual(repeat_payload["state_updates"][0]["state"], "waiting_for_match")
+            self.assertEqual(repeat_payload["state_updates"][0]["state"], "nudge_scheduled")
             self.assertEqual(repeat_payload["scheduled_actions"], [])
             self.assertEqual(states_exit, 0)
             state = states_payload["states"][0]
-            self.assertEqual(state["last_nudged_inbound_fingerprint"], "gia:in:absurd-comedy")
-            self.assertEqual(state["nudge_count_since_inbound"], 1)
+            self.assertIsNone(state["last_nudged_inbound_fingerprint"])
+            self.assertEqual(state["nudge_count_since_inbound"], 0)
+            self.assertEqual(state["next_due_at"], "2026-05-26T00:30:00Z")
+
+    def test_due_nudge_with_fresh_draft_generates_one_send_request(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(FIXTURE_DIR / "scan_batch_nudge.json"),
+            ])
+            due_scan = json.loads((FIXTURE_DIR / "scan_batch_nudge.json").read_text(encoding="utf-8"))
+            due_scan["captured_at"] = "2026-05-26T01:01:00Z"
+            due_scan["thread_observations"][0]["draft"] = _nudge_draft()
+            due_scan_path = Path(temp_dir) / "due_scan.json"
+            self._write_json(due_scan_path, due_scan)
+
+            with patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-05-26T01:00:00Z"}):
+                due_exit, due_payload, _ = self._run([
+                    "automation",
+                    "session",
+                    "step",
+                    "--data-dir",
+                    str(data_dir),
+                    "--scan-batch",
+                    str(due_scan_path),
+                ])
+                repeat_exit, repeat_payload, _ = self._run([
+                    "automation",
+                    "session",
+                    "step",
+                    "--data-dir",
+                    str(data_dir),
+                    "--scan-batch",
+                    str(due_scan_path),
+                ])
+                states_exit, states_payload, _ = self._run([
+                    "automation",
+                    "get-state",
+                    "--data-dir",
+                    str(data_dir),
+                ])
+
+        self.assertEqual(due_exit, 0)
+        self.assertEqual(len(due_payload["action_requests"]), 1)
+        self.assertIn("刚想起来", due_payload["action_requests"][0]["payload_text"])
+        self.assertEqual(repeat_exit, 0)
+        self.assertEqual(repeat_payload["action_requests"], [])
+        self.assertIn("duplicate_send_request_suppressed", repeat_payload["warnings"])
+        self.assertEqual(states_exit, 0)
+        state = states_payload["states"][0]
+        self.assertEqual(state["last_nudged_inbound_fingerprint"], "gia:in:absurd-comedy")
+        self.assertEqual(state["nudge_count_since_inbound"], 1)
 
     def _init_profile(self, data_dir):
         self._run([
@@ -760,6 +840,12 @@ class AutomationSessionTests(unittest.TestCase):
             exit_code = main(argv)
         text = output.getvalue()
         return exit_code, json.loads(text), text
+
+    def _run_text(self, argv):
+        output = StringIO()
+        with redirect_stdout(output):
+            exit_code = main(argv)
+        return exit_code, output.getvalue()
 
     def _write_json(self, path, payload):
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -838,6 +924,25 @@ def _contact_exchange_scan_batch():
                 },
             }
         ],
+    }
+
+
+def _nudge_draft():
+    return {
+        "best_reply": "刚想起来，你上次说的荒诞喜剧是哪部来着",
+        "safer_reply": "刚想起来，你上次说的那种喜剧有推荐吗",
+        "bolder_reply": "刚想起来，这题我还挺想抄个片单的",
+        "why_this_works": "It lightly reopens the last movie thread.",
+        "situation_read": "The thread was open but paused after the user replied.",
+        "conversation_move": "nudge_later",
+        "hook_source": "conversation_thread",
+        "naturalness_notes": ["short", "keeps the old topic"],
+        "followup_if_match_replies": "If she names a movie, reply around that title.",
+        "risk_flags": [],
+        "missing_info": [],
+        "mode_notes": "Adaptive mode.",
+        "persona_divergence": "low",
+        "stance_divergence": "low",
     }
 
 

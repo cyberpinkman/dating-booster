@@ -50,16 +50,22 @@ class ConversationObservation:
     visible_messages: list[dict[str, str]]
     input_state: str
     thread_cues: list[str]
+    latest_inbound_messages: list[dict[str, str]]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ConversationObservation":
+        visible_messages = [dict(message) for message in data.get("visible_messages", [])]
+        latest_inbound_messages = data.get("latest_inbound_messages")
+        if latest_inbound_messages is None:
+            latest_inbound_messages = _derive_latest_inbound_messages(visible_messages)
         return cls(
-            visible_messages=[dict(message) for message in data.get("visible_messages", [])],
+            visible_messages=visible_messages,
             input_state=data.get("input_state", ""),
             thread_cues=list(data.get("thread_cues", [])),
+            latest_inbound_messages=[dict(message) for message in latest_inbound_messages],
         )
 
 
@@ -141,9 +147,22 @@ class AppObservation:
                 visible_messages=[],
                 input_state="",
                 thread_cues=[],
+                latest_inbound_messages=[],
             ),
             element_observations=[],
             exception_state=ExceptionState.NONE,
             provenance={},
             raw_ref=None,
         )
+
+
+def _derive_latest_inbound_messages(visible_messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    latest_user_index = -1
+    for index, message in enumerate(visible_messages):
+        if message.get("sender") == "user":
+            latest_user_index = index
+    return [
+        dict(message)
+        for message in visible_messages[latest_user_index + 1 :]
+        if message.get("sender") == "match"
+    ]

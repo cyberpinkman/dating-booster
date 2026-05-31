@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -36,6 +37,17 @@ def _run_smoke(data_dir: Path) -> int:
     data_dir.mkdir(parents=True, exist_ok=True)
     commands: dict[str, int] = {}
 
+    skill_doctor = _run_cli(
+        "skill",
+        "doctor",
+        "--package",
+        str(SKILL_PACKAGE_PATH),
+        "--data-dir",
+        str(data_dir),
+        "--json",
+        command_key="skill_doctor",
+        commands=commands,
+    )
     capabilities = _run_cli(
         "capabilities",
         "--json",
@@ -65,6 +77,36 @@ def _run_smoke(data_dir: Path) -> int:
         commands=commands,
     )
     match_id = str(ingest["match_id"])
+    planner_assessment_path = data_dir / "planner_assessment.json"
+    _write_json(planner_assessment_path, _planner_assessment_fixture())
+    _run_cli(
+        "planner",
+        "update",
+        "--data-dir",
+        str(data_dir),
+        "--match-id",
+        match_id,
+        "--goal-id",
+        "goal_meet",
+        "--observation",
+        str(FIXTURE_DIR / "app_observation_chat.json"),
+        "--assessment",
+        str(planner_assessment_path),
+        "--json",
+        command_key="planner_update",
+        commands=commands,
+    )
+    _run_cli(
+        "planner",
+        "recommend",
+        "--data-dir",
+        str(data_dir),
+        "--match-id",
+        match_id,
+        "--json",
+        command_key="planner_recommend",
+        commands=commands,
+    )
     _run_cli(
         "memory",
         "get-match",
@@ -186,6 +228,47 @@ def _run_smoke(data_dir: Path) -> int:
         command_key="automation_session_start",
         commands=commands,
     )
+    scan_template = _run_cli(
+        "automation",
+        "scan",
+        "template",
+        "--json",
+        command_key="automation_scan_template",
+        commands=commands,
+    )
+    automation_fixture = _read_json(AUTOMATION_FIXTURE_DIR / "scan_batch_initial.json")
+    message_list_path = data_dir / "automation_message_list.json"
+    threads_path = data_dir / "automation_threads.json"
+    _write_json(message_list_path, automation_fixture["message_list_snapshot"])
+    _write_json(threads_path, {"thread_observations": automation_fixture["thread_observations"]})
+    assembled_scan = _run_cli(
+        "automation",
+        "scan",
+        "assemble",
+        "--message-list",
+        str(message_list_path),
+        "--threads",
+        str(threads_path),
+        "--session-id",
+        str(automation_fixture["session_id"]),
+        "--captured-at",
+        str(automation_fixture["captured_at"]),
+        "--json",
+        command_key="automation_scan_assemble",
+        commands=commands,
+    )
+    scan_path = data_dir / "automation_scan_batch.json"
+    _write_json(scan_path, assembled_scan["scan_batch"])
+    _run_cli(
+        "automation",
+        "scan",
+        "validate",
+        "--input",
+        str(scan_path),
+        "--json",
+        command_key="automation_scan_validate",
+        commands=commands,
+    )
     automation_step = _run_cli(
         "automation",
         "session",
@@ -193,7 +276,7 @@ def _run_smoke(data_dir: Path) -> int:
         "--data-dir",
         str(data_dir),
         "--scan-batch",
-        str(AUTOMATION_FIXTURE_DIR / "scan_batch_initial.json"),
+        str(scan_path),
         command_key="automation_session_step",
         commands=commands,
     )
@@ -244,6 +327,17 @@ def _run_smoke(data_dir: Path) -> int:
         command_key="automation_report_latest",
         commands=commands,
     )
+    report_md = _run_text(
+        "automation",
+        "report",
+        "latest",
+        "--data-dir",
+        str(data_dir),
+        "--format",
+        "md",
+        command_key="automation_report_latest_md",
+        commands=commands,
+    )
 
     print(
         json.dumps(
@@ -251,18 +345,23 @@ def _run_smoke(data_dir: Path) -> int:
                 "status": "ok",
                 "data_dir": str(data_dir),
                 "match_id": match_id,
+                "skill_doctor": skill_doctor,
                 "tool_version": capabilities["tool_version"],
                 "compatibility": compatibility,
                 "commands": commands,
                 "artifacts": {
                     "context": str(context_path),
+                    "planner_assessment": str(planner_assessment_path),
                     "host_draft": str(draft_path),
                     "action_result": str(action_result_path),
                     "action_audit": str(data_dir / "audit" / "action_results.jsonl"),
                     "feedback": str(data_dir / "matches" / match_id / "feedback_events.jsonl"),
+                    "automation_scan_template_example": scan_template["session_id"],
+                    "automation_scan_batch": str(scan_path),
                     "automation_action_result": str(automation_action_path) if automation_action_path else None,
                     "automation_machine_report": str(data_dir / automation_stop["machine_report_path"]),
                     "automation_human_report": str(data_dir / automation_stop["human_report_path"]),
+                    "automation_human_report_preview": report_md.splitlines()[:3],
                 },
             },
             ensure_ascii=False,
@@ -274,12 +373,15 @@ def _run_smoke(data_dir: Path) -> int:
 
 
 def _run_cli(*args: str, command_key: str, commands: dict[str, int]) -> dict[str, Any]:
+    env = dict(os.environ)
+    env.setdefault("DATING_BOOST_NOW", "2026-05-26T00:00:00Z")
     result = subprocess.run(
         [sys.executable, "-m", "dating_boost.cli", *args],
         cwd=ROOT,
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
     commands[command_key] = result.returncode
     if result.returncode != 0:
@@ -287,6 +389,25 @@ def _run_cli(*args: str, command_key: str, commands: dict[str, int]) -> dict[str
             f"dating-boost {' '.join(args)} failed with exit {result.returncode}: {result.stderr or result.stdout}"
         )
     return json.loads(result.stdout)
+
+
+def _run_text(*args: str, command_key: str, commands: dict[str, int]) -> str:
+    env = dict(os.environ)
+    env.setdefault("DATING_BOOST_NOW", "2026-05-26T00:00:00Z")
+    result = subprocess.run(
+        [sys.executable, "-m", "dating_boost.cli", *args],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    commands[command_key] = result.returncode
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"dating-boost {' '.join(args)} failed with exit {result.returncode}: {result.stderr or result.stdout}"
+        )
+    return result.stdout
 
 
 def _check_compatibility(capabilities: dict[str, Any]) -> dict[str, Any]:
@@ -322,7 +443,7 @@ def _check_compatibility(capabilities: dict[str, Any]) -> dict[str, Any]:
 
     source_spec_commit = metadata.get("source_spec_commit")
     git_commit = capabilities.get("git_commit")
-    if source_spec_commit and git_commit and source_spec_commit != git_commit:
+    if _looks_like_git_commit(source_spec_commit) and git_commit and source_spec_commit != git_commit:
         warnings.append(
             f"source_spec_commit {source_spec_commit} differs from current git_commit {git_commit}"
         )
@@ -345,6 +466,12 @@ def _version_tuple(version: str) -> tuple[int, ...]:
     return tuple(values)
 
 
+def _looks_like_git_commit(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    return 7 <= len(value) <= 40 and all(character in "0123456789abcdef" for character in value.lower())
+
+
 def _payload_hash(payload: dict[str, Any]) -> str:
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -360,6 +487,38 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _planner_assessment_fixture() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "latest_turn_summary": "The match responded to the current chat thread with a lightweight opening.",
+        "latest_turn_type": "short_answer",
+        "inbound_intent": "answer",
+        "topic": {
+            "current_topic": "weekend_plans",
+            "topic_state": "active",
+            "new_information": ["match mentioned weekend context"],
+            "stale_hooks": [],
+        },
+        "scores": {
+            "engagement": 52,
+            "warmth": 45,
+            "curiosity": 30,
+            "comfort": 40,
+            "momentum": 46,
+            "topic_saturation": 25,
+            "logistics_readiness": 20,
+            "risk": 10,
+        },
+        "recommended_stage": "warmup",
+        "recommended_move": "bridge_topic",
+        "next_milestone": "Build a little comfort before probing meeting interest.",
+        "avoid_next": ["do not jump directly to exact meeting details"],
+        "soft_invite_allowed": False,
+        "confidence": "high",
+        "evidence": "Fixture assessment for smoke testing the planner contract.",
+    }
 
 
 if __name__ == "__main__":

@@ -75,6 +75,49 @@ class ObservationTests(unittest.TestCase):
             "It was. What are you up to this weekend?",
         )
 
+    def test_latest_inbound_messages_are_derived_after_latest_user_message(self):
+        observation = AppObservation.from_dict(
+            {
+                "observation_id": "obs_turn_boundary",
+                "source_type": "manual_fixture",
+                "app_id": "wechat",
+                "adapter_id": "manual.fixture.v1",
+                "captured_at": "2026-05-31T16:25:00+08:00",
+                "page_type": "chat_thread",
+                "page_confidence": "high",
+                "match_identity_hints": {
+                    "visible_name": "小青",
+                    "profile_cues": [],
+                    "conversation_fingerprint": "xiaoqing-cat-thread",
+                    "evidence": "Visible chat thread.",
+                },
+                "profile_observation": {
+                    "profile_text": "",
+                    "photo_cues": [],
+                    "hook_candidates": [],
+                },
+                "conversation_observation": {
+                    "visible_messages": [
+                        {"sender": "match", "text": "还有个猫猫大君"},
+                        {"sender": "user", "text": "大左这个名字有点好笑...它是最有脾气那个吗"},
+                        {"sender": "match", "text": "还好呀"},
+                        {"sender": "match", "text": "都没什么脾气我家的猫"},
+                    ],
+                    "input_state": "empty",
+                    "thread_cues": [],
+                },
+                "element_observations": [],
+                "exception_state": "none",
+                "provenance": {},
+                "raw_ref": None,
+            }
+        )
+
+        self.assertEqual(
+            [message["text"] for message in observation.conversation_observation.latest_inbound_messages],
+            ["还好呀", "都没什么脾气我家的猫"],
+        )
+
     def test_builds_observation_from_manual_screenshot_analysis(self):
         observation = build_observation_from_screenshot_analysis(
             screenshot_path=Path("/tmp/tinder-screen.png"),

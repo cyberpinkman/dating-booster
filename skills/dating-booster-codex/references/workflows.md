@@ -6,11 +6,14 @@ policy, and audit tools. They do not replace the repository specs.
 ## Startup
 
 1. Choose a data directory, usually `.local/dating-boost`.
-2. Run `dating-boost capabilities --json --data-dir .local/dating-boost`.
-3. Load `skill-package.json` and compare `dating_boost_min_version`,
+2. Run `python3 scripts/doctor.py --json --data-dir .local/dating-boost`.
+3. If doctor returns `needs_bootstrap`, run `python3 scripts/bootstrap_cli.py`, then run doctor again.
+4. Run `dating-boost skill doctor --package skill-package.json --data-dir .local/dating-boost --json` when debugging package compatibility from the CLI.
+5. Run `dating-boost capabilities --json --data-dir .local/dating-boost`.
+6. Load `skill-package.json` and compare `dating_boost_min_version`,
    `required_schema_versions`, and `required_commands`.
-4. Stop before viewing dating app content if compatibility fails.
-5. Warn, but do not automatically stop, if `source_spec_commit` differs while
+7. Stop before viewing dating app content if compatibility fails.
+8. Warn, but do not automatically stop, if `source_spec_commit` differs while
    version, schema, and command checks pass.
 
 ## Draft
@@ -75,6 +78,44 @@ high-risk experiment.
 7. Record the action with `dating-boost action record-result --data-dir .local/dating-boost --input action_result.json`.
 8. Use `result_status: "unknown"` when post-action verification is inconclusive.
 
+### iPhone Mirroring Send Execution
+
+For iPhone Mirroring, the host harness must assume text input can be lossy.
+This is especially true for Chinese and longer messages.
+
+Preferred execution path:
+
+1. Use foreground app copy when possible: put the exact
+   `action_request.payload_text` in a normal Mac app, select it, and copy it
+   with a real `Cmd+C`. Do not assume `pbcopy` alone will trigger Universal
+   Clipboard.
+2. Focus the iOS chat input box.
+3. Try `Cmd+V` as a staging shortcut only after the input box is focused and
+   positioned normally. If it stages the exact text, continue to verification.
+4. If `Cmd+V` does not stage text, long-press or two-finger/right-click the iOS
+   input box to open the edit menu, then tap Paste.
+5. Verify staged text in the input box before sending.
+6. Do not send if the staged text is missing, truncated, garbled, or materially
+   different from `action_request.payload_text`.
+7. Tap Send only after the staged text matches.
+8. After sending, take a fresh observation and compare the outbound bubble with
+   the requested payload.
+
+Do not treat `type_text`, `Cmd+V`, `Return`, or a visible outbound bubble alone
+as proof of success. `Cmd+V` may be a valid staging shortcut, and Return may
+send in apps such as WeChat after staging, but success still requires
+staged-text and outbound-bubble verification. If the sent text is incomplete or
+different, record the action result with `result_status: "failed"` when the
+mismatch is clear, or `result_status: "unknown"` when verification is
+inconclusive. Do not send a second recovery message until the current mismatch
+is recorded and a fresh thread observation produces a new action request.
+
+If the input box has position drift after full-screen input, a keyboard mode
+change, or a viewport shift, do not keep probing stale coordinates. Back out
+and reopen the chat thread, verify the input box is back in its normal location,
+then repeat foreground app copy, long-press, Paste, and staged-text
+verification.
+
 ## Feedback
 
 Use this when the user accepts, edits, rejects, or rates a draft.
@@ -89,17 +130,23 @@ Use this when the user accepts, edits, rejects, or rates a draft.
 Use this when the user explicitly asks the host agent to manage multiple matches
 toward a goal such as meeting in person.
 
-1. Run `dating-boost capabilities --json --data-dir .local/dating-boost` and verify compatibility.
+1. Run startup doctor and `dating-boost capabilities --json --data-dir .local/dating-boost`, then verify compatibility.
 2. Save the user's goal with `dating-boost automation goal set --data-dir .local/dating-boost --input goal.json`.
 3. Save availability with `dating-boost automation availability set --data-dir .local/dating-boost --input availability.json`.
 4. Start the session with `dating-boost automation session start --data-dir .local/dating-boost --authorization auth.json`.
-5. The host agent scans the visible message list and opens a bounded set of relevant threads.
-6. Convert the scan into a `scan_batch` JSON. Include host-authored `assessment` and `draft` objects for threads that are ready for ordinary replies.
-7. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
-8. Execute only ordinary `send_message` action requests. Do not execute `handoffs`.
-9. After each send, verify the sent state from a fresh observation and run `dating-boost action record-result --data-dir .local/dating-boost --input action_result.json`.
-10. Stop with `dating-boost automation session stop --data-dir .local/dating-boost`.
-11. Resume later by reading `dating-boost automation report latest --data-dir .local/dating-boost` and continuing from local state.
+5. Use `dating-boost automation scan template --json` for a skeleton when needed.
+6. The host agent scans the visible message list and opens a bounded set of relevant threads.
+7. For each opened thread, read `planner-authoring.md` and author `planner_assessment`: score engagement, warmth, curiosity, comfort, momentum, topic_saturation, logistics_readiness, and risk; choose recommended stage, recommended move, next milestone, avoid_next, and soft_invite_allowed.
+8. Prefer separate files for the list and opened threads, then run `dating-boost automation scan assemble --message-list list.json --threads threads.json --session-id SESSION --captured-at TIME --json`.
+9. Run `dating-boost automation scan normalize --input scan_batch.json --json` only when safe defaults are missing.
+10. Run `dating-boost automation scan validate --input scan_batch.json --json`; stop if validation fails.
+11. Optionally run `dating-boost planner update --data-dir .local/dating-boost --match-id MATCH_ID --goal-id GOAL_ID --observation observation.json --assessment planner_assessment.json --json` and inspect `dating-boost planner recommend --data-dir .local/dating-boost --match-id MATCH_ID --json` when debugging one thread.
+12. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
+13. Execute only ordinary `send_message` action requests with `planner_alignment: ok`. Do not execute `handoffs`.
+14. After each send, verify the sent state from a fresh observation and run `dating-boost action record-result --data-dir .local/dating-boost --input action_result.json`.
+15. Stop with `dating-boost automation session stop --data-dir .local/dating-boost`.
+16. Show `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
+17. Resume later by reading `dating-boost automation report latest --data-dir .local/dating-boost` and continuing from local state.
 
 Do not use automation session output to commit to exact meeting details, contact
 exchange, likes, unmatches, reports, or profile edits.

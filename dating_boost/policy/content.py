@@ -33,6 +33,14 @@ class ContentPolicyDecision:
 def evaluate_draft_content(draft: Any, context_pack: Mapping[str, Any]) -> ContentPolicyDecision:
     """Evaluate generated reply variants against MVP content safety rules."""
 
+    soft_invite_violation = _soft_invite_detail_violation_reason(draft, context_pack)
+    if soft_invite_violation:
+        return ContentPolicyDecision(
+            allowed=False,
+            severity="high",
+            reason=soft_invite_violation,
+        )
+
     if _has_overseas_study_constraint(context_pack) and _draft_contains_overseas_study_claim(draft):
         return ContentPolicyDecision(
             allowed=False,
@@ -61,6 +69,101 @@ def evaluate_draft_content(draft: Any, context_pack: Mapping[str, Any]) -> Conte
         severity="low",
         reason="Draft content passed MVP policy checks.",
     )
+
+
+def _soft_invite_detail_violation_reason(draft: Any, context_pack: Mapping[str, Any]) -> str | None:
+    recommendation = _planner_recommendation(context_pack)
+    if recommendation.get("recommended_move") != "soft_invite_probe":
+        return None
+
+    for text in _draft_texts(draft):
+        if _contains_contact_exchange(text):
+            return "Soft invite draft includes contact exchange details that require user handoff."
+        if _contains_specific_appointment_time(text):
+            return "Soft invite draft includes specific appointment timing that requires user handoff."
+        if _contains_specific_meetup_place(text):
+            return "Soft invite draft includes a specific meetup place that requires user handoff."
+    return None
+
+
+def _planner_recommendation(context_pack: Mapping[str, Any]) -> Mapping[str, Any]:
+    direct = context_pack.get("planner_recommendation")
+    if isinstance(direct, Mapping):
+        return direct
+    for item in context_pack.get("items", []):
+        if isinstance(item, Mapping) and item.get("label") == "planner_recommendation":
+            content = item.get("content")
+            if isinstance(content, Mapping):
+                return content
+    return {}
+
+
+def _contains_contact_exchange(text: str) -> bool:
+    normalized = text.casefold()
+    contact_terms = (
+        "微信",
+        "wechat",
+        "wx",
+        "vx",
+        "手机号",
+        "电话",
+        "号码",
+        "加我",
+        "我加你",
+        "留个",
+    )
+    return any(term in normalized for term in contact_terms)
+
+
+def _contains_specific_appointment_time(text: str) -> bool:
+    normalized = text.casefold()
+    if re.search(r"\b\d{1,2}\s*[:：]\s*\d{2}\b", normalized):
+        return True
+    if re.search(r"\d{1,2}\s*[点點]\s*(?:半|[0-5]?\d\s*分?)?", normalized):
+        return True
+    date_markers = (
+        "今天",
+        "今晚",
+        "明天",
+        "明晚",
+        "后天",
+        "後天",
+        "大后天",
+        "大後天",
+        "周一",
+        "周二",
+        "周三",
+        "周四",
+        "周五",
+        "周六",
+        "周日",
+        "周天",
+        "星期一",
+        "星期二",
+        "星期三",
+        "星期四",
+        "星期五",
+        "星期六",
+        "星期日",
+        "星期天",
+        "礼拜一",
+        "礼拜二",
+        "礼拜三",
+        "礼拜四",
+        "礼拜五",
+        "礼拜六",
+        "礼拜日",
+        "礼拜天",
+    )
+    return any(marker in normalized for marker in date_markers)
+
+
+def _contains_specific_meetup_place(text: str) -> bool:
+    normalized = text.casefold()
+    place_markers = ("三里屯", "国贸", "朝阳大悦城", "合生汇", "环球港", "五道口", "望京")
+    if any(marker in normalized for marker in place_markers):
+        return True
+    return bool(re.search(r"(?:在|去)[^，。！？,.!?]{1,16}(?:见|碰|喝|吃|坐|逛)", normalized))
 
 
 def _has_overseas_study_constraint(context_pack: Mapping[str, Any]) -> bool:

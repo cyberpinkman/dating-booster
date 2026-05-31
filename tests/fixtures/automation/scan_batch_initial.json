@@ -119,6 +119,35 @@
         "evidence": "Ada delegated the reward choice back to the user.",
         "risk_flags": []
       },
+      "planner_assessment": {
+        "schema_version": 1,
+        "latest_turn_summary": "对方把奖励选择权交还给用户",
+        "latest_turn_type": "handoff_choice",
+        "inbound_intent": "delegate_choice",
+        "topic": {
+          "current_topic": "reward",
+          "topic_state": "active",
+          "new_information": ["对方接受奖励设定并让用户决定"],
+          "stale_hooks": []
+        },
+        "scores": {
+          "engagement": 64,
+          "warmth": 58,
+          "curiosity": 42,
+          "comfort": 56,
+          "momentum": 62,
+          "topic_saturation": 28,
+          "logistics_readiness": 35,
+          "risk": 12
+        },
+        "recommended_stage": "warmup",
+        "recommended_move": "take_the_lead",
+        "next_milestone": "接住选择权，用轻松承诺继续推进气氛但不进入具体约见细节",
+        "avoid_next": ["继续反问想要什么奖励", "直接定具体时间地点"],
+        "soft_invite_allowed": false,
+        "confidence": "high",
+        "evidence": "latest inbound says 你定, so the natural move is to take the lead rather than ask another question."
+      },
       "observation": {
         "observation_id": "obs_ada_001",
         "source_type": "manual_fixture",

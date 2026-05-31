@@ -12,6 +12,22 @@ Before drafting, write a one-sentence `situation_read`:
 - 当前阻力: user over-sent, thread is dry, topic is too generic, distance, timing.
 - 用户是否已经连续输出过多: if yes, keep the next reply lighter and shorter.
 
+First identify the `turn boundary`: `latest_inbound_messages` means match
+messages after the user's latest outbound. Draft from those messages as the
+primary hook. Old visible messages are background only; do not answer a stale
+bubble just because it is still visible on screen.
+
+If `latest_inbound_messages` is empty or the turn boundary is unclear, do not
+draft as if the latest visible match bubble is fresh. Re-observe, ask the user
+for the current live message, or use an explicit reset/nudge workflow.
+
+When a `goal_plan` or planner recommendation exists, draft toward its
+`next_milestone`. Treat `topic_saturation`, `soft_invite_probe`, and
+`bridge_topic` as strategy constraints: if a topic is saturated, bridge or reset
+instead of continuing an interview; if soft invite is not allowed, do not push
+for meeting. The draft's conversation move should match the planner move unless
+the rationale explicitly explains an equivalent move.
+
 For low-investment replies like "嗯嗯", "没有", "挺不错的", do not add a long
 explanation. Bridge from the last message and offer one easy opening.
 

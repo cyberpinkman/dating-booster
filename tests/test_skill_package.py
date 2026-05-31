@@ -1,4 +1,5 @@
 import json
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -27,8 +28,21 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(metadata["package_name"], "dating-booster-codex-skill")
         self.assertEqual(metadata["target_host"], "codex")
-        self.assertEqual(metadata["package_version"], "0.1.5")
-        self.assertEqual(metadata["dating_boost_min_version"], "0.1.5")
+        self.assertEqual(metadata["package_version"], "0.1.6")
+        self.assertEqual(metadata["dating_boost_min_version"], "0.1.6")
+        self.assertEqual(metadata["source_repo"], "cyberpinkman/dating-booster")
+        self.assertEqual(metadata["skill_path"], "skills/dating-booster-codex")
+        self.assertNotIn(metadata["source_ref"], {"main", "master", "codex/mvp-intelligence"})
+        self.assertEqual(metadata["source_ref"], f"v{metadata['package_version']}")
+        self.assertRegex(metadata["source_ref"], r"^v\d+\.\d+\.\d+$")
+        self.assertNotIn(metadata["source_spec_commit"], {"main", "master", "codex/mvp-intelligence"})
+        self.assertTrue(
+            metadata["source_spec_commit"] == metadata["source_ref"]
+            or re.fullmatch(r"[0-9a-f]{7,40}", metadata["source_spec_commit"])
+        )
+        self.assertEqual(metadata["cli_command"], "dating-boost")
+        self.assertEqual(metadata["bootstrap_script"], "scripts/bootstrap_cli.py")
+        self.assertEqual(metadata["doctor_script"], "scripts/doctor.py")
         self.assertLessEqual(_version_tuple(metadata["dating_boost_min_version"]), _version_tuple(__version__))
         self.assertTrue(set(metadata["required_commands"]).issubset(set(capabilities["supported_commands"])))
         self.assertEqual(metadata["required_schema_versions"]["reply_draft"], 2)
@@ -36,6 +50,11 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(metadata["required_schema_versions"]["automation_session"], 1)
         self.assertEqual(metadata["required_schema_versions"]["appointment_ledger"], 1)
         self.assertEqual(metadata["required_schema_versions"]["progress_report"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["planner_assessment"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["goal_plan"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["planner_recommendation"], 1)
+        for command in ("planner update", "planner get", "planner recommend", "planner event-log"):
+            self.assertIn(command, metadata["required_commands"])
         for schema_name, schema_version in metadata["required_schema_versions"].items():
             self.assertEqual(capabilities["schema_versions"][schema_name], schema_version)
         for spec_path in metadata["source_specs"]:
@@ -44,6 +63,8 @@ class SkillPackageTests(unittest.TestCase):
             self.assertTrue((SKILL_DIR / reference_path).exists(), reference_path)
         self.assertIn("references/drafting-framework.md", metadata["references"])
         self.assertIn("references/naturalness-checklist.md", metadata["references"])
+        self.assertTrue((SKILL_DIR / metadata["bootstrap_script"]).exists())
+        self.assertTrue((SKILL_DIR / metadata["doctor_script"]).exists())
 
     def test_skill_markdown_contains_required_operational_guards(self):
         skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower()
@@ -62,9 +83,20 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("post-action verification", skill_text)
         self.assertIn("record-result", skill_text)
         self.assertIn("automation session", skill_text)
+        self.assertIn("planner_assessment", skill_text)
+        self.assertIn("goal-oriented", skill_text)
+        self.assertIn("doctor.py", skill_text)
+        self.assertIn("bootstrap_cli.py", skill_text)
+        self.assertLess(skill_text.index("doctor.py"), skill_text.index("visible dating app content"))
         self.assertIn("host agent", skill_text)
         self.assertIn("drafting-framework.md", skill_text)
         self.assertIn("naturalness-checklist.md", skill_text)
+        self.assertIn("long-press", skill_text)
+        self.assertIn("paste", skill_text)
+        self.assertIn("verify staged text", skill_text)
+        self.assertIn("position drift", skill_text)
+        self.assertIn("reopen the chat thread", skill_text)
+        self.assertIn("foreground app copy", skill_text)
 
     def test_skill_reference_files_describe_reusable_workflows_and_contracts(self):
         workflows_text = (SKILL_DIR / "references" / "workflows.md").read_text(encoding="utf-8").lower()
@@ -90,13 +122,33 @@ class SkillPackageTests(unittest.TestCase):
             "automation session step",
             "automation session stop",
             "automation report latest",
+            "automation scan template",
+            "automation scan validate",
+            "automation scan normalize",
+            "automation scan assemble",
+            "planner update",
+            "planner recommend",
+            "skill doctor",
         ):
             self.assertIn(command, workflows_text)
+        for phrase in (
+            "iphone mirroring",
+            "long-press",
+            "paste",
+            "verify staged text",
+            "do not send",
+            "position drift",
+            "reopen the chat thread",
+            "foreground app copy",
+            "result_status",
+        ):
+            self.assertIn(phrase, workflows_text)
         for field_name in (
             "observation_id",
             "match_identity_hints",
             "profile_observation",
             "conversation_observation",
+            "latest_inbound_messages",
             "best_reply",
             "situation_read",
             "conversation_move",
@@ -109,11 +161,24 @@ class SkillPackageTests(unittest.TestCase):
             "scan_batch",
             "action_request_id",
             "machine_report",
+            "doctor",
+            "message_list_snapshot",
+            "thread_observations",
+            "planner_assessment",
+            "goal_plan",
+            "planner_recommendation",
+            "conversation_scores",
+            "topic_lifecycle",
+            "soft_invite_allowed",
         ):
             self.assertIn(field_name, contracts_text)
         for phrase in (
             "对方投入度",
             "最后一句",
+            "latest_inbound_messages",
+            "turn boundary",
+            "after the user's latest outbound",
+            "old visible messages are background",
             "连续输出",
             "未知细节",
             "question is optional",
@@ -123,6 +188,10 @@ class SkillPackageTests(unittest.TestCase):
             "对方把选择权交给你",
             "不要继续反问",
             "一句为主",
+            "topic_saturation",
+            "soft_invite_probe",
+            "next_milestone",
+            "bridge_topic",
         ):
             self.assertIn(phrase, drafting_text)
         for phrase in (

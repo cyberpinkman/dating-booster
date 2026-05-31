@@ -44,6 +44,35 @@
         "evidence": "The host judged the match did not close the conversation and one delayed nudge is allowed.",
         "risk_flags": []
       },
+      "planner_assessment": {
+        "schema_version": 1,
+        "latest_turn_summary": "电影喜剧话题此前有可延展信息，但用户发出上一句后对方暂未回复",
+        "latest_turn_type": "paused_thread",
+        "inbound_intent": "background_context",
+        "topic": {
+          "current_topic": "movies",
+          "topic_state": "paused",
+          "new_information": ["对方喜欢有点荒诞的喜剧"],
+          "stale_hooks": []
+        },
+        "scores": {
+          "engagement": 46,
+          "warmth": 42,
+          "curiosity": 35,
+          "comfort": 44,
+          "momentum": 34,
+          "topic_saturation": 36,
+          "logistics_readiness": 10,
+          "risk": 10
+        },
+        "recommended_stage": "warmup",
+        "recommended_move": "nudge_later",
+        "next_milestone": "用一个轻量旧话题钩子恢复对话，不连续追问",
+        "avoid_next": ["催促对方回复", "突然转到约见"],
+        "soft_invite_allowed": false,
+        "confidence": "medium",
+        "evidence": "A delayed nudge should lightly reopen the movie thread if still due."
+      },
       "observation": {
         "observation_id": "obs_gia_001",
         "source_type": "manual_fixture",

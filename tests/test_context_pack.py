@@ -34,6 +34,38 @@ class ContextPackTests(unittest.TestCase):
         self.assertLess(labels.index("latest_message"), labels.index("conversation_summary"))
         self.assertEqual(pack["reply_mode"], "adaptive")
 
+    def test_context_pack_prioritizes_latest_inbound_turn_boundary(self):
+        pack = build_context_pack(
+            user_profile={},
+            match_profile={"conversation_hooks": ["cat names"]},
+            conversation_memory={
+                "recent_messages": [
+                    {"sender": "match", "text": "还有个猫猫大君"},
+                    {"sender": "user", "text": "大左这个名字有点好笑..."},
+                    {"sender": "match", "text": "还好呀"},
+                    {"sender": "match", "text": "都没什么脾气我家的猫"},
+                ],
+                "latest_inbound_messages": [
+                    {"sender": "match", "text": "还好呀"},
+                    {"sender": "match", "text": "都没什么脾气我家的猫"},
+                ],
+                "open_threads": [],
+                "commitments": [],
+                "running_summary": "They discussed cats.",
+            },
+            reply_mode=ReplyMode.ADAPTIVE,
+            max_items=None,
+        )
+
+        labels = [item["label"] for item in pack["items"]]
+
+        self.assertLess(labels.index("latest_inbound_messages"), labels.index("latest_message"))
+        self.assertLess(labels.index("turn_boundary"), labels.index("recent_messages"))
+        self.assertEqual(
+            pack["items"][labels.index("latest_inbound_messages")]["content"][-1]["text"],
+            "都没什么脾气我家的猫",
+        )
+
     def test_context_pack_includes_safety_constraints_for_facts_and_history(self):
         pack = build_context_pack(
             user_profile={},

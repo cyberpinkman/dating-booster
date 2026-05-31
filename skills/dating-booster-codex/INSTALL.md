@@ -6,7 +6,9 @@ while the host agent owns the LLM and any computer-use interaction.
 
 ## Install
 
-From the repository root:
+Preferred GitHub install path is documented in `INSTALL_FROM_GITHUB.md`.
+
+For local development from the repository root:
 
 ```bash
 python3 -m pip install -e .
@@ -20,7 +22,19 @@ directly from `skills/dating-booster-codex` without copying it.
 ## Startup Check
 
 Before any host agent observes visible dating app content, choose a local data
-directory and run:
+directory and run the skill doctor:
+
+```bash
+python3 skills/dating-booster-codex/scripts/doctor.py --json --data-dir .local/dating-boost
+```
+
+If doctor returns `needs_bootstrap`, run:
+
+```bash
+python3 skills/dating-booster-codex/scripts/bootstrap_cli.py
+```
+
+Then run:
 
 ```bash
 dating-boost capabilities --json --data-dir .local/dating-boost

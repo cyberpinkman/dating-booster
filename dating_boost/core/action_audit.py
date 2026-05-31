@@ -52,6 +52,13 @@ def validate_action_result(payload: dict[str, Any], *, created_at: str) -> dict[
     )
     result_status = _require_result_status(payload["result_status"])
     evidence = _require_evidence(payload["evidence"])
+    raw_action_request_id = payload.get("action_request_id")
+    if action in VERIFIABLE_SUCCESS_ACTIONS:
+        action_request_id = _require_non_empty_string(raw_action_request_id, "action_request_id")
+    elif raw_action_request_id is None:
+        action_request_id = None
+    else:
+        action_request_id = _require_non_empty_string(raw_action_request_id, "action_request_id")
 
     if result_status == "succeeded" and action in VERIFIABLE_SUCCESS_ACTIONS and not post_observation_id:
         raise ValueError("succeeded send_message results require post_action_observation_id evidence")
@@ -60,7 +67,7 @@ def validate_action_result(payload: dict[str, Any], *, created_at: str) -> dict[
         "schema_version": ACTION_RESULT_SCHEMA_VERSION,
         "action": action,
         "target_match_id": target_match_id,
-        "action_request_id": payload.get("action_request_id"),
+        "action_request_id": action_request_id,
         "payload_hash": payload_hash,
         "pre_action_observation_id": pre_observation_id,
         "post_action_observation_id": post_observation_id,

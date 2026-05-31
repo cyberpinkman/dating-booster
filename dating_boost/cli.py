@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
+import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -14,7 +16,15 @@ from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.feedback import create_feedback_event
 from dating_boost.core.identity import resolve_match_identity
 from dating_boost.core.models import Divergence, MemoryItem, ReplyMode, UserProfile
+from dating_boost.core.planner import PlannerRepository, planner_context_items
 from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
+from dating_boost.core.scan_authoring import (
+    assemble_scan_batch,
+    normalize_scan_batch,
+    scan_template,
+    validate_scan_batch,
+)
+from dating_boost.core.skill_doctor import run_skill_doctor
 from dating_boost.intelligence.backends import ModelBackend, OpenAIBackend, ScriptedBackend
 from dating_boost.intelligence.reply_generator import DraftResponse, generate_reply
 from dating_boost.perception.fixture_loader import load_observation
@@ -25,6 +35,10 @@ from dating_boost.policy.content import ContentPolicyDecision, evaluate_draft_co
 
 
 MVP_TIMESTAMP = "2026-05-25T00:00:00Z"
+
+
+def _now_iso() -> str:
+    return os.environ.get("DATING_BOOST_NOW") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,6 +60,14 @@ def main(argv: list[str] | None = None) -> int:
     capabilities_parser.add_argument("--json", action="store_true", help="Print JSON output.")
     capabilities_parser.add_argument("--data-dir", type=Path)
     capabilities_parser.set_defaults(handler=_handle_capabilities)
+
+    skill_parser = subparsers.add_parser("skill", help="Codex skill packaging and diagnostics.")
+    skill_subparsers = skill_parser.add_subparsers(dest="skill_command", required=True)
+    skill_doctor_parser = skill_subparsers.add_parser("doctor", help="Check skill/CLI compatibility.")
+    skill_doctor_parser.add_argument("--package", required=True, type=Path)
+    skill_doctor_parser.add_argument("--data-dir", required=True, type=Path)
+    skill_doctor_parser.add_argument("--json", action="store_true")
+    skill_doctor_parser.set_defaults(handler=_handle_skill_doctor)
 
     authorize_parser = subparsers.add_parser(
         "authorize",
@@ -170,6 +192,32 @@ def main(argv: list[str] | None = None) -> int:
     workflow_draft_parser.add_argument("--draft-id")
     workflow_draft_parser.set_defaults(handler=_handle_workflow_draft)
 
+    planner_parser = subparsers.add_parser("planner", help="Goal-oriented conversation planning commands.")
+    planner_subparsers = planner_parser.add_subparsers(dest="planner_command", required=True)
+    planner_update_parser = planner_subparsers.add_parser("update")
+    planner_update_parser.add_argument("--data-dir", required=True, type=Path)
+    planner_update_parser.add_argument("--match-id", required=True)
+    planner_update_parser.add_argument("--goal-id", required=True)
+    planner_update_parser.add_argument("--observation", required=True, type=Path)
+    planner_update_parser.add_argument("--assessment", required=True, type=Path)
+    planner_update_parser.add_argument("--json", action="store_true")
+    planner_update_parser.set_defaults(handler=_handle_planner_update)
+    planner_get_parser = planner_subparsers.add_parser("get")
+    planner_get_parser.add_argument("--data-dir", required=True, type=Path)
+    planner_get_parser.add_argument("--match-id", required=True)
+    planner_get_parser.add_argument("--json", action="store_true")
+    planner_get_parser.set_defaults(handler=_handle_planner_get)
+    planner_recommend_parser = planner_subparsers.add_parser("recommend")
+    planner_recommend_parser.add_argument("--data-dir", required=True, type=Path)
+    planner_recommend_parser.add_argument("--match-id", required=True)
+    planner_recommend_parser.add_argument("--json", action="store_true")
+    planner_recommend_parser.set_defaults(handler=_handle_planner_recommend)
+    planner_event_log_parser = planner_subparsers.add_parser("event-log")
+    planner_event_log_parser.add_argument("--data-dir", required=True, type=Path)
+    planner_event_log_parser.add_argument("--match-id", required=True)
+    planner_event_log_parser.add_argument("--json", action="store_true")
+    planner_event_log_parser.set_defaults(handler=_handle_planner_event_log)
+
     automation_parser = subparsers.add_parser("automation", help="Host-orchestrated automation commands.")
     automation_subparsers = automation_parser.add_subparsers(dest="automation_command", required=True)
 
@@ -197,7 +245,34 @@ def main(argv: list[str] | None = None) -> int:
     )
     report_latest_parser = automation_report_subparsers.add_parser("latest")
     report_latest_parser.add_argument("--data-dir", required=True, type=Path)
+    report_latest_parser.add_argument("--format", choices=["json", "md"], default="json")
     report_latest_parser.set_defaults(handler=_handle_automation_report_latest)
+
+    automation_scan_parser = automation_subparsers.add_parser("scan", help="Automation scan authoring commands.")
+    automation_scan_subparsers = automation_scan_parser.add_subparsers(
+        dest="automation_scan_command",
+        required=True,
+    )
+    scan_template_parser = automation_scan_subparsers.add_parser("template")
+    scan_template_parser.add_argument("--json", action="store_true")
+    scan_template_parser.set_defaults(handler=_handle_automation_scan_template)
+    scan_validate_parser = automation_scan_subparsers.add_parser("validate")
+    scan_validate_parser.add_argument("--input", required=True, type=Path)
+    scan_validate_parser.add_argument("--json", action="store_true")
+    scan_validate_parser.set_defaults(handler=_handle_automation_scan_validate)
+    scan_normalize_parser = automation_scan_subparsers.add_parser("normalize")
+    scan_normalize_parser.add_argument("--input", required=True, type=Path)
+    scan_normalize_parser.add_argument("--json", action="store_true")
+    scan_normalize_parser.set_defaults(handler=_handle_automation_scan_normalize)
+    scan_assemble_parser = automation_scan_subparsers.add_parser("assemble")
+    scan_assemble_parser.add_argument("--message-list", required=True, type=Path)
+    scan_assemble_parser.add_argument("--threads", required=True, type=Path)
+    scan_assemble_parser.add_argument("--session-id", required=True)
+    scan_assemble_parser.add_argument("--captured-at", required=True)
+    scan_assemble_parser.add_argument("--app-id", default="tinder")
+    scan_assemble_parser.add_argument("--scan-budget", type=int, default=5)
+    scan_assemble_parser.add_argument("--json", action="store_true")
+    scan_assemble_parser.set_defaults(handler=_handle_automation_scan_assemble)
 
     automation_get_state_parser = automation_subparsers.add_parser("get-state")
     automation_get_state_parser.add_argument("--data-dir", required=True, type=Path)
@@ -261,6 +336,12 @@ def _run_authorization(argv: list[str]) -> int:
 def _handle_capabilities(args: argparse.Namespace) -> int:
     _print_json(build_capabilities(args.data_dir))
     return 0
+
+
+def _handle_skill_doctor(args: argparse.Namespace) -> int:
+    payload = run_skill_doctor(args.package, args.data_dir)
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
 
 
 def _handle_authorize(args: argparse.Namespace) -> int:
@@ -380,7 +461,7 @@ def _handle_draft(args: argparse.Namespace) -> int:
     reply_mode = ReplyMode(args.mode)
     backend = _select_backend(args)
     observation = ObservationRepository(args.data_dir).load_latest_observation(args.match_id)
-    context_pack = _build_mvp_context_pack(profile, args.match_id, reply_mode, observation)
+    context_pack = _build_mvp_context_pack(profile, args.match_id, reply_mode, observation, args.data_dir)
     draft = generate_reply(context_pack, reply_mode, backend)
     policy = evaluate_draft_content(draft, context_pack)
 
@@ -413,7 +494,7 @@ def _handle_context_build(args: argparse.Namespace) -> int:
     profile = JsonMemoryRepository(args.data_dir).load_user_profile()
     reply_mode = ReplyMode(args.mode)
     observation = ObservationRepository(args.data_dir).load_latest_observation(args.match_id)
-    context_pack = _build_mvp_context_pack(profile, args.match_id, reply_mode, observation)
+    context_pack = _build_mvp_context_pack(profile, args.match_id, reply_mode, observation, args.data_dir)
     _print_json(
         {
             "schema_version": 1,
@@ -457,7 +538,7 @@ def _handle_workflow_draft(args: argparse.Namespace) -> int:
     match_id = str(ingest["match_id"])
     profile = JsonMemoryRepository(args.data_dir).load_user_profile()
     latest_observation = ObservationRepository(args.data_dir).load_latest_observation(match_id)
-    context_pack = _build_mvp_context_pack(profile, match_id, reply_mode, latest_observation)
+    context_pack = _build_mvp_context_pack(profile, match_id, reply_mode, latest_observation, args.data_dir)
     steps["context_build"] = "ok"
 
     draft = _draft_from_dict(_read_json_object(args.draft))
@@ -501,6 +582,41 @@ def _handle_workflow_draft(args: argparse.Namespace) -> int:
         steps["feedback_record"] = "skipped"
 
     _print_json(payload)
+    return 0
+
+
+def _handle_planner_update(args: argparse.Namespace) -> int:
+    observation = load_observation(args.observation)
+    assessment = _read_json_object(args.assessment)
+    try:
+        payload = PlannerRepository(args.data_dir).update_plan(
+            match_id=args.match_id,
+            goal_id=args.goal_id,
+            observation=observation,
+            assessment=assessment,
+            now=_now_iso(),
+        )
+    except ValueError as exc:
+        _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})
+        return 2
+    _print_json(payload)
+    return 0
+
+
+def _handle_planner_get(args: argparse.Namespace) -> int:
+    payload = PlannerRepository(args.data_dir).get_plan_payload(args.match_id)
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_planner_recommend(args: argparse.Namespace) -> int:
+    payload = PlannerRepository(args.data_dir).recommend(args.match_id)
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_planner_event_log(args: argparse.Namespace) -> int:
+    _print_json(PlannerRepository(args.data_dir).event_log_payload(args.match_id))
     return 0
 
 
@@ -568,8 +684,58 @@ def _handle_automation_session_stop(args: argparse.Namespace) -> int:
 
 def _handle_automation_report_latest(args: argparse.Namespace) -> int:
     payload = AutomationRepository(args.data_dir).latest_report()
+    if args.format == "md":
+        if payload["status"] != "ok":
+            _print_json(payload)
+            return 2
+        sys.stdout.write(AutomationRepository(args.data_dir).latest_human_report() + "\n")
+        return 0
     _print_json(payload)
     return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_automation_scan_template(args: argparse.Namespace) -> int:
+    _print_json(scan_template())
+    return 0
+
+
+def _handle_automation_scan_validate(args: argparse.Namespace) -> int:
+    payload = validate_scan_batch(_read_json_object(args.input))
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_automation_scan_normalize(args: argparse.Namespace) -> int:
+    scan_batch = normalize_scan_batch(_read_json_object(args.input))
+    validation = validate_scan_batch(scan_batch)
+    payload = {
+        "schema_version": 1,
+        "status": validation["status"],
+        "scan_batch": scan_batch,
+        "validation": validation,
+    }
+    _print_json(payload)
+    return 0 if validation["status"] == "ok" else 2
+
+
+def _handle_automation_scan_assemble(args: argparse.Namespace) -> int:
+    scan_batch = assemble_scan_batch(
+        message_list=_read_json_object(args.message_list),
+        threads=_read_json_payload(args.threads),
+        session_id=args.session_id,
+        captured_at=args.captured_at,
+        app_id=args.app_id,
+        scan_budget=args.scan_budget,
+    )
+    validation = validate_scan_batch(scan_batch)
+    payload = {
+        "schema_version": 1,
+        "status": validation["status"],
+        "scan_batch": scan_batch,
+        "validation": validation,
+    }
+    _print_json(payload)
+    return 0 if validation["status"] == "ok" else 2
 
 
 def _handle_automation_get_state(args: argparse.Namespace) -> int:
@@ -641,6 +807,7 @@ def _build_mvp_context_pack(
     match_id: str,
     reply_mode: ReplyMode,
     observation: AppObservation | None,
+    data_dir: Path | None = None,
 ) -> dict[str, Any]:
     user_profile = _profile_to_context_dict(profile)
     if observation is None:
@@ -658,6 +825,8 @@ def _build_mvp_context_pack(
     else:
         match_profile = _match_profile_from_observation(match_id, observation)
         conversation_memory = _conversation_memory_from_observation(observation)
+    if data_dir is not None:
+        conversation_memory.update(planner_context_items(PlannerRepository(data_dir).load_plan(match_id)))
 
     return build_context_pack(
         user_profile=user_profile,
@@ -686,8 +855,10 @@ def _match_profile_from_observation(match_id: str, observation: AppObservation) 
 def _conversation_memory_from_observation(observation: AppObservation) -> dict[str, Any]:
     conversation = observation.conversation_observation
     visible_messages = [dict(message) for message in conversation.visible_messages]
+    latest_inbound_messages = [dict(message) for message in conversation.latest_inbound_messages]
     return {
         "recent_messages": visible_messages,
+        "latest_inbound_messages": latest_inbound_messages,
         "open_threads": list(conversation.thread_cues),
         "commitments": [],
         "running_summary": _observation_summary(observation),
@@ -697,7 +868,14 @@ def _conversation_memory_from_observation(observation: AppObservation) -> dict[s
 def _observation_summary(observation: AppObservation) -> str:
     profile_text = observation.profile_observation.profile_text.strip()
     messages = observation.conversation_observation.visible_messages
-    latest_message = messages[-1].get("text", "").strip() if messages else ""
+    latest_inbound = observation.conversation_observation.latest_inbound_messages
+    latest_message = (
+        latest_inbound[-1].get("text", "").strip()
+        if latest_inbound
+        else messages[-1].get("text", "").strip()
+        if messages
+        else ""
+    )
     parts = [part for part in [profile_text, latest_message] if part]
     if parts:
         return " ".join(parts)
@@ -774,6 +952,10 @@ def _read_json_object(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"expected JSON object: {path}")
     return data
+
+
+def _read_json_payload(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _validate_storage_id(value: str, label: str) -> None:

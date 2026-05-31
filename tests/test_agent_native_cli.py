@@ -33,17 +33,29 @@ class AgentNativeCliTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(payload["schema_version"], 1)
-            self.assertEqual(payload["tool_version"], "0.1.5")
+            self.assertEqual(payload["tool_version"], "0.1.6")
             self.assertIsInstance(payload["git_commit"], str)
             self.assertEqual(payload["data_dir"], str(data_dir.resolve()))
             self.assertEqual(payload["schema_versions"]["action_result"], 1)
             self.assertEqual(payload["schema_versions"]["reply_draft"], 2)
             self.assertEqual(payload["schema_versions"]["workflow_result"], 1)
+            self.assertEqual(payload["schema_versions"]["planner_assessment"], 1)
+            self.assertEqual(payload["schema_versions"]["goal_plan"], 1)
+            self.assertEqual(payload["schema_versions"]["planner_recommendation"], 1)
             self.assertTrue(REQUIRED_AGENT_NATIVE_COMMANDS.issubset(set(payload["supported_commands"])))
             self.assertIn("workflow draft", payload["supported_commands"])
+            self.assertIn("planner update", payload["supported_commands"])
+            self.assertIn("planner get", payload["supported_commands"])
+            self.assertIn("planner recommend", payload["supported_commands"])
+            self.assertIn("planner event-log", payload["supported_commands"])
             self.assertIn("policy_capabilities", payload)
             self.assertIn("memory_capabilities", payload)
             self.assertIn("agent_native_capabilities", payload)
+            self.assertTrue(payload["agent_native_capabilities"]["goal_oriented_planning"])
+            self.assertTrue(payload["agent_native_capabilities"]["conversation_scores"])
+            self.assertTrue(payload["agent_native_capabilities"]["topic_lifecycle"])
+            self.assertTrue(payload["agent_native_capabilities"]["soft_invite_probe"])
+            self.assertTrue(payload["agent_native_capabilities"]["planner_report"])
             self.assertIsInstance(payload["warnings"], list)
 
     def test_nested_agent_native_commands_reuse_mvp_storage_and_policy(self):
@@ -211,6 +223,7 @@ class AgentNativeCliTests(unittest.TestCase):
                 input_path.write_text(
                     json.dumps(
                         {
+                            "action_request_id": f"action_request_{status}",
                             "action": "send_message",
                             "target_match_id": "match_alex",
                             "payload_hash": f"sha256:{status}",
@@ -263,6 +276,15 @@ class AgentNativeCliTests(unittest.TestCase):
                 "post_action_observation_id": "obs_after",
                 "result_status": "unknown",
                 "evidence": {"verification": "missing hash"},
+            },
+            {
+                "action": "send_message",
+                "target_match_id": "match_alex",
+                "payload_hash": "sha256:missing-request",
+                "pre_action_observation_id": "obs_before",
+                "post_action_observation_id": "obs_after",
+                "result_status": "unknown",
+                "evidence": {"verification": "missing action request id"},
             },
             {
                 "action": "send_message",

@@ -83,6 +83,9 @@ Fill `conversation_observation` from visible messages:
 - `visible_messages`: ordered oldest-to-newest for the visible window. Use
   `sender: "user"` for the user's messages, `sender: "match"` for the other
   person, and `sender: "system"` for app notices.
+- `latest_inbound_messages`: match messages after the user's latest outbound.
+  This is the turn boundary for drafting. Old visible messages are background
+  only and must not become the primary reply hook.
 - `input_state`: use `empty`, `draft_present`, `keyboard_open`, `disabled`, or
   `unknown`.
 - `thread_cues`: unresolved questions, open topics, commitments, or emotional
@@ -90,6 +93,12 @@ Fill `conversation_observation` from visible messages:
 
 If message order is unclear, record only the messages whose order is visible and
 use `unknown` in evidence/provenance.
+
+When a visible thread contains older match messages above the user's latest
+reply, do not treat those older bubbles as the live question. If
+`latest_inbound_messages` is empty, either wait for a new inbound message or use
+a deliberate reset/nudge workflow instead of pretending the old visible text is
+fresh.
 
 ## Elements And Exceptions
 
@@ -144,6 +153,9 @@ intends to keep that artifact.
   },
   "conversation_observation": {
     "visible_messages": [
+      {"sender": "match", "text": "What are you up to this weekend?"}
+    ],
+    "latest_inbound_messages": [
       {"sender": "match", "text": "What are you up to this weekend?"}
     ],
     "input_state": "empty",

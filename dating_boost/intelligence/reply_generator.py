@@ -37,7 +37,7 @@ def generate_reply(context_pack: Mapping[str, Any], reply_mode: ReplyMode, backe
         user_prompt=_build_user_prompt(context_pack, reply_mode),
         schema=REPLY_SCHEMA,
     )
-    return _parse_draft_response(payload)
+    return parse_draft_response(payload)
 
 
 def _build_system_prompt() -> str:
@@ -75,7 +75,7 @@ def _build_user_prompt(context_pack: Mapping[str, Any], reply_mode: ReplyMode) -
     )
 
 
-def _parse_draft_response(payload: Mapping[str, object]) -> DraftResponse:
+def parse_draft_response(payload: Mapping[str, object]) -> DraftResponse:
     required = tuple(REPLY_SCHEMA["required"])
     missing = [key for key in required if key not in payload]
     if missing:
@@ -120,3 +120,6 @@ def _require_divergence(payload: Mapping[str, object], key: str) -> Divergence:
     except ValueError as exc:
         allowed = ", ".join(item.value for item in Divergence)
         raise ValueError(f"Reply generation field '{key}' must be one of: {allowed}.") from exc
+
+
+_parse_draft_response = parse_draft_response
