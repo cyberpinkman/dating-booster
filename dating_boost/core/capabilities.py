@@ -117,6 +117,8 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "automation_session": True,
             "operator_session": True,
             "goal_oriented_operator": True,
+            "host_loop_supervisor": True,
+            "tinder_host_loop": True,
             "automation_dry_run_default": True,
             "automation_external_scheduler": True,
             "appointment_ledger": True,

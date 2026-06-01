@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "user_id": "user_local",
+  "facts": [],
+  "preferences": [],
+  "boundaries": [],
+  "style_examples": ["short, warm, dry humor"],
+  "goals": ["practice better dating conversations"],
+  "persona_baseline": "reserved",
+  "persona_range": ["warmer", "more outgoing"],
+  "stance_range": ["can express curiosity about new interests"],
+  "updated_at": "2026-05-25T00:00:00Z",
+  "default_reply_mode": "adaptive"
+}

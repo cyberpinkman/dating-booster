@@ -54,9 +54,9 @@ or `dating-boost skill doctor`.
 {
   "schema_version": 1,
   "status": "ok",
-  "skill_version": "0.1.7",
+  "skill_version": "0.1.8",
   "cli_found": true,
-  "cli_version": "0.1.7",
+  "cli_version": "0.1.8",
   "capabilities_ok": true,
   "missing_commands": [],
   "schema_mismatches": [],
@@ -497,3 +497,39 @@ when available. It includes Summary, Match States, Conversation Plans, Handoffs,
 Appointment Ledger, and Next Priority Queue. It should not hide who the agent
 talked to by default, but it also should not dump full chat transcripts unless
 the user explicitly asks for a transcript-style audit.
+
+## Tinder Host Loop Work Dir
+
+`scripts/operator_host_loop.py` writes `current_work_item.json` plus one
+template file. The host fills the matching non-template file.
+
+```text
+message_list_observation.template.json -> message_list_observation.json
+thread_observation_<candidate_key>.template.json -> thread_observation_<candidate_key>.json
+staged_verification.template.json -> staged_verification.json
+action_result.template.json -> action_result.json
+```
+
+`staged_verification.json` confirms paste/stage before send:
+
+```json
+{
+  "schema_version": 1,
+  "verification_type": "staged_text",
+  "action_request_id": "action_request_match_123",
+  "match_id": "match_123",
+  "candidate_key": "ada_1_preview",
+  "expected_payload_hash": "sha256:example",
+  "expected_payload_text": "那先欠你一顿好吃的",
+  "result_status": "succeeded",
+  "staged_text": "那先欠你一顿好吃的",
+  "evidence": {
+    "verification": "Tinder input box text matched the payload before send.",
+    "input_method": "paste"
+  }
+}
+```
+
+In `--send-mode stage`, the host must not click send after this file is written.
+In `--send-mode live`, write `action_result.json` only after a fresh
+post-action observation confirms the sent bubble.

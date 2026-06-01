@@ -193,6 +193,21 @@ debt, self-disclosure debt, reciprocity balance, low-investment streak, match
 curiosity about the user, and last user turn type. The naturalness checklist is
 internal QA; do not show it by default.
 
+## Tinder Host Loop
+
+For real Tinder host-loop testing, prefer `scripts/operator_host_loop.py` over
+manually calling every operator command. Read `references/host-loop.md` first.
+
+Default to `--send-mode stage`: paste the draft into Tinder, verify the staged
+text, and stop before clicking send. Use `--send-mode live` only after explicit
+user authorization for ordinary automatic sends. Live mode still requires staged
+text verification before send and post-action verification after send.
+
+The host must write only the requested work-dir files:
+`message_list_observation.json`, `thread_observation_<candidate_key>.json`,
+`staged_verification.json`, or `action_result.json`. Do not infer success from a
+requested action alone.
+
 ## Host-Orchestrated Automation Session Fallback
 
 Use this mode only after explicit user authorization. Codex remains the host

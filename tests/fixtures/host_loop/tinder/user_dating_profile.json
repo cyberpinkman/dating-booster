@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "user_id": "user_local",
+  "hard_facts": [
+    {
+      "fact_id": "fact_city",
+      "field": "city",
+      "value": "北京",
+      "source": "dating_profile"
+    }
+  ],
+  "boundaries": [
+    {
+      "boundary_id": "boundary_hard_facts",
+      "text": "不要编造学历、城市、工作和家庭情况"
+    }
+  ],
+  "voice_samples": ["短一点，先接梗"],
+  "persona_style": {
+    "baseline": "偏内向但可以主动一点",
+    "allowed_modulations": ["warmer", "more playful"]
+  },
+  "simulation_policy": "free_simulation_soft"
+}

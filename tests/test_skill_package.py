@@ -28,8 +28,8 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(metadata["package_name"], "dating-booster-codex-skill")
         self.assertEqual(metadata["target_host"], "codex")
-        self.assertEqual(metadata["package_version"], "0.1.7")
-        self.assertEqual(metadata["dating_boost_min_version"], "0.1.7")
+        self.assertEqual(metadata["package_version"], "0.1.8")
+        self.assertEqual(metadata["dating_boost_min_version"], "0.1.8")
         self.assertEqual(metadata["source_repo"], "cyberpinkman/dating-booster")
         self.assertEqual(metadata["skill_path"], "skills/dating-booster-codex")
         self.assertNotIn(metadata["source_ref"], {"main", "master", "codex/mvp-intelligence"})
@@ -69,12 +69,14 @@ class SkillPackageTests(unittest.TestCase):
             "automation-phase-b",
             "goal-oriented-conversation-agent",
             "self-disclosure-low-investment",
+            "tinder-host-loop",
         ):
             self.assertIn(source_spec_keyword, source_specs_text)
         for reference_path in metadata["references"]:
             self.assertTrue((SKILL_DIR / reference_path).exists(), reference_path)
         self.assertIn("references/drafting-framework.md", metadata["references"])
         self.assertIn("references/naturalness-checklist.md", metadata["references"])
+        self.assertIn("references/host-loop.md", metadata["references"])
         self.assertTrue((SKILL_DIR / metadata["bootstrap_script"]).exists())
         self.assertTrue((SKILL_DIR / metadata["doctor_script"]).exists())
 
@@ -122,6 +124,7 @@ class SkillPackageTests(unittest.TestCase):
         checklist_text = (SKILL_DIR / "references" / "naturalness-checklist.md").read_text(
             encoding="utf-8"
         ).lower()
+        host_loop_text = (SKILL_DIR / "references" / "host-loop.md").read_text(encoding="utf-8").lower()
 
         for workflow_name in ("draft", "profile refresh", "send", "feedback"):
             self.assertIn(workflow_name, workflows_text)
@@ -155,8 +158,9 @@ class SkillPackageTests(unittest.TestCase):
             "operator record-action-result",
             "operator stop",
             "operator report latest",
+            "operator_host_loop.py",
         ):
-            self.assertIn(command, workflows_text)
+            self.assertTrue(command in workflows_text or command in host_loop_text, command)
         for phrase in (
             "iphone mirroring",
             "long-press",
@@ -196,8 +200,20 @@ class SkillPackageTests(unittest.TestCase):
             "conversation_scores",
             "topic_lifecycle",
             "soft_invite_allowed",
+            "staged_verification",
+            "message_list_observation.template.json",
         ):
             self.assertIn(field_name, contracts_text)
+        for phrase in (
+            "tinder host loop",
+            "--send-mode stage",
+            "--send-mode live",
+            "staged_verification.json",
+            "action_result.json",
+            "do not click send",
+            "re-locate the current input box",
+        ):
+            self.assertIn(phrase, host_loop_text)
         for phrase in (
             "对方投入度",
             "最后一句",

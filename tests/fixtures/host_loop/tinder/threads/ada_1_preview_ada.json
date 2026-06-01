@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "observation_type": "thread",
+  "candidate_key": "ada_1_preview_ada",
+  "assessment": {
+    "schema_version": 1,
+    "latest_match_message": "你定",
+    "latest_user_message": "你猜猜会有什么奖励",
+    "latest_inbound_fingerprint": "ada:in:you-pick",
+    "reply_window_status": "open",
+    "continuation_opportunity": "yes",
+    "appointment_stage": "none",
+    "recommended_next": "reply",
+    "confidence": "high",
+    "evidence": "The match delegated the choice.",
+    "risk_flags": []
+  },
+  "planner_assessment": {
+    "schema_version": 1,
+    "latest_turn_summary": "The match delegated the reward decision.",
+    "latest_turn_type": "handoff",
+    "inbound_intent": "delegate",
+    "topic": {
+      "current_topic": "reward",
+      "topic_state": "active",
+      "new_information": ["match said 你定"],
+      "stale_hooks": []
+    },
+    "scores": {
+      "engagement": 62,
+      "warmth": 55,
+      "curiosity": 35,
+      "comfort": 50,
+      "momentum": 61,
+      "topic_saturation": 20,
+      "logistics_readiness": 25,
+      "risk": 10
+    },
+    "recommended_stage": "warmup",
+    "recommended_move": "take_the_lead",
+    "next_milestone": "Accept the handoff with one light decision.",
+    "avoid_next": ["do not ask her to decide again"],
+    "soft_invite_allowed": false,
+    "reciprocity": {
+      "question_debt": 1,
+      "self_disclosure_debt": 1,
+      "reciprocity_balance": "balanced",
+      "low_investment_streak": 0,
+      "match_curiosity_about_user": "mixed",
+      "topic_exit_pressure": "low",
+      "last_user_turn_type": "question"
+    },
+    "confidence": "high",
+    "evidence": "Latest inbound delegates the choice."
+  },
+  "observation": {
+    "observation_id": "obs_ada_host_loop_001",
+    "source_type": "manual_fixture",
+    "app_id": "tinder",
+    "captured_at": "2026-05-26T10:00:10Z",
+    "page_type": "chat_thread",
+    "page_confidence": "high",
+    "match_identity_hints": {
+      "visible_name": "Ada",
+      "profile_cues": ["日料", "纯爱"],
+      "conversation_fingerprint": "ada-reward",
+      "evidence": "Visible Tinder chat header and latest message."
+    },
+    "profile_observation": {
+      "profile_text": "纯爱，喜欢日料。",
+      "photo_cues": [],
+      "hook_candidates": ["日料", "纯爱"]
+    },
+    "conversation_observation": {
+      "visible_messages": [
+        {"sender": "user", "text": "你猜猜会有什么奖励"},
+        {"sender": "match", "text": "你定"}
+      ],
+      "latest_inbound_messages": [
+        {"sender": "match", "text": "你定"}
+      ],
+      "input_state": "empty",
+      "thread_cues": ["reward"]
+    },
+    "element_observations": [],
+    "exception_state": "none",
+    "provenance": {
+      "evidence": "Fixture host thread observation.",
+      "redaction_status": "synthetic"
+    },
+    "raw_ref": null
+  },
+  "draft": {
+    "best_reply": "那先欠你一顿好吃的，具体吃啥我认真想一下",
+    "safer_reply": "那我先认真记一笔",
+    "bolder_reply": "那我定了，先欠你一顿日料",
+    "why_this_works": "It accepts the delegated choice and keeps the reward frame light.",
+    "situation_read": "The match delegated the choice; the user should not bounce the question back.",
+    "conversation_move": "take_the_lead",
+    "hook_source": "latest_message",
+    "naturalness_notes": ["short", "does not ask another question"],
+    "followup_if_match_replies": "If she accepts, keep it playful and avoid exact logistics until user handoff.",
+    "risk_flags": [],
+    "missing_info": [],
+    "mode_notes": "Adaptive mode.",
+    "disclosure_source": "none",
+    "used_user_material_ids": [],
+    "question_count": 0,
+    "reply_shape": "statement",
+    "persona_divergence": "low",
+    "stance_divergence": "low"
+  }
+}

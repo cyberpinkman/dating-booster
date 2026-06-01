@@ -162,6 +162,20 @@ toward a goal such as meeting in person.
 13. Show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
 14. Resume later by reading `dating-boost operator report latest --data-dir .local/dating-boost` and continuing from local state.
 
+## Tinder Host Loop Supervisor
+
+For real Tinder/iPhone Mirroring runs, prefer:
+
+```bash
+python3 scripts/operator_host_loop.py --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+```
+
+Use `--send-mode stage` by default. It writes work items and templates, waits
+for host-authored observation or verification files, stages text, and stops
+before clicking send. Use `--send-mode live` only when the user explicitly
+authorizes ordinary sends; live mode still requires staged verification before
+`action_result.json`.
+
 ## Automation Session Fallback
 
 Use lower-level `automation session` commands for batch debugging or fixture

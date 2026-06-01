@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "observation_type": "message_list",
+  "session_id": "session_host_loop_fixture",
+  "app_id": "tinder",
+  "captured_at": "2026-05-26T10:00:00Z",
+  "scan_cursor": "page_1",
+  "scan_budget": 5,
+  "provenance": {
+    "author": "fixture_host",
+    "evidence": "Synthetic Tinder message list fixture."
+  },
+  "message_list_snapshot": {
+    "entries": [
+      {
+        "candidate_key": "ada_1_preview_ada",
+        "visible_name": "Ada",
+        "latest_preview": "你定",
+        "latest_preview_hash": "preview_ada",
+        "timestamp_cue": "昨天",
+        "unread_cue": "present",
+        "position": 1,
+        "match_identity_hints": {
+          "visible_name": "Ada",
+          "profile_cues": ["日料", "纯爱"],
+          "conversation_fingerprint": "ada-reward"
+        },
+        "evidence": "Visible first Tinder row with unread marker."
+      }
+    ]
+  }
+}
