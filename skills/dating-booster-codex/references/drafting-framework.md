@@ -49,8 +49,8 @@ Use one `conversation_move`:
 
 - `answer_or_riff`:对方已经提问、吐槽或惊讶时，先回答或接梗。
 - `take_the_lead`:对方把选择权交给你时，接过来给一个轻量具体决定。
-- `bridge_from_latest`:接住最后一句，再轻轻转到下一个点。
-- `deepen_hook`:挖 profile 标签背后的未知细节。
+- `bridge_topic`:接住最后一句，再轻轻转到下一个点。
+- `deepen_current`:挖 profile 标签背后的未知细节。
 - `light_self_disclosure`:给一点自己的信息，但不抢话。
 - `reciprocal_disclosure`:对方分享了自己时，先给一个对应的自己。
 - `low_investment_repair`:对方短回或低投入时，用轻自曝/轻接梗修复，不继续采访。
@@ -58,7 +58,7 @@ Use one `conversation_move`:
 - `soft_invite_probe`:只有对方投入度足够时，轻试探线下可能性。
 - `slow_down_wait`:低投入修复后仍无扩展，暂缓推进。
 
-For the first version, prefer `bridge_from_latest` or `deepen_hook` when the
+For the first version, prefer `bridge_topic` or `deepen_current` when the
 match is replying briefly.
 
 Use `answer_or_riff` when the match has already given you an active opening.

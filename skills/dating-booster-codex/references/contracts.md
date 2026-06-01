@@ -142,7 +142,7 @@ Use this shape with `dating-boost policy check-draft`.
   "bolder_reply": "If there is live music involved, I am listening.",
   "why_this_works": "It follows the open weekend thread and asks an easy question.",
   "situation_read": "The match gave a short positive reply; the user should not over-explain.",
-  "conversation_move": "deepen_hook",
+  "conversation_move": "deepen_current",
   "hook_source": "profile_unknown_detail",
   "naturalness_notes": [
     "one short question",
@@ -378,13 +378,13 @@ The assembled `scan_batch` shape is:
         "risk_flags": [],
         "missing_info": [],
         "mode_notes": "Adaptive mode.",
-      "disclosure_source": "none",
-      "used_user_material_ids": [],
-      "question_count": 0,
-      "reply_shape": "statement",
-      "persona_divergence": "low",
-      "stance_divergence": "low"
-    }
+        "disclosure_source": "none",
+        "used_user_material_ids": [],
+        "question_count": 0,
+        "reply_shape": "statement",
+        "persona_divergence": "low",
+        "stance_divergence": "low"
+      }
     }
   ]
 }
@@ -491,6 +491,9 @@ The assembled `scan_batch` shape is:
 ## Automation Human Report
 
 Use `dating-boost automation report latest --data-dir .local/dating-boost --format md`
-to show a redacted Markdown report. It includes Summary, Match States,
-Handoffs, Appointment Ledger, and Next Priority Queue without dumping full chat
-message text.
+to show a user-facing Markdown report. It must keep match identifiers visible
+enough for the user to know who was handled, including match id and candidate key
+when available. It includes Summary, Match States, Conversation Plans, Handoffs,
+Appointment Ledger, and Next Priority Queue. It should not hide who the agent
+talked to by default, but it also should not dump full chat transcripts unless
+the user explicitly asks for a transcript-style audit.

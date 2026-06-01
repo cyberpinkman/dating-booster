@@ -4,7 +4,7 @@
   "bolder_reply": "Now I need your best live music recommendation.",
   "why_this_works": "It uses the match's live music cue and answers with curiosity.",
   "situation_read": "Match asked about weekend plans; user can bridge to live music.",
-  "conversation_move": "deepen_hook",
+  "conversation_move": "deepen_current",
   "hook_source": "profile_unknown_detail",
   "naturalness_notes": [
     "asks for a specific unknown detail",

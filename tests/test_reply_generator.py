@@ -26,7 +26,7 @@ class ReplyGeneratorTests(unittest.TestCase):
 
         self.assertEqual(response.best_reply, "Sounds fun. Any good live music spots you recommend?")
         self.assertEqual(response.situation_read, "Match asked about weekend plans; user can bridge to live music.")
-        self.assertEqual(response.conversation_move, "deepen_hook")
+        self.assertEqual(response.conversation_move, "deepen_current")
         self.assertEqual(response.hook_source, "profile_unknown_detail")
         self.assertIn("asks for a specific unknown detail", response.naturalness_notes)
         self.assertEqual(response.followup_if_match_replies, "If they name a venue, ask what kind of shows they like.")

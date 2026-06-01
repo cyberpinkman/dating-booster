@@ -40,7 +40,10 @@
   "source_specs": [
     "docs/superpowers/specs/2026-05-25-agent-native-launch-strategy.md",
     "docs/superpowers/specs/2026-05-25-product-architecture-blueprint.md",
-    "docs/superpowers/specs/2026-05-25-intelligence-layer-design.md"
+    "docs/superpowers/specs/2026-05-25-intelligence-layer-design.md",
+    "docs/superpowers/specs/2026-05-26-automation-phase-b.md",
+    "docs/superpowers/specs/2026-06-01-goal-oriented-conversation-agent.md",
+    "docs/superpowers/specs/2026-06-01-self-disclosure-low-investment.md"
   ],
   "references": [
     "INSTALL.md",

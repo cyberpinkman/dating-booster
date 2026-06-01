@@ -28,7 +28,7 @@ class NaturalnessFixtureTests(unittest.TestCase):
             self.assertTrue(example["avoids_issues"])
             for avoided_issue in example["avoids_issues"]:
                 self.assertIn(avoided_issue, known_issues)
-            self.assertIn(example["conversation_move"], {"deepen_hook", "bridge_from_latest"})
+            self.assertIn(example["conversation_move"], {"deepen_current", "bridge_topic"})
 
     def test_chinese_naturalness_seed_case_covers_answer_or_riff_without_forced_question(self):
         fixture_path = Path("tests/fixtures/evals/chinese_naturalness_cases.json")
@@ -51,7 +51,7 @@ class NaturalnessFixtureTests(unittest.TestCase):
         self.assertTrue(better_without_question)
 
         for example in case["better_examples"]:
-            self.assertIn(example["conversation_move"], {"answer_or_riff", "bridge_from_latest"})
+            self.assertIn(example["conversation_move"], {"answer_or_riff", "bridge_topic"})
             self.assertTrue(example["avoids_issues"])
             for avoided_issue in example["avoids_issues"]:
                 self.assertIn(avoided_issue, known_issues)
@@ -77,7 +77,7 @@ class NaturalnessFixtureTests(unittest.TestCase):
         self.assertTrue(better_without_question)
 
         for example in case["better_examples"]:
-            self.assertIn(example["conversation_move"], {"take_the_lead", "bridge_from_latest"})
+            self.assertIn(example["conversation_move"], {"take_the_lead", "bridge_topic"})
             self.assertTrue(example["avoids_issues"])
             for avoided_issue in example["avoids_issues"]:
                 self.assertIn(avoided_issue, known_issues)

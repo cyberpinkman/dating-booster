@@ -12,7 +12,7 @@ def _draft_response(**overrides):
         "bolder_reply": "Tell me more.",
         "why_this_works": "Keeps the conversation moving.",
         "situation_read": "Policy unit test fixture.",
-        "conversation_move": "deepen_hook",
+        "conversation_move": "deepen_current",
         "hook_source": "conversation_thread",
         "naturalness_notes": ["unit test fixture"],
         "followup_if_match_replies": "Continue the thread.",

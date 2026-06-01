@@ -145,7 +145,7 @@ class AgentNativeCliTests(unittest.TestCase):
                         "bolder_reply": "I went to university in London, so I get it.",
                         "why_this_works": "It invents an education connection.",
                         "situation_read": "Blocked policy test situation.",
-                        "conversation_move": "deepen_hook",
+                        "conversation_move": "deepen_current",
                         "hook_source": "profile_unknown_detail",
                         "naturalness_notes": ["unit test fixture"],
                         "followup_if_match_replies": "Stop if policy blocks.",

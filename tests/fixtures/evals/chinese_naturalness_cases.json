@@ -43,7 +43,7 @@
       "better_examples": [
         {
           "reply": "还行，夜风加点酒确实挺舒服😂 你这种夜猫子晚上不睡觉的时候一般听谁的歌？",
-          "conversation_move": "deepen_hook",
+          "conversation_move": "deepen_current",
           "avoids_issues": [
             "three-option survey wording",
             "asks known tags instead of unknown details"
@@ -52,7 +52,7 @@
         },
         {
           "reply": "哈哈是挺舒服。你不是也爱电影吗，ESFP 一般会喜欢哪种片？",
-          "conversation_move": "deepen_hook",
+          "conversation_move": "deepen_current",
           "avoids_issues": [
             "uses logical-comparison wording: 偏 A 还是 B",
             "three-option survey wording",
@@ -62,7 +62,7 @@
         },
         {
           "reply": "主要是夜风不错。你平常更爱看电影还是出去听歌？",
-          "conversation_move": "bridge_from_latest",
+          "conversation_move": "bridge_topic",
           "avoids_issues": [
             "uses logical-comparison wording: 偏 A 还是 B",
             "tag stacking: ESFP夜猫子",
@@ -147,7 +147,7 @@
         },
         {
           "reply": "这哥们儿行动力有点离谱，换我坐到一半就开始后悔了哈哈哈",
-          "conversation_move": "bridge_from_latest",
+          "conversation_move": "bridge_topic",
           "avoids_issues": [
             "jumps away from the live thread to profile tags",
             "abstract lifestyle wording",
@@ -227,7 +227,7 @@
         },
         {
           "reply": "那奖励你继续发现我的优点，发现得准还有加餐",
-          "conversation_move": "bridge_from_latest",
+          "conversation_move": "bridge_topic",
           "avoids_issues": [
             "keeps bouncing the choice back",
             "stalls after a delayed reply",

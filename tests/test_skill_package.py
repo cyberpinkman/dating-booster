@@ -61,6 +61,16 @@ class SkillPackageTests(unittest.TestCase):
             self.assertEqual(capabilities["schema_versions"][schema_name], schema_version)
         for spec_path in metadata["source_specs"]:
             self.assertTrue(Path(spec_path).exists(), spec_path)
+        source_specs_text = "\n".join(metadata["source_specs"])
+        for source_spec_keyword in (
+            "agent-native-launch-strategy",
+            "product-architecture-blueprint",
+            "intelligence-layer-design",
+            "automation-phase-b",
+            "goal-oriented-conversation-agent",
+            "self-disclosure-low-investment",
+        ):
+            self.assertIn(source_spec_keyword, source_specs_text)
         for reference_path in metadata["references"]:
             self.assertTrue((SKILL_DIR / reference_path).exists(), reference_path)
         self.assertIn("references/drafting-framework.md", metadata["references"])
@@ -213,6 +223,10 @@ class SkillPackageTests(unittest.TestCase):
             "self-disclosure",
         ):
             self.assertIn(phrase, drafting_text)
+        self.assertNotIn("deepen_hook", drafting_text)
+        self.assertNotIn("bridge_from_latest", drafting_text)
+        self.assertIn("deepen_current", drafting_text)
+        self.assertIn("bridge_topic", drafting_text)
         for phrase in (
             "偏 a 还是 b",
             "a 还是 b 还是 c",
@@ -242,6 +256,15 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("show only the final draft", skill_text)
         self.assertIn("do not list checklist results", workflows_text)
         self.assertIn("not a default user-facing output format", checklist_text)
+
+    def test_human_report_contract_keeps_match_identity_visible(self):
+        contracts_text = (SKILL_DIR / "references" / "contracts.md").read_text(encoding="utf-8").lower()
+
+        self.assertIn("user-facing markdown report", contracts_text)
+        self.assertIn("match identifiers visible", contracts_text)
+        self.assertIn("should not hide who the agent", contracts_text)
+        self.assertIn("talked to by default", contracts_text)
+        self.assertNotIn("show a redacted markdown report", contracts_text)
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
