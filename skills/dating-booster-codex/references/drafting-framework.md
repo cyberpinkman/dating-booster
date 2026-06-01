@@ -31,6 +31,18 @@ the rationale explicitly explains an equivalent move.
 For low-investment replies like "嗯嗯", "没有", "挺不错的", do not add a long
 explanation. Bridge from the last message and offer one easy opening.
 
+Before writing, choose one of five directions: `给/问/接/转/停`.
+
+- `给`: share a small true or allowed-simulated user detail.
+- `问`: ask one specific unknown detail only when the match has enough energy.
+- `接`: answer, riff, or react to the latest message.
+- `转`: bridge away from a saturated topic.
+- `停`: wait or slow down when the thread is too one-sided.
+
+Do not default to questions. If the user has asked multiple questions in a row,
+or the match has given two low-investment replies, switch to giving a small
+self-disclosure, lightly riffing, or waiting.
+
 ## Choose The Conversation Move
 
 Use one `conversation_move`:
@@ -40,8 +52,11 @@ Use one `conversation_move`:
 - `bridge_from_latest`:接住最后一句，再轻轻转到下一个点。
 - `deepen_hook`:挖 profile 标签背后的未知细节。
 - `light_self_disclosure`:给一点自己的信息，但不抢话。
+- `reciprocal_disclosure`:对方分享了自己时，先给一个对应的自己。
+- `low_investment_repair`:对方短回或低投入时，用轻自曝/轻接梗修复，不继续采访。
 - `reset_thread`:前面聊干了，换一个轻题。
 - `soft_invite_probe`:只有对方投入度足够时，轻试探线下可能性。
+- `slow_down_wait`:低投入修复后仍无扩展，暂缓推进。
 
 For the first version, prefer `bridge_from_latest` or `deepen_hook` when the
 match is replying briefly.
@@ -54,6 +69,21 @@ Use `take_the_lead` when the match says things like "你定", "你安排",
 "随你", or "听你的". This is a handoff, not an invitation to keep asking.
 不要继续反问. Pick a small, low-pressure decision that fits the thread and
 their profile boundaries.
+
+Use `low_investment_repair` when the user has been asking and the match is only
+answering. The reply should usually contain zero direct questions. Give one
+small user-side detail, a light reaction, or a soft bridge. If that repair does
+not produce new energy, choose `slow_down_wait` instead of pushing again.
+
+Use `light_self_disclosure` or `reciprocal_disclosure` to make the conversation
+two-sided. Pick material from the user disclosure profile when possible. If the
+profile allows `free_simulation_soft`, the agent may simulate soft persona,
+attitude, or low-risk生活感, but must not invent hard facts such as city,
+education, work, age, family status, or past commitments.
+If the profile uses `material_only`, every disclosure draft must set
+`disclosure_source: "user_material"` and include the exact
+`used_user_material_ids`. If the profile uses `user_confirmed_only`, stop for
+user confirmation before sending any self-disclosure.
 
 ## Choose The Hook
 
@@ -80,6 +110,13 @@ Avoid asking the match to choose among tags they already wrote. That often gets
 - Use one label at most. "夜猫子" is enough; "ESFP 夜猫子" usually sounds like tag stacking.
 - Prefer concrete words over abstract planning words.
 - If the previous user sent many messages, do not send another multi-line bundle.
+- If the previous user asked multiple questions, avoid another direct question.
+- For low-investment repair, prefer one short self-disclosure or riff with zero questions.
+- Include `question_count` or `reply_shape` in draft JSON when the thread is in
+  low-investment repair; under high question debt, any direct question is
+  blocked even if the move is `bridge_topic`.
+- Self-disclosure must help the current milestone:生活感, humor, shared rhythm,
+  comfort, or a softer path toward meeting.
 
 ## Worked Example: A Case
 

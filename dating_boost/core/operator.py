@@ -20,6 +20,15 @@ class OperatorRepository:
 
     def start_session(self, authorization: dict[str, Any]) -> dict[str, Any]:
         automation_session = self._automation.start_session(authorization)
+        if automation_session.get("status") != "active":
+            return {
+                "schema_version": 1,
+                "status": automation_session.get("status", "blocked"),
+                "reason": automation_session.get("reason") or "automation_session_not_started",
+                "authorization_id": automation_session.get("authorization_id"),
+                "user_profile_readiness": automation_session.get("user_profile_readiness"),
+                "resumed_from_report": automation_session.get("resumed_from_report"),
+            }
         session = {
             "schema_version": 1,
             "session_id": automation_session["session_id"],

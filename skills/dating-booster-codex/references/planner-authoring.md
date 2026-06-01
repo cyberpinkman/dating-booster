@@ -25,6 +25,34 @@ Use integer scores from 0 to 100:
 
 Use `0-30` for low, `31-60` for medium, and `61-100` for high.
 
+## Reciprocity State
+
+Author `reciprocity` when the thread is more than one turn old:
+
+- `question_debt`: how many recent user turns have mainly asked/interviewed.
+- `self_disclosure_debt`: how long the user has gone without giving useful
+  personal texture.
+- `reciprocity_balance`: `balanced`, `user_over_asking`,
+  `user_under_disclosing`, or `unknown`.
+- `low_investment_streak`: consecutive low-effort match replies such as
+  "嗯嗯", "还好", "没有", "哈哈哈" without a new hook.
+- `match_curiosity_about_user`: `yes`, `mixed`, `no`, or `unknown`.
+- `topic_exit_pressure`: `low`, `medium`, or `high`.
+- `last_user_turn_type`: `question`, `riff`, `disclosure`, `invite`,
+  `nudge`, `wait`, or `unknown`.
+
+If `low_investment_streak >= 2` and `question_debt >= 2`, do not recommend
+another direct question. Recommend `low_investment_repair`,
+`light_self_disclosure`, `reset_thread`, or `slow_down_wait`.
+If you choose `bridge_topic` in this state, the draft must still be a statement,
+riff, or self-disclosure; a bridge that asks another question is treated as
+more interviewing and is blocked.
+
+If you cannot confidently count the recent turns, provide `reciprocity` instead
+of relying on fallback inference. Fallback inference only updates debt when
+`last_user_turn_type` is explicitly supplied for the current observed turn; it
+does not infer past user behavior from the recommended next move.
+
 ## Topic Lifecycle
 
 Set `topic_state` to:
@@ -59,11 +87,24 @@ Choose one move:
 - `deepen_current`: ask a specific unknown detail inside the current topic.
 - `bridge_topic`: move from the topic to the person or a nearby life context.
 - `light_self_disclosure`: add a small personal detail without stealing the turn.
+- `reciprocal_disclosure`: respond to the match's disclosure with one matching
+  user-side detail.
+- `low_investment_repair`: repair a one-sided thread with a short self-disclosure
+  or riff instead of another interview question.
 - `reset_thread`: deliberately open a fresh low-pressure thread.
 - `soft_invite_probe`: low-pressure offline probe, no exact logistics.
 - `nudge_later`: one delayed reopening attempt.
+- `slow_down_wait`: stop pushing after low reciprocity or failed repair.
 - `wait`: no useful automatic move yet.
 - `handoff`: user must take over.
+
+## Self-Disclosure
+
+Use self-disclosure when the match has not started wondering about the user, or
+when the user has asked too many questions. The disclosure should be short,
+relevant to the topic, and either sourced from `UserDisclosureProfile` or marked
+as soft simulation. Never invent hard facts such as location, work, education,
+age, family status, or past commitments.
 
 ## Soft Invite
 

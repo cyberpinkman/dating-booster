@@ -77,6 +77,21 @@ the user explicitly asks for explanation, critique, review, or debug output.
 ## Goal-Oriented Planning
 
 For autonomous or semi-autonomous sessions, this is a goal-oriented workflow.
+Autonomous progression requires a user self model before any dating app content
+is processed for managed sending. Run:
+
+```bash
+dating-boost user readiness --data-dir .local/dating-boost --mode autonomous --json
+```
+
+If it returns `needs_user_profile`, stop managed automation and ask the user to
+provide/import their dating profile and self interview with
+`dating-boost user ingest-profile` and `dating-boost user ingest-interview`.
+Do not start `operator session` or `automation session` for autonomous sends
+until readiness passes. Readiness requires both sources plus at least three
+usable `shareable_material` entries with non-empty text and low/medium
+sensitivity.
+
 Before generating a draft for an opened thread, read
 `references/planner-authoring.md` and author a `planner_assessment` that
 describes conversation stage, scores, topic lifecycle, next milestone, and
@@ -86,23 +101,36 @@ if they do not, stop instead of sending.
 
 Use planner scores as strategy state, not as truth about the person. Low
 confidence, stale turn boundaries, topic loops, appointment details, or contact
-exchange must stop automatic sending for that match.
+exchange must stop automatic sending for that match. Low-investment threads
+must not be pushed by repeated questions: track question debt, self-disclosure
+debt, reciprocity balance, and low-investment streak, then use
+`low_investment_repair`, `light_self_disclosure`, `reciprocal_disclosure`, or
+`slow_down_wait` when appropriate.
+
+When a draft uses a self-disclosure move, set `disclosure_source` explicitly:
+`user_material` with `used_user_material_ids` whenever possible, or
+`simulated_soft` only when the user profile `simulation_policy` is
+`free_simulation_soft`. If the policy is `material_only`, do not simulate. If it
+is `user_confirmed_only`, stop for user confirmation. For low-investment repair,
+set `question_count: 0` or `reply_shape: "statement"` unless there is a strong
+reason to hand off.
 
 ## Workflow
 
 1. Run `python3 scripts/doctor.py --json --data-dir .local/dating-boost`; bootstrap with `python3 scripts/bootstrap_cli.py` only if doctor says `needs_bootstrap`.
 2. Run `dating-boost capabilities --json --data-dir .local/dating-boost` and verify compatibility against `skill-package.json`.
-3. Convert visible screen content to an observation JSON using `references/observation-authoring.md`.
-4. When working toward a long-term goal, author a `planner_assessment` and run `dating-boost planner update`.
-5. Read `references/drafting-framework.md`, then generate the draft JSON in Codex using the visible profile/chat context and planner recommendation.
-6. Before using the draft, silently apply `references/naturalness-checklist.md` and revise anything that reads like AI-written Chinese.
-7. Run `dating-boost workflow draft --data-dir .local/dating-boost --observation observation.json --draft draft.json --mode adaptive`.
-8. If the workflow returns `blocked`, do not show or paste the blocked draft.
-9. If the workflow returns `ok`, show only the final draft or paste it when the user requested paste.
-10. For any high-risk action, run `dating-boost policy check-action` and ask for explicit confirmation.
-11. After the host executes an action, perform post-action verification from a fresh observation.
-12. Record the result with `dating-boost action record-result`.
-13. Record user feedback with `dating-boost feedback record` when useful.
+3. For managed/autonomous work, run `dating-boost user readiness --data-dir .local/dating-boost --mode autonomous --json`; stop if it returns `needs_user_profile`.
+4. Convert visible screen content to an observation JSON using `references/observation-authoring.md`.
+5. When working toward a long-term goal, author a `planner_assessment` and run `dating-boost planner update`.
+6. Read `references/drafting-framework.md`, then generate the draft JSON in Codex using the visible profile/chat context and planner recommendation.
+7. Before using the draft, silently apply `references/naturalness-checklist.md` and revise anything that reads like AI-written Chinese.
+8. Run `dating-boost workflow draft --data-dir .local/dating-boost --observation observation.json --draft draft.json --mode adaptive`.
+9. If the workflow returns `blocked`, do not show or paste the blocked draft.
+10. If the workflow returns `ok`, show only the final draft or paste it when the user requested paste.
+11. For any high-risk action, run `dating-boost policy check-action` and ask for explicit confirmation.
+12. After the host executes an action, perform post-action verification from a fresh observation.
+13. Record the result with `dating-boost action record-result`.
+14. Record user feedback with `dating-boost feedback record` when useful.
 
 ## iPhone Mirroring Input
 
@@ -143,24 +171,27 @@ state engine: it decides the next work item, tracks planner state, prevents
 duplicates, gates risky actions, and writes reports.
 
 1. Run the mandatory startup check.
-2. Record goal and availability JSON with `dating-boost automation goal set` and `dating-boost automation availability set`.
-3. Start with `dating-boost operator session start --data-dir .local/dating-boost --authorization auth.json`.
-4. Call `dating-boost operator next --data-dir .local/dating-boost`.
-5. If the work item is `scan_message_list`, observe the visible message list and call `dating-boost operator ingest-observation --data-dir .local/dating-boost --input list_observation.json`.
-6. If the work item is `open_thread`, open that thread, author a thread observation, author `planner_assessment`, draft only if the planner move requires a reply, and call `dating-boost operator ingest-observation --data-dir .local/dating-boost --input thread_observation.json`.
-7. If the work item is `send_message`, execute only ordinary `send_message` requests whose planner alignment is `ok`.
-8. After each send, perform post-action verification and call `dating-boost operator record-action-result --data-dir .local/dating-boost --input action_result.json`.
-9. If the work item is `handoff`, appointment details, contact exchange, or high-risk content, stop automation for that match and ask the user to take over.
-10. Continue calling `operator next` until the user stops the session or the operator returns `wait`.
-11. Stop with `dating-boost operator stop --data-dir .local/dating-boost` and show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
-12. On a later run, use `dating-boost operator report latest` and local state to continue without relying on host-agent memory.
+2. Run `dating-boost user readiness --data-dir .local/dating-boost --mode autonomous --json`; if it is not ready, import the user's profile/interview before continuing.
+3. Record goal and availability JSON with `dating-boost automation goal set` and `dating-boost automation availability set`.
+4. Start with `dating-boost operator session start --data-dir .local/dating-boost --authorization auth.json`.
+5. Call `dating-boost operator next --data-dir .local/dating-boost`.
+6. If the work item is `scan_message_list`, observe the visible message list and call `dating-boost operator ingest-observation --data-dir .local/dating-boost --input list_observation.json`.
+7. If the work item is `open_thread`, open that thread, author a thread observation, author `planner_assessment`, draft only if the planner move requires a reply, and call `dating-boost operator ingest-observation --data-dir .local/dating-boost --input thread_observation.json`.
+8. If the work item is `send_message`, execute only ordinary `send_message` requests whose planner alignment is `ok`.
+9. After each send, perform post-action verification and call `dating-boost operator record-action-result --data-dir .local/dating-boost --input action_result.json`.
+10. If the work item is `handoff`, appointment details, contact exchange, or high-risk content, stop automation for that match and ask the user to take over.
+11. Continue calling `operator next` until the user stops the session or the operator returns `wait`.
+12. Stop with `dating-boost operator stop --data-dir .local/dating-boost` and show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
+13. On a later run, use `dating-boost operator report latest` and local state to continue without relying on host-agent memory.
 
 For each opened thread, read `references/planner-authoring.md` and author
 `planner_assessment` before allowing autonomous send: include engagement,
 warmth, curiosity, comfort, momentum, topic_saturation, logistics_readiness,
 risk, recommended stage, recommended move, next milestone, avoid_next, and
-soft_invite_allowed. The naturalness checklist is internal QA; do not show it
-by default.
+soft_invite_allowed. Also include reciprocity state when possible: question
+debt, self-disclosure debt, reciprocity balance, low-investment streak, match
+curiosity about the user, and last user turn type. The naturalness checklist is
+internal QA; do not show it by default.
 
 ## Host-Orchestrated Automation Session Fallback
 
@@ -170,17 +201,18 @@ agent: it observes the dating app screen, opens message threads, authors
 the local state engine; it does not scan the screen or click the app.
 
 1. Run the mandatory startup check.
-2. Record goal and availability JSON with `dating-boost automation goal set` and `dating-boost automation availability set`.
-3. Start with `dating-boost automation session start --data-dir .local/dating-boost --authorization auth.json`.
-4. Generate a scan skeleton with `dating-boost automation scan template --json` when useful.
-5. Scan the visible message list and a bounded set of relevant threads. Prefer writing separate message-list and thread JSON files, then run `dating-boost automation scan assemble --message-list list.json --threads threads.json --session-id SESSION --captured-at TIME --json`.
-6. For each opened thread, author `planner_assessment` before the draft: include engagement, warmth, curiosity, comfort, momentum, topic_saturation, logistics_readiness, risk, recommended stage, recommended move, next milestone, avoid_next, and soft_invite_allowed.
-7. Run `dating-boost automation scan validate --input scan_batch.json --json` before every session step.
-8. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
-9. Execute only allowed ordinary `send_message` action requests whose planner alignment is `ok`.
-10. After each send, perform post-action verification and call `dating-boost action record-result`.
-11. Stop with `dating-boost automation session stop --data-dir .local/dating-boost` and show `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
-12. On a later run, use `dating-boost automation report latest` and local state to continue without relying on host-agent memory.
+2. Run `dating-boost user readiness --data-dir .local/dating-boost --mode autonomous --json`; stop if the user profile/interview is missing.
+3. Record goal and availability JSON with `dating-boost automation goal set` and `dating-boost automation availability set`.
+4. Start with `dating-boost automation session start --data-dir .local/dating-boost --authorization auth.json`.
+5. Generate a scan skeleton with `dating-boost automation scan template --json` when useful.
+6. Scan the visible message list and a bounded set of relevant threads. Prefer writing separate message-list and thread JSON files, then run `dating-boost automation scan assemble --message-list list.json --threads threads.json --session-id SESSION --captured-at TIME --json`.
+7. For each opened thread, author `planner_assessment` before the draft: include engagement, warmth, curiosity, comfort, momentum, topic_saturation, logistics_readiness, risk, recommended stage, recommended move, next milestone, avoid_next, soft_invite_allowed, and reciprocity state.
+8. Run `dating-boost automation scan validate --input scan_batch.json --json` before every session step.
+9. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
+10. Execute only allowed ordinary `send_message` action requests whose planner alignment is `ok`.
+11. After each send, perform post-action verification and call `dating-boost action record-result`.
+12. Stop with `dating-boost automation session stop --data-dir .local/dating-boost` and show `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
+13. On a later run, use `dating-boost automation report latest` and local state to continue without relying on host-agent memory.
 
 If the step output contains `handoffs`, appointment details, contact exchange,
 or high-risk content, stop automation for that match and ask the user to take

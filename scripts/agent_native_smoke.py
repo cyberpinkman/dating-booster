@@ -67,6 +67,37 @@ def _run_smoke(data_dir: Path) -> int:
         command_key="init_profile",
         commands=commands,
     )
+    _run_cli(
+        "user",
+        "ingest-profile",
+        "--data-dir",
+        str(data_dir),
+        "--input",
+        str(FIXTURE_DIR / "user_dating_profile.json"),
+        command_key="user_ingest_profile",
+        commands=commands,
+    )
+    _run_cli(
+        "user",
+        "ingest-interview",
+        "--data-dir",
+        str(data_dir),
+        "--input",
+        str(FIXTURE_DIR / "user_self_interview.json"),
+        command_key="user_ingest_interview",
+        commands=commands,
+    )
+    _run_cli(
+        "user",
+        "readiness",
+        "--data-dir",
+        str(data_dir),
+        "--mode",
+        "autonomous",
+        "--json",
+        command_key="user_readiness",
+        commands=commands,
+    )
     ingest = _run_cli(
         "memory",
         "ingest-observation",
@@ -349,6 +380,37 @@ def _run_smoke(data_dir: Path) -> int:
         "--input",
         str(FIXTURE_DIR / "user_profile.json"),
         command_key="operator_init_profile",
+        commands=commands,
+    )
+    _run_cli(
+        "user",
+        "ingest-profile",
+        "--data-dir",
+        str(operator_data_dir),
+        "--input",
+        str(FIXTURE_DIR / "user_dating_profile.json"),
+        command_key="operator_user_ingest_profile",
+        commands=commands,
+    )
+    _run_cli(
+        "user",
+        "ingest-interview",
+        "--data-dir",
+        str(operator_data_dir),
+        "--input",
+        str(FIXTURE_DIR / "user_self_interview.json"),
+        command_key="operator_user_ingest_interview",
+        commands=commands,
+    )
+    _run_cli(
+        "user",
+        "readiness",
+        "--data-dir",
+        str(operator_data_dir),
+        "--mode",
+        "autonomous",
+        "--json",
+        command_key="operator_user_readiness",
         commands=commands,
     )
     _run_cli(

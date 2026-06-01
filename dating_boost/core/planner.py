@@ -29,9 +29,12 @@ CONVERSATION_MOVES = {
     "deepen_current",
     "bridge_topic",
     "light_self_disclosure",
+    "reciprocal_disclosure",
+    "low_investment_repair",
     "reset_thread",
     "soft_invite_probe",
     "nudge_later",
+    "slow_down_wait",
     "wait",
     "handoff",
 }
@@ -110,6 +113,11 @@ class PlannerRepository:
         scores = _scores_from_assessment(assessment)
         stage = str(assessment["recommended_stage"])
         move = str(assessment["recommended_move"])
+        reciprocity = _reciprocity_from_assessment(
+            assessment,
+            existing=existing,
+            scores=scores,
+        )
         handoff_reason = _handoff_reason(stage, move, assessment)
         if handoff_reason:
             stage = "appointment_handoff"
@@ -139,6 +147,14 @@ class PlannerRepository:
             "topic_state": str(topic["topic_state"]),
             "topic_history": topic_history,
             "scores": scores,
+            "reciprocity": reciprocity,
+            "question_debt": reciprocity["question_debt"],
+            "self_disclosure_debt": reciprocity["self_disclosure_debt"],
+            "reciprocity_balance": reciprocity["reciprocity_balance"],
+            "low_investment_streak": reciprocity["low_investment_streak"],
+            "match_curiosity_about_user": reciprocity["match_curiosity_about_user"],
+            "topic_exit_pressure": reciprocity["topic_exit_pressure"],
+            "last_user_turn_type": reciprocity["last_user_turn_type"],
             "next_milestone": str(assessment["next_milestone"]),
             "recommended_move": move,
             "avoid_next": [str(item) for item in assessment.get("avoid_next", [])],
@@ -258,6 +274,15 @@ def validate_planner_assessment(assessment: Any) -> dict[str, Any]:
         errors.append("planner_assessment.soft_invite_allowed must be a boolean")
     if "handoff_reason" in assessment and assessment.get("handoff_reason") not in HANDOFF_REASONS:
         errors.append(f"planner_assessment.handoff_reason must be one of {sorted(HANDOFF_REASONS)}")
+    reciprocity = assessment.get("reciprocity")
+    if reciprocity is not None:
+        if not isinstance(reciprocity, dict):
+            errors.append("planner_assessment.reciprocity must be an object")
+        else:
+            for field in ("question_debt", "self_disclosure_debt", "low_investment_streak"):
+                value = reciprocity.get(field)
+                if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+                    errors.append(f"planner_assessment.reciprocity.{field} must be a non-negative integer")
 
     return {
         "schema_version": 1,
@@ -286,6 +311,14 @@ def build_planner_recommendation(goal_plan: dict[str, Any]) -> dict[str, Any]:
     if move == "soft_invite_probe":
         if not goal_plan.get("soft_invite_allowed") or int(scores.get("logistics_readiness", 0)) < 40:
             block_reasons.append("soft_invite_not_ready")
+    if move in {"wait", "slow_down_wait"}:
+        block_reasons.append("planner_wait")
+    if (
+        int(goal_plan.get("low_investment_streak") or 0) >= 2
+        and int(goal_plan.get("question_debt") or 0) >= 2
+        and move in {"deepen_current", "soft_invite_probe"}
+    ):
+        block_reasons.append("low_investment_question_debt")
     if int(scores.get("risk", 0)) >= 70:
         block_reasons.append("risk_too_high")
 
@@ -300,6 +333,12 @@ def build_planner_recommendation(goal_plan: dict[str, Any]) -> dict[str, Any]:
         "next_milestone": goal_plan.get("next_milestone"),
         "avoid_next": list(goal_plan.get("avoid_next", [])),
         "conversation_scores": scores,
+        "reciprocity": dict(goal_plan.get("reciprocity") or {}),
+        "question_debt": int(goal_plan.get("question_debt") or 0),
+        "self_disclosure_debt": int(goal_plan.get("self_disclosure_debt") or 0),
+        "reciprocity_balance": str(goal_plan.get("reciprocity_balance") or "unknown"),
+        "low_investment_streak": int(goal_plan.get("low_investment_streak") or 0),
+        "match_curiosity_about_user": str(goal_plan.get("match_curiosity_about_user") or "unknown"),
         "topic_lifecycle": {
             "current_topic": goal_plan.get("current_topic"),
             "topic_state": goal_plan.get("topic_state"),
@@ -322,6 +361,7 @@ def planner_context_items(goal_plan: dict[str, Any] | None) -> dict[str, Any]:
         "planner_recommendation": recommendation,
         "conversation_scores": recommendation["conversation_scores"],
         "topic_lifecycle": recommendation["topic_lifecycle"],
+        "reciprocity": recommendation["reciprocity"],
         "avoid_next": recommendation["avoid_next"],
     }
 
@@ -329,6 +369,80 @@ def planner_context_items(goal_plan: dict[str, Any] | None) -> dict[str, Any]:
 def _scores_from_assessment(assessment: dict[str, Any]) -> dict[str, int]:
     scores = dict(assessment["scores"])
     return {field: int(scores[field]) for field in SCORE_FIELDS}
+
+
+def _reciprocity_from_assessment(
+    assessment: dict[str, Any],
+    *,
+    existing: dict[str, Any] | None,
+    scores: dict[str, int],
+) -> dict[str, Any]:
+    supplied = assessment.get("reciprocity")
+    if isinstance(supplied, dict):
+        return {
+            "question_debt": _bounded_int(supplied.get("question_debt"), 0, 99),
+            "self_disclosure_debt": _bounded_int(supplied.get("self_disclosure_debt"), 0, 99),
+            "reciprocity_balance": str(supplied.get("reciprocity_balance") or "unknown"),
+            "low_investment_streak": _bounded_int(supplied.get("low_investment_streak"), 0, 99),
+            "match_curiosity_about_user": str(supplied.get("match_curiosity_about_user") or "unknown"),
+            "topic_exit_pressure": str(supplied.get("topic_exit_pressure") or _topic_exit_pressure(scores)),
+            "last_user_turn_type": str(supplied.get("last_user_turn_type") or "unknown"),
+        }
+
+    existing_reciprocity = dict((existing or {}).get("reciprocity") or {})
+    latest_turn_type = str(assessment.get("latest_turn_type") or "")
+    low_investment = (
+        latest_turn_type in {"short_answer", "short_acknowledgement", "low_investment"}
+        or (scores.get("engagement", 0) <= 30 and scores.get("curiosity", 0) <= 30)
+    )
+    observed_last_user_turn_type = str(assessment.get("last_user_turn_type") or "")
+    last_user_turn_type = str(observed_last_user_turn_type or existing_reciprocity.get("last_user_turn_type") or "unknown")
+    prior_question_debt = int(existing_reciprocity.get("question_debt") or 0)
+    prior_disclosure_debt = int(existing_reciprocity.get("self_disclosure_debt") or 0)
+    if observed_last_user_turn_type in {"question", "followup_question", "interview"}:
+        question_debt = prior_question_debt + 1
+        self_disclosure_debt = prior_disclosure_debt + 1
+    elif observed_last_user_turn_type in {"disclosure", "riff", "answer_or_riff", "reciprocal_disclosure"}:
+        question_debt = 0
+        self_disclosure_debt = 0
+    elif observed_last_user_turn_type in {"statement", "invite", "nudge"}:
+        question_debt = 0
+        self_disclosure_debt = prior_disclosure_debt
+    else:
+        question_debt = prior_question_debt
+        self_disclosure_debt = prior_disclosure_debt
+    low_streak = int(existing_reciprocity.get("low_investment_streak") or 0) + 1 if low_investment else 0
+    match_curiosity = "yes" if scores.get("curiosity", 0) >= 45 else "no" if scores.get("curiosity", 0) <= 25 else "mixed"
+    if question_debt > self_disclosure_debt + 1:
+        balance = "user_over_asking"
+    elif self_disclosure_debt > question_debt + 1:
+        balance = "user_under_disclosing"
+    else:
+        balance = "balanced"
+    return {
+        "question_debt": question_debt,
+        "self_disclosure_debt": self_disclosure_debt,
+        "reciprocity_balance": balance,
+        "low_investment_streak": low_streak,
+        "match_curiosity_about_user": match_curiosity,
+        "topic_exit_pressure": _topic_exit_pressure(scores),
+        "last_user_turn_type": last_user_turn_type,
+    }
+
+
+def _topic_exit_pressure(scores: dict[str, int]) -> str:
+    saturation = scores.get("topic_saturation", 0)
+    if saturation >= 80:
+        return "high"
+    if saturation >= 60:
+        return "medium"
+    return "low"
+
+
+def _bounded_int(value: Any, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return minimum
+    return max(minimum, min(maximum, value))
 
 
 def _updated_topic_history(
@@ -357,7 +471,15 @@ def _updated_topic_history(
 
 
 def _saturated_topic_move_allowed(move: str, evidence: str) -> bool:
-    if move in {"bridge_topic", "reset_thread"}:
+    if move in {
+        "bridge_topic",
+        "reset_thread",
+        "light_self_disclosure",
+        "reciprocal_disclosure",
+        "low_investment_repair",
+        "slow_down_wait",
+        "wait",
+    }:
         return True
     if move == "deepen_current":
         evidence_lower = evidence.casefold()

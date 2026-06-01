@@ -84,6 +84,53 @@ Use this shape from `dating-boost context build` as host-agent input.
 }
 ```
 
+## User Disclosure Profile
+
+Use this shape through `dating-boost user ingest-profile`,
+`dating-boost user ingest-interview`, `dating-boost user disclosure-profile`,
+and `dating-boost user readiness`.
+
+```json
+{
+  "schema_version": 1,
+  "user_id": "user_local",
+  "hard_facts": [
+    {"fact_id": "fact_city", "field": "city", "value": "北京", "source": "dating_profile"}
+  ],
+  "persona_style": {
+    "baseline": "有点慢热",
+    "allowed_modulations": ["warmer", "more outgoing", "more playful"]
+  },
+  "shareable_material": [
+    {
+      "material_id": "mat_home_rhythm",
+      "type": "life_detail",
+      "text": "我在家待久了会突然想出去透气",
+      "tags": ["home", "low_investment_repair"],
+      "sensitivity": "low",
+      "source": "user_interview"
+    }
+  ],
+  "voice_samples": ["短一点，先接梗再补一句自己的状态"],
+  "boundaries": [{"boundary_id": "no_fake_hard_fact", "text": "不编城市、学历、工作、年龄"}],
+  "simulation_policy": "free_simulation_soft",
+  "source_completion": {"dating_profile": true, "interview": true}
+}
+```
+
+For autonomous mode, `user readiness` must return `ready: true`; otherwise the
+operator/session start returns `needs_user_profile`. Readiness counts only
+usable material: non-empty `text` and low/medium `sensitivity`. Empty interview
+template rows do not unlock autonomous sending.
+
+`simulation_policy` controls send-time behavior:
+
+- `free_simulation_soft`: may use `simulated_soft` for low-risk persona,
+  attitude, or生活感; hard facts remain locked.
+- `material_only`: disclosure drafts must use `user_material` and list
+  `used_user_material_ids`.
+- `user_confirmed_only`: autonomous sending must stop before disclosure.
+
 ## Draft Input
 
 Use this shape with `dating-boost policy check-draft`.
@@ -274,6 +321,15 @@ The assembled `scan_batch` shape is:
         "next_milestone": "Accept the handoff with one light decision.",
         "avoid_next": ["do not ask her to decide again"],
         "soft_invite_allowed": false,
+        "reciprocity": {
+          "question_debt": 1,
+          "self_disclosure_debt": 1,
+          "reciprocity_balance": "balanced",
+          "low_investment_streak": 0,
+          "match_curiosity_about_user": "mixed",
+          "topic_exit_pressure": "low",
+          "last_user_turn_type": "question"
+        },
         "confidence": "high",
         "evidence": "The latest inbound delegates the choice."
       },
@@ -322,9 +378,13 @@ The assembled `scan_batch` shape is:
         "risk_flags": [],
         "missing_info": [],
         "mode_notes": "Adaptive mode.",
-        "persona_divergence": "low",
-        "stance_divergence": "low"
-      }
+      "disclosure_source": "none",
+      "used_user_material_ids": [],
+      "question_count": 0,
+      "reply_shape": "statement",
+      "persona_divergence": "low",
+      "stance_divergence": "low"
+    }
     }
   ]
 }
@@ -351,7 +411,12 @@ The assembled `scan_batch` shape is:
       "conversation_stage": "warmup",
       "conversation_move": "take_the_lead",
       "planner_alignment": "ok",
-      "next_milestone": "Accept the handoff with one light decision."
+      "next_milestone": "Accept the handoff with one light decision.",
+      "disclosure_source": "none",
+      "used_user_material_ids": [],
+      "question_debt_after": 1,
+      "reciprocity_balance_after": "balanced",
+      "low_investment_repair_applied": false
     }
   ],
   "handoffs": [],
@@ -384,6 +449,15 @@ The assembled `scan_batch` shape is:
     "topic_saturation": 20,
     "logistics_readiness": 25,
     "risk": 10
+  },
+  "reciprocity": {
+    "question_debt": 1,
+    "self_disclosure_debt": 1,
+    "reciprocity_balance": "balanced",
+    "low_investment_streak": 0,
+    "match_curiosity_about_user": "mixed",
+    "topic_exit_pressure": "low",
+    "last_user_turn_type": "question"
   },
   "recommended_move": "take_the_lead",
   "next_milestone": "Accept the handoff with one light decision.",

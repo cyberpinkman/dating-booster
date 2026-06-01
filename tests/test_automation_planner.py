@@ -10,6 +10,9 @@ from unittest.mock import patch
 from dating_boost.cli import main
 
 
+FIXTURE_DIR = Path("tests/fixtures/automation")
+
+
 class AutomationPlannerTests(unittest.TestCase):
     def setUp(self):
         self._clock_patch = patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-05-26T08:00:00Z"})
@@ -297,6 +300,163 @@ class AutomationPlannerTests(unittest.TestCase):
             self.assertEqual(step_exit, 0)
             self.assertEqual(step_payload["handoffs"][0]["reason"], "contact_exchange")
 
+    def test_low_investment_repair_can_send_self_disclosure_instead_of_more_questions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            scan_path = Path(temp_dir) / "low_repair.json"
+            self._write_json(
+                scan_path,
+                _planner_scan(
+                    planner_move="low_investment_repair",
+                    draft_move="low_investment_repair",
+                    reciprocity={
+                        "question_debt": 2,
+                        "self_disclosure_debt": 3,
+                        "reciprocity_balance": "user_over_asking",
+                        "low_investment_streak": 2,
+                        "match_curiosity_about_user": "no",
+                        "topic_exit_pressure": "high",
+                        "last_user_turn_type": "question",
+                    },
+                    draft_overrides={
+                        "best_reply": "感觉你家已经很会享受安静了，我有时候也是在家憋久了才突然想出去透口气",
+                        "conversation_move": "low_investment_repair",
+                        "disclosure_source": "user_material",
+                        "used_user_material_ids": ["mat_home_rhythm"],
+                    },
+                ),
+            )
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+            self.assertEqual(step_exit, 0)
+            self.assertEqual(len(step_payload["action_requests"]), 1)
+            request = step_payload["action_requests"][0]
+            self.assertEqual(request["conversation_move"], "low_investment_repair")
+            self.assertEqual(request["disclosure_source"], "user_material")
+            self.assertEqual(request["used_user_material_ids"], ["mat_home_rhythm"])
+            self.assertTrue(request["low_investment_repair_applied"])
+
+    def test_material_only_policy_blocks_simulated_self_disclosure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            disclosure_path = data_dir / "user" / "disclosure_profile.json"
+            profile = json.loads(disclosure_path.read_text(encoding="utf-8"))
+            profile["simulation_policy"] = "material_only"
+            disclosure_path.write_text(json.dumps(profile, ensure_ascii=False), encoding="utf-8")
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            scan_path = Path(temp_dir) / "simulated_disclosure.json"
+            self._write_json(
+                scan_path,
+                _planner_scan(
+                    planner_move="low_investment_repair",
+                    draft_move="low_investment_repair",
+                    reciprocity={
+                        "question_debt": 2,
+                        "self_disclosure_debt": 3,
+                        "reciprocity_balance": "user_over_asking",
+                        "low_investment_streak": 2,
+                        "match_curiosity_about_user": "no",
+                        "topic_exit_pressure": "high",
+                        "last_user_turn_type": "question",
+                    },
+                    draft_overrides={
+                        "best_reply": "我有时候也是在家待久了才突然想出门透口气",
+                        "conversation_move": "low_investment_repair",
+                    },
+                ),
+            )
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+            self.assertEqual(step_exit, 0)
+            self.assertEqual(step_payload["action_requests"], [])
+            self.assertIn("simulated_disclosure_not_allowed", step_payload["warnings"])
+
+    def test_low_investment_debt_blocks_bridge_question(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            scan_path = Path(temp_dir) / "bridge_question.json"
+            self._write_json(
+                scan_path,
+                _planner_scan(
+                    planner_move="bridge_topic",
+                    draft_move="bridge_topic",
+                    reciprocity={
+                        "question_debt": 2,
+                        "self_disclosure_debt": 3,
+                        "reciprocity_balance": "user_over_asking",
+                        "low_investment_streak": 2,
+                        "match_curiosity_about_user": "no",
+                        "topic_exit_pressure": "high",
+                        "last_user_turn_type": "question",
+                    },
+                    draft_overrides={
+                        "best_reply": "感觉你家小动物含量有点高，你平时是不是还挺宅的",
+                        "conversation_move": "bridge_topic",
+                    },
+                ),
+            )
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+            self.assertEqual(step_exit, 0)
+            self.assertEqual(step_payload["action_requests"], [])
+            self.assertIn("low_investment_direct_question_blocked", step_payload["warnings"])
+
     def test_session_report_includes_planner_progress(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
@@ -353,6 +513,22 @@ class AutomationPlannerTests(unittest.TestCase):
             "--input",
             "tests/fixtures/intelligence/user_profile.json",
         ])
+        self._run([
+            "user",
+            "ingest-profile",
+            "--data-dir",
+            str(data_dir),
+            "--input",
+            "tests/fixtures/intelligence/user_dating_profile.json",
+        ])
+        self._run([
+            "user",
+            "ingest-interview",
+            "--data-dir",
+            str(data_dir),
+            "--input",
+            "tests/fixtures/intelligence/user_self_interview.json",
+        ])
 
     def _run(self, argv):
         output = StringIO()
@@ -383,6 +559,8 @@ def _planner_scan(
     soft_invite_allowed=False,
     logistics_readiness=15,
     appointment_slot=None,
+    reciprocity=None,
+    draft_overrides=None,
 ):
     why_this_works = (
         "It follows planner move bridge_topic and moves from cats to her home-life rhythm."
@@ -452,6 +630,7 @@ def _planner_scan(
                     "soft_invite_allowed": soft_invite_allowed,
                     "confidence": "high",
                     "evidence": "latest_inbound_messages only answered the cat temperament question; no new strong hook.",
+                    **({"reciprocity": reciprocity} if reciprocity else {}),
                     **({"handoff_reason": planner_handoff_reason} if planner_handoff_reason else {}),
                 },
                 **({"appointment_slot": appointment_slot} if appointment_slot else {}),
@@ -507,6 +686,7 @@ def _planner_scan(
                     "mode_notes": "Adaptive mode.",
                     "persona_divergence": "low",
                     "stance_divergence": "low",
+                    **(draft_overrides or {}),
                 },
             }
         ],

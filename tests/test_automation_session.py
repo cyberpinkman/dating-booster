@@ -103,6 +103,11 @@ class AutomationSessionTests(unittest.TestCase):
             self.assertEqual(action_request["pre_action_observation_id"], "obs_ada_001")
             self.assertTrue(action_request["requires_post_action_verification"])
             self.assertIn("欠你一顿好吃的", action_request["payload_text"])
+            self.assertIn("disclosure_source", action_request)
+            self.assertIn("used_user_material_ids", action_request)
+            self.assertIn("question_debt_after", action_request)
+            self.assertIn("reciprocity_balance_after", action_request)
+            self.assertIn("low_investment_repair_applied", action_request)
             self.assertEqual(len(step_payload["handoffs"]), 2)
             self.assertEqual(step_payload["handoffs"][0]["reason"], "appointment_details_requested")
             self.assertTrue(step_payload["handoffs"][1]["slot_conflict"])
@@ -832,6 +837,22 @@ class AutomationSessionTests(unittest.TestCase):
             str(data_dir),
             "--input",
             "tests/fixtures/intelligence/user_profile.json",
+        ])
+        self._run([
+            "user",
+            "ingest-profile",
+            "--data-dir",
+            str(data_dir),
+            "--input",
+            "tests/fixtures/intelligence/user_dating_profile.json",
+        ])
+        self._run([
+            "user",
+            "ingest-interview",
+            "--data-dir",
+            str(data_dir),
+            "--input",
+            "tests/fixtures/intelligence/user_self_interview.json",
         ])
 
     def _run(self, argv):

@@ -167,6 +167,10 @@ def _contains_specific_meetup_place(text: str) -> bool:
 
 
 def _has_overseas_study_constraint(context_pack: Mapping[str, Any]) -> bool:
+    hard_fact_text = " ".join(_flatten_text(fact).lower() for fact in _hard_fact_content(context_pack))
+    if _mentions_local_chinese_education(hard_fact_text):
+        return True
+
     for item in context_pack.get("items", []):
         if not isinstance(item, Mapping):
             continue
@@ -175,6 +179,10 @@ def _has_overseas_study_constraint(context_pack: Mapping[str, Any]) -> bool:
         text = _flatten_text(content).lower()
         if label == "user_boundaries" and _mentions_forbidden_overseas_study(text):
             return True
+        if label == "user_disclosure_profile":
+            boundary_text = _flatten_text(content.get("boundaries", []) if isinstance(content, Mapping) else content).lower()
+            if _mentions_forbidden_overseas_study(boundary_text):
+                return True
         if label == "user_hard_facts" and _mentions_local_chinese_education(text):
             return True
     return False
@@ -192,14 +200,34 @@ def _hard_fact_contradiction_reason(draft: Any, context_pack: Mapping[str, Any])
 def _hard_fact_content(context_pack: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     facts: list[Mapping[str, Any]] = []
     for item in context_pack.get("items", []):
-        if not isinstance(item, Mapping) or item.get("label") != "user_hard_facts":
+        if not isinstance(item, Mapping):
             continue
+        label = item.get("label")
         content = item.get("content")
-        if isinstance(content, Mapping):
-            facts.append(content)
-        elif isinstance(content, list):
-            facts.extend(entry for entry in content if isinstance(entry, Mapping))
+        if label == "user_hard_facts":
+            facts.extend(_hard_fact_entries(content))
+        elif label == "user_disclosure_profile" and isinstance(content, Mapping):
+            facts.extend(_hard_fact_entries(content.get("hard_facts")))
     return facts
+
+
+def _hard_fact_entries(value: Any) -> list[Mapping[str, Any]]:
+    entries: list[Mapping[str, Any]] = []
+    if isinstance(value, Mapping):
+        entries.append(_normalize_hard_fact(value))
+    elif isinstance(value, list):
+        entries.extend(_normalize_hard_fact(entry) for entry in value if isinstance(entry, Mapping))
+    return entries
+
+
+def _normalize_hard_fact(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    content = value.get("content")
+    if isinstance(content, Mapping):
+        return content
+    field = value.get("field")
+    if isinstance(field, str) and field.strip() and "value" in value:
+        return {field.strip(): value.get("value"), "source": value.get("source")}
+    return value
 
 
 def _age_fact_contradicted(draft: Any, hard_facts: list[Mapping[str, Any]]) -> bool:

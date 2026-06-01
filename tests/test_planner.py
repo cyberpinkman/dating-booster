@@ -109,6 +109,121 @@ class PlannerCoreTests(unittest.TestCase):
             self.assertTrue(allowed["auto_send_allowed"])
             self.assertEqual(allowed["recommended_move"], "bridge_topic")
 
+    def test_low_investment_question_debt_blocks_more_questions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = PlannerRepository(Path(temp_dir))
+
+            blocked = repo.update_plan(
+                match_id="match_xiaoqing",
+                goal_id="goal_meet",
+                observation=_observation("obs_low_001"),
+                assessment=_planner_assessment(
+                    recommended_move="deepen_current",
+                    topic_saturation=40,
+                    reciprocity={
+                        "question_debt": 2,
+                        "self_disclosure_debt": 3,
+                        "reciprocity_balance": "user_over_asking",
+                        "low_investment_streak": 2,
+                        "match_curiosity_about_user": "no",
+                        "topic_exit_pressure": "medium",
+                        "last_user_turn_type": "question",
+                    },
+                ),
+                now=NOW,
+            )["recommendation"]
+            repair = repo.update_plan(
+                match_id="match_xiaoqing",
+                goal_id="goal_meet",
+                observation=_observation("obs_low_002"),
+                assessment=_planner_assessment(
+                    recommended_move="low_investment_repair",
+                    topic_saturation=72,
+                    reciprocity={
+                        "question_debt": 2,
+                        "self_disclosure_debt": 3,
+                        "reciprocity_balance": "user_over_asking",
+                        "low_investment_streak": 2,
+                        "match_curiosity_about_user": "no",
+                        "topic_exit_pressure": "high",
+                        "last_user_turn_type": "question",
+                    },
+                ),
+                now="2026-05-31T16:06:00+08:00",
+            )["recommendation"]
+
+            self.assertFalse(blocked["auto_send_allowed"])
+            self.assertIn("low_investment_question_debt", blocked["block_reasons"])
+            self.assertTrue(repair["auto_send_allowed"])
+            self.assertEqual(repair["recommended_move"], "low_investment_repair")
+            self.assertEqual(repair["low_investment_streak"], 2)
+
+    def test_fallback_reciprocity_does_not_reset_debt_from_recommended_repair(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = PlannerRepository(Path(temp_dir))
+            repo.update_plan(
+                match_id="match_xiaoqing",
+                goal_id="goal_meet",
+                observation=_observation("obs_low_001"),
+                assessment=_planner_assessment(
+                    recommended_move="deepen_current",
+                    topic_saturation=40,
+                    reciprocity={
+                        "question_debt": 2,
+                        "self_disclosure_debt": 3,
+                        "reciprocity_balance": "user_over_asking",
+                        "low_investment_streak": 1,
+                        "match_curiosity_about_user": "no",
+                        "topic_exit_pressure": "medium",
+                        "last_user_turn_type": "question",
+                    },
+                ),
+                now=NOW,
+            )
+
+            repair = repo.update_plan(
+                match_id="match_xiaoqing",
+                goal_id="goal_meet",
+                observation=_observation("obs_low_002"),
+                assessment=_planner_assessment(
+                    recommended_move="low_investment_repair",
+                    topic_saturation=72,
+                ),
+                now="2026-05-31T16:06:00+08:00",
+            )["recommendation"]
+
+            self.assertEqual(repair["recommended_move"], "low_investment_repair")
+            self.assertEqual(repair["question_debt"], 2)
+            self.assertEqual(repair["self_disclosure_debt"], 3)
+
+    def test_slow_down_wait_pauses_auto_send(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = PlannerRepository(Path(temp_dir))
+
+            recommendation = repo.update_plan(
+                match_id="match_xiaoqing",
+                goal_id="goal_meet",
+                observation=_observation("obs_wait_001"),
+                assessment=_planner_assessment(
+                    recommended_move="slow_down_wait",
+                    topic_saturation=88,
+                    reciprocity={
+                        "question_debt": 2,
+                        "self_disclosure_debt": 4,
+                        "reciprocity_balance": "user_over_asking",
+                        "low_investment_streak": 3,
+                        "match_curiosity_about_user": "no",
+                        "topic_exit_pressure": "high",
+                        "last_user_turn_type": "question",
+                    },
+                ),
+                now=NOW,
+            )["recommendation"]
+
+            self.assertFalse(recommendation["auto_send_allowed"])
+            self.assertIn("planner_wait", recommendation["block_reasons"])
+            self.assertEqual(recommendation["recommended_move"], "slow_down_wait")
+
     def test_soft_invite_and_handoff_recommendations(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = PlannerRepository(Path(temp_dir))
@@ -301,6 +416,7 @@ def _planner_assessment(
     logistics_readiness=15,
     soft_invite_allowed=False,
     handoff_reason=None,
+    reciprocity=None,
     evidence="latest_inbound_messages answered the current question but did not create a deeper hook.",
 ):
     return {
@@ -331,6 +447,7 @@ def _planner_assessment(
         "soft_invite_allowed": soft_invite_allowed,
         "confidence": "high",
         "evidence": evidence,
+        **({"reciprocity": reciprocity} if reciprocity else {}),
         **({"handoff_reason": handoff_reason} if handoff_reason else {}),
     }
 

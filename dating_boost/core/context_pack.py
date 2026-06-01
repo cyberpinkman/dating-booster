@@ -35,6 +35,8 @@ def build_context_pack(
 
     _append(items, "user_boundaries", user_profile.get("boundaries"))
     _append(items, "user_hard_facts", user_profile.get("facts"))
+    _append(items, "user_disclosure_profile", user_profile.get("disclosure_profile"))
+    _append(items, "user_disclosure_readiness", user_profile.get("disclosure_readiness"))
     _append(items, "goal_plan", conversation_memory.get("goal_plan"))
     _append(items, "planner_recommendation", conversation_memory.get("planner_recommendation"))
     _append(items, "conversation_scores", conversation_memory.get("conversation_scores"))

@@ -424,6 +424,22 @@ class OperatorSessionTests(unittest.TestCase):
             "--input",
             "tests/fixtures/intelligence/user_profile.json",
         ])
+        self._run([
+            "user",
+            "ingest-profile",
+            "--data-dir",
+            str(data_dir),
+            "--input",
+            "tests/fixtures/intelligence/user_dating_profile.json",
+        ])
+        self._run([
+            "user",
+            "ingest-interview",
+            "--data-dir",
+            str(data_dir),
+            "--input",
+            "tests/fixtures/intelligence/user_self_interview.json",
+        ])
 
     def _run(self, argv):
         output = StringIO()

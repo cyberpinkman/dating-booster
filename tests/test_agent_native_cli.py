@@ -39,6 +39,8 @@ class AgentNativeCliTests(unittest.TestCase):
             self.assertEqual(payload["schema_versions"]["action_result"], 1)
             self.assertEqual(payload["schema_versions"]["reply_draft"], 2)
             self.assertEqual(payload["schema_versions"]["workflow_result"], 1)
+            self.assertEqual(payload["schema_versions"]["user_disclosure_profile"], 1)
+            self.assertEqual(payload["schema_versions"]["user_readiness"], 1)
             self.assertEqual(payload["schema_versions"]["planner_assessment"], 1)
             self.assertEqual(payload["schema_versions"]["goal_plan"], 1)
             self.assertEqual(payload["schema_versions"]["planner_recommendation"], 1)
@@ -48,6 +50,7 @@ class AgentNativeCliTests(unittest.TestCase):
             self.assertIn("planner get", payload["supported_commands"])
             self.assertIn("planner recommend", payload["supported_commands"])
             self.assertIn("planner event-log", payload["supported_commands"])
+            self.assertIn("user readiness", payload["supported_commands"])
             self.assertIn("policy_capabilities", payload)
             self.assertIn("memory_capabilities", payload)
             self.assertIn("agent_native_capabilities", payload)
@@ -56,6 +59,8 @@ class AgentNativeCliTests(unittest.TestCase):
             self.assertTrue(payload["agent_native_capabilities"]["topic_lifecycle"])
             self.assertTrue(payload["agent_native_capabilities"]["soft_invite_probe"])
             self.assertTrue(payload["agent_native_capabilities"]["planner_report"])
+            self.assertTrue(payload["agent_native_capabilities"]["self_disclosure_profile"])
+            self.assertTrue(payload["agent_native_capabilities"]["low_investment_repair"])
             self.assertIsInstance(payload["warnings"], list)
 
     def test_nested_agent_native_commands_reuse_mvp_storage_and_policy(self):

@@ -33,6 +33,7 @@ from dating_boost.perception.observations import AppObservation
 from dating_boost.perception.screenshot_loader import build_observation_from_screenshot_analysis
 from dating_boost.policy import Action, authorize_action
 from dating_boost.policy.content import ContentPolicyDecision, evaluate_draft_content
+from dating_boost.core.user_disclosure import UserDisclosureRepository, interview_template
 
 
 MVP_TIMESTAMP = "2026-05-25T00:00:00Z"
@@ -90,6 +91,34 @@ def main(argv: list[str] | None = None) -> int:
     init_parser.add_argument("--data-dir", required=True, type=Path)
     init_parser.add_argument("--input", required=True, type=Path)
     init_parser.set_defaults(handler=_handle_init_profile)
+
+    user_parser = subparsers.add_parser("user", help="User self model and disclosure readiness commands.")
+    user_subparsers = user_parser.add_subparsers(dest="user_command", required=True)
+    user_interview_parser = user_subparsers.add_parser("interview", help="User interview helpers.")
+    user_interview_subparsers = user_interview_parser.add_subparsers(
+        dest="user_interview_command",
+        required=True,
+    )
+    user_interview_template_parser = user_interview_subparsers.add_parser("template")
+    user_interview_template_parser.add_argument("--json", action="store_true")
+    user_interview_template_parser.set_defaults(handler=_handle_user_interview_template)
+    user_ingest_profile_parser = user_subparsers.add_parser("ingest-profile")
+    user_ingest_profile_parser.add_argument("--data-dir", required=True, type=Path)
+    user_ingest_profile_parser.add_argument("--input", required=True, type=Path)
+    user_ingest_profile_parser.set_defaults(handler=_handle_user_ingest_profile)
+    user_ingest_interview_parser = user_subparsers.add_parser("ingest-interview")
+    user_ingest_interview_parser.add_argument("--data-dir", required=True, type=Path)
+    user_ingest_interview_parser.add_argument("--input", required=True, type=Path)
+    user_ingest_interview_parser.set_defaults(handler=_handle_user_ingest_interview)
+    user_disclosure_profile_parser = user_subparsers.add_parser("disclosure-profile")
+    user_disclosure_profile_parser.add_argument("--data-dir", required=True, type=Path)
+    user_disclosure_profile_parser.add_argument("--json", action="store_true")
+    user_disclosure_profile_parser.set_defaults(handler=_handle_user_disclosure_profile)
+    user_readiness_parser = user_subparsers.add_parser("readiness")
+    user_readiness_parser.add_argument("--data-dir", required=True, type=Path)
+    user_readiness_parser.add_argument("--mode", required=True, choices=["draft", "autonomous"])
+    user_readiness_parser.add_argument("--json", action="store_true")
+    user_readiness_parser.set_defaults(handler=_handle_user_readiness)
 
     import_parser = subparsers.add_parser("import-observation", help="Import an app observation fixture.")
     import_parser.add_argument("--data-dir", required=True, type=Path)
@@ -430,6 +459,43 @@ def _handle_init_profile(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_user_interview_template(args: argparse.Namespace) -> int:
+    _print_json(interview_template())
+    return 0
+
+
+def _handle_user_ingest_profile(args: argparse.Namespace) -> int:
+    payload = UserDisclosureRepository(args.data_dir).save_dating_profile(_read_json_object(args.input), updated_at=_now_iso())
+    _print_json(payload)
+    return 0
+
+
+def _handle_user_ingest_interview(args: argparse.Namespace) -> int:
+    try:
+        payload = UserDisclosureRepository(args.data_dir).save_interview(_read_json_object(args.input), updated_at=_now_iso())
+    except ValueError as exc:
+        _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})
+        return 2
+    _print_json(payload)
+    return 0
+
+
+def _handle_user_disclosure_profile(args: argparse.Namespace) -> int:
+    try:
+        profile = UserDisclosureRepository(args.data_dir).load_profile()
+    except FileNotFoundError:
+        _print_json({"schema_version": 1, "status": "not_found", "reason": "missing_user_disclosure_profile"})
+        return 2
+    _print_json({"schema_version": 1, "status": "ok", "profile": profile})
+    return 0
+
+
+def _handle_user_readiness(args: argparse.Namespace) -> int:
+    payload = UserDisclosureRepository(args.data_dir).readiness(mode=args.mode)
+    _print_json(payload)
+    return 0 if payload["ready"] else 2
+
+
 def _handle_import_observation(args: argparse.Namespace) -> int:
     observation = load_observation(args.input)
     return _persist_observation(args.data_dir, observation)
@@ -714,8 +780,9 @@ def _handle_automation_record_authorization(args: argparse.Namespace) -> int:
 
 
 def _handle_automation_session_start(args: argparse.Namespace) -> int:
-    _print_json(AutomationRepository(args.data_dir).start_session(_read_json_object(args.authorization)))
-    return 0
+    payload = AutomationRepository(args.data_dir).start_session(_read_json_object(args.authorization))
+    _print_json(payload)
+    return 0 if payload.get("status") == "active" else 2
 
 
 def _handle_automation_session_step(args: argparse.Namespace) -> int:
@@ -800,8 +867,9 @@ def _handle_automation_resume(args: argparse.Namespace) -> int:
 
 
 def _handle_operator_session_start(args: argparse.Namespace) -> int:
-    _print_json(OperatorRepository(args.data_dir).start_session(_read_json_object(args.authorization)))
-    return 0
+    payload = OperatorRepository(args.data_dir).start_session(_read_json_object(args.authorization))
+    _print_json(payload)
+    return 0 if payload.get("status") == "active" else 2
 
 
 def _handle_operator_next(args: argparse.Namespace) -> int:
@@ -919,6 +987,12 @@ def _build_mvp_context_pack(
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
     user_profile = _profile_to_context_dict(profile)
+    if data_dir is not None:
+        disclosure_repo = UserDisclosureRepository(data_dir)
+        disclosure_profile = disclosure_repo.load_profile_or_none()
+        if disclosure_profile is not None:
+            user_profile["disclosure_profile"] = disclosure_profile
+        user_profile["disclosure_readiness"] = disclosure_repo.readiness(mode="draft")
     if observation is None:
         match_profile = {
             "match_id": match_id,

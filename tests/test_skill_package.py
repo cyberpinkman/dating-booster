@@ -46,6 +46,8 @@ class SkillPackageTests(unittest.TestCase):
         self.assertLessEqual(_version_tuple(metadata["dating_boost_min_version"]), _version_tuple(__version__))
         self.assertTrue(set(metadata["required_commands"]).issubset(set(capabilities["supported_commands"])))
         self.assertEqual(metadata["required_schema_versions"]["reply_draft"], 2)
+        self.assertEqual(metadata["required_schema_versions"]["user_disclosure_profile"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["user_readiness"], 1)
         self.assertEqual(metadata["required_schema_versions"]["workflow_result"], 1)
         self.assertEqual(metadata["required_schema_versions"]["automation_session"], 1)
         self.assertEqual(metadata["required_schema_versions"]["appointment_ledger"], 1)
@@ -97,6 +99,9 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("position drift", skill_text)
         self.assertIn("reopen the chat thread", skill_text)
         self.assertIn("foreground app copy", skill_text)
+        self.assertIn("user readiness", skill_text)
+        self.assertIn("needs_user_profile", skill_text)
+        self.assertIn("low_investment_repair", skill_text)
 
     def test_skill_reference_files_describe_reusable_workflows_and_contracts(self):
         workflows_text = (SKILL_DIR / "references" / "workflows.md").read_text(encoding="utf-8").lower()
@@ -117,6 +122,11 @@ class SkillPackageTests(unittest.TestCase):
             "policy check-action",
             "action record-result",
             "feedback record",
+            "user interview template",
+            "user ingest-profile",
+            "user ingest-interview",
+            "user disclosure-profile",
+            "user readiness",
             "workflow draft",
             "automation session start",
             "automation session step",
@@ -198,6 +208,9 @@ class SkillPackageTests(unittest.TestCase):
             "soft_invite_probe",
             "next_milestone",
             "bridge_topic",
+            "给/问/接/转/停",
+            "low_investment_repair",
+            "self-disclosure",
         ):
             self.assertIn(phrase, drafting_text)
         for phrase in (

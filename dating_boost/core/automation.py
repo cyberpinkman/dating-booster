@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from dating_boost.core.models import Divergence, ReplyMode
 from dating_boost.core.planner import PlannerRepository, planner_context_items
 from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
 from dating_boost.core.storage import JsonStorage
+from dating_boost.core.user_disclosure import UserDisclosureRepository
 from dating_boost.intelligence.reply_generator import DraftResponse
 from dating_boost.perception.observations import AppObservation
 from dating_boost.policy.content import evaluate_draft_content
@@ -68,6 +70,16 @@ class AutomationRepository:
 
     def start_session(self, authorization: dict[str, Any]) -> dict[str, Any]:
         auth_result = self.save_authorization(authorization)
+        readiness = UserDisclosureRepository(self.root).readiness(mode="autonomous")
+        if authorization.get("autonomous_send") and not readiness["ready"]:
+            return {
+                "schema_version": 1,
+                "status": "needs_user_profile",
+                "reason": "autonomous_requires_user_profile",
+                "authorization_id": auth_result["authorization_id"],
+                "user_profile_readiness": readiness,
+                "resumed_from_report": None,
+            }
         latest_report_path = self._latest_machine_report_path()
         session_id = f"session_{auth_result['authorization_id']}_{_digest(authorization)[:8]}"
         now = self._now()
@@ -81,6 +93,7 @@ class AutomationRepository:
             "step_count": 0,
             "last_scan_cursor": None,
             "resumed_from_report": str(latest_report_path) if latest_report_path else None,
+            "user_profile_readiness": readiness,
         }
         self._storage.write_json(Path("automation") / "session.json", session)
         return {
@@ -95,7 +108,8 @@ class AutomationRepository:
         session = self._load_session()
         states = self.load_states()
         ledger = self.load_ledger()
-        summary = _build_summary(states, ledger)
+        user_readiness = UserDisclosureRepository(self.root).readiness(mode="autonomous")
+        summary = _build_summary(states, ledger, user_readiness)
         now = self._now()
         machine_path = Path("automation") / "reports" / "machine_latest.json"
         human_path = Path("automation") / "reports" / "human_latest.md"
@@ -106,6 +120,7 @@ class AutomationRepository:
             "started_at": session.get("started_at"),
             "stopped_at": now,
             "summary": summary,
+            "user_profile_readiness": user_readiness,
             "states": states,
             "conversation_plans": self._planner_plans(states),
             "appointment_ledger": ledger,
@@ -382,6 +397,14 @@ class AutomationRepository:
                 state["planner_revision"] = goal_plan.get("plan_revision")
                 state["planner_recommended_move"] = goal_plan.get("recommended_move")
                 state["next_milestone"] = goal_plan.get("next_milestone")
+                state["question_debt"] = goal_plan.get("question_debt")
+                state["self_disclosure_debt"] = goal_plan.get("self_disclosure_debt")
+                state["reciprocity_balance"] = goal_plan.get("reciprocity_balance")
+                state["low_investment_streak"] = goal_plan.get("low_investment_streak")
+                state["match_curiosity_about_user"] = goal_plan.get("match_curiosity_about_user")
+                state["topic_exit_pressure"] = goal_plan.get("topic_exit_pressure")
+                if goal_plan.get("recommended_move") == "slow_down_wait":
+                    state["pause_reason"] = "low_reciprocity"
 
             if planner_recommendation and planner_recommendation.get("requires_handoff"):
                 handoff_reason = str(planner_recommendation.get("handoff_reason") or "appointment_details_requested")
@@ -447,7 +470,11 @@ class AutomationRepository:
                 state["state"] = "needs_reply"
                 warnings.append("planner_assessment_required")
             elif planner_recommendation and not planner_recommendation.get("auto_send_allowed"):
-                state["state"] = "needs_reply"
+                if planner_recommendation.get("recommended_move") in {"wait", "slow_down_wait"}:
+                    state["state"] = "waiting_for_match"
+                    state["pause_reason"] = "low_reciprocity" if planner_recommendation.get("recommended_move") == "slow_down_wait" else "planner_wait"
+                else:
+                    state["state"] = "needs_reply"
                 warnings.extend(str(reason) for reason in planner_recommendation.get("block_reasons", []))
             elif planner_recommendation and draft_payload and not _draft_aligns_with_planner(dict(draft_payload), planner_recommendation):
                 state["state"] = "needs_reply"
@@ -602,6 +629,11 @@ class AutomationRepository:
             "persona_range": list(profile.persona_range),
             "stance_range": list(profile.stance_range),
         }
+        disclosure_repo = UserDisclosureRepository(self.root)
+        disclosure_profile = disclosure_repo.load_profile_or_none()
+        if disclosure_profile is not None:
+            user_profile["disclosure_profile"] = disclosure_profile
+        user_profile["disclosure_readiness"] = disclosure_repo.readiness(mode="draft")
         match_profile = {
             "match_id": match_id,
             "display_name": observation.match_identity_hints.visible_name,
@@ -657,7 +689,47 @@ class AutomationRepository:
         is_nudge: bool,
         planner_recommendation: dict[str, Any] | None = None,
     ) -> None:
-        draft = _draft_from_dict(dict(draft_payload))
+        raw_draft = dict(draft_payload)
+        draft = _draft_from_dict(raw_draft)
+        disclosure_moves = {"light_self_disclosure", "reciprocal_disclosure", "low_investment_repair"}
+        disclosure_repo = UserDisclosureRepository(self.root)
+        disclosure_readiness = disclosure_repo.readiness(mode="autonomous")
+        if draft.conversation_move in disclosure_moves and not disclosure_readiness["ready"]:
+            state["state"] = "needs_reply"
+            warnings.append("user_disclosure_profile_required")
+            return
+        disclosure_source = str(
+            raw_draft.get("disclosure_source")
+            or ("simulated_soft" if draft.conversation_move in disclosure_moves else "none")
+        )
+        used_material_ids = [
+            str(item)
+            for item in raw_draft.get("used_user_material_ids", [])
+            if str(item).strip()
+        ] if isinstance(raw_draft.get("used_user_material_ids"), list) else []
+        disclosure_error = _disclosure_policy_error(
+            draft_move=draft.conversation_move,
+            disclosure_moves=disclosure_moves,
+            disclosure_source=disclosure_source,
+            used_material_ids=used_material_ids,
+            disclosure_profile=disclosure_repo.load_profile_or_none(),
+        )
+        if disclosure_error:
+            state["state"] = "needs_reply"
+            warnings.append(disclosure_error)
+            return
+
+        question_count = _draft_question_count(raw_draft, draft.best_reply)
+        if (
+            planner_recommendation
+            and int(planner_recommendation.get("low_investment_streak") or 0) >= 2
+            and int(planner_recommendation.get("question_debt") or 0) >= 2
+            and question_count > 0
+        ):
+            state["state"] = "needs_reply"
+            warnings.append("low_investment_direct_question_blocked")
+            return
+
         context_pack = self._context_pack(match_id, observation)
         policy = evaluate_draft_content(draft, context_pack)
         if not policy.allowed:
@@ -672,6 +744,7 @@ class AutomationRepository:
             return
 
         action_request_id = f"action_request_{match_id}_{payload_hash[:12]}"
+        low_investment_repair_applied = draft.conversation_move == "low_investment_repair"
         action_requests.append(
             {
                 "schema_version": 1,
@@ -694,6 +767,11 @@ class AutomationRepository:
                 "conversation_move": draft.conversation_move,
                 "planner_alignment": "ok" if planner_recommendation else "not_provided",
                 "next_milestone": planner_recommendation.get("next_milestone") if planner_recommendation else None,
+                "disclosure_source": disclosure_source,
+                "used_user_material_ids": used_material_ids,
+                "question_debt_after": planner_recommendation.get("question_debt") if planner_recommendation else state.get("question_debt"),
+                "reciprocity_balance_after": planner_recommendation.get("reciprocity_balance") if planner_recommendation else state.get("reciprocity_balance"),
+                "low_investment_repair_applied": low_investment_repair_applied,
             }
         )
         state["state"] = "send_requested"
@@ -702,6 +780,9 @@ class AutomationRepository:
         state["last_outbound_payload_hash"] = payload_hash
         state["last_pre_action_observation_id"] = observation.observation_id
         state["last_draft_id"] = f"draft_{payload_hash[:12]}"
+        state["last_disclosure_source"] = disclosure_source if disclosure_source != "none" else None
+        state["used_user_material_ids"] = used_material_ids
+        state["low_investment_repair_applied"] = low_investment_repair_applied
         if is_nudge:
             state["last_nudged_inbound_fingerprint"] = latest_fingerprint
             state["nudge_count_since_inbound"] = int(state.get("nudge_count_since_inbound") or 0) + 1
@@ -725,6 +806,70 @@ def _draft_from_dict(data: dict[str, Any]) -> DraftResponse:
         persona_divergence=Divergence(str(data["persona_divergence"])),
         stance_divergence=Divergence(str(data["stance_divergence"])),
     )
+
+
+def _disclosure_policy_error(
+    *,
+    draft_move: str,
+    disclosure_moves: set[str],
+    disclosure_source: str,
+    used_material_ids: list[str],
+    disclosure_profile: dict[str, Any] | None,
+) -> str | None:
+    valid_sources = {"none", "user_material", "simulated_soft", "user_confirmed"}
+    if disclosure_source not in valid_sources:
+        return "invalid_disclosure_source"
+    if draft_move not in disclosure_moves:
+        return None
+    if disclosure_profile is None:
+        return "user_disclosure_profile_required"
+
+    simulation_policy = str(disclosure_profile.get("simulation_policy") or "free_simulation_soft")
+    material_ids = {
+        str(item.get("material_id"))
+        for item in disclosure_profile.get("shareable_material", [])
+        if (
+            isinstance(item, dict)
+            and str(item.get("material_id") or "").strip()
+            and isinstance(item.get("text"), str)
+            and item["text"].strip()
+            and str(item.get("sensitivity") or "low") in {"low", "medium"}
+        )
+    }
+
+    if disclosure_source == "simulated_soft":
+        if simulation_policy != "free_simulation_soft":
+            return "simulated_disclosure_not_allowed"
+        return None
+    if disclosure_source == "user_material":
+        if not used_material_ids:
+            return "user_material_disclosure_requires_material_ids"
+        if not set(used_material_ids).issubset(material_ids):
+            return "user_material_disclosure_unknown_material_id"
+        return None
+    if disclosure_source == "user_confirmed":
+        return "user_confirmed_disclosure_requires_handoff"
+    return "disclosure_source_required"
+
+
+def _draft_question_count(raw_draft: dict[str, Any], best_reply: str) -> int:
+    explicit = raw_draft.get("question_count")
+    if isinstance(explicit, int) and not isinstance(explicit, bool) and explicit >= 0:
+        return explicit
+    reply_shape = str(raw_draft.get("reply_shape") or "")
+    if reply_shape in {"question", "contains_question"}:
+        return 1
+    return 1 if _looks_like_direct_question(best_reply) else 0
+
+
+def _looks_like_direct_question(text: str) -> bool:
+    stripped = text.strip()
+    if "?" in stripped or "？" in stripped:
+        return True
+    question_phrases = ("是不是", "有没有", "会不会", "要不要", "能不能", "为什么", "怎么")
+    if any(marker in stripped for marker in question_phrases):
+        return True
+    return bool(re.search(r"(吗|嘛|么|呢)[。！!…]*$", stripped))
 
 
 def _can_request_send(
@@ -940,6 +1085,16 @@ def _new_state(*, match_id: str, candidate_key: str, session_id: str, timestamp:
         "last_action_request_id": None,
         "last_pre_action_observation_id": None,
         "handoff_reason": None,
+        "question_debt": 0,
+        "self_disclosure_debt": 0,
+        "reciprocity_balance": "unknown",
+        "low_investment_streak": 0,
+        "match_curiosity_about_user": "unknown",
+        "topic_exit_pressure": "low",
+        "last_user_turn_type": "unknown",
+        "last_disclosure_source": None,
+        "low_investment_repair_applied": False,
+        "pause_reason": None,
         "last_session_id": session_id,
         "updated_at": timestamp,
         "seen_before": False,
@@ -957,10 +1112,17 @@ def _state_update(state: dict[str, Any]) -> dict[str, Any]:
         "planner_revision": state.get("planner_revision"),
         "planner_recommended_move": state.get("planner_recommended_move"),
         "next_milestone": state.get("next_milestone"),
+        "question_debt": state.get("question_debt"),
+        "reciprocity_balance": state.get("reciprocity_balance"),
+        "low_investment_streak": state.get("low_investment_streak"),
     }
 
 
-def _build_summary(states: list[dict[str, Any]], ledger: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_summary(
+    states: list[dict[str, Any]],
+    ledger: list[dict[str, Any]],
+    user_readiness: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "match_count": len(states),
         "new_match_count": sum(1 for state in states if state.get("candidate_type") == "new_match_candidate"),
@@ -970,6 +1132,15 @@ def _build_summary(states: list[dict[str, Any]], ledger: list[dict[str, Any]]) -
         "handoff_count": sum(1 for state in states if state.get("state") == "appointment_handoff"),
         "slot_count": len(ledger),
         "slot_conflict_count": sum(1 for slot in ledger if slot.get("conflict")),
+        "user_profile_ready": bool(user_readiness and user_readiness.get("ready")),
+        "disclosure_usage_count": sum(1 for state in states if state.get("last_disclosure_source")),
+        "low_investment_repair_count": sum(1 for state in states if state.get("low_investment_repair_applied")),
+        "paused_due_to_low_reciprocity": sum(
+            1
+            for state in states
+            if state.get("state") in {"paused", "waiting_for_match"}
+            and state.get("pause_reason") == "low_reciprocity"
+        ),
     }
 
 
@@ -1014,6 +1185,10 @@ def _human_report(report: dict[str, Any]) -> str:
         f"- Nudge scheduled: {summary['nudge_count']}",
         f"- Handoffs: {summary['handoff_count']}",
         f"- Slot conflicts: {summary['slot_conflict_count']}",
+        f"- User profile ready: {summary.get('user_profile_ready')}",
+        f"- Disclosure usage: {summary.get('disclosure_usage_count')}",
+        f"- Low-investment repairs: {summary.get('low_investment_repair_count')}",
+        f"- Paused for low reciprocity: {summary.get('paused_due_to_low_reciprocity')}",
         "",
         "## Match States",
         "",
@@ -1029,6 +1204,8 @@ def _human_report(report: dict[str, Any]) -> str:
                         f"state={state.get('state')}",
                         f"handoff={state.get('handoff_reason') or 'none'}",
                         f"next_due_at={state.get('next_due_at') or 'none'}",
+                        f"question_debt={state.get('question_debt', 0)}",
+                        f"low_investment={state.get('low_investment_streak', 0)}",
                     ]
                 )
             )

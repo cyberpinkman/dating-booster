@@ -118,6 +118,49 @@ class ContentPolicyTests(unittest.TestCase):
                 self.assertFalse(decision.allowed)
                 self.assertEqual(decision.severity, "high")
 
+    def test_blocks_hard_fact_violations_from_disclosure_profile(self):
+        context_pack = {
+            "items": [
+                {
+                    "label": "user_disclosure_profile",
+                    "content": {
+                        "hard_facts": [
+                            {"fact_id": "fact_city", "field": "city", "value": "Beijing"},
+                            {
+                                "fact_id": "fact_education",
+                                "field": "education",
+                                "value": "Chinese university graduate",
+                            },
+                        ],
+                        "boundaries": [
+                            {"boundary_id": "no_fake_study", "text": "Do not claim overseas study"}
+                        ],
+                    },
+                },
+            ]
+        }
+        cases = (
+            _draft_response(
+                best_reply="I live in London too.",
+                safer_reply="That sounds interesting.",
+                bolder_reply="Tell me more.",
+                why_this_works="Invents location.",
+            ),
+            _draft_response(
+                best_reply="I studied overseas too.",
+                safer_reply="That sounds interesting.",
+                bolder_reply="Tell me more.",
+                why_this_works="Invents education.",
+            ),
+        )
+
+        for draft in cases:
+            with self.subTest(reply=draft.best_reply):
+                decision = evaluate_draft_content(draft, context_pack)
+
+                self.assertFalse(decision.allowed)
+                self.assertEqual(decision.severity, "high")
+
     def test_blocks_overseas_study_synonyms_in_any_reply_variant(self):
         context_pack = {
             "items": [
