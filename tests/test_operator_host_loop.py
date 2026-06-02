@@ -62,6 +62,113 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
             self.assertIn("stage mode does not record action result", payload["stop_reason"])
 
+    def test_confirm_staged_cancel_clears_pending_send_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            work_dir = Path(temp_dir) / "work"
+            staged_payload = self._run_script(
+                "run",
+                "--fixture-host",
+                str(FIXTURE_DIR),
+                "--data-dir",
+                str(data_dir),
+                "--work-dir",
+                str(work_dir),
+                "--send-mode",
+                "stage",
+                "--max-steps",
+                "8",
+                "--json",
+            )
+            work_item_id = staged_payload["current_work_item"]["work_item_id"]
+
+            cancel_payload = self._run_script(
+                "confirm-staged",
+                "--data-dir",
+                str(data_dir),
+                "--work-dir",
+                str(work_dir),
+                "--cancel",
+                "--json",
+            )
+            status_payload = self._run_script(
+                "status",
+                "--data-dir",
+                str(data_dir),
+                "--work-dir",
+                str(work_dir),
+                "--json",
+            )
+
+            self.assertEqual(cancel_payload["status"], "staged_cancelled")
+            self.assertEqual(status_payload["status"], "idle")
+            self.assertFalse((work_dir / "current_work_item.json").exists())
+            self.assertFalse((data_dir / "operator" / "current_work_item.json").exists())
+            self.assertFalse((work_dir / f"staged_verification.{work_item_id}.json").exists())
+
+    def test_confirm_staged_action_result_is_idempotent_and_clears_state(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            work_dir = Path(temp_dir) / "work"
+            staged_payload = self._run_script(
+                "run",
+                "--fixture-host",
+                str(FIXTURE_DIR),
+                "--data-dir",
+                str(data_dir),
+                "--work-dir",
+                str(work_dir),
+                "--send-mode",
+                "stage",
+                "--max-steps",
+                "8",
+                "--json",
+            )
+            work_item = staged_payload["current_work_item"]
+            action_result_path = Path(temp_dir) / "action_result.json"
+            self._write_json(action_result_path, _action_result_for_work_item(work_item))
+
+            first_confirm = self._run_script(
+                "confirm-staged",
+                "--data-dir",
+                str(data_dir),
+                "--work-dir",
+                str(work_dir),
+                "--action-result",
+                str(action_result_path),
+                "--json",
+            )
+            status_payload = self._run_script(
+                "status",
+                "--data-dir",
+                str(data_dir),
+                "--work-dir",
+                str(work_dir),
+                "--json",
+            )
+            second_confirm = self._run_script(
+                "confirm-staged",
+                "--data-dir",
+                str(data_dir),
+                "--work-dir",
+                str(work_dir),
+                "--action-result",
+                str(action_result_path),
+                "--json",
+            )
+            audit_events = [
+                json.loads(line)
+                for line in (data_dir / "audit" / "action_results.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+            self.assertEqual(first_confirm["status"], "confirmed")
+            self.assertEqual(status_payload["status"], "idle")
+            self.assertEqual(second_confirm["status"], "blocked")
+            self.assertEqual(second_confirm["stop_reason"], "no_staged_send_work_item")
+            self.assertEqual(len(audit_events), 1)
+            self.assertFalse((work_dir / "current_work_item.json").exists())
+            self.assertFalse((data_dir / "operator" / "current_work_item.json").exists())
+
     def test_fixture_host_loop_live_mode_requires_staged_verification_before_recording_result(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
@@ -240,6 +347,25 @@ class OperatorHostLoopTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         return json.loads(result.stdout)
+
+    def _write_json(self, path: Path, payload: dict) -> None:
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _action_result_for_work_item(work_item: dict) -> dict:
+    return {
+        "action_request_id": work_item["action_request_id"],
+        "action": "send_message",
+        "target_match_id": work_item["match_id"],
+        "payload_hash": work_item["payload_hash"],
+        "pre_action_observation_id": work_item.get("pre_action_observation_id"),
+        "post_action_observation_id": f"{work_item.get('pre_action_observation_id')}_sent",
+        "result_status": "succeeded",
+        "evidence": {
+            "post_send_visible_text": work_item["payload_text"],
+            "staged_text_verified": True,
+        },
+    }
 
 
 if __name__ == "__main__":

@@ -121,6 +121,21 @@ class HostNativePhaseCTests(unittest.TestCase):
             self.assertTrue(any("turn_boundary_evidence" in error for error in bad_payload["errors"]))
             self.assertTrue(any("latest_inbound_messages" in error for error in bad_payload["errors"]))
 
+            empty_boundary = json.loads(json.dumps(good_thread))
+            empty_boundary["turn_boundary_evidence"] = {}
+            empty_boundary_path = Path(temp_dir) / "empty_boundary_thread.json"
+            empty_boundary_path.write_text(json.dumps(empty_boundary, ensure_ascii=False), encoding="utf-8")
+
+            empty_exit, empty_payload = self._run_cli([
+                "observation",
+                "validate",
+                "--input",
+                str(empty_boundary_path),
+                "--json",
+            ])
+            self.assertEqual(empty_exit, 2)
+            self.assertTrue(any("turn_boundary_evidence" in error for error in empty_payload["errors"]))
+
     def test_conversation_eval_and_replay_cli(self):
         eval_exit, eval_payload = self._run_cli(["eval", "run", "--suite", "conversation", "--json"])
         self.assertEqual(eval_exit, 0)

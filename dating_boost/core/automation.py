@@ -483,7 +483,26 @@ class AutomationRepository:
             elif host_identity_confidence == "low":
                 state["state"] = "needs_reply"
                 warnings.append("low_identity_confidence")
-            elif _can_request_send(authorization, ingest, assessment, state, draft_payload):
+            elif draft_payload and (
+                auth_block := _send_authorization_block_reason(
+                    authorization,
+                    match_id=match_id,
+                    app_id=observation.app_id,
+                    now=now,
+                )
+            ):
+                state["state"] = "needs_reply"
+                warnings.append(auth_block)
+            elif _can_request_send(
+                authorization,
+                ingest,
+                assessment,
+                state,
+                draft_payload,
+                match_id=match_id,
+                app_id=observation.app_id,
+                now=now,
+            ):
                 self._queue_send_request(
                     action_requests=action_requests,
                     warnings=warnings,
@@ -502,7 +521,26 @@ class AutomationRepository:
                 if host_identity_confidence == "low":
                     state["state"] = "needs_reply"
                     warnings.append("low_identity_confidence")
-                elif _can_request_nudge(authorization, ingest, assessment, state, draft_payload, now):
+                elif draft_payload and (
+                    auth_block := _send_authorization_block_reason(
+                        authorization,
+                        match_id=match_id,
+                        app_id=observation.app_id,
+                        now=now,
+                    )
+                ):
+                    state["state"] = "nudge_scheduled" if auth_block == "authorization_quiet_hours" else "needs_reply"
+                    warnings.append(auth_block)
+                elif _can_request_nudge(
+                    authorization,
+                    ingest,
+                    assessment,
+                    state,
+                    draft_payload,
+                    now,
+                    match_id=match_id,
+                    app_id=observation.app_id,
+                ):
                     self._queue_send_request(
                         action_requests=action_requests,
                         warnings=warnings,
@@ -885,10 +923,16 @@ def _can_request_send(
     assessment: dict[str, Any],
     state: dict[str, Any],
     draft_payload: Any,
+    *,
+    match_id: str,
+    app_id: str,
+    now: str,
 ) -> bool:
     if not draft_payload:
         return False
     if state.get("state") == "appointment_handoff":
+        return False
+    if _send_authorization_block_reason(authorization, match_id=match_id, app_id=app_id, now=now):
         return False
     if not authorization.get("autonomous_send"):
         return False
@@ -911,10 +955,15 @@ def _can_request_nudge(
     state: dict[str, Any],
     draft_payload: Any,
     now: str,
+    *,
+    match_id: str,
+    app_id: str,
 ) -> bool:
     if not draft_payload:
         return False
     if state.get("state") == "appointment_handoff":
+        return False
+    if _send_authorization_block_reason(authorization, match_id=match_id, app_id=app_id, now=now):
         return False
     if not authorization.get("autonomous_send") or not authorization.get("autonomous_nudge", True):
         return False
@@ -954,6 +1003,95 @@ def _authorization_revoked_or_expired(authorization: dict[str, Any], now: str) -
         except ValueError:
             return True
     return False
+
+
+def _send_authorization_block_reason(
+    authorization: dict[str, Any],
+    *,
+    match_id: str,
+    app_id: str,
+    now: str,
+) -> str | None:
+    if not authorization:
+        return "authorization_missing"
+    if authorization.get("scope") != "send_chat_messages":
+        return "authorization_scope_not_send_chat_messages"
+    if str(authorization.get("app_id") or "") != app_id:
+        return "authorization_app_mismatch"
+    if not authorization.get("autonomous_send"):
+        return "authorization_autonomous_send_disabled"
+    if "send_message" not in authorization.get("allowed_actions", []):
+        return "authorization_action_not_allowed"
+    if authorization.get("requires_post_action_verification") is not True:
+        return "authorization_requires_post_action_verification"
+    allowed_match_ids = authorization.get("allowed_match_ids")
+    if isinstance(allowed_match_ids, list) and allowed_match_ids:
+        allowed = {str(item) for item in allowed_match_ids}
+        if match_id not in allowed:
+            return "authorization_match_not_allowed"
+    if _quiet_hours_active(authorization.get("quiet_hours"), now):
+        return "authorization_quiet_hours"
+    return None
+
+
+def _quiet_hours_active(value: Any, now: str) -> bool:
+    if not isinstance(value, list) or not value:
+        return False
+    try:
+        current = _clock_minutes(_parse_iso_local_clock(now))
+    except ValueError:
+        return True
+    for item in value:
+        window = _quiet_window_minutes(item)
+        if window is None:
+            continue
+        start, end = window
+        if _minutes_in_window(current, start, end):
+            return True
+    return False
+
+
+def _quiet_window_minutes(item: Any) -> tuple[int, int] | None:
+    if isinstance(item, dict):
+        start = item.get("start") or item.get("start_time")
+        end = item.get("end") or item.get("end_time")
+        start_minutes = _parse_clock_minutes(start)
+        end_minutes = _parse_clock_minutes(end)
+        if start_minutes is None or end_minutes is None:
+            return None
+        return start_minutes, end_minutes
+    if isinstance(item, str) and "-" in item:
+        start, end = item.split("-", 1)
+        start_minutes = _parse_clock_minutes(start.strip())
+        end_minutes = _parse_clock_minutes(end.strip())
+        if start_minutes is None or end_minutes is None:
+            return None
+        return start_minutes, end_minutes
+    return None
+
+
+def _parse_clock_minutes(value: Any) -> int | None:
+    if not isinstance(value, str) or ":" not in value:
+        return None
+    hour_text, minute_text = value.split(":", 1)
+    try:
+        hour = int(hour_text)
+        minute = int(minute_text)
+    except ValueError:
+        return None
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        return None
+    return hour * 60 + minute
+
+
+def _clock_minutes(value: datetime) -> int:
+    return value.hour * 60 + value.minute
+
+
+def _minutes_in_window(current: int, start: int, end: int) -> bool:
+    if start <= end:
+        return start <= current <= end
+    return current >= start or current <= end
 
 
 def _action_result_mismatch(event: dict[str, Any], state: dict[str, Any]) -> str | None:
@@ -1376,3 +1514,10 @@ def _parse_iso_utc(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _parse_iso_local_clock(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed

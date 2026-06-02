@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.operator import OperatorRepository
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = Path(".local") / "dating-boost-host-loop"
@@ -265,8 +267,28 @@ class HostLoopSupervisor:
         if current is None or current.get("work_item_type") != "send_message":
             return self._finish("blocked", "no_staged_send_work_item", extra={"next_host_action": "run_status"}), 0
         if getattr(self.args, "cancel", False):
+            try:
+                operator_cancel = OperatorRepository(self.data_dir).cancel_current_work_item(
+                    current,
+                    reason="user_cancelled_staged_send",
+                )
+            except ValueError as exc:
+                operator_cancel = {
+                    "schema_version": 1,
+                    "status": "skipped",
+                    "reason": str(exc),
+                }
+            self._clear_host_work_item(current)
             self._append_timeline("stage_cancelled", current, {"reason": "user_cancelled"})
-            return self._finish("staged_cancelled", "user_cancelled_staged_send", current=current, extra={"next_host_action": "clear_input_or_resume"}), 0
+            return self._finish(
+                "staged_cancelled",
+                "user_cancelled_staged_send",
+                current=current,
+                extra={
+                    "next_host_action": "clear_input_or_resume",
+                    "operator_cancel": operator_cancel,
+                },
+            ), 0
         if getattr(self.args, "clear_retry", False):
             staged = self._work_file(current, "staged_verification")
             if staged.exists():
@@ -280,6 +302,7 @@ class HostLoopSupervisor:
             recorded = self._run_cli_json("operator", "record-action-result", "--data-dir", str(self.data_dir), "--input", str(action_result))
             self.action_results_recorded.append(recorded)
             self._append_timeline("action_result", current, {"result": recorded})
+            self._clear_host_work_item(current, consume=True)
             return self._finish("confirmed", "staged_send_confirmed_and_recorded", current=current, extra={"next_host_action": "resume_host_loop"}), 0
         return self._finish(
             "waiting_for_user_send",
@@ -614,6 +637,28 @@ class HostLoopSupervisor:
     def _write_current_work_item(self, work_item: dict[str, Any]) -> None:
         _write_json(self.work_dir / "current_work_item.json", work_item)
 
+    def _clear_host_work_item(self, work_item: dict[str, Any], *, consume: bool = False) -> None:
+        for kind in ("message_list_observation", "thread_observation", "staged_verification", "action_result"):
+            path = self._work_file(work_item, kind)
+            template = _template_path(path)
+            if path.exists():
+                if consume:
+                    self._consume(path)
+                else:
+                    path.unlink()
+            if template.exists():
+                template.unlink()
+        current_path = self.work_dir / "current_work_item.json"
+        if not current_path.exists():
+            return
+        try:
+            current = _read_json(current_path)
+        except HostLoopError:
+            current_path.unlink()
+            return
+        if _same_work_item(current, work_item):
+            current_path.unlink()
+
     def _read_current_work_item_or_none(self) -> dict[str, Any] | None:
         path = self.work_dir / "current_work_item.json"
         if path.exists():
@@ -938,6 +983,16 @@ def _session_hint(work_item: dict[str, Any]) -> str:
 
 def _safe_name(value: str) -> str:
     return "".join(character if character.isalnum() else "_" for character in value).strip("_") or "unknown"
+
+
+def _same_work_item(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_id = left.get("work_item_id")
+    right_id = right.get("work_item_id")
+    if left_id and right_id:
+        return left_id == right_id
+    left_action = left.get("action_request_id")
+    right_action = right.get("action_request_id")
+    return bool(left_action and right_action and left_action == right_action)
 
 
 def _template_path(path: Path) -> Path:

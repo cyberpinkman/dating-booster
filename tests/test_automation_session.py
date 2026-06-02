@@ -386,6 +386,59 @@ class AutomationSessionTests(unittest.TestCase):
                     self.assertEqual(step_payload["action_requests"], [])
                     self.assertIn("authorization_expired_or_revoked", step_payload["warnings"])
 
+    def test_authorization_scope_app_allowlist_quiet_hours_and_verification_gate_send(self):
+        cases = [
+            ("draft_only_scope", {"scope": "draft_only"}, "authorization_scope_not_send_chat_messages"),
+            ("wrong_app", {"app_id": "wechat"}, "authorization_app_mismatch"),
+            (
+                "match_not_allowed",
+                {"allowed_match_ids": ["match_not_ada"]},
+                "authorization_match_not_allowed",
+            ),
+            (
+                "quiet_hours",
+                {"quiet_hours": [{"start": "00:00", "end": "23:59"}]},
+                "authorization_quiet_hours",
+            ),
+            (
+                "missing_post_action_verification",
+                {"requires_post_action_verification": False},
+                "authorization_requires_post_action_verification",
+            ),
+        ]
+        for name, overrides, warning in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    data_dir = Path(temp_dir) / "data"
+                    auth_path = Path(temp_dir) / f"{name}.json"
+                    auth_payload = json.loads((FIXTURE_DIR / "auth_send.json").read_text(encoding="utf-8"))
+                    auth_payload.update(overrides)
+                    self._write_json(auth_path, auth_payload)
+                    self._init_profile(data_dir)
+                    self._run([
+                        "automation",
+                        "session",
+                        "start",
+                        "--data-dir",
+                        str(data_dir),
+                        "--authorization",
+                        str(auth_path),
+                    ])
+
+                    step_exit, step_payload, _ = self._run([
+                        "automation",
+                        "session",
+                        "step",
+                        "--data-dir",
+                        str(data_dir),
+                        "--scan-batch",
+                        str(FIXTURE_DIR / "scan_batch_initial.json"),
+                    ])
+
+                    self.assertEqual(step_exit, 0)
+                    self.assertEqual(step_payload["action_requests"], [])
+                    self.assertIn(warning, step_payload["warnings"])
+
     def test_contact_exchange_handoff_has_specific_reason(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"

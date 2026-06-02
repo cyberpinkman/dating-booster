@@ -30,8 +30,23 @@ class ActionAuditRepository:
 
     def append_action_result(self, payload: dict[str, Any], *, created_at: str) -> dict[str, Any]:
         event = validate_action_result(payload, created_at=created_at)
+        duplicate = self._find_duplicate_action_result(event)
+        if duplicate is not None:
+            return {**duplicate, "duplicate": True}
         self._storage.append_jsonl(ACTION_RESULTS_PATH, event)
         return event
+
+    def _find_duplicate_action_result(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        for existing in self._storage.read_jsonl(ACTION_RESULTS_PATH):
+            if (
+                existing.get("action_request_id") == event.get("action_request_id")
+                and existing.get("action") == event.get("action")
+                and existing.get("target_match_id") == event.get("target_match_id")
+                and existing.get("payload_hash") == event.get("payload_hash")
+                and existing.get("result_status") == event.get("result_status")
+            ):
+                return existing
+        return None
 
 
 def validate_action_result(payload: dict[str, Any], *, created_at: str) -> dict[str, Any]:

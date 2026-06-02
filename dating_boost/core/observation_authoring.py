@@ -166,8 +166,11 @@ def _validate_thread(payload: dict[str, Any], errors: list[str]) -> None:
     _require_non_empty_string(payload, "identity_evidence", errors, "thread")
     if not isinstance(payload.get("screenshot_ref"), str):
         errors.append("thread.screenshot_ref is required and may be an empty string")
-    if not isinstance(payload.get("turn_boundary_evidence"), dict):
+    boundary = payload.get("turn_boundary_evidence")
+    if not isinstance(boundary, dict):
         errors.append("thread.turn_boundary_evidence is required")
+    else:
+        _validate_turn_boundary_evidence(boundary, errors)
     observation = payload.get("observation")
     if not isinstance(observation, dict):
         errors.append("thread.observation must be an object")
@@ -190,6 +193,16 @@ def _validate_thread(payload: dict[str, Any], errors: list[str]) -> None:
             errors.append(
                 f"latest_inbound_messages[{index}] must be marked is_after_latest_outbound=true; old visible messages belong in background"
             )
+
+
+def _validate_turn_boundary_evidence(payload: dict[str, Any], errors: list[str]) -> None:
+    _require_non_empty_string(payload, "latest_user_outbound_text", errors, "thread.turn_boundary_evidence")
+    latest_inbound = payload.get("latest_inbound_after_user")
+    if not isinstance(latest_inbound, list) or not any(isinstance(item, str) and item.strip() for item in latest_inbound):
+        errors.append("thread.turn_boundary_evidence.latest_inbound_after_user must contain at least one message")
+    latest_user_index = payload.get("latest_user_outbound_index")
+    if latest_user_index is not None and (not isinstance(latest_user_index, int) or isinstance(latest_user_index, bool)):
+        errors.append("thread.turn_boundary_evidence.latest_user_outbound_index must be an integer or null")
 
 
 def _validation_payload(errors: list[str]) -> dict[str, Any]:

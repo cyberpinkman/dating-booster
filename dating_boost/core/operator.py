@@ -160,10 +160,11 @@ class OperatorRepository:
         event = ActionAuditRepository(self.root).append_action_result(payload, created_at=_now_iso())
         self._automation.apply_action_result(event)
         session = self._load_session()
-        current = session.get("current_work_item")
-        if isinstance(current, dict) and current.get("action_request_id") == event.get("action_request_id"):
-            session["current_work_item"] = None
-            self._write_session(session)
+        self._clear_current_work_item(
+            session,
+            expected_type="send_message",
+            expected_action_request_id=event.get("action_request_id"),
+        )
         if not self._load_work_queue():
             self._clear_pending_scan_file()
         return {
@@ -173,6 +174,34 @@ class OperatorRepository:
             "action_request_id": event.get("action_request_id"),
             "result_status": event["result_status"],
             "path": "audit/action_results.jsonl",
+        }
+
+    def cancel_current_work_item(self, work_item: dict[str, Any], *, reason: str) -> dict[str, Any]:
+        session = self._load_session()
+        self._clear_current_work_item(
+            session,
+            expected_type=str(work_item.get("work_item_type") or ""),
+            expected_action_request_id=work_item.get("action_request_id"),
+            expected_work_item_id=work_item.get("work_item_id"),
+        )
+        state_update_count = 0
+        if work_item.get("work_item_type") == "send_message":
+            states = self._automation.load_states()
+            for state in states:
+                if state.get("last_action_request_id") != work_item.get("action_request_id"):
+                    continue
+                state["state"] = "draft_ready"
+                state["last_action_result_error"] = reason
+                state["updated_at"] = _now_iso()
+                state_update_count += 1
+            if state_update_count:
+                self._automation.save_states(states)
+        return {
+            "schema_version": 1,
+            "status": "ok",
+            "cancelled_work_item_id": work_item.get("work_item_id"),
+            "action_request_id": work_item.get("action_request_id"),
+            "state_update_count": state_update_count,
         }
 
     def stop_session(self) -> dict[str, Any]:
@@ -255,6 +284,8 @@ class OperatorRepository:
         *,
         expected_type: str | None = None,
         expected_candidate_key: str | None = None,
+        expected_action_request_id: Any = None,
+        expected_work_item_id: Any = None,
     ) -> None:
         current = session.get("current_work_item")
         if not isinstance(current, dict):
@@ -262,6 +293,10 @@ class OperatorRepository:
         if expected_type and current.get("work_item_type") != expected_type:
             return
         if expected_candidate_key and current.get("candidate_key") != expected_candidate_key:
+            return
+        if expected_action_request_id and current.get("action_request_id") != expected_action_request_id:
+            return
+        if expected_work_item_id and current.get("work_item_id") != expected_work_item_id:
             return
         session["current_work_item"] = None
         self._write_session(session)

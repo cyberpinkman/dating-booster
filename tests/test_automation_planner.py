@@ -32,7 +32,7 @@ class AutomationPlannerTests(unittest.TestCase):
                 "--data-dir",
                 str(data_dir),
                 "--authorization",
-                "tests/fixtures/automation/auth_send.json",
+                str(self._auth_for_app(temp_dir)),
             ])
             bad_scan_path = Path(temp_dir) / "misaligned_scan.json"
             good_scan_path = Path(temp_dir) / "aligned_scan.json"
@@ -92,7 +92,7 @@ class AutomationPlannerTests(unittest.TestCase):
                 "--data-dir",
                 str(data_dir),
                 "--authorization",
-                "tests/fixtures/automation/auth_send.json",
+                str(self._auth_for_app(temp_dir)),
             ])
             scan = _planner_scan(draft_move="bridge_topic")
             scan["thread_observations"][0].pop("planner_assessment")
@@ -125,7 +125,7 @@ class AutomationPlannerTests(unittest.TestCase):
                 "--data-dir",
                 str(data_dir),
                 "--authorization",
-                "tests/fixtures/automation/auth_send.json",
+                str(self._auth_for_app(temp_dir)),
             ])
             scan = _planner_scan(draft_move="deepen_current")
             scan["thread_observations"][0]["draft"]["why_this_works"] = (
@@ -159,7 +159,7 @@ class AutomationPlannerTests(unittest.TestCase):
                 "--data-dir",
                 str(data_dir),
                 "--authorization",
-                "tests/fixtures/automation/auth_send.json",
+                str(self._auth_for_app(temp_dir)),
             ])
             scan_path = Path(temp_dir) / "handoff_scan.json"
             self._write_json(
@@ -200,7 +200,7 @@ class AutomationPlannerTests(unittest.TestCase):
                 "--data-dir",
                 str(data_dir),
                 "--authorization",
-                "tests/fixtures/automation/auth_send.json",
+                str(self._auth_for_app(temp_dir)),
             ])
             slot = {"date": "2026-06-06", "time_window": "19:00-21:00", "area": "朝阳"}
             first_scan = _planner_scan(
@@ -277,7 +277,7 @@ class AutomationPlannerTests(unittest.TestCase):
                 "--data-dir",
                 str(data_dir),
                 "--authorization",
-                "tests/fixtures/automation/auth_send.json",
+                str(self._auth_for_app(temp_dir)),
             ])
             scan = _planner_scan(
                 planner_stage="appointment_handoff",
@@ -311,7 +311,7 @@ class AutomationPlannerTests(unittest.TestCase):
                 "--data-dir",
                 str(data_dir),
                 "--authorization",
-                str(FIXTURE_DIR / "auth_send.json"),
+                str(self._auth_for_app(temp_dir)),
             ])
             scan_path = Path(temp_dir) / "low_repair.json"
             self._write_json(
@@ -370,7 +370,7 @@ class AutomationPlannerTests(unittest.TestCase):
                 "--data-dir",
                 str(data_dir),
                 "--authorization",
-                str(FIXTURE_DIR / "auth_send.json"),
+                str(self._auth_for_app(temp_dir)),
             ])
             scan_path = Path(temp_dir) / "simulated_disclosure.json"
             self._write_json(
@@ -419,7 +419,7 @@ class AutomationPlannerTests(unittest.TestCase):
                 "--data-dir",
                 str(data_dir),
                 "--authorization",
-                str(FIXTURE_DIR / "auth_send.json"),
+                str(self._auth_for_app(temp_dir)),
             ])
             scan_path = Path(temp_dir) / "bridge_question.json"
             self._write_json(
@@ -468,7 +468,7 @@ class AutomationPlannerTests(unittest.TestCase):
                 "--data-dir",
                 str(data_dir),
                 "--authorization",
-                "tests/fixtures/automation/auth_send.json",
+                str(self._auth_for_app(temp_dir)),
             ])
             scan_path = Path(temp_dir) / "aligned_scan.json"
             self._write_json(scan_path, _planner_scan(draft_move="bridge_topic"))
@@ -542,6 +542,13 @@ class AutomationPlannerTests(unittest.TestCase):
         with redirect_stdout(output):
             exit_code = main(argv)
         return exit_code, output.getvalue()
+
+    def _auth_for_app(self, temp_dir, app_id="wechat"):
+        path = Path(temp_dir) / f"auth_{app_id}.json"
+        payload = json.loads((FIXTURE_DIR / "auth_send.json").read_text(encoding="utf-8"))
+        payload["app_id"] = app_id
+        self._write_json(path, payload)
+        return path
 
     def _write_json(self, path, payload):
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
