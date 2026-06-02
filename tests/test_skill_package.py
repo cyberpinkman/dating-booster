@@ -29,8 +29,8 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(metadata["package_name"], "dating-booster-codex-skill")
         self.assertEqual(metadata["target_host"], "codex")
-        self.assertEqual(metadata["package_version"], "0.1.10")
-        self.assertEqual(metadata["dating_boost_min_version"], "0.1.10")
+        self.assertEqual(metadata["package_version"], "0.2.0")
+        self.assertEqual(metadata["dating_boost_min_version"], "0.2.0")
         self.assertEqual(metadata["source_repo"], "cyberpinkman/dating-booster")
         self.assertEqual(metadata["skill_path"], "skills/dating-booster-codex")
         self.assertNotIn(metadata["source_ref"], {"main", "master", "codex/mvp-intelligence"})
@@ -57,6 +57,11 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(metadata["required_schema_versions"]["planner_assessment"], 1)
         self.assertEqual(metadata["required_schema_versions"]["goal_plan"], 1)
         self.assertEqual(metadata["required_schema_versions"]["planner_recommendation"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["data_store"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["migration"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["automation_lock"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["confirmation"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["production_smoke"], 1)
         for command in ("planner update", "planner get", "planner recommend", "planner event-log"):
             self.assertIn(command, metadata["required_commands"])
         for schema_name, schema_version in metadata["required_schema_versions"].items():
@@ -168,6 +173,13 @@ class SkillPackageTests(unittest.TestCase):
             "operator stop",
             "operator report latest",
             "dating-boost-host-loop",
+            "data doctor",
+            "data migrate",
+            "data export",
+            "data delete",
+            "confirmation create",
+            "confirmation confirm",
+            "confirmation validate",
         ):
             self.assertTrue(command in workflows_text or command in host_loop_text, command)
         for phrase in (

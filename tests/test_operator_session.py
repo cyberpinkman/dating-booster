@@ -131,6 +131,8 @@ class OperatorSessionTests(unittest.TestCase):
             action_result["action_request_id"] = send_payload["work_item"]["action_request_id"]
             action_result["target_match_id"] = send_payload["work_item"]["match_id"]
             action_result["payload_hash"] = send_payload["work_item"]["payload_hash"]
+            action_result["precondition_hash"] = send_payload["work_item"]["precondition_hash"]
+            action_result["autonomous_audit_binding"] = send_payload["work_item"]["autonomous_audit_binding"]
             result_path = Path(temp_dir) / "operator_action_result.json"
             self._write_json(result_path, action_result)
             result_exit, result_payload, _ = self._run([
@@ -457,6 +459,8 @@ class OperatorSessionTests(unittest.TestCase):
         action_result["target_match_id"] = work_item["match_id"]
         action_result["payload_hash"] = work_item["payload_hash"]
         action_result["pre_action_observation_id"] = work_item["pre_action_observation_id"]
+        action_result["precondition_hash"] = work_item["precondition_hash"]
+        action_result["autonomous_audit_binding"] = work_item["autonomous_audit_binding"]
         result_path = Path(temp_dir) / f"{work_item['candidate_key']}_action_result.json"
         self._write_json(result_path, action_result)
         result_exit, result_payload, _ = self._run([

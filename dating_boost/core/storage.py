@@ -59,20 +59,36 @@ class JsonStorage:
         path = self._resolve_path(relative_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = path.with_suffix(path.suffix + ".tmp")
-        temp_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        with temp_path.open("r+", encoding="utf-8") as handle:
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_path, path)
-        self._fsync_directory(path.parent)
+        try:
+            temp_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            with temp_path.open("r+", encoding="utf-8") as handle:
+                handle.flush()
+                os.fsync(handle.fileno())
+            self._mirror_document_to_sqlite(relative_path, data)
+            os.replace(temp_path, path)
+            self._fsync_directory(path.parent)
+        except Exception:
+            if temp_path.exists():
+                temp_path.unlink()
+            raise
 
     def append_jsonl(self, relative_path: Path, data: dict[str, Any]) -> None:
         path = self._resolve_path(relative_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(data, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        temp_path = path.with_suffix(path.suffix + ".tmp")
+        try:
+            existing = path.read_text(encoding="utf-8") if path.exists() else ""
+            temp_path.write_text(existing + json.dumps(data, sort_keys=True) + "\n", encoding="utf-8")
+            with temp_path.open("r+", encoding="utf-8") as handle:
+                handle.flush()
+                os.fsync(handle.fileno())
+            self._mirror_event_to_sqlite(relative_path, data)
+            os.replace(temp_path, path)
+            self._fsync_directory(path.parent)
+        except Exception:
+            if temp_path.exists():
+                temp_path.unlink()
+            raise
 
     def read_jsonl(self, relative_path: Path) -> list[dict[str, Any]]:
         path = self._resolve_path(relative_path)
@@ -91,3 +107,20 @@ class JsonStorage:
         except json.JSONDecodeError as exc:
             raise StorageCorruptionError(f"corrupt JSONL: {relative_path}") from exc
         return items
+
+    def _sqlite_db_exists(self) -> bool:
+        return (self.root / "dating_boost.sqlite3").exists()
+
+    def _mirror_document_to_sqlite(self, relative_path: Path, data: dict[str, Any]) -> None:
+        if not self._sqlite_db_exists():
+            return
+        from dating_boost.core.production_store import ProductionDataStore
+
+        ProductionDataStore(self.root).upsert_document(relative_path.as_posix(), data)
+
+    def _mirror_event_to_sqlite(self, relative_path: Path, data: dict[str, Any]) -> None:
+        if not self._sqlite_db_exists():
+            return
+        from dating_boost.core.production_store import ProductionDataStore
+
+        ProductionDataStore(self.root).append_audit_event(relative_path.as_posix(), data)

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost import __version__
+from dating_boost.core.production_store import ProductionDataStore
 
 
 CAPABILITIES_SCHEMA_VERSION = 1
@@ -40,6 +41,11 @@ SCHEMA_VERSIONS: dict[str, int] = {
     "conversation_eval": 1,
     "replay_timeline": 1,
     "app_profile": 1,
+    "data_store": 1,
+    "migration": 1,
+    "automation_lock": 1,
+    "confirmation": 1,
+    "production_smoke": 1,
 }
 
 SUPPORTED_COMMANDS: list[str] = [
@@ -94,10 +100,18 @@ SUPPORTED_COMMANDS: list[str] = [
     "operator get-state",
     "eval run",
     "replay latest",
+    "data doctor",
+    "data migrate",
+    "data export",
+    "data delete",
+    "confirmation create",
+    "confirmation confirm",
+    "confirmation validate",
 ]
 
 
 def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
+    storage_status = _storage_status(data_dir)
     return {
         "schema_version": CAPABILITIES_SCHEMA_VERSION,
         "tool_version": __version__,
@@ -105,11 +119,20 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
         "schema_versions": dict(SCHEMA_VERSIONS),
         "supported_commands": list(SUPPORTED_COMMANDS),
         "data_dir": str(data_dir.resolve()) if data_dir is not None else None,
+        "storage_capabilities": {
+            "sqlite": True,
+            "storage_backend": storage_status["storage_backend"],
+            "canonical_store": "sqlite",
+            "json_host_work_dir_contract": True,
+            "data_doctor": True,
+            "migration": True,
+        },
         "policy_capabilities": {
             "action_authorization": True,
             "draft_content_check": True,
             "blocked_draft_redaction": True,
             "high_risk_autonomous_switch": True,
+            "confirmation_contract": True,
         },
         "memory_capabilities": {
             "user_profile": True,
@@ -119,6 +142,8 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "observation_ingest": True,
             "context_pack_build": True,
             "feedback_events": True,
+            "export": True,
+            "delete": True,
         },
         "agent_native_capabilities": {
             "host_executed_action_audit": True,
@@ -155,6 +180,12 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "autonomous_requires_user_profile": True,
             "low_investment_repair": True,
             "reciprocity_tracking": True,
+            "production_smoke": True,
+            "real_stage_smoke_required": True,
+            "ci_tested_version": __version__,
+            "data_doctor": True,
+            "capability_mismatch_blocks_startup": True,
+            "dirty_source_warning": True,
             "llm_owned_by_host_agent": True,
             "live_gui_harness": False,
             "mcp_adapter": False,
@@ -177,3 +208,13 @@ def _git_commit() -> str:
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
     return result.stdout.strip() or "unknown"
+
+
+def _storage_status(data_dir: Path | None) -> dict[str, str]:
+    if data_dir is None:
+        return {"storage_backend": "sqlite"}
+    try:
+        doctor = ProductionDataStore(data_dir).doctor()
+    except Exception:  # noqa: BLE001 - capabilities must remain diagnostic-only.
+        return {"storage_backend": "unknown"}
+    return {"storage_backend": str(doctor.get("storage_backend") or "unknown")}

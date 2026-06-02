@@ -90,6 +90,9 @@ def validate_action_result(payload: dict[str, Any], *, created_at: str) -> dict[
         "evidence": evidence,
         "created_at": created_at,
     }
+    for optional_field in ("confirmation_id", "precondition_hash", "autonomous_audit_binding"):
+        if optional_field in payload:
+            base_event[optional_field] = payload[optional_field]
     return {
         "event_id": f"action_result_{_event_digest(base_event)}",
         **base_event,

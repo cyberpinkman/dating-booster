@@ -5,6 +5,7 @@ from typing import Any
 
 from dating_boost.core.action_audit import ActionAuditRepository
 from dating_boost.core.automation import AutomationRepository, _now_iso
+from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.scan_authoring import validate_scan_batch
 from dating_boost.core.storage import JsonStorage
 
@@ -157,6 +158,7 @@ class OperatorRepository:
         raise ValueError("observation_type must be message_list or thread")
 
     def record_action_result(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._validate_confirmation_contract(payload)
         event = ActionAuditRepository(self.root).append_action_result(payload, created_at=_now_iso())
         self._automation.apply_action_result(event)
         session = self._load_session()
@@ -175,6 +177,45 @@ class OperatorRepository:
             "result_status": event["result_status"],
             "path": "audit/action_results.jsonl",
         }
+
+    def _validate_confirmation_contract(self, payload: dict[str, Any]) -> None:
+        if payload.get("action") != "send_message" or payload.get("result_status") != "succeeded":
+            return
+        action_request_id = payload.get("action_request_id")
+        state = next(
+            (
+                item
+                for item in self._automation.load_states()
+                if item.get("last_action_request_id") == action_request_id
+            ),
+            None,
+        )
+        if state is None:
+            return
+        expected_binding = state.get("last_autonomous_audit_binding")
+        precondition_hash = state.get("last_precondition_hash")
+        if not isinstance(precondition_hash, str) or not precondition_hash:
+            return
+        confirmation_id = payload.get("confirmation_id")
+        if isinstance(confirmation_id, str) and confirmation_id.strip():
+            validation = ProductionDataStore(self.root).validate_confirmation_hashes(
+                confirmation_id=confirmation_id,
+                action="send_message",
+                target_match_id=str(payload.get("target_match_id") or ""),
+                payload_hash=str(payload.get("payload_hash") or ""),
+                precondition_hash=precondition_hash,
+            )
+            if validation.get("status") == "ok":
+                return
+            raise ValueError(f"confirmation_contract_blocked:{validation.get('reason')}")
+        binding = payload.get("autonomous_audit_binding")
+        if not isinstance(expected_binding, dict) or not isinstance(binding, dict):
+            raise ValueError("confirmation_contract_required")
+        if payload.get("precondition_hash") != precondition_hash:
+            raise ValueError("precondition_hash_mismatch")
+        for key in ("authorization_id", "action", "target_match_id", "payload_hash", "precondition_hash"):
+            if binding.get(key) != expected_binding.get(key):
+                raise ValueError(f"autonomous_audit_binding_mismatch:{key}")
 
     def cancel_current_work_item(self, work_item: dict[str, Any], *, reason: str) -> dict[str, Any]:
         session = self._load_session()

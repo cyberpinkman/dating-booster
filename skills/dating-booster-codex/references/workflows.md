@@ -9,12 +9,27 @@ policy, and audit tools. They do not replace the repository specs.
 2. Run `python3 scripts/doctor.py --json --data-dir .local/dating-boost`.
 3. If doctor returns `needs_bootstrap`, run `python3 scripts/bootstrap_cli.py`, then run doctor again.
 4. Run `dating-boost skill doctor --package skill-package.json --data-dir .local/dating-boost --json` when debugging package compatibility from the CLI.
-5. Run `dating-boost capabilities --json --data-dir .local/dating-boost`.
-6. Load `skill-package.json` and compare `dating_boost_min_version`,
+5. Run `dating-boost data doctor --data-dir .local/dating-boost --json`.
+6. If the data doctor reports `needs_migration`, run `dating-boost data migrate --data-dir .local/dating-boost --json`.
+7. Run `dating-boost capabilities --json --data-dir .local/dating-boost`.
+8. Load `skill-package.json` and compare `dating_boost_min_version`,
    `required_schema_versions`, and `required_commands`.
-7. Stop before viewing dating app content if compatibility fails.
-8. Warn, but do not automatically stop, if `source_spec_commit` differs while
+9. Stop before viewing dating app content if compatibility fails.
+10. Warn, but do not automatically stop, if `source_spec_commit` differs while
    version, schema, and command checks pass.
+
+## Production Data And Confirmation
+
+Use these commands before private production smoke or when auditing local state:
+
+1. Run `dating-boost data doctor --data-dir .local/dating-boost --json`.
+2. Run `dating-boost data migrate --data-dir .local/dating-boost --json` before production smoke when JSON data has not been migrated.
+3. Run `dating-boost data export --data-dir .local/dating-boost --output export.json --json` to produce a restorable JSON audit/export artifact.
+4. Run `dating-boost data delete --data-dir .local/dating-boost --scope match --match-id MATCH_ID --confirm delete:match:MATCH_ID --json` for match-scoped deletion.
+5. Use `dating-boost confirmation create`, `dating-boost confirmation confirm`,
+   and `dating-boost confirmation validate` for live sends requiring an explicit
+   confirmation contract.
+6. Read `production-stage-runbook.md` before any real Tinder stage-mode smoke.
 
 ## User Self Model
 

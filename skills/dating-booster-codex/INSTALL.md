@@ -37,6 +37,7 @@ python3 skills/dating-booster-codex/scripts/bootstrap_cli.py
 Then run:
 
 ```bash
+dating-boost data doctor --data-dir .local/dating-boost --json
 dating-boost capabilities --json --data-dir .local/dating-boost
 ```
 
@@ -45,6 +46,8 @@ Then compare the output with `skills/dating-booster-codex/skill-package.json`:
 - `tool_version` must satisfy `dating_boost_min_version`.
 - `schema_versions` must satisfy `required_schema_versions`.
 - `supported_commands` must contain every `required_commands` entry.
+- Run `dating-boost data migrate --data-dir .local/dating-boost --json` if
+  data doctor reports `needs_migration`.
 - A different `source_spec_commit` is a warning if version, schema, and command
   checks pass.
 
@@ -63,10 +66,15 @@ so the generated artifacts remain inspectable after the script exits.
 
 The smoke test runs capability discovery, profile initialization, observation
 ingest, match lookup, context build, host-draft policy check, skill-package
-compatibility checks, action-result audit, and feedback recording. The preferred
+compatibility checks, data doctor/migration/export, action-result audit, and feedback recording. The preferred
 manual workflow uses `dating-boost workflow draft` to combine observation
 ingest, context build, host-draft policy check, and optional feedback recording.
 It does not open Tinder, use iPhone Mirroring, send messages, or call an LLM.
+
+For real Tinder stage-mode private smoke, read
+`references/production-stage-runbook.md`. The run must stop at
+`staged_waiting_user_confirmation` and save replay, audit export, and staged
+verification artifacts.
 
 ## First Real Manual Workflow
 

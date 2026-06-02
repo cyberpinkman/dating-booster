@@ -12,6 +12,7 @@ from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.identity import resolve_match_identity
 from dating_boost.core.models import Divergence, ReplyMode
 from dating_boost.core.planner import PlannerRepository, planner_context_items
+from dating_boost.core.production_store import payload_digest
 from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
 from dating_boost.core.storage import JsonStorage
 from dating_boost.core.user_disclosure import UserDisclosureRepository
@@ -513,6 +514,7 @@ class AutomationRepository:
                     draft_payload=draft_payload,
                     latest_fingerprint=latest_fingerprint,
                     is_nudge=False,
+                    authorization=authorization,
                     planner_recommendation=planner_recommendation,
                 )
             elif assessment.get("recommended_next") == "reply":
@@ -551,6 +553,7 @@ class AutomationRepository:
                         draft_payload=draft_payload,
                         latest_fingerprint=latest_fingerprint,
                         is_nudge=True,
+                        authorization=authorization,
                         planner_recommendation=planner_recommendation,
                     )
                 elif state.get("last_nudged_inbound_fingerprint") == latest_fingerprint:
@@ -732,6 +735,7 @@ class AutomationRepository:
         draft_payload: Any,
         latest_fingerprint: str | None,
         is_nudge: bool,
+        authorization: dict[str, Any],
         planner_recommendation: dict[str, Any] | None = None,
     ) -> None:
         raw_draft = dict(draft_payload)
@@ -789,6 +793,24 @@ class AutomationRepository:
             return
 
         action_request_id = f"action_request_{match_id}_{payload_hash[:12]}"
+        precondition = {
+            "schema_version": 1,
+            "action": "send_message",
+            "target_match_id": match_id,
+            "candidate_key": candidate_key,
+            "pre_action_observation_id": observation.observation_id,
+            "latest_inbound_fingerprint": latest_fingerprint,
+        }
+        precondition_hash = payload_digest(precondition)
+        autonomous_audit_binding = {
+            "schema_version": 1,
+            "binding_type": "autonomous_authorization",
+            "authorization_id": authorization.get("authorization_id"),
+            "action": "send_message",
+            "target_match_id": match_id,
+            "payload_hash": payload_hash,
+            "precondition_hash": precondition_hash,
+        }
         low_investment_repair_applied = draft.conversation_move == "low_investment_repair"
         action_requests.append(
             {
@@ -799,6 +821,8 @@ class AutomationRepository:
                 "action": "send_message",
                 "payload_text": draft.best_reply,
                 "payload_hash": payload_hash,
+                "precondition_hash": precondition_hash,
+                "autonomous_audit_binding": autonomous_audit_binding,
                 "pre_action_observation_id": observation.observation_id,
                 "requires_post_action_verification": True,
                 "policy": {
@@ -823,6 +847,8 @@ class AutomationRepository:
         state["last_action"] = "send_message"
         state["last_action_request_id"] = action_request_id
         state["last_outbound_payload_hash"] = payload_hash
+        state["last_precondition_hash"] = precondition_hash
+        state["last_autonomous_audit_binding"] = autonomous_audit_binding
         state["last_pre_action_observation_id"] = observation.observation_id
         state["last_draft_id"] = f"draft_{payload_hash[:12]}"
         state["last_disclosure_source"] = disclosure_source if disclosure_source != "none" else None

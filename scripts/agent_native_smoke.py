@@ -49,6 +49,33 @@ def _run_smoke(data_dir: Path) -> int:
         command_key="skill_doctor",
         commands=commands,
     )
+    data_doctor_initial = _run_cli(
+        "data",
+        "doctor",
+        "--data-dir",
+        str(data_dir),
+        "--json",
+        command_key="data_doctor_initial",
+        commands=commands,
+    )
+    data_migration = _run_cli(
+        "data",
+        "migrate",
+        "--data-dir",
+        str(data_dir),
+        "--json",
+        command_key="data_migrate",
+        commands=commands,
+    )
+    data_doctor = _run_cli(
+        "data",
+        "doctor",
+        "--data-dir",
+        str(data_dir),
+        "--json",
+        command_key="data_doctor",
+        commands=commands,
+    )
     capabilities = _run_cli(
         "capabilities",
         "--json",
@@ -323,6 +350,8 @@ def _run_smoke(data_dir: Path) -> int:
                 "action": "send_message",
                 "target_match_id": request["match_id"],
                 "payload_hash": request["payload_hash"],
+                "precondition_hash": request.get("precondition_hash"),
+                "autonomous_audit_binding": request.get("autonomous_audit_binding"),
                 "pre_action_observation_id": request["pre_action_observation_id"],
                 "post_action_observation_id": "obs_automation_sent_001",
                 "result_status": "succeeded",
@@ -492,6 +521,8 @@ def _run_smoke(data_dir: Path) -> int:
             "action": "send_message",
             "target_match_id": operator_request["match_id"],
             "payload_hash": operator_request["payload_hash"],
+            "precondition_hash": operator_request["precondition_hash"],
+            "autonomous_audit_binding": operator_request["autonomous_audit_binding"],
             "pre_action_observation_id": operator_request["pre_action_observation_id"],
             "post_action_observation_id": "obs_operator_sent_001",
             "result_status": "succeeded",
@@ -527,17 +558,120 @@ def _run_smoke(data_dir: Path) -> int:
         command_key="operator_report_latest",
         commands=commands,
     )
+    export_path = data_dir / "export.json"
+    data_export = _run_cli(
+        "data",
+        "export",
+        "--data-dir",
+        str(data_dir),
+        "--output",
+        str(export_path),
+        "--json",
+        command_key="data_export",
+        commands=commands,
+    )
+    data_doctor_final = _run_cli(
+        "data",
+        "doctor",
+        "--data-dir",
+        str(data_dir),
+        "--json",
+        command_key="data_doctor_final",
+        commands=commands,
+    )
+
+    stage_fixture_dir = ROOT / "tests" / "fixtures" / "host_loop" / "tinder"
+    stage_data_dir = data_dir / "host-loop-stage"
+    stage_work_dir = stage_data_dir / "host-work"
+    shutil.rmtree(stage_data_dir, ignore_errors=True)
+    stage_result = _run_host_loop(
+        "run",
+        "--data-dir",
+        str(stage_data_dir),
+        "--authorization",
+        str(stage_fixture_dir / "auth.json"),
+        "--goal",
+        str(stage_fixture_dir / "goal.json"),
+        "--availability",
+        str(stage_fixture_dir / "availability.json"),
+        "--app-id",
+        "tinder",
+        "--send-mode",
+        "stage",
+        "--fixture-host",
+        str(stage_fixture_dir),
+        "--work-dir",
+        str(stage_work_dir),
+        "--max-steps",
+        "10",
+        "--wait-timeout",
+        "0",
+        "--json",
+        command_key="host_loop_fixture_stage",
+        commands=commands,
+    )
+    if stage_result.get("status") != "staged_waiting_user_confirmation":
+        raise RuntimeError(f"host-loop stage smoke did not stop at staged confirmation: {stage_result.get('status')}")
+    stage_migration = _run_cli(
+        "data",
+        "migrate",
+        "--data-dir",
+        str(stage_data_dir),
+        "--json",
+        command_key="host_loop_stage_data_migrate",
+        commands=commands,
+    )
+    stage_export_path = data_dir / "host_loop_stage_export.json"
+    stage_export = _run_cli(
+        "data",
+        "export",
+        "--data-dir",
+        str(stage_data_dir),
+        "--output",
+        str(stage_export_path),
+        "--json",
+        command_key="host_loop_stage_data_export",
+        commands=commands,
+    )
+    stage_replay = _run_cli(
+        "replay",
+        "latest",
+        "--data-dir",
+        str(stage_data_dir),
+        "--format",
+        "json",
+        command_key="host_loop_stage_replay",
+        commands=commands,
+    )
+    staged_artifacts = sorted(stage_work_dir.glob("staged_verification.*.json"))
+    if not staged_artifacts:
+        raise RuntimeError("host-loop stage smoke did not write staged verification artifact")
 
     print(
         json.dumps(
             {
+                "schema_version": 1,
                 "status": "ok",
+                "production_smoke": True,
                 "data_dir": str(data_dir),
                 "match_id": match_id,
                 "skill_doctor": skill_doctor,
+                "data_doctor_initial": data_doctor_initial,
+                "data_migration": data_migration,
+                "data_doctor_after_migration": data_doctor,
+                "data_doctor": data_doctor_final,
                 "tool_version": capabilities["tool_version"],
                 "compatibility": compatibility,
                 "commands": commands,
+                "host_loop_fixture_stage": {
+                    "status": stage_result["status"],
+                    "stop_reason": stage_result.get("stop_reason"),
+                    "stage_data_dir": str(stage_data_dir),
+                    "stage_work_dir": str(stage_work_dir),
+                    "current_work_item": str(stage_work_dir / "current_work_item.json"),
+                    "staged_verification": str(staged_artifacts[0]),
+                    "replay_status": stage_replay.get("status"),
+                },
                 "artifacts": {
                     "context": str(context_path),
                     "planner_assessment": str(planner_assessment_path),
@@ -556,6 +690,12 @@ def _run_smoke(data_dir: Path) -> int:
                     "operator_thread": str(operator_thread_path),
                     "operator_action_result": str(operator_action_path),
                     "operator_machine_report": str(operator_data_dir / operator_stop["machine_report_path"]),
+                    "data_export": str(export_path),
+                    "data_export_document_count": data_export["document_count"],
+                    "host_loop_stage_export": str(stage_export_path),
+                    "host_loop_stage_export_document_count": stage_export["document_count"],
+                    "host_loop_stage_migration_backup": stage_migration["backup_dir"],
+                    "host_loop_stage_replay": stage_replay.get("timeline_path"),
                 },
             },
             ensure_ascii=False,
@@ -581,6 +721,26 @@ def _run_cli(*args: str, command_key: str, commands: dict[str, int]) -> dict[str
     if result.returncode != 0:
         raise RuntimeError(
             f"dating-boost {' '.join(args)} failed with exit {result.returncode}: {result.stderr or result.stdout}"
+        )
+    return json.loads(result.stdout)
+
+
+def _run_host_loop(*args: str, command_key: str, commands: dict[str, int]) -> dict[str, Any]:
+    env = dict(os.environ)
+    env.setdefault("DATING_BOOST_NOW", "2026-05-26T00:00:00Z")
+    result = subprocess.run(
+        [sys.executable, "-m", "dating_boost.host_loop", *args],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    commands[command_key] = result.returncode
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"dating-boost-host-loop {' '.join(args)} failed with exit {result.returncode}: "
+            f"{result.stderr or result.stdout}"
         )
     return json.loads(result.stdout)
 

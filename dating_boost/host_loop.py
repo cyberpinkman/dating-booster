@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.operator import OperatorRepository
+from dating_boost.core.production_store import ProductionDataStore
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -328,6 +329,36 @@ class HostLoopSupervisor:
     def run(self, *, resume: bool = False) -> tuple[dict[str, Any], int]:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
+        run_id = f"run_host_loop_{_digest({'data_dir': str(self.data_dir), 'work_dir': str(self.work_dir), 'resume': resume, 'now': _now_iso()})[:12]}"
+        store = ProductionDataStore(self.data_dir)
+        lock_result = store.acquire_lock(
+            "host_loop_run",
+            owner="dating-boost-host-loop",
+            run_id=run_id,
+        )
+        if not lock_result.acquired:
+            return {
+                "schema_version": 1,
+                "status": "blocked",
+                "stop_reason": "automation_lock_active",
+                "send_mode": self.args.send_mode,
+                "app_id": self.args.app_id,
+                "data_dir": str(self.data_dir),
+                "work_dir": str(self.work_dir),
+                "steps": list(self.steps),
+                "staged_verifications": list(self.staged_verifications),
+                "action_results_recorded": list(self.action_results_recorded),
+                "next_host_action": "resume_after_lock_expires",
+                "lock": lock_result.lock,
+            }, 0
+        try:
+            payload, exit_code = self._run_unlocked(resume=resume)
+        finally:
+            released_lock = store.release_lock("host_loop_run", run_id=run_id)
+        payload["lock"] = {**released_lock, "takeover": bool(lock_result.lock.get("takeover"))}
+        return payload, exit_code
+
+    def _run_unlocked(self, *, resume: bool = False) -> tuple[dict[str, Any], int]:
         try:
             self._bootstrap_fixture_profile()
             self._preflight()
@@ -925,6 +956,8 @@ def _action_result_template(work_item: dict[str, Any]) -> dict[str, Any]:
         "action": "send_message",
         "target_match_id": work_item.get("match_id"),
         "payload_hash": work_item.get("payload_hash"),
+        "precondition_hash": work_item.get("precondition_hash"),
+        "autonomous_audit_binding": work_item.get("autonomous_audit_binding"),
         "pre_action_observation_id": work_item.get("pre_action_observation_id"),
         "post_action_observation_id": "",
         "result_status": "unknown",
@@ -940,6 +973,8 @@ def _action_result_fixture(work_item: dict[str, Any]) -> dict[str, Any]:
         "action": "send_message",
         "target_match_id": work_item.get("match_id"),
         "payload_hash": work_item.get("payload_hash"),
+        "precondition_hash": work_item.get("precondition_hash"),
+        "autonomous_audit_binding": work_item.get("autonomous_audit_binding"),
         "pre_action_observation_id": work_item.get("pre_action_observation_id"),
         "post_action_observation_id": f"{work_item.get('pre_action_observation_id')}_sent",
         "result_status": "succeeded",
@@ -1028,6 +1063,15 @@ def _data_dir_path(data_dir: Path, value: Any) -> str | None:
     if path.is_absolute():
         return str(path)
     return str(data_dir / path)
+
+
+def _digest(payload: Any) -> str:
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _now_iso() -> str:
+    return os.environ.get("DATING_BOOST_NOW") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def _load_app_profile(app_id: str) -> dict[str, Any]:

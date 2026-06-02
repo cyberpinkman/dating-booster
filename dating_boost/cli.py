@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import sys
@@ -23,6 +24,7 @@ from dating_boost.core.observation_authoring import (
 )
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.planner import PlannerRepository, planner_context_items
+from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.replay import latest_replay_markdown, latest_replay_payload
 from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
 from dating_boost.core.scan_authoring import (
@@ -77,6 +79,47 @@ def main(argv: list[str] | None = None) -> int:
     skill_doctor_parser.add_argument("--data-dir", required=True, type=Path)
     skill_doctor_parser.add_argument("--json", action="store_true")
     skill_doctor_parser.set_defaults(handler=_handle_skill_doctor)
+
+    data_parser = subparsers.add_parser("data", help="SQLite data-store diagnostics and privacy commands.")
+    data_subparsers = data_parser.add_subparsers(dest="data_command", required=True)
+    data_doctor_parser = data_subparsers.add_parser("doctor")
+    data_doctor_parser.add_argument("--data-dir", required=True, type=Path)
+    data_doctor_parser.add_argument("--json", action="store_true")
+    data_doctor_parser.set_defaults(handler=_handle_data_doctor)
+    data_migrate_parser = data_subparsers.add_parser("migrate")
+    data_migrate_parser.add_argument("--data-dir", required=True, type=Path)
+    data_migrate_parser.add_argument("--json", action="store_true")
+    data_migrate_parser.set_defaults(handler=_handle_data_migrate)
+    data_export_parser = data_subparsers.add_parser("export")
+    data_export_parser.add_argument("--data-dir", required=True, type=Path)
+    data_export_parser.add_argument("--output", required=True, type=Path)
+    data_export_parser.add_argument("--json", action="store_true")
+    data_export_parser.set_defaults(handler=_handle_data_export)
+    data_delete_parser = data_subparsers.add_parser("delete")
+    data_delete_parser.add_argument("--data-dir", required=True, type=Path)
+    data_delete_parser.add_argument("--scope", required=True, choices=["match", "archived", "all"])
+    data_delete_parser.add_argument("--match-id")
+    data_delete_parser.add_argument("--confirm", required=True)
+    data_delete_parser.add_argument("--json", action="store_true")
+    data_delete_parser.set_defaults(handler=_handle_data_delete)
+
+    confirmation_parser = subparsers.add_parser("confirmation", help="Create and validate send confirmations.")
+    confirmation_subparsers = confirmation_parser.add_subparsers(dest="confirmation_command", required=True)
+    confirmation_create_parser = confirmation_subparsers.add_parser("create")
+    _add_confirmation_binding_args(confirmation_create_parser)
+    confirmation_create_parser.add_argument("--expires-at", required=True)
+    confirmation_create_parser.add_argument("--json", action="store_true")
+    confirmation_create_parser.set_defaults(handler=_handle_confirmation_create)
+    confirmation_confirm_parser = confirmation_subparsers.add_parser("confirm")
+    confirmation_confirm_parser.add_argument("--data-dir", required=True, type=Path)
+    confirmation_confirm_parser.add_argument("--confirmation-id", required=True)
+    confirmation_confirm_parser.add_argument("--json", action="store_true")
+    confirmation_confirm_parser.set_defaults(handler=_handle_confirmation_confirm)
+    confirmation_validate_parser = confirmation_subparsers.add_parser("validate")
+    confirmation_validate_parser.add_argument("--confirmation-id", required=True)
+    _add_confirmation_binding_args(confirmation_validate_parser)
+    confirmation_validate_parser.add_argument("--json", action="store_true")
+    confirmation_validate_parser.set_defaults(handler=_handle_confirmation_validate)
 
     authorize_parser = subparsers.add_parser(
         "authorize",
@@ -301,6 +344,8 @@ def main(argv: list[str] | None = None) -> int:
     session_step_parser = automation_session_subparsers.add_parser("step")
     session_step_parser.add_argument("--data-dir", required=True, type=Path)
     session_step_parser.add_argument("--scan-batch", required=True, type=Path)
+    session_step_parser.add_argument("--run-id")
+    session_step_parser.add_argument("--idempotency-key")
     session_step_parser.set_defaults(handler=_handle_automation_session_step)
     session_stop_parser = automation_session_subparsers.add_parser("stop")
     session_stop_parser.add_argument("--data-dir", required=True, type=Path)
@@ -455,6 +500,64 @@ def _handle_skill_doctor(args: argparse.Namespace) -> int:
     payload = run_skill_doctor(args.package, args.data_dir)
     _print_json(payload)
     return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_data_doctor(args: argparse.Namespace) -> int:
+    payload = ProductionDataStore(args.data_dir).doctor()
+    _print_json(payload)
+    return 0
+
+
+def _handle_data_migrate(args: argparse.Namespace) -> int:
+    payload = ProductionDataStore(args.data_dir).migrate()
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_data_export(args: argparse.Namespace) -> int:
+    payload = ProductionDataStore(args.data_dir).export(args.output)
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_data_delete(args: argparse.Namespace) -> int:
+    payload = ProductionDataStore(args.data_dir).delete(
+        scope=args.scope,
+        match_id=args.match_id,
+        confirm=args.confirm,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_confirmation_create(args: argparse.Namespace) -> int:
+    payload = ProductionDataStore(args.data_dir).create_confirmation(
+        action=args.action,
+        target_match_id=args.target_match_id,
+        payload=_read_json_payload(args.payload_json),
+        precondition=_read_json_payload(args.precondition_json),
+        expires_at=args.expires_at,
+    )
+    _print_json(payload)
+    return 0
+
+
+def _handle_confirmation_confirm(args: argparse.Namespace) -> int:
+    payload = ProductionDataStore(args.data_dir).confirm_confirmation(args.confirmation_id)
+    _print_json(payload)
+    return 0 if payload.get("status") == "confirmed" else 2
+
+
+def _handle_confirmation_validate(args: argparse.Namespace) -> int:
+    payload = ProductionDataStore(args.data_dir).validate_confirmation(
+        confirmation_id=args.confirmation_id,
+        action=args.action,
+        target_match_id=args.target_match_id,
+        payload=_read_json_payload(args.payload_json),
+        precondition=_read_json_payload(args.precondition_json),
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
 
 
 def _handle_authorize(args: argparse.Namespace) -> int:
@@ -848,7 +951,58 @@ def _handle_automation_session_start(args: argparse.Namespace) -> int:
 
 
 def _handle_automation_session_step(args: argparse.Namespace) -> int:
-    _print_json(AutomationRepository(args.data_dir).step(_read_json_object(args.scan_batch)))
+    scan_batch = _read_json_object(args.scan_batch)
+    run_id = args.run_id or _derive_run_id(scan_batch)
+    idempotency_key = args.idempotency_key or _derive_idempotency_key(scan_batch)
+    store = ProductionDataStore(args.data_dir)
+    replay = store.load_idempotency(idempotency_key)
+    if replay is not None:
+        payload = dict(replay)
+        replayed_action_requests = list(payload.get("action_requests", []))
+        replayed_scheduled_actions = list(payload.get("scheduled_actions", []))
+        replay_warnings = [*payload.get("warnings", []), "idempotency_replay"]
+        if replayed_action_requests:
+            replay_warnings.append("duplicate_send_request_suppressed")
+        if replayed_scheduled_actions:
+            replay_warnings.append("duplicate_scheduled_action_suppressed")
+        payload["warnings"] = _unique_cli_strings(replay_warnings)
+        payload["replayed_action_request_ids"] = [
+            item.get("action_request_id")
+            for item in replayed_action_requests
+            if isinstance(item, dict) and item.get("action_request_id")
+        ]
+        payload["replayed_scheduled_action_count"] = len(replayed_scheduled_actions)
+        payload["action_requests"] = []
+        payload["handoffs"] = []
+        payload["scan_requests"] = []
+        payload["scheduled_actions"] = []
+        payload["lock"] = {
+            "schema_version": 1,
+            "lock_name": "automation_session_step",
+            "status": "replayed",
+        }
+        _print_json(payload)
+        return 0
+
+    lock_result = store.acquire_lock(
+        "automation_session_step",
+        owner="dating-boost-cli",
+        run_id=run_id,
+    )
+    if not lock_result.acquired:
+        _print_json(_lock_blocked_payload(lock_result.lock, run_id=run_id, idempotency_key=idempotency_key))
+        return 0
+
+    try:
+        payload = AutomationRepository(args.data_dir).step(scan_batch)
+    finally:
+        released_lock = store.release_lock("automation_session_step", run_id=run_id)
+    payload["run_id"] = run_id
+    payload["idempotency_key"] = idempotency_key
+    payload["lock"] = {**released_lock, "takeover": bool(lock_result.lock.get("takeover"))}
+    if payload.get("status") == "ok" and payload.get("action_requests"):
+        store.store_idempotency(idempotency_key, run_id=run_id, response=payload)
+    _print_json(payload)
     return 0
 
 
@@ -935,11 +1089,32 @@ def _handle_operator_session_start(args: argparse.Namespace) -> int:
 
 
 def _handle_operator_next(args: argparse.Namespace) -> int:
+    run_id = f"run_operator_next_{_digest({'now': _now_iso(), 'data_dir': str(args.data_dir)})[:12]}"
+    store = ProductionDataStore(args.data_dir)
+    lock_result = store.acquire_lock(
+        "operator_next",
+        owner="dating-boost-cli",
+        run_id=run_id,
+    )
+    if not lock_result.acquired:
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "blocked",
+                "reason": "automation_lock_active",
+                "work_item": None,
+                "lock": lock_result.lock,
+            }
+        )
+        return 2
     try:
         payload = OperatorRepository(args.data_dir).next_work_item()
     except ValueError as exc:
         _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})
         return 2
+    finally:
+        released_lock = store.release_lock("operator_next", run_id=run_id)
+    payload["lock"] = {**released_lock, "takeover": bool(lock_result.lock.get("takeover"))}
     _print_json(payload)
     return 0 if payload["status"] == "ok" else 2
 
@@ -1228,6 +1403,72 @@ def _read_json_object(path: Path) -> dict[str, Any]:
 
 def _read_json_payload(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _add_confirmation_binding_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--data-dir", required=True, type=Path)
+    parser.add_argument("--action", required=True, choices=[action.value for action in Action])
+    parser.add_argument("--target-match-id", required=True)
+    parser.add_argument("--payload-json", required=True, type=Path)
+    parser.add_argument("--precondition-json", required=True, type=Path)
+
+
+def _derive_run_id(scan_batch: dict[str, Any]) -> str:
+    return f"run_{_digest({'idempotency': _idempotency_seed(scan_batch), 'now': _now_iso()})[:16]}"
+
+
+def _derive_idempotency_key(scan_batch: dict[str, Any]) -> str:
+    return "idem:" + _digest(_idempotency_seed(scan_batch))
+
+
+def _idempotency_seed(scan_batch: dict[str, Any]) -> dict[str, Any]:
+    entries = list(scan_batch.get("message_list_snapshot", {}).get("entries", []))
+    first_candidate = entries[0].get("candidate_key") if entries and isinstance(entries[0], dict) else None
+    fingerprints: list[str] = []
+    for item in scan_batch.get("thread_observations", []):
+        if not isinstance(item, dict):
+            continue
+        assessment = item.get("assessment")
+        if isinstance(assessment, dict) and assessment.get("latest_inbound_fingerprint"):
+            fingerprints.append(str(assessment["latest_inbound_fingerprint"]))
+    return {
+        "session_id": scan_batch.get("session_id"),
+        "candidate_key": first_candidate,
+        "latest_inbound_fingerprint": fingerprints[0] if fingerprints else None,
+    }
+
+
+def _lock_blocked_payload(lock: dict[str, Any], *, run_id: str, idempotency_key: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "status": "blocked",
+        "reason": "automation_lock_active",
+        "run_id": run_id,
+        "idempotency_key": idempotency_key,
+        "lock": lock,
+        "action_requests": [],
+        "handoffs": [],
+        "scan_requests": [],
+        "scheduled_actions": [],
+        "warnings": ["automation_lock_active"],
+    }
+
+
+def _unique_cli_strings(values: list[Any]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        value = str(item)
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _digest(payload: Any) -> str:
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _validate_storage_id(value: str, label: str) -> None:

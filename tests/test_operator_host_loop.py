@@ -358,6 +358,8 @@ def _action_result_for_work_item(work_item: dict) -> dict:
         "action": "send_message",
         "target_match_id": work_item["match_id"],
         "payload_hash": work_item["payload_hash"],
+        "precondition_hash": work_item["precondition_hash"],
+        "autonomous_audit_binding": work_item["autonomous_audit_binding"],
         "pre_action_observation_id": work_item.get("pre_action_observation_id"),
         "post_action_observation_id": f"{work_item.get('pre_action_observation_id')}_sent",
         "result_status": "succeeded",

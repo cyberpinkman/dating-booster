@@ -2,12 +2,12 @@
   "schema_version": 1,
   "name": "dating-booster-codex",
   "package_name": "dating-booster-codex-skill",
-  "package_version": "0.1.10",
+  "package_version": "0.2.0",
   "target_host": "codex",
-  "dating_boost_min_version": "0.1.10",
+  "dating_boost_min_version": "0.2.0",
   "source_repo": "cyberpinkman/dating-booster",
   "skill_path": "skills/dating-booster-codex",
-  "source_ref": "v0.1.10",
+  "source_ref": "v0.2.0",
   "cli_package_name": "dating-booster",
   "cli_command": "dating-boost",
   "host_loop_command": "dating-boost-host-loop",
@@ -39,9 +39,14 @@
     "observation_authoring": 1,
     "conversation_eval": 1,
     "replay_timeline": 1,
-    "app_profile": 1
+    "app_profile": 1,
+    "data_store": 1,
+    "migration": 1,
+    "automation_lock": 1,
+    "confirmation": 1,
+    "production_smoke": 1
   },
-  "source_spec_commit": "v0.1.10",
+  "source_spec_commit": "v0.2.0",
   "source_specs": [
     "docs/superpowers/specs/2026-05-25-agent-native-launch-strategy.md",
     "docs/superpowers/specs/2026-05-25-product-architecture-blueprint.md",
@@ -62,7 +67,8 @@
     "references/observation-authoring.md",
     "references/planner-authoring.md",
     "references/drafting-framework.md",
-    "references/naturalness-checklist.md"
+    "references/naturalness-checklist.md",
+    "references/production-stage-runbook.md"
   ],
   "required_commands": [
     "capabilities",
@@ -109,6 +115,13 @@
     "operator report latest",
     "operator get-state",
     "eval run",
-    "replay latest"
+    "replay latest",
+    "data doctor",
+    "data migrate",
+    "data export",
+    "data delete",
+    "confirmation create",
+    "confirmation confirm",
+    "confirmation validate"
   ]
 }

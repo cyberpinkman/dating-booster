@@ -26,7 +26,14 @@ Then run `python3 scripts/doctor.py --json --data-dir .local/dating-boost` again
 Finally run:
 
 ```bash
+dating-boost data doctor --data-dir .local/dating-boost --json
 dating-boost capabilities --json --data-dir .local/dating-boost
+```
+
+If data doctor reports `needs_migration`, run:
+
+```bash
+dating-boost data migrate --data-dir .local/dating-boost --json
 ```
 
 Load this package's `skill-package.json` and compare it with the capabilities JSON before continuing:
@@ -35,9 +42,11 @@ Load this package's `skill-package.json` and compare it with the capabilities JS
 - Every `required_schema_versions` entry must exist in `schema_versions` with the same version.
 - Every `required_commands` entry must exist in `supported_commands`.
 - `schema_version` for capabilities must be supported by this skill package.
+- `storage_capabilities.storage_backend` should be `sqlite` before production smoke.
+- `agent_native_capabilities.ci_tested_version` should match the installed tool version.
 - If `source_spec_commit` differs from the local repo commit, report a warning. Continue only if version, schema, and command checks pass.
 
-If doctor, bootstrap, or capabilities fails; returns invalid JSON; has an incompatible `schema_version`; is too old; lacks a required schema version; or does not list the required commands, stop before observing dating app content and tell the user the local Dating Booster tool is incompatible.
+If doctor, bootstrap, data doctor, migration, or capabilities fails; returns invalid JSON; has an incompatible `schema_version`; is too old; lacks a required schema version; or does not list the required commands, stop before observing dating app content and tell the user the local Dating Booster tool is incompatible.
 
 ## Privacy Boundary
 
