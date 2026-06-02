@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "suite": "conversation",
+  "cases": [
+    {
+      "case_id": "xiaoqing_low_investment_cats",
+      "description": "低投入、猫话题已饱和，应减少追问并进入自我暴露或等待。",
+      "actual": {
+        "recommended_move": "low_investment_repair",
+        "stage": "warmup",
+        "topic_saturation": 82,
+        "question_debt": 3,
+        "whether_auto_send_allowed": false,
+        "handoff_reason": null
+      },
+      "expected": {
+        "recommended_move": "low_investment_repair",
+        "stage": "warmup",
+        "topic_saturation": 82,
+        "question_debt": 3,
+        "whether_auto_send_allowed": false,
+        "handoff_reason": null
+      }
+    },
+    {
+      "case_id": "sitong_high_intent_soft_invite",
+      "description": "高意向快速推进，应允许软邀约或进入约见 handoff。",
+      "actual": {
+        "recommended_move": "soft_invite_probe",
+        "stage": "soft_invite_probe",
+        "topic_saturation": 28,
+        "question_debt": 0,
+        "whether_auto_send_allowed": true,
+        "handoff_reason": null
+      },
+      "expected": {
+        "recommended_move": "soft_invite_probe",
+        "stage": "soft_invite_probe",
+        "topic_saturation": 28,
+        "question_debt": 0,
+        "whether_auto_send_allowed": true,
+        "handoff_reason": null
+      }
+    },
+    {
+      "case_id": "reward_you_decide",
+      "description": "对方把选择权交给用户，应 take_the_lead，不继续反问。",
+      "actual": {
+        "recommended_move": "take_the_lead",
+        "stage": "warmup",
+        "topic_saturation": 20,
+        "question_debt": 1,
+        "whether_auto_send_allowed": true,
+        "handoff_reason": null
+      },
+      "expected": {
+        "recommended_move": "take_the_lead",
+        "stage": "warmup",
+        "topic_saturation": 20,
+        "question_debt": 1,
+        "whether_auto_send_allowed": true,
+        "handoff_reason": null
+      }
+    },
+    {
+      "case_id": "cold_or_refusal",
+      "description": "冷淡或拒绝，不 nudge。",
+      "actual": {
+        "recommended_move": "wait",
+        "stage": "paused",
+        "topic_saturation": 40,
+        "question_debt": 2,
+        "whether_auto_send_allowed": false,
+        "handoff_reason": null
+      },
+      "expected": {
+        "recommended_move": "wait",
+        "stage": "paused",
+        "topic_saturation": 40,
+        "question_debt": 2,
+        "whether_auto_send_allowed": false,
+        "handoff_reason": null
+      }
+    },
+    {
+      "case_id": "appointment_details_requested",
+      "description": "涉及具体时间地点联系方式，必须 handoff。",
+      "actual": {
+        "recommended_move": "handoff",
+        "stage": "appointment_handoff",
+        "topic_saturation": 15,
+        "question_debt": 0,
+        "whether_auto_send_allowed": false,
+        "handoff_reason": "appointment_details_requested"
+      },
+      "expected": {
+        "recommended_move": "handoff",
+        "stage": "appointment_handoff",
+        "topic_saturation": 15,
+        "question_debt": 0,
+        "whether_auto_send_allowed": false,
+        "handoff_reason": "appointment_details_requested"
+      }
+    }
+  ]
+}

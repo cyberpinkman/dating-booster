@@ -36,6 +36,10 @@ SCHEMA_VERSIONS: dict[str, int] = {
     "planner_assessment": 1,
     "goal_plan": 1,
     "planner_recommendation": 1,
+    "observation_authoring": 1,
+    "conversation_eval": 1,
+    "replay_timeline": 1,
+    "app_profile": 1,
 }
 
 SUPPORTED_COMMANDS: list[str] = [
@@ -43,6 +47,9 @@ SUPPORTED_COMMANDS: list[str] = [
     "init-profile",
     "import-observation",
     "observe-screenshot",
+    "observation template",
+    "observation validate",
+    "observation normalize",
     "draft",
     "feedback",
     "authorize",
@@ -85,6 +92,8 @@ SUPPORTED_COMMANDS: list[str] = [
     "operator stop",
     "operator report latest",
     "operator get-state",
+    "eval run",
+    "replay latest",
 ]
 
 
@@ -118,8 +127,17 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "operator_session": True,
             "goal_oriented_operator": True,
             "host_loop_supervisor": True,
+            "host_loop_recovery": True,
+            "host_loop_doctor": True,
+            "host_loop_init": True,
+            "host_loop_resume": True,
             "tinder_host_loop": True,
             "host_loop_command": "dating-boost-host-loop",
+            "supported_app_profiles": ["tinder", "wechat", "bumble", "tashuo"],
+            "multi_app_profiles": True,
+            "observation_authoring": True,
+            "conversation_eval": True,
+            "replay_timeline": True,
             "automation_dry_run_default": True,
             "automation_external_scheduler": True,
             "appointment_ledger": True,

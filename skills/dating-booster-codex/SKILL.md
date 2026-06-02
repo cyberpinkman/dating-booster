@@ -87,10 +87,10 @@ dating-boost user readiness --data-dir .local/dating-boost --mode autonomous --j
 If it returns `needs_user_profile`, stop managed automation and ask the user to
 provide/import their dating profile and self interview with
 `dating-boost user ingest-profile` and `dating-boost user ingest-interview`.
-Do not start `operator session` or `automation session` for autonomous sends
-until readiness passes. Readiness requires both sources plus at least three
-usable `shareable_material` entries with non-empty text and low/medium
-sensitivity.
+Do not start `operator session`, `automation session`, or `dating-boost-host-loop run`
+for autonomous sends until readiness passes. Readiness requires both sources
+plus at least five low-risk shareable materials, at least two materials usable
+for `low_investment_repair`, and at least one date/meeting preference material.
 
 Before generating a draft for an opened thread, read
 `references/planner-authoring.md` and author a `planner_assessment` that
@@ -198,15 +198,48 @@ internal QA; do not show it by default.
 For real Tinder host-loop testing, prefer `dating-boost-host-loop` over
 manually calling every operator command. Read `references/host-loop.md` first.
 
+Preferred one-command path:
+
+```bash
+dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json
+dating-boost-host-loop init --data-dir .local/dating-boost --work-dir .local/dating-boost-host-loop --app-id tinder --json
+dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+```
+
+Use `dating-boost-host-loop status` to inspect the current waiting state,
+`dating-boost-host-loop resume` to continue after interruption, and
+`dating-boost-host-loop confirm-staged` only after a stage-mode send has been
+reviewed by the user.
+
 Default to `--send-mode stage`: paste the draft into Tinder, verify the staged
 text, and stop before clicking send. Use `--send-mode live` only after explicit
 user authorization for ordinary automatic sends. Live mode still requires staged
 text verification before send and post-action verification after send.
 
-The host must write only the requested work-dir files:
-`message_list_observation.json`, `thread_observation_<candidate_key>.json`,
-`staged_verification.json`, or `action_result.json`. Do not infer success from a
-requested action alone.
+The host must write only the requested work-dir files named with the current
+`work_item_id`: `message_list_observation.<work_item_id>.json`,
+`thread_observation.<work_item_id>.json`,
+`staged_verification.<work_item_id>.json`, or
+`action_result.<work_item_id>.json`. Legacy examples may mention
+`staged_verification.json` or `action_result.json`; for host loop recovery, use
+the scoped names. Do not infer success from a requested action alone.
+
+Every message-list/thread observation must pass:
+
+```bash
+dating-boost observation validate --input OBSERVATION.json --json
+```
+
+Then the supervisor ingests it. `latest_inbound_messages` must include only
+messages after the user's latest outbound and must include turn boundary
+evidence; old visible bubbles are background context.
+
+After a run, use:
+
+```bash
+dating-boost replay latest --data-dir .local/dating-boost --format md
+dating-boost eval run --suite conversation --json
+```
 
 ## Host-Orchestrated Automation Session Fallback
 

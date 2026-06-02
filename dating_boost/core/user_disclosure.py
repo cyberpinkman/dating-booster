@@ -20,6 +20,10 @@ SIMULATION_POLICIES = {
 }
 MATERIAL_SENSITIVITIES = {"low", "medium", "high"}
 AUTONOMOUS_MATERIAL_SENSITIVITIES = {"low", "medium"}
+MATERIAL_RISK_LEVELS = {"low", "medium", "high"}
+MIN_AUTONOMOUS_LOW_RISK_MATERIALS = 5
+MIN_AUTONOMOUS_LOW_INVESTMENT_REPAIR_MATERIALS = 2
+MIN_AUTONOMOUS_DATE_PREFERENCE_MATERIALS = 1
 
 
 def interview_template() -> dict[str, Any]:
@@ -38,6 +42,10 @@ def interview_template() -> dict[str, Any]:
                 "type": "life_detail",
                 "text": "",
                 "tags": [],
+                "risk_level": "low",
+                "usable_moves": ["light_self_disclosure"],
+                "hard_fact_dependencies": [],
+                "example_phrasings": [],
                 "sensitivity": "low",
                 "source": "user_interview",
             }
@@ -117,8 +125,16 @@ class UserDisclosureRepository:
                 missing.append("self_interview")
 
         shareable = _usable_shareable_material(profile)
-        if mode == "autonomous" and len(shareable) < 3:
-            missing.append("shareable_material")
+        low_risk = _low_risk_material(profile)
+        repair = _materials_for_move(profile, "low_investment_repair")
+        date_preferences = _date_preference_material(profile)
+        if mode == "autonomous":
+            if len(low_risk) < MIN_AUTONOMOUS_LOW_RISK_MATERIALS:
+                missing.append("low_risk_shareable_material")
+            if len(repair) < MIN_AUTONOMOUS_LOW_INVESTMENT_REPAIR_MATERIALS:
+                missing.append("low_investment_repair_material")
+            if len(date_preferences) < MIN_AUTONOMOUS_DATE_PREFERENCE_MATERIALS:
+                missing.append("date_preference_material")
 
         if not profile.get("simulation_policy"):
             missing.append("simulation_policy")
@@ -181,6 +197,14 @@ def validate_disclosure_profile(profile: Any) -> list[str]:
             errors.append(f"{path}.tags must be a list")
         if material.get("sensitivity", "low") not in MATERIAL_SENSITIVITIES:
             errors.append(f"{path}.sensitivity must be one of {sorted(MATERIAL_SENSITIVITIES)}")
+        if material.get("risk_level", material.get("sensitivity", "low")) not in MATERIAL_RISK_LEVELS:
+            errors.append(f"{path}.risk_level must be one of {sorted(MATERIAL_RISK_LEVELS)}")
+        if "usable_moves" in material and not isinstance(material.get("usable_moves"), list):
+            errors.append(f"{path}.usable_moves must be a list")
+        if "hard_fact_dependencies" in material and not isinstance(material.get("hard_fact_dependencies"), list):
+            errors.append(f"{path}.hard_fact_dependencies must be a list")
+        if "example_phrasings" in material and not isinstance(material.get("example_phrasings"), list):
+            errors.append(f"{path}.example_phrasings must be a list")
     if not isinstance(profile.get("persona_style"), dict):
         errors.append("persona_style must be an object")
     if profile.get("simulation_policy") not in SIMULATION_POLICIES:
@@ -266,6 +290,10 @@ def _normalize_material(value: Any) -> list[dict[str, Any]]:
         material.setdefault("material_id", f"mat_{index}")
         material.setdefault("type", "life_detail")
         material.setdefault("tags", [])
+        material.setdefault("risk_level", str(material.get("sensitivity") or "low"))
+        material.setdefault("usable_moves", _moves_from_material(material))
+        material.setdefault("hard_fact_dependencies", [])
+        material.setdefault("example_phrasings", [])
         material.setdefault("sensitivity", "low")
         material.setdefault("source", "user_interview")
         normalized.append(material)
@@ -280,6 +308,51 @@ def _usable_shareable_material(profile: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(text, str) and text.strip() and sensitivity in AUTONOMOUS_MATERIAL_SENSITIVITIES:
             usable.append(material)
     return usable
+
+
+def _low_risk_material(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        material
+        for material in _usable_shareable_material(profile)
+        if _material_risk_level(material) == "low"
+    ]
+
+
+def _materials_for_move(profile: dict[str, Any], move: str) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for material in _low_risk_material(profile):
+        moves = [str(item) for item in material.get("usable_moves", [])] if isinstance(material.get("usable_moves"), list) else []
+        tags = [str(item) for item in material.get("tags", [])] if isinstance(material.get("tags"), list) else []
+        if move in moves or move in tags:
+            result.append(material)
+    return result
+
+
+def _date_preference_material(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for material in _low_risk_material(profile):
+        material_type = str(material.get("type") or "")
+        tags = [str(item) for item in material.get("tags", [])] if isinstance(material.get("tags"), list) else []
+        moves = [str(item) for item in material.get("usable_moves", [])] if isinstance(material.get("usable_moves"), list) else []
+        if material_type == "date_preference" or "date_preference" in tags or "soft_invite_probe" in moves:
+            result.append(material)
+    return result
+
+
+def _material_risk_level(material: dict[str, Any]) -> str:
+    return str(material.get("risk_level") or material.get("sensitivity") or "low")
+
+
+def _moves_from_material(material: dict[str, Any]) -> list[str]:
+    tags = [str(item) for item in material.get("tags", [])] if isinstance(material.get("tags"), list) else []
+    moves: list[str] = []
+    if "low_investment_repair" in tags:
+        moves.append("low_investment_repair")
+    if "soft_invite" in tags or "date_activity" in tags or "date_preference" in tags:
+        moves.append("soft_invite_probe")
+    if not moves:
+        moves.append("light_self_disclosure")
+    return moves
 
 
 def _objects(value: Any) -> list[dict[str, Any]]:
@@ -339,6 +412,9 @@ def _readiness_payload(
 ) -> dict[str, Any]:
     material_count = len(_objects(profile.get("shareable_material"))) if profile else 0
     usable_material_count = len(_usable_shareable_material(profile)) if profile else 0
+    low_risk_count = len(_low_risk_material(profile)) if profile else 0
+    low_investment_repair_count = len(_materials_for_move(profile, "low_investment_repair")) if profile else 0
+    date_preference_count = len(_date_preference_material(profile)) if profile else 0
     return {
         "schema_version": USER_READINESS_SCHEMA_VERSION,
         "status": "ok" if ready else "needs_user_profile",
@@ -348,6 +424,9 @@ def _readiness_payload(
         "missing": missing,
         "shareable_material_count": material_count,
         "usable_shareable_material_count": usable_material_count,
+        "low_risk_material_count": low_risk_count,
+        "low_investment_repair_material_count": low_investment_repair_count,
+        "date_preference_material_count": date_preference_count,
         "simulation_policy": profile.get("simulation_policy") if profile else None,
         "profile_path": str(DISCLOSURE_PROFILE_PATH) if profile else None,
     }

@@ -2,12 +2,12 @@
   "schema_version": 1,
   "name": "dating-booster-codex",
   "package_name": "dating-booster-codex-skill",
-  "package_version": "0.1.9",
+  "package_version": "0.1.10",
   "target_host": "codex",
-  "dating_boost_min_version": "0.1.9",
+  "dating_boost_min_version": "0.1.10",
   "source_repo": "cyberpinkman/dating-booster",
   "skill_path": "skills/dating-booster-codex",
-  "source_ref": "v0.1.9",
+  "source_ref": "v0.1.10",
   "cli_package_name": "dating-booster",
   "cli_command": "dating-boost",
   "host_loop_command": "dating-boost-host-loop",
@@ -35,9 +35,13 @@
     "skill_package": 1,
     "planner_assessment": 1,
     "goal_plan": 1,
-    "planner_recommendation": 1
+    "planner_recommendation": 1,
+    "observation_authoring": 1,
+    "conversation_eval": 1,
+    "replay_timeline": 1,
+    "app_profile": 1
   },
-  "source_spec_commit": "v0.1.9",
+  "source_spec_commit": "v0.1.10",
   "source_specs": [
     "docs/superpowers/specs/2026-05-25-agent-native-launch-strategy.md",
     "docs/superpowers/specs/2026-05-25-product-architecture-blueprint.md",
@@ -45,7 +49,8 @@
     "docs/superpowers/specs/2026-05-26-automation-phase-b.md",
     "docs/superpowers/specs/2026-06-01-goal-oriented-conversation-agent.md",
     "docs/superpowers/specs/2026-06-01-self-disclosure-low-investment.md",
-    "docs/superpowers/specs/2026-06-01-tinder-host-loop.md"
+    "docs/superpowers/specs/2026-06-01-tinder-host-loop.md",
+    "docs/superpowers/specs/2026-06-02-host-native-maturity-phase-c.md"
   ],
   "references": [
     "INSTALL.md",
@@ -53,6 +58,7 @@
     "references/workflows.md",
     "references/contracts.md",
     "references/host-loop.md",
+    "references/start-prompts.md",
     "references/observation-authoring.md",
     "references/planner-authoring.md",
     "references/drafting-framework.md",
@@ -72,6 +78,9 @@
     "user ingest-interview",
     "user disclosure-profile",
     "user readiness",
+    "observation template",
+    "observation validate",
+    "observation normalize",
     "workflow draft",
     "skill doctor",
     "planner update",
@@ -98,6 +107,8 @@
     "operator record-action-result",
     "operator stop",
     "operator report latest",
-    "operator get-state"
+    "operator get-state",
+    "eval run",
+    "replay latest"
   ]
 }

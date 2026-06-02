@@ -2,6 +2,14 @@
   "schema_version": 1,
   "observation_type": "thread",
   "candidate_key": "ada_1_preview_ada",
+  "identity_confidence": "high",
+  "identity_evidence": "Visible Tinder chat header Ada matches the selected message-list row.",
+  "turn_boundary_evidence": {
+    "latest_user_outbound_text": "你猜猜会有什么奖励",
+    "latest_user_outbound_index": 0,
+    "latest_inbound_after_user": ["你定"]
+  },
+  "screenshot_ref": "",
   "assessment": {
     "schema_version": 1,
     "latest_match_message": "你定",
@@ -77,7 +85,7 @@
         {"sender": "match", "text": "你定"}
       ],
       "latest_inbound_messages": [
-        {"sender": "match", "text": "你定"}
+        {"sender": "match", "text": "你定", "is_after_latest_outbound": true}
       ],
       "input_state": "empty",
       "thread_cues": ["reward"]

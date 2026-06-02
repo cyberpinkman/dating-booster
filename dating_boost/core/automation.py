@@ -343,6 +343,7 @@ class AutomationRepository:
             ingest = self._store_observation(observation)
             match_id = ingest["match_id"]
             assessment = dict(thread_item.get("assessment", {}))
+            host_identity_confidence = str(thread_item.get("identity_confidence") or "medium")
             latest_fingerprint = assessment.get("latest_inbound_fingerprint")
             state = states_by_match.get(match_id)
             if state is None:
@@ -479,6 +480,9 @@ class AutomationRepository:
             elif planner_recommendation and draft_payload and not _draft_aligns_with_planner(dict(draft_payload), planner_recommendation):
                 state["state"] = "needs_reply"
                 warnings.append("planner_misaligned_draft")
+            elif host_identity_confidence == "low":
+                state["state"] = "needs_reply"
+                warnings.append("low_identity_confidence")
             elif _can_request_send(authorization, ingest, assessment, state, draft_payload):
                 self._queue_send_request(
                     action_requests=action_requests,
@@ -495,7 +499,10 @@ class AutomationRepository:
             elif assessment.get("recommended_next") == "reply":
                 state["state"] = "needs_reply"
             elif assessment.get("recommended_next") == "nudge_later":
-                if _can_request_nudge(authorization, ingest, assessment, state, draft_payload, now):
+                if host_identity_confidence == "low":
+                    state["state"] = "needs_reply"
+                    warnings.append("low_identity_confidence")
+                elif _can_request_nudge(authorization, ingest, assessment, state, draft_payload, now):
                     self._queue_send_request(
                         action_requests=action_requests,
                         warnings=warnings,
@@ -1169,6 +1176,7 @@ def _human_report(report: dict[str, Any]) -> str:
     summary = report["summary"]
     states = list(report.get("states", []))
     plans = list(report.get("conversation_plans", []))
+    plans_by_match = {plan.get("match_id"): dict(plan) for plan in plans if isinstance(plan, dict)}
     ledger = list(report.get("appointment_ledger", []))
     queue = list(report.get("next_priority_queue", []))
 
@@ -1195,6 +1203,8 @@ def _human_report(report: dict[str, Any]) -> str:
     ]
     if states:
         for state in states:
+            plan = plans_by_match.get(state.get("match_id"), {})
+            scores = dict(plan.get("scores", {}))
             lines.append(
                 "- "
                 + " | ".join(
@@ -1202,10 +1212,19 @@ def _human_report(report: dict[str, Any]) -> str:
                         f"match={state.get('match_id')}",
                         f"candidate={state.get('candidate_key')}",
                         f"state={state.get('state')}",
+                        f"stage={state.get('conversation_stage') or plan.get('stage') or 'unknown'}",
+                        f"topic={plan.get('current_topic') or 'unknown'}",
+                        f"topic_state={plan.get('topic_state') or state.get('topic_exit_pressure') or 'unknown'}",
+                        f"engagement={scores.get('engagement')}",
+                        f"momentum={scores.get('momentum')}",
                         f"handoff={state.get('handoff_reason') or 'none'}",
                         f"next_due_at={state.get('next_due_at') or 'none'}",
                         f"question_debt={state.get('question_debt', 0)}",
+                        f"self_disclosure_debt={state.get('self_disclosure_debt', 0)}",
                         f"low_investment={state.get('low_investment_streak', 0)}",
+                        f"next_milestone={state.get('next_milestone') or plan.get('next_milestone') or 'none'}",
+                        f"next_host_action={_state_next_host_action(state)}",
+                        f"failure_hypothesis={_failure_hypothesis(state, plan)}",
                     ]
                 )
             )
@@ -1266,6 +1285,38 @@ def _human_report(report: dict[str, Any]) -> str:
         lines.append("- none")
     lines.append("")
     return "\n".join(lines)
+
+
+def _state_next_host_action(state: dict[str, Any]) -> str:
+    state_name = str(state.get("state") or "")
+    if state_name == "needs_thread_scan":
+        return "open_thread"
+    if state_name in {"needs_reply", "draft_ready"}:
+        return "author_or_review_draft"
+    if state_name == "send_requested":
+        return "verify_or_record_pending_send"
+    if state_name == "appointment_handoff":
+        return "user_takeover"
+    if state_name == "nudge_scheduled":
+        return "wait_until_due"
+    if state_name in {"sent_waiting", "waiting_for_match"}:
+        return "wait_for_match"
+    return "none"
+
+
+def _failure_hypothesis(state: dict[str, Any], plan: dict[str, Any]) -> str:
+    if state.get("handoff_reason"):
+        return f"handoff:{state.get('handoff_reason')}"
+    if state.get("pause_reason") == "low_reciprocity":
+        return "low_reciprocity_or_over_questioning"
+    if int(state.get("low_investment_streak") or 0) >= 2:
+        return "match_low_investment"
+    scores = dict(plan.get("scores", {}))
+    if int(scores.get("topic_saturation") or 0) >= 70:
+        return "topic_saturated"
+    if state.get("last_action_result_error"):
+        return f"action_result:{state.get('last_action_result_error')}"
+    return "none"
 
 
 def _provisional_match_id(entry: dict[str, Any]) -> str:

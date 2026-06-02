@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "app_id": "tinder",
+  "display_name": "Tinder",
+  "message_list_observation": [
+    "Observe only visible rows.",
+    "Use candidate_key = visible_name + row_index + latest_preview_hash.",
+    "Do not draft until the thread has been opened."
+  ],
+  "thread_observation": [
+    "Open the requested candidate thread.",
+    "latest_inbound_messages must contain only messages after the user's latest outbound.",
+    "Old visible bubbles belong in visible_messages/background only."
+  ],
+  "stage_send_verification": [
+    "Paste Chinese text into the input box; do not rely on direct Chinese typing.",
+    "Verify staged text exactly equals payload_text before send.",
+    "If input position drifts, exit and reopen the thread."
+  ],
+  "post_send_verification": [
+    "Record succeeded only after a fresh screenshot shows the sent bubble.",
+    "If not verifiable, record unknown."
+  ],
+  "known_gui_pitfalls": [
+    "Input box position can change after full-screen input closes.",
+    "Re-locate the current input box before every click.",
+    "Do not reuse stale coordinates."
+  ],
+  "unsupported_actions": ["like", "super_like", "unmatch", "report", "profile_edit", "contact_exchange"]
+}

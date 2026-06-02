@@ -25,6 +25,7 @@ class EvalResult:
     averages: dict[str, float]
     passed: bool
     failures: tuple[str, ...]
+    cases: tuple[dict[str, Any], ...] = ()
 
     @property
     def failure_reasons(self) -> tuple[str, ...]:
@@ -43,6 +44,52 @@ def run_reply_quality_eval(path: Path) -> EvalResult:
         averages=averages,
         passed=not failure_reasons,
         failures=tuple(failure_reasons),
+    )
+
+
+def run_conversation_eval(path: Path | None = None) -> EvalResult:
+    """Run deterministic planner/automation fixture assertions."""
+
+    fixture_path = path or Path("tests/fixtures/evals/conversation_cases.json")
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("conversation eval payload must be an object")
+    cases_payload = payload.get("cases")
+    if not isinstance(cases_payload, list):
+        raise ValueError("conversation eval payload must include cases")
+
+    failures: list[str] = []
+    case_results: list[dict[str, Any]] = []
+    for index, raw_case in enumerate(cases_payload, start=1):
+        if not isinstance(raw_case, dict):
+            failures.append(f"case {index} must be an object")
+            continue
+        case_id = str(raw_case.get("case_id") or f"case_{index}")
+        actual = raw_case.get("actual")
+        expected = raw_case.get("expected")
+        if not isinstance(actual, dict) or not isinstance(expected, dict):
+            failures.append(f"{case_id} must include actual and expected objects")
+            continue
+        mismatches: list[str] = []
+        for field, expected_value in expected.items():
+            actual_value = actual.get(field)
+            if actual_value != expected_value:
+                mismatches.append(f"{field}: expected {expected_value!r}, got {actual_value!r}")
+        case_results.append(
+            {
+                "case_id": case_id,
+                "passed": not mismatches,
+                "mismatches": mismatches,
+            }
+        )
+        failures.extend(f"{case_id} {mismatch}" for mismatch in mismatches)
+
+    return EvalResult(
+        case_count=len(cases_payload),
+        averages={},
+        passed=not failures,
+        failures=tuple(failures),
+        cases=tuple(case_results),
     )
 
 

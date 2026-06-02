@@ -51,6 +51,34 @@ enabled.
 The Codex-first skill package lives at `skills/dating-booster-codex/`.
 Installation and startup instructions live at
 `skills/dating-booster-codex/INSTALL.md`.
+
+Shortest Codex-host path:
+
+```bash
+dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json
+dating-boost-host-loop init --data-dir .local/dating-boost --work-dir .local/dating-boost-host-loop --app-id tinder --json
+dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+```
+
+Use `--send-mode stage` first. It only stages text and verifies the input box;
+it does not click send. Use `dating-boost-host-loop status` to inspect the
+current wait point, `dating-boost-host-loop resume` after interruption, and
+`dating-boost replay latest --data-dir .local/dating-boost --format md` for a
+run replay. `--send-mode live` is only for explicitly authorized ordinary
+chat messages and still requires staged-text and post-send verification.
+
+Fully managed/autonomous runs require the user self model first:
+
+```bash
+python3 -m dating_boost.cli user interview template --json
+python3 -m dating_boost.cli user ingest-profile --data-dir .local/dating-boost --input user_dating_profile.json
+python3 -m dating_boost.cli user ingest-interview --data-dir .local/dating-boost --input self_interview.json
+python3 -m dating_boost.cli user readiness --data-dir .local/dating-boost --mode autonomous --json
+```
+
+Autonomous readiness requires both profile sources, at least five low-risk
+shareable materials, at least two low-investment repair materials, and at least
+one date/meeting preference material.
 Its required commands are:
 
 ```bash

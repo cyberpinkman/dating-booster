@@ -3,7 +3,7 @@
 Use Codex's `skill-installer` to install this skill from the repository path:
 
 ```text
-Install the Codex skill from https://github.com/cyberpinkman/dating-booster/tree/v0.1.9/skills/dating-booster-codex
+Install the Codex skill from https://github.com/cyberpinkman/dating-booster/tree/v0.1.10/skills/dating-booster-codex
 ```
 
 Restart Codex after installation so the new skill is discovered.

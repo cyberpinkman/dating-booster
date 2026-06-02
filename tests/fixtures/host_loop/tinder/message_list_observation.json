@@ -6,6 +6,7 @@
   "captured_at": "2026-05-26T10:00:00Z",
   "scan_cursor": "page_1",
   "scan_budget": 5,
+  "screenshot_ref": "",
   "provenance": {
     "author": "fixture_host",
     "evidence": "Synthetic Tinder message list fixture."
@@ -20,6 +21,8 @@
         "timestamp_cue": "昨天",
         "unread_cue": "present",
         "position": 1,
+        "identity_confidence": "high",
+        "identity_evidence": "Visible first Tinder row with name Ada and stable unread preview.",
         "match_identity_hints": {
           "visible_name": "Ada",
           "profile_cues": ["日料", "纯爱"],

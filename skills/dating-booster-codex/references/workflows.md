@@ -31,7 +31,8 @@ questions.
 6. If readiness returns `needs_user_profile`, do not start `operator session` or
    `automation session` for autonomous sending. Ask the user to provide missing
    profile/interview material. `shareable_material_count` alone is not enough;
-   `usable_shareable_material_count` must be at least three.
+   autonomous readiness requires at least five low-risk materials, two
+   `low_investment_repair` materials, and one date/meeting preference material.
 
 ## Draft
 
@@ -167,14 +168,31 @@ toward a goal such as meeting in person.
 For real Tinder/iPhone Mirroring runs, prefer:
 
 ```bash
-dating-boost-host-loop --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json
+dating-boost-host-loop init --data-dir .local/dating-boost --work-dir .local/dating-boost-host-loop --app-id tinder --json
+dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
 ```
 
+Use `dating-boost-host-loop status` to inspect what the host must do next,
+`dating-boost-host-loop resume` after interruption, and
+`dating-boost-host-loop confirm-staged` after a stage-mode send is reviewed.
 Use `--send-mode stage` by default. It writes work items and templates, waits
 for host-authored observation or verification files, stages text, and stops
-before clicking send. Use `--send-mode live` only when the user explicitly
-authorizes ordinary sends; live mode still requires staged verification before
-`action_result.json`.
+before clicking send. Files are scoped by `work_item_id`, such as
+`staged_verification.<work_item_id>.json`; old examples may mention
+`staged_verification.json`. Use `--send-mode live` only when the user
+explicitly authorizes ordinary sends; live mode still requires staged
+verification before `action_result.<work_item_id>.json`.
+
+Validate host observations with:
+
+```bash
+dating-boost observation validate --input OBSERVATION.json --json
+```
+
+Use `dating-boost replay latest --data-dir .local/dating-boost --format md`
+for run review and `dating-boost eval run --suite conversation --json` for
+deterministic fixture regression.
 
 ## Automation Session Fallback
 

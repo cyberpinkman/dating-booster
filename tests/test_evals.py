@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dating_boost.evals.runner import run_reply_quality_eval
+from dating_boost.evals.runner import run_conversation_eval, run_reply_quality_eval
 
 
 class EvalTests(unittest.TestCase):
@@ -38,6 +38,14 @@ class EvalTests(unittest.TestCase):
         self.assertIsInstance(result.failures, tuple)
         self.assertGreaterEqual(len(result.failures), 3)
         self.assertTrue(all(isinstance(failure, str) for failure in result.failures))
+
+    def test_conversation_eval_passes_static_fixture_suite(self):
+        result = run_conversation_eval(Path("tests/fixtures/evals/conversation_cases.json"))
+
+        self.assertEqual(result.case_count, 5)
+        self.assertTrue(result.passed)
+        self.assertTrue(result.cases)
+        self.assertTrue(all(case["passed"] for case in result.cases))
 
 
 if __name__ == "__main__":

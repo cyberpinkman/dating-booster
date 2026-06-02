@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "app_id": "wechat",
+  "display_name": "WeChat",
+  "message_list_observation": [
+    "Use the visible chat list as the message list equivalent.",
+    "Only include test contacts explicitly authorized by the user."
+  ],
+  "thread_observation": [
+    "Ignore any history before the user's explicit start marker.",
+    "latest_inbound_messages must contain only messages after the latest user outbound inside the test window."
+  ],
+  "stage_send_verification": [
+    "Mac WeChat can usually accept clipboard paste directly.",
+    "Verify staged text before pressing Enter or clicking send."
+  ],
+  "post_send_verification": [
+    "Record succeeded only after the outbound bubble appears."
+  ],
+  "known_gui_pitfalls": [
+    "Desktop chat history may expose unrelated personal history; respect the declared test boundary."
+  ],
+  "unsupported_actions": ["payments", "calls", "contact_exchange_without_user"]
+}

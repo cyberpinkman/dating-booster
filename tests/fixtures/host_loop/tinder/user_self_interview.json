@@ -12,6 +12,10 @@
       "type": "preference",
       "text": "我比较喜欢边走边找吃的，比纯坐着硬聊舒服",
       "tags": ["food", "date_activity", "soft_invite"],
+      "risk_level": "low",
+      "usable_moves": ["soft_invite_probe", "light_self_disclosure"],
+      "hard_fact_dependencies": [],
+      "example_phrasings": ["我比较喜欢边走边找吃的，比纯坐着硬聊舒服"],
       "sensitivity": "low",
       "source": "user_interview"
     },
@@ -20,6 +24,10 @@
       "type": "interest",
       "text": "我听歌很杂，更多是看当时状态",
       "tags": ["music"],
+      "risk_level": "low",
+      "usable_moves": ["bridge_topic", "light_self_disclosure"],
+      "hard_fact_dependencies": [],
+      "example_phrasings": ["我听歌很杂，更多是看当时状态"],
       "sensitivity": "low",
       "source": "user_interview"
     },
@@ -28,6 +36,34 @@
       "type": "life_detail",
       "text": "我在家待久了会突然想出门透气",
       "tags": ["home", "low_investment_repair"],
+      "risk_level": "low",
+      "usable_moves": ["low_investment_repair", "light_self_disclosure"],
+      "hard_fact_dependencies": [],
+      "example_phrasings": ["我在家待久了会突然想出门透气"],
+      "sensitivity": "low",
+      "source": "user_interview"
+    },
+    {
+      "material_id": "mat_low_energy_joke",
+      "type": "life_detail",
+      "text": "我尬住的时候会先接一个短梗，不会一直追问",
+      "tags": ["humor", "low_investment_repair"],
+      "risk_level": "low",
+      "usable_moves": ["low_investment_repair", "answer_or_riff"],
+      "hard_fact_dependencies": [],
+      "example_phrasings": ["我尬住的时候一般先接个短梗"],
+      "sensitivity": "low",
+      "source": "user_interview"
+    },
+    {
+      "material_id": "mat_date_pace",
+      "type": "date_preference",
+      "text": "聊顺的话我更喜欢先约一个轻松短局",
+      "tags": ["date_preference", "meeting_pace", "soft_invite"],
+      "risk_level": "low",
+      "usable_moves": ["soft_invite_probe", "handoff"],
+      "hard_fact_dependencies": [],
+      "example_phrasings": ["聊顺的话我更喜欢先短短见一下"],
       "sensitivity": "low",
       "source": "user_interview"
     }

@@ -20,7 +20,49 @@ REPORT_FINAL_STATUSES = {"wait", "blocked", "handoff", "scheduled_wait", "stoppe
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Drive a host-executed Tinder operator loop.")
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
+
+    supervisor = HostLoopSupervisor(args)
+    command = getattr(args, "command", "run")
+    if command == "doctor":
+        payload, exit_code = supervisor.doctor()
+    elif command == "init":
+        payload, exit_code = supervisor.init()
+    elif command == "status":
+        payload, exit_code = supervisor.status()
+    elif command == "confirm-staged":
+        payload, exit_code = supervisor.confirm_staged()
+    elif command == "resume":
+        payload, exit_code = supervisor.resume()
+    else:
+        payload, exit_code = supervisor.run()
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        _print_human(payload)
+    return exit_code
+
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    commands = {"doctor", "init", "run", "resume", "status", "confirm-staged"}
+    normalized = list(argv)
+    if not normalized or normalized[0].startswith("-") or normalized[0] not in commands:
+        normalized = ["run", *normalized]
+
+    parser = argparse.ArgumentParser(description="Drive a host-executed dating app operator loop.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    for command in ("doctor", "init", "run", "resume", "status", "confirm-staged"):
+        subparser = subparsers.add_parser(command)
+        _add_common_args(subparser)
+        if command == "confirm-staged":
+            subparser.add_argument("--action-result", type=Path)
+            subparser.add_argument("--cancel", action="store_true")
+            subparser.add_argument("--clear-retry", action="store_true")
+    return parser.parse_args(normalized)
+
+
+def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--authorization", type=Path)
     parser.add_argument("--goal", type=Path)
@@ -35,46 +77,249 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--wait-timeout", type=float, default=None)
     parser.add_argument("--poll-interval", type=float, default=1.0)
     parser.add_argument("--skill-package", type=Path)
-    args = parser.parse_args(argv)
-
-    supervisor = HostLoopSupervisor(args)
-    payload, exit_code = supervisor.run()
-    if args.json:
-        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    else:
-        _print_human(payload)
-    return exit_code
 
 
 class HostLoopSupervisor:
     def __init__(self, args: argparse.Namespace):
         self.args = args
-        self.fixture_host = args.fixture_host.resolve() if args.fixture_host else None
-        self.data_dir = (args.data_dir or DEFAULT_DATA_DIR).resolve()
-        self.work_dir = (args.work_dir or self.data_dir / "host-loop").resolve()
+        self.fixture_host = args.fixture_host.resolve() if getattr(args, "fixture_host", None) else None
+        self.data_dir = (getattr(args, "data_dir", None) or DEFAULT_DATA_DIR).resolve()
+        self.work_dir = (getattr(args, "work_dir", None) or self.data_dir / "host-loop").resolve()
         self.steps: list[dict[str, Any]] = []
         self.staged_verifications: list[dict[str, Any]] = []
         self.action_results_recorded: list[dict[str, Any]] = []
         self.operator_session_active = False
-        self.skill_package_path = self._resolve_skill_package_path(args.skill_package)
+        self.skill_package_path = self._resolve_skill_package_path(getattr(args, "skill_package", None))
+        self.app_profile = _load_app_profile(getattr(args, "app_id", "tinder"))
 
-    def run(self) -> tuple[dict[str, Any], int]:
+    def doctor(self) -> tuple[dict[str, Any], int]:
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.work_dir.mkdir(parents=True, exist_ok=True)
+        missing: list[str] = []
+        warnings: list[str] = []
+        details: dict[str, Any] = {}
+
+        try:
+            capabilities = self._run_cli_json("capabilities", "--json", "--data-dir", str(self.data_dir))
+            details["capabilities_ok"] = bool(capabilities.get("agent_native_capabilities", {}).get("host_loop_supervisor"))
+            if not details["capabilities_ok"]:
+                return self._doctor_payload("blocked", missing, "upgrade_or_reinstall_cli", details), 2
+        except Exception as exc:  # noqa: BLE001 - doctor must return structured diagnostics.
+            details["capabilities_error"] = str(exc)
+            return self._doctor_payload("blocked", ["cli"], "fix_cli_installation", details), 2
+
+        try:
+            skill = self._run_cli_json(
+                "skill",
+                "doctor",
+                "--package",
+                str(self.skill_package_path),
+                "--data-dir",
+                str(self.data_dir),
+                "--json",
+            )
+            details["skill_doctor"] = skill
+            if skill.get("status") != "ok":
+                return self._doctor_payload("needs_skill_upgrade", missing, "run_skill_bootstrap_or_upgrade", details), 2
+        except Exception as exc:  # noqa: BLE001
+            details["skill_doctor_error"] = str(exc)
+            return self._doctor_payload("needs_skill_upgrade", missing, "run_skill_bootstrap_or_upgrade", details), 2
+
+        readiness = self._run_cli_json(
+            "user",
+            "readiness",
+            "--data-dir",
+            str(self.data_dir),
+            "--mode",
+            "autonomous",
+            "--json",
+            allow_error=True,
+        )
+        details["user_readiness"] = readiness
+        if readiness.get("ready") is not True:
+            missing.append("user_profile")
+            missing.extend(str(item) for item in readiness.get("missing", []))
+            return self._doctor_payload("needs_user_profile", missing, "complete_user_profile_and_interview", details), 0
+
+        goal_path = self.args.goal or self._fixture_file("goal.json") or self.data_dir / "automation" / "goals.json"
+        if not goal_path.exists():
+            missing.append("goal")
+            return self._doctor_payload("needs_goal", missing, "run_init_or_set_goal", details), 0
+        availability_path = self.args.availability or self._fixture_file("availability.json") or self.data_dir / "automation" / "availability.json"
+        if not availability_path.exists():
+            missing.append("availability")
+            return self._doctor_payload("needs_availability", missing, "run_init_or_set_availability", details), 0
+        auth_path = self.args.authorization or self._fixture_file("auth.json") or self.data_dir / "automation" / "authorization.json"
+        if not auth_path.exists():
+            missing.append("authorization")
+            return self._doctor_payload("needs_authorization", missing, "create_or_pass_authorization", details), 0
+
+        details["app_profile"] = {
+            "app_id": self.app_profile.get("app_id"),
+            "profile_path": self.app_profile.get("_path"),
+        }
+        if warnings:
+            details["warnings"] = warnings
+        return self._doctor_payload("ready", missing, "start_or_resume_host_loop", details), 0
+
+    def init(self) -> tuple[dict[str, Any], int]:
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.work_dir.mkdir(parents=True, exist_ok=True)
+        automation_dir = self.data_dir / "automation"
+        automation_dir.mkdir(parents=True, exist_ok=True)
+        templates = {
+            "authorization_template": automation_dir / "auth.template.json",
+            "goal_template": automation_dir / "goal.template.json",
+            "availability_template": automation_dir / "availability.template.json",
+            "current_work_item": self.work_dir / "current_work_item.json",
+        }
+        _write_json(
+            templates["authorization_template"],
+            {
+                "schema_version": 1,
+                "authorization_id": "auth_local_TODO",
+                "scope": "send_chat_messages",
+                "app_id": self.args.app_id,
+                "expires_at": "TODO_ISO_TIMESTAMP",
+                "allowed_match_ids": [],
+                "allowed_actions": ["send_message"],
+                "autonomous_send": False,
+                "autonomous_nudge": True,
+                "goal_ids": ["goal_meet_in_person"],
+                "quiet_hours": [],
+                "requires_post_action_verification": True,
+                "created_at": "TODO_ISO_TIMESTAMP",
+                "revoked_at": None,
+            },
+        )
+        _write_json(
+            templates["goal_template"],
+            {
+                "schema_version": 1,
+                "goal_id": "goal_meet_in_person",
+                "goal_type": "meet_in_person",
+                "status": "active",
+                "handoff_triggers": ["specific_day", "specific_time", "specific_venue", "contact_exchange"],
+            },
+        )
+        _write_json(
+            templates["availability_template"],
+            {
+                "schema_version": 1,
+                "availability": [
+                    {
+                        "availability_id": "avail_TODO",
+                        "date": "TODO_DATE",
+                        "time_window": "TODO_TIME_WINDOW",
+                        "area": "TODO_AREA",
+                        "meeting_types": ["coffee"],
+                        "constraints": [],
+                        "confidence": "user_confirmed",
+                        "expires_at": "TODO_ISO_TIMESTAMP",
+                    }
+                ],
+            },
+        )
+        _write_json(
+            templates["current_work_item"],
+            {
+                "schema_version": 1,
+                "work_item_type": "not_started",
+                "next_host_action": "run dating-boost-host-loop doctor, then run",
+            },
+        )
+        return {
+            "schema_version": 1,
+            "status": "ok",
+            "data_dir": str(self.data_dir),
+            "work_dir": str(self.work_dir),
+            "templates": {key: str(value) for key, value in templates.items()},
+            "next_host_action": "fill_templates_then_run_doctor",
+        }, 0
+
+    def status(self) -> tuple[dict[str, Any], int]:
+        current = self._read_current_work_item_or_none()
+        if current is None:
+            return {
+                "schema_version": 1,
+                "status": "idle",
+                "data_dir": str(self.data_dir),
+                "work_dir": str(self.work_dir),
+                "next_host_action": "run_or_resume_host_loop",
+            }, 0
+        work_type = str(current.get("work_item_type") or "")
+        status = "waiting_for_confirmation" if work_type == "send_message" and self._work_file(current, "staged_verification").exists() else "waiting_for_host"
+        return {
+            "schema_version": 1,
+            "status": status,
+            "data_dir": str(self.data_dir),
+            "work_dir": str(self.work_dir),
+            "work_item": current,
+            "expected_input": str(self._expected_input_path(current)),
+            "next_host_action": _next_host_action(status, current, self.args.send_mode),
+            "app_profile": _host_instructions(self.app_profile, work_type),
+        }, 0
+
+    def confirm_staged(self) -> tuple[dict[str, Any], int]:
+        current = self._read_current_work_item_or_none()
+        if current is None or current.get("work_item_type") != "send_message":
+            return self._finish("blocked", "no_staged_send_work_item", extra={"next_host_action": "run_status"}), 0
+        if getattr(self.args, "cancel", False):
+            self._append_timeline("stage_cancelled", current, {"reason": "user_cancelled"})
+            return self._finish("staged_cancelled", "user_cancelled_staged_send", current=current, extra={"next_host_action": "clear_input_or_resume"}), 0
+        if getattr(self.args, "clear_retry", False):
+            staged = self._work_file(current, "staged_verification")
+            if staged.exists():
+                staged.unlink()
+            self._append_timeline("stage_retry_requested", current, {"reason": "user_requested_retry"})
+            return self._finish("waiting_for_host", "staged_text_retry_requested", current=current, extra={"next_host_action": "clear_input_and_restage"}), 0
+        action_result = getattr(self.args, "action_result", None)
+        if action_result is not None:
+            result = _read_json(action_result)
+            _validate_action_result(result, current)
+            recorded = self._run_cli_json("operator", "record-action-result", "--data-dir", str(self.data_dir), "--input", str(action_result))
+            self.action_results_recorded.append(recorded)
+            self._append_timeline("action_result", current, {"result": recorded})
+            return self._finish("confirmed", "staged_send_confirmed_and_recorded", current=current, extra={"next_host_action": "resume_host_loop"}), 0
+        return self._finish(
+            "waiting_for_user_send",
+            "stage_confirmed_but_action_result_missing",
+            current=current,
+            extra={"next_host_action": "send_staged_text_then_provide_action_result"},
+        ), 0
+
+    def resume(self) -> tuple[dict[str, Any], int]:
+        return self.run(resume=True)
+
+    def _doctor_payload(self, status: str, missing: list[str], next_host_action: str, details: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "status": status,
+            "missing": _unique_strings(missing),
+            "data_dir": str(self.data_dir),
+            "work_dir": str(self.work_dir),
+            "next_host_action": next_host_action,
+            "details": details,
+        }
+
+    def run(self, *, resume: bool = False) -> tuple[dict[str, Any], int]:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         try:
             self._bootstrap_fixture_profile()
             self._preflight()
-            start = self._run_cli_json(
-                "operator",
-                "session",
-                "start",
-                "--data-dir",
-                str(self.data_dir),
-                "--authorization",
-                str(self._authorization_path()),
-            )
-            if start.get("status") != "active":
-                return self._finish("blocked", "operator_session_not_active", extra={"start": start}), 0
+            if not resume or self._operator_session_status() != "active":
+                start = self._run_cli_json(
+                    "operator",
+                    "session",
+                    "start",
+                    "--data-dir",
+                    str(self.data_dir),
+                    "--authorization",
+                    str(self._authorization_path()),
+                )
+                if start.get("status") != "active":
+                    return self._finish("blocked", "operator_session_not_active", extra={"start": start}), 0
             self.operator_session_active = True
 
             for _ in range(max(self.args.max_steps, 1)):
@@ -84,6 +329,7 @@ class HostLoopSupervisor:
                     return self._finish("error", "operator_next_returned_no_work_item", extra={"next": next_payload}), 2
                 work_type = str(work_item.get("work_item_type") or "")
                 self._write_current_work_item(work_item)
+                self._append_timeline("work_item", work_item, {"reused": bool(next_payload.get("reused_current_work_item"))})
                 self.steps.append(
                     {
                         "work_item_type": work_type,
@@ -166,7 +412,7 @@ class HostLoopSupervisor:
             raise HostLoopError("missing availability; pass --availability or configure availability first")
 
     def _handle_scan_message_list(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
-        path = self.work_dir / "message_list_observation.json"
+        path = self._work_file(work_item, "message_list_observation")
         if self.fixture_host is not None and not path.exists():
             fixture = self.fixture_host / "message_list_observation.json"
             if fixture.exists():
@@ -176,7 +422,11 @@ class HostLoopSupervisor:
             waiting = self._waiting("message_list_observation", path, work_item)
             if waiting.get("status") != "host_input_ready":
                 return waiting
+        validation = self._run_cli_json("observation", "validate", "--input", str(path), "--json")
+        if validation.get("status") != "ok":
+            return self._finish("blocked", "message_list_observation_invalid", current=work_item, extra={"validation": validation})
         ingest = self._run_cli_json("operator", "ingest-observation", "--data-dir", str(self.data_dir), "--input", str(path))
+        self._append_timeline("observation", work_item, {"observation_type": "message_list", "path": str(path), "ingest": ingest})
         self._consume(path)
         if ingest.get("status") != "ok":
             return self._finish("blocked", str(ingest.get("reason") or "message_list_ingest_failed"), current=work_item)
@@ -184,7 +434,7 @@ class HostLoopSupervisor:
 
     def _handle_open_thread(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
         candidate_key = _required_string(work_item, "candidate_key")
-        path = self.work_dir / f"thread_observation_{_safe_name(candidate_key)}.json"
+        path = self._work_file(work_item, "thread_observation")
         if self.fixture_host is not None and not path.exists():
             fixture = self.fixture_host / "threads" / f"{candidate_key}.json"
             if fixture.exists():
@@ -194,14 +444,18 @@ class HostLoopSupervisor:
             waiting = self._waiting("thread_observation", path, work_item)
             if waiting.get("status") != "host_input_ready":
                 return waiting
+        validation = self._run_cli_json("observation", "validate", "--input", str(path), "--json")
+        if validation.get("status") != "ok":
+            return self._finish("blocked", "thread_observation_invalid", current=work_item, extra={"validation": validation})
         ingest = self._run_cli_json("operator", "ingest-observation", "--data-dir", str(self.data_dir), "--input", str(path))
+        self._append_timeline("observation", work_item, {"observation_type": "thread", "path": str(path), "ingest": ingest})
         self._consume(path)
         if ingest.get("status") != "ok":
             return self._finish("blocked", str(ingest.get("reason") or "thread_ingest_failed"), current=work_item)
         return None
 
     def _handle_send_message(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
-        staged_path = self.work_dir / "staged_verification.json"
+        staged_path = self._work_file(work_item, "staged_verification")
         if self.fixture_host is not None and not staged_path.exists():
             _write_json(staged_path, _staged_verification(work_item, result_status="succeeded"))
         if not staged_path.exists():
@@ -213,6 +467,7 @@ class HostLoopSupervisor:
         staged = _read_json(staged_path)
         verification = _validate_staged_verification(staged, work_item)
         self.staged_verifications.append(verification)
+        self._append_timeline("staged_verification", work_item, {"path": str(staged_path), "verification": verification})
         if verification["status"] != "ok":
             return self._finish("blocked", verification["reason"], current=work_item)
         if self.args.send_mode == "stage":
@@ -220,9 +475,10 @@ class HostLoopSupervisor:
                 "staged_waiting_user_confirmation",
                 "stage mode does not record action result or click send",
                 current=work_item,
+                extra={"next_host_action": "review_staged_text_and_confirm_or_cancel"},
             )
 
-        result_path = self.work_dir / "action_result.json"
+        result_path = self._work_file(work_item, "action_result")
         if self.fixture_host is not None and not result_path.exists():
             _write_json(result_path, _action_result_fixture(work_item))
         if not result_path.exists():
@@ -235,6 +491,7 @@ class HostLoopSupervisor:
         _validate_action_result(result, work_item)
         recorded = self._run_cli_json("operator", "record-action-result", "--data-dir", str(self.data_dir), "--input", str(result_path))
         self.action_results_recorded.append(recorded)
+        self._append_timeline("action_result", work_item, {"path": str(result_path), "recorded": recorded})
         self._consume(staged_path)
         self._consume(result_path)
         return None
@@ -295,7 +552,11 @@ class HostLoopSupervisor:
                 "waiting_for_host",
                 f"waiting_for_{expected}",
                 current=work_item,
-                extra={"expected_input": str(path)},
+                extra={
+                    "expected_input": str(path),
+                    "next_host_action": _next_host_action("waiting_for_host", work_item, self.args.send_mode),
+                    "app_profile": _host_instructions(self.app_profile, str(work_item.get("work_item_type") or "")),
+                },
             )
         deadline = None if self.args.wait_timeout is None else time.time() + self.args.wait_timeout
         while deadline is None or time.time() < deadline:
@@ -306,7 +567,11 @@ class HostLoopSupervisor:
             "waiting_for_host",
             f"timeout_waiting_for_{expected}",
             current=work_item,
-            extra={"expected_input": str(path)},
+            extra={
+                "expected_input": str(path),
+                "next_host_action": _next_host_action("waiting_for_host", work_item, self.args.send_mode),
+                "app_profile": _host_instructions(self.app_profile, str(work_item.get("work_item_type") or "")),
+            },
         )
 
     def _finish(
@@ -328,6 +593,7 @@ class HostLoopSupervisor:
             "steps": list(self.steps),
             "staged_verifications": list(self.staged_verifications),
             "action_results_recorded": list(self.action_results_recorded),
+            "next_host_action": _next_host_action(status, current, self.args.send_mode),
         }
         if current is not None:
             payload["current_work_item"] = current
@@ -348,13 +614,69 @@ class HostLoopSupervisor:
     def _write_current_work_item(self, work_item: dict[str, Any]) -> None:
         _write_json(self.work_dir / "current_work_item.json", work_item)
 
+    def _read_current_work_item_or_none(self) -> dict[str, Any] | None:
+        path = self.work_dir / "current_work_item.json"
+        if path.exists():
+            try:
+                return _read_json(path)
+            except HostLoopError:
+                return None
+        operator_path = self.data_dir / "operator" / "current_work_item.json"
+        if operator_path.exists():
+            try:
+                return _read_json(operator_path)
+            except HostLoopError:
+                return None
+        return None
+
+    def _work_file(self, work_item: dict[str, Any], kind: str) -> Path:
+        work_item_id = _safe_name(str(work_item.get("work_item_id") or kind))
+        return self.work_dir / f"{kind}.{work_item_id}.json"
+
+    def _expected_input_path(self, work_item: dict[str, Any]) -> Path:
+        work_type = str(work_item.get("work_item_type") or "")
+        if work_type == "scan_message_list":
+            return self._work_file(work_item, "message_list_observation")
+        if work_type == "open_thread":
+            return self._work_file(work_item, "thread_observation")
+        if work_type == "send_message":
+            staged = self._work_file(work_item, "staged_verification")
+            return self._work_file(work_item, "action_result") if staged.exists() and self.args.send_mode == "live" else staged
+        return self.work_dir / "current_work_item.json"
+
+    def _append_timeline(self, event_type: str, work_item: dict[str, Any] | None, payload: dict[str, Any] | None = None) -> None:
+        event = {
+            "schema_version": 1,
+            "event_type": event_type,
+            "created_at": os.environ.get("DATING_BOOST_NOW") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "work_item_id": work_item.get("work_item_id") if isinstance(work_item, dict) else None,
+            "work_item_type": work_item.get("work_item_type") if isinstance(work_item, dict) else None,
+            "candidate_key": work_item.get("candidate_key") if isinstance(work_item, dict) else None,
+            "payload": payload or {},
+        }
+        path = self.data_dir / "host_loop" / "timeline.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+
+    def _operator_session_status(self) -> str | None:
+        session_path = self.data_dir / "operator" / "session.json"
+        if not session_path.exists():
+            return None
+        try:
+            session = _read_json(session_path)
+        except HostLoopError:
+            return None
+        status = session.get("status")
+        return str(status) if status is not None else None
+
     def _consume(self, path: Path) -> None:
         consumed_dir = self.work_dir / "consumed"
         consumed_dir.mkdir(parents=True, exist_ok=True)
         target = consumed_dir / f"{len(list(consumed_dir.iterdir())) + 1:04d}_{path.name}"
         path.replace(target)
 
-    def _run_cli_json(self, *args: str) -> dict[str, Any]:
+    def _run_cli_json(self, *args: str, allow_error: bool = False) -> dict[str, Any]:
         env = dict(os.environ)
         if self.fixture_host is not None:
             env.setdefault("DATING_BOOST_NOW", DEFAULT_FIXTURE_NOW)
@@ -368,6 +690,8 @@ class HostLoopSupervisor:
         )
         if result.returncode != 0:
             structured_error = _try_read_json_object(result.stdout)
+            if allow_error and structured_error is not None:
+                return structured_error
             if structured_error is not None:
                 raise HostLoopCommandError(args, structured_error, result.returncode)
             raise RuntimeError(f"dating-boost {' '.join(args)} failed: {result.stderr or result.stdout}")
@@ -402,6 +726,7 @@ def _message_list_template(work_item: dict[str, Any], app_id: str) -> dict[str, 
         "captured_at": "TODO_ISO_TIMESTAMP",
         "scan_cursor": None,
         "scan_budget": 5,
+        "screenshot_ref": "",
         "provenance": {
             "author": "host_agent",
             "evidence": "Tinder message list observed through iPhone Mirroring.",
@@ -416,6 +741,8 @@ def _message_list_template(work_item: dict[str, Any], app_id: str) -> dict[str, 
                     "timestamp_cue": "TODO",
                     "unread_cue": "present|absent",
                     "position": 1,
+                    "identity_confidence": "medium",
+                    "identity_evidence": "Visible row, stable name, and preview.",
                     "match_identity_hints": {
                         "visible_name": "TODO",
                         "profile_cues": [],
@@ -434,6 +761,14 @@ def _thread_template(work_item: dict[str, Any], app_id: str) -> dict[str, Any]:
         "schema_version": 1,
         "observation_type": "thread",
         "candidate_key": candidate_key,
+        "identity_confidence": "medium",
+        "identity_evidence": "Visible chat header matches the selected message-list row.",
+        "turn_boundary_evidence": {
+            "latest_user_outbound_text": "",
+            "latest_user_outbound_index": None,
+            "latest_inbound_after_user": [],
+        },
+        "screenshot_ref": "",
         "assessment": {
             "schema_version": 1,
             "latest_match_message": "TODO",
@@ -495,7 +830,13 @@ def _thread_template(work_item: dict[str, Any], app_id: str) -> dict[str, Any]:
             },
             "conversation_observation": {
                 "visible_messages": [],
-                "latest_inbound_messages": [],
+                "latest_inbound_messages": [
+                    {
+                        "sender": "match",
+                        "text": "TODO",
+                        "is_after_latest_outbound": True,
+                    }
+                ],
                 "input_state": "empty",
                 "thread_cues": [],
             },
@@ -632,6 +973,63 @@ def _data_dir_path(data_dir: Path, value: Any) -> str | None:
     if path.is_absolute():
         return str(path)
     return str(data_dir / path)
+
+
+def _load_app_profile(app_id: str) -> dict[str, Any]:
+    path = ROOT / "app_profiles" / f"{_safe_name(app_id)}.json"
+    if not path.exists():
+        raise HostLoopError(f"unsupported app profile: {app_id}")
+    profile = _read_json(path)
+    profile["_path"] = str(path)
+    return profile
+
+
+def _host_instructions(profile: dict[str, Any], work_item_type: str) -> dict[str, Any]:
+    key = {
+        "scan_message_list": "message_list_observation",
+        "open_thread": "thread_observation",
+        "send_message": "stage_send_verification",
+    }.get(work_item_type, "known_gui_pitfalls")
+    return {
+        "app_id": profile.get("app_id"),
+        "display_name": profile.get("display_name"),
+        "instructions": profile.get(key, []),
+        "known_gui_pitfalls": profile.get("known_gui_pitfalls", []),
+        "unsupported_actions": profile.get("unsupported_actions", []),
+    }
+
+
+def _next_host_action(status: str, work_item: dict[str, Any] | None, send_mode: str) -> str:
+    if not isinstance(work_item, dict):
+        if status in {"blocked", "error"}:
+            return "inspect_error_and_fix_configuration"
+        return "run_or_resume_host_loop"
+    work_type = str(work_item.get("work_item_type") or "")
+    if status == "staged_waiting_user_confirmation":
+        return "review_staged_text_and_confirm_or_cancel"
+    if work_type == "scan_message_list":
+        return "open_app_message_list_and_write_message_list_observation"
+    if work_type == "open_thread":
+        return "open_requested_thread_and_write_thread_observation"
+    if work_type == "send_message":
+        if send_mode == "stage":
+            return "paste_payload_text_and_verify_staged_text"
+        return "paste_verify_send_then_record_action_result"
+    if work_type == "handoff":
+        return "user_takeover_required"
+    if work_type in {"wait", "scheduled_wait"}:
+        return "wait_or_resume_later"
+    return "inspect_current_work_item"
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

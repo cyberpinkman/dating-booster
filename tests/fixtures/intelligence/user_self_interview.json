@@ -14,6 +14,10 @@
       "type": "life_detail",
       "text": "我在家待久了会突然想出门透气，但真出门前又会拖一会儿",
       "tags": ["home", "cats", "low_investment_repair"],
+      "risk_level": "low",
+      "usable_moves": ["low_investment_repair", "light_self_disclosure"],
+      "hard_fact_dependencies": [],
+      "example_phrasings": ["我在家待久了也会突然想出去透口气"],
       "sensitivity": "low",
       "source": "user_interview"
     },
@@ -22,6 +26,10 @@
       "type": "preference",
       "text": "我比较喜欢边走边找吃的，比纯坐着硬聊舒服",
       "tags": ["food", "date_activity", "soft_invite"],
+      "risk_level": "low",
+      "usable_moves": ["soft_invite_probe", "light_self_disclosure"],
+      "hard_fact_dependencies": [],
+      "example_phrasings": ["我比较喜欢边走边找吃的，没那么像面试"],
       "sensitivity": "low",
       "source": "user_interview"
     },
@@ -30,6 +38,34 @@
       "type": "interest",
       "text": "我听歌很杂，更多是看当时状态，不太按流派分",
       "tags": ["music", "conversation_bridge"],
+      "risk_level": "low",
+      "usable_moves": ["bridge_topic", "light_self_disclosure"],
+      "hard_fact_dependencies": [],
+      "example_phrasings": ["我听歌很杂，经常是看当天状态"],
+      "sensitivity": "low",
+      "source": "user_interview"
+    },
+    {
+      "material_id": "mat_low_energy_joke",
+      "type": "life_detail",
+      "text": "我有时候会用一句很冷的玩笑救一下尬住的场面",
+      "tags": ["humor", "low_investment_repair"],
+      "risk_level": "low",
+      "usable_moves": ["low_investment_repair", "answer_or_riff"],
+      "hard_fact_dependencies": [],
+      "example_phrasings": ["我一般会先讲个冷笑话把场子救一下"],
+      "sensitivity": "low",
+      "source": "user_interview"
+    },
+    {
+      "material_id": "mat_date_pace",
+      "type": "date_preference",
+      "text": "如果聊得顺，我更喜欢先约一个轻松短局，不把第一次见面搞太正式",
+      "tags": ["date_preference", "meeting_pace", "soft_invite"],
+      "risk_level": "low",
+      "usable_moves": ["soft_invite_probe", "handoff"],
+      "hard_fact_dependencies": [],
+      "example_phrasings": ["聊顺的话我更喜欢先短短见一下，轻松点"],
       "sensitivity": "low",
       "source": "user_interview"
     }

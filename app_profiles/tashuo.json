@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "app_id": "tashuo",
+  "display_name": "她说",
+  "message_list_observation": [
+    "Observe only the visible conversation list.",
+    "Use visible name, row position, and latest preview hash for candidate_key."
+  ],
+  "thread_observation": [
+    "Open the target thread and mark turn_boundary_evidence explicitly.",
+    "Do not treat old visible app/profile content as a new inbound reply."
+  ],
+  "stage_send_verification": [
+    "Prefer paste for Chinese text.",
+    "Verify exact staged text before any send."
+  ],
+  "post_send_verification": [
+    "Record succeeded only when a fresh outbound bubble is visible."
+  ],
+  "known_gui_pitfalls": [
+    "Profile screenshots may be separate from the live chat; keep profile analysis and chat observations distinct."
+  ],
+  "unsupported_actions": ["like", "unmatch", "report", "profile_edit", "contact_exchange"]
+}

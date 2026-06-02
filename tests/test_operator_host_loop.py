@@ -57,7 +57,8 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(payload["status"], "staged_waiting_user_confirmation")
             self.assertEqual(payload["send_mode"], "stage")
             self.assertTrue((work_dir / "current_work_item.json").exists())
-            self.assertTrue((work_dir / "staged_verification.json").exists())
+            work_item_id = payload["current_work_item"]["work_item_id"]
+            self.assertTrue((work_dir / f"staged_verification.{work_item_id}.json").exists())
             self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
             self.assertIn("stage mode does not record action result", payload["stop_reason"])
 
@@ -88,8 +89,8 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(events[0]["result_status"], "succeeded")
             self.assertTrue(payload["staged_verifications"])
             self.assertTrue(payload["action_results_recorded"])
-            self.assertFalse((work_dir / "staged_verification.json").exists())
-            self.assertTrue(any(path.name.endswith("_staged_verification.json") for path in (work_dir / "consumed").iterdir()))
+            self.assertFalse(any(path.name.startswith("staged_verification.") for path in work_dir.glob("*.json")))
+            self.assertTrue(any("staged_verification" in path.name for path in (work_dir / "consumed").iterdir()))
             self.assertIn("machine_report_path", payload)
             self.assertTrue(Path(payload["machine_report_path"]).exists())
             self.assertIn("human_report_path", payload)
@@ -118,8 +119,12 @@ class OperatorHostLoopTests(unittest.TestCase):
 
             self.assertEqual(payload["status"], "waiting_for_host")
             self.assertEqual(payload["current_work_item"]["work_item_type"], "scan_message_list")
-            self.assertEqual(Path(payload["expected_input"]).resolve(), (work_dir / "message_list_observation.json").resolve())
-            self.assertTrue((work_dir / "message_list_observation.template.json").exists())
+            work_item_id = payload["current_work_item"]["work_item_id"]
+            self.assertEqual(
+                Path(payload["expected_input"]).resolve(),
+                (work_dir / f"message_list_observation.{work_item_id}.json").resolve(),
+            )
+            self.assertTrue((work_dir / f"message_list_observation.{work_item_id}.template.json").exists())
 
     def test_supervisor_does_not_inject_fixed_clock_without_fixture_host(self):
         with tempfile.TemporaryDirectory() as temp_dir:

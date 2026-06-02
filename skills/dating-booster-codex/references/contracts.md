@@ -54,9 +54,9 @@ or `dating-boost skill doctor`.
 {
   "schema_version": 1,
   "status": "ok",
-  "skill_version": "0.1.9",
+  "skill_version": "0.1.10",
   "cli_found": true,
-  "cli_version": "0.1.9",
+  "cli_version": "0.1.10",
   "capabilities_ok": true,
   "missing_commands": [],
   "schema_mismatches": [],
@@ -501,16 +501,22 @@ the user explicitly asks for a transcript-style audit.
 ## Tinder Host Loop Work Dir
 
 `dating-boost-host-loop` writes `current_work_item.json` plus one
-template file. The host fills the matching non-template file.
+template file. The host fills the matching non-template file. Phase C scopes
+all active files by `work_item_id` to prevent stale-file pollution.
 
 ```text
-message_list_observation.template.json -> message_list_observation.json
-thread_observation_<candidate_key>.template.json -> thread_observation_<candidate_key>.json
-staged_verification.template.json -> staged_verification.json
-action_result.template.json -> action_result.json
+message_list_observation.<work_item_id>.template.json -> message_list_observation.<work_item_id>.json
+thread_observation.<work_item_id>.template.json -> thread_observation.<work_item_id>.json
+staged_verification.<work_item_id>.template.json -> staged_verification.<work_item_id>.json
+action_result.<work_item_id>.template.json -> action_result.<work_item_id>.json
 ```
 
-`staged_verification.json` confirms paste/stage before send:
+Older examples may mention `staged_verification.json` or `action_result.json`;
+host-loop recovery uses the scoped names. The old
+`message_list_observation.template.json` style is no longer the active file
+contract.
+
+`staged_verification.<work_item_id>.json` confirms paste/stage before send:
 
 ```json
 {
@@ -531,5 +537,68 @@ action_result.template.json -> action_result.json
 ```
 
 In `--send-mode stage`, the host must not click send after this file is written.
-In `--send-mode live`, write `action_result.json` only after a fresh
+In `--send-mode live`, write `action_result.<work_item_id>.json` only after a fresh
 post-action observation confirms the sent bubble.
+
+## Observation Authoring
+
+Before ingestion, host-authored observations should pass:
+
+```bash
+dating-boost observation validate --input OBSERVATION.json --json
+```
+
+Thread observation quality fields:
+
+```json
+{
+  "schema_version": 1,
+  "observation_type": "thread",
+  "candidate_key": "ada_1_preview_ada",
+  "identity_confidence": "high",
+  "identity_evidence": "Visible chat header matches the list row.",
+  "turn_boundary_evidence": {
+    "latest_user_outbound_text": "你猜猜会有什么奖励",
+    "latest_user_outbound_index": 0,
+    "latest_inbound_after_user": ["你定"]
+  },
+  "screenshot_ref": "",
+  "observation": {
+    "conversation_observation": {
+      "visible_messages": [],
+      "latest_inbound_messages": [
+        {
+          "sender": "match",
+          "text": "你定",
+          "is_after_latest_outbound": true
+        }
+      ]
+    }
+  }
+}
+```
+
+`latest_inbound_messages` must only contain messages after the user's latest
+outbound. Old visible messages are background context.
+
+## Replay And Eval
+
+`dating-boost replay latest --data-dir .local/dating-boost --format json`
+returns:
+
+```json
+{
+  "schema_version": 1,
+  "status": "ok",
+  "event_count": 3,
+  "timeline": [
+    {"event_type": "work_item", "work_item_type": "scan_message_list"},
+    {"event_type": "observation", "work_item_type": "open_thread"},
+    {"event_type": "staged_verification", "work_item_type": "send_message"}
+  ]
+}
+```
+
+`dating-boost eval run --suite conversation --json` returns deterministic
+fixture pass/fail results for planner decisions and does not call an external
+LLM.

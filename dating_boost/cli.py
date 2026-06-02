@@ -16,8 +16,14 @@ from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.feedback import create_feedback_event
 from dating_boost.core.identity import resolve_match_identity
 from dating_boost.core.models import Divergence, MemoryItem, ReplyMode, UserProfile
+from dating_boost.core.observation_authoring import (
+    normalize_observation,
+    observation_template,
+    validate_observation,
+)
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.planner import PlannerRepository, planner_context_items
+from dating_boost.core.replay import latest_replay_markdown, latest_replay_payload
 from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
 from dating_boost.core.scan_authoring import (
     assemble_scan_batch,
@@ -28,6 +34,7 @@ from dating_boost.core.scan_authoring import (
 from dating_boost.core.skill_doctor import run_skill_doctor
 from dating_boost.intelligence.backends import ModelBackend, OpenAIBackend, ScriptedBackend
 from dating_boost.intelligence.reply_generator import DraftResponse, generate_reply
+from dating_boost.evals.runner import run_conversation_eval
 from dating_boost.perception.fixture_loader import load_observation
 from dating_boost.perception.observations import AppObservation
 from dating_boost.perception.screenshot_loader import build_observation_from_screenshot_analysis
@@ -125,6 +132,22 @@ def main(argv: list[str] | None = None) -> int:
     import_parser.add_argument("--input", required=True, type=Path)
     import_parser.set_defaults(handler=_handle_import_observation)
 
+    observation_parser = subparsers.add_parser("observation", help="Host observation authoring helpers.")
+    observation_subparsers = observation_parser.add_subparsers(dest="observation_command", required=True)
+    observation_template_parser = observation_subparsers.add_parser("template")
+    observation_template_parser.add_argument("--type", choices=["message_list", "thread"], default="thread")
+    observation_template_parser.add_argument("--app-id", default="tinder")
+    observation_template_parser.add_argument("--json", action="store_true")
+    observation_template_parser.set_defaults(handler=_handle_observation_template)
+    observation_validate_parser = observation_subparsers.add_parser("validate")
+    observation_validate_parser.add_argument("--input", required=True, type=Path)
+    observation_validate_parser.add_argument("--json", action="store_true")
+    observation_validate_parser.set_defaults(handler=_handle_observation_validate)
+    observation_normalize_parser = observation_subparsers.add_parser("normalize")
+    observation_normalize_parser.add_argument("--input", required=True, type=Path)
+    observation_normalize_parser.add_argument("--json", action="store_true")
+    observation_normalize_parser.set_defaults(handler=_handle_observation_normalize)
+
     memory_parser = subparsers.add_parser("memory", help="Agent-native memory commands.")
     memory_subparsers = memory_parser.add_subparsers(dest="memory_command", required=True)
     memory_ingest_parser = memory_subparsers.add_parser(
@@ -207,6 +230,21 @@ def main(argv: list[str] | None = None) -> int:
     feedback_parser.add_argument("--mode", required=True, choices=[mode.value for mode in ReplyMode])
     feedback_parser.add_argument("--label", required=True)
     feedback_parser.set_defaults(handler=_handle_feedback)
+
+    eval_parser = subparsers.add_parser("eval", help="Offline evaluation commands.")
+    eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
+    eval_run_parser = eval_subparsers.add_parser("run")
+    eval_run_parser.add_argument("--suite", required=True, choices=["conversation"])
+    eval_run_parser.add_argument("--input", type=Path)
+    eval_run_parser.add_argument("--json", action="store_true")
+    eval_run_parser.set_defaults(handler=_handle_eval_run)
+
+    replay_parser = subparsers.add_parser("replay", help="Host loop replay commands.")
+    replay_subparsers = replay_parser.add_subparsers(dest="replay_command", required=True)
+    replay_latest_parser = replay_subparsers.add_parser("latest")
+    replay_latest_parser.add_argument("--data-dir", required=True, type=Path)
+    replay_latest_parser.add_argument("--format", choices=["json", "md"], default="json")
+    replay_latest_parser.set_defaults(handler=_handle_replay_latest)
 
     workflow_parser = subparsers.add_parser("workflow", help="Agent-native workflow runners.")
     workflow_subparsers = workflow_parser.add_subparsers(dest="workflow_command", required=True)
@@ -509,6 +547,30 @@ def _handle_observe_screenshot(args: argparse.Namespace) -> int:
         analysis=_read_json_object(args.analysis),
     )
     return _persist_observation(args.data_dir, observation)
+
+
+def _handle_observation_template(args: argparse.Namespace) -> int:
+    _print_json(observation_template(args.type, args.app_id))
+    return 0
+
+
+def _handle_observation_validate(args: argparse.Namespace) -> int:
+    payload = validate_observation(_read_json_object(args.input))
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_observation_normalize(args: argparse.Namespace) -> int:
+    observation = normalize_observation(_read_json_object(args.input))
+    validation = validate_observation(observation)
+    payload = {
+        "schema_version": 1,
+        "status": validation["status"],
+        "observation": observation,
+        "validation": validation,
+    }
+    _print_json(payload)
+    return 0 if validation["status"] == "ok" else 2
 
 
 def _persist_observation(data_dir: Path, observation: AppObservation) -> int:
@@ -951,6 +1013,33 @@ def _handle_feedback(args: argparse.Namespace) -> int:
     )
     _print_json(event_payload)
     return 0
+
+
+def _handle_eval_run(args: argparse.Namespace) -> int:
+    if args.suite != "conversation":
+        _print_json({"schema_version": 1, "status": "error", "reason": "unsupported_eval_suite"})
+        return 2
+    result = run_conversation_eval(args.input)
+    payload = {
+        "schema_version": 1,
+        "status": "ok" if result.passed else "failed",
+        "suite": "conversation",
+        "case_count": result.case_count,
+        "passed": result.passed,
+        "failures": list(result.failures),
+        "cases": result.cases,
+    }
+    _print_json(payload)
+    return 0 if result.passed else 2
+
+
+def _handle_replay_latest(args: argparse.Namespace) -> int:
+    payload = latest_replay_payload(args.data_dir)
+    if args.format == "md":
+        sys.stdout.write(latest_replay_markdown(args.data_dir) + "\n")
+        return 0 if payload["status"] == "ok" else 2
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
 
 
 def _record_feedback(
