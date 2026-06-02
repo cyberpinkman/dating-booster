@@ -1,6 +1,7 @@
 import json
 import re
 import tempfile
+import tomllib
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -28,8 +29,8 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(metadata["package_name"], "dating-booster-codex-skill")
         self.assertEqual(metadata["target_host"], "codex")
-        self.assertEqual(metadata["package_version"], "0.1.8")
-        self.assertEqual(metadata["dating_boost_min_version"], "0.1.8")
+        self.assertEqual(metadata["package_version"], "0.1.9")
+        self.assertEqual(metadata["dating_boost_min_version"], "0.1.9")
         self.assertEqual(metadata["source_repo"], "cyberpinkman/dating-booster")
         self.assertEqual(metadata["skill_path"], "skills/dating-booster-codex")
         self.assertNotIn(metadata["source_ref"], {"main", "master", "codex/mvp-intelligence"})
@@ -41,6 +42,7 @@ class SkillPackageTests(unittest.TestCase):
             or re.fullmatch(r"[0-9a-f]{7,40}", metadata["source_spec_commit"])
         )
         self.assertEqual(metadata["cli_command"], "dating-boost")
+        self.assertEqual(metadata["host_loop_command"], "dating-boost-host-loop")
         self.assertEqual(metadata["bootstrap_script"], "scripts/bootstrap_cli.py")
         self.assertEqual(metadata["doctor_script"], "scripts/doctor.py")
         self.assertLessEqual(_version_tuple(metadata["dating_boost_min_version"]), _version_tuple(__version__))
@@ -79,6 +81,13 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("references/host-loop.md", metadata["references"])
         self.assertTrue((SKILL_DIR / metadata["bootstrap_script"]).exists())
         self.assertTrue((SKILL_DIR / metadata["doctor_script"]).exists())
+
+    def test_host_loop_supervisor_is_exposed_as_installable_console_command(self):
+        pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+        scripts = pyproject["project"]["scripts"]
+
+        self.assertEqual(scripts["dating-boost"], "dating_boost.cli:main")
+        self.assertEqual(scripts["dating-boost-host-loop"], "dating_boost.host_loop:main")
 
     def test_skill_markdown_contains_required_operational_guards(self):
         skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower()
@@ -158,7 +167,7 @@ class SkillPackageTests(unittest.TestCase):
             "operator record-action-result",
             "operator stop",
             "operator report latest",
-            "operator_host_loop.py",
+            "dating-boost-host-loop",
         ):
             self.assertTrue(command in workflows_text or command in host_loop_text, command)
         for phrase in (

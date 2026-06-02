@@ -195,7 +195,7 @@ internal QA; do not show it by default.
 
 ## Tinder Host Loop
 
-For real Tinder host-loop testing, prefer `scripts/operator_host_loop.py` over
+For real Tinder host-loop testing, prefer `dating-boost-host-loop` over
 manually calling every operator command. Read `references/host-loop.md` first.
 
 Default to `--send-mode stage`: paste the draft into Tinder, verify the staged

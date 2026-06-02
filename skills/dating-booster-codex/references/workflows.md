@@ -167,7 +167,7 @@ toward a goal such as meeting in person.
 For real Tinder/iPhone Mirroring runs, prefer:
 
 ```bash
-python3 scripts/operator_host_loop.py --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+dating-boost-host-loop --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
 ```
 
 Use `--send-mode stage` by default. It writes work items and templates, waits

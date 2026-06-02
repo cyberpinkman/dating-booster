@@ -54,9 +54,9 @@ or `dating-boost skill doctor`.
 {
   "schema_version": 1,
   "status": "ok",
-  "skill_version": "0.1.8",
+  "skill_version": "0.1.9",
   "cli_found": true,
-  "cli_version": "0.1.8",
+  "cli_version": "0.1.9",
   "capabilities_ok": true,
   "missing_commands": [],
   "schema_mismatches": [],
@@ -500,7 +500,7 @@ the user explicitly asks for a transcript-style audit.
 
 ## Tinder Host Loop Work Dir
 
-`scripts/operator_host_loop.py` writes `current_work_item.json` plus one
+`dating-boost-host-loop` writes `current_work_item.json` plus one
 template file. The host fills the matching non-template file.
 
 ```text

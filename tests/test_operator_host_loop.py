@@ -3,10 +3,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import argparse
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from dating_boost.cli import main
+from dating_boost.host_loop import HostLoopCommandError, HostLoopSupervisor
 
 
 FIXTURE_DIR = Path("tests/fixtures/host_loop/tinder")
@@ -29,6 +32,7 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertTrue(payload["agent_native_capabilities"]["host_loop_supervisor"])
             self.assertTrue(payload["agent_native_capabilities"]["tinder_host_loop"])
+            self.assertEqual(payload["agent_native_capabilities"]["host_loop_command"], "dating-boost-host-loop")
             self.assertFalse(payload["agent_native_capabilities"]["live_gui_harness"])
 
     def test_fixture_host_loop_stage_mode_stages_message_without_recording_send_result(self):
@@ -84,6 +88,12 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(events[0]["result_status"], "succeeded")
             self.assertTrue(payload["staged_verifications"])
             self.assertTrue(payload["action_results_recorded"])
+            self.assertFalse((work_dir / "staged_verification.json").exists())
+            self.assertTrue(any(path.name.endswith("_staged_verification.json") for path in (work_dir / "consumed").iterdir()))
+            self.assertIn("machine_report_path", payload)
+            self.assertTrue(Path(payload["machine_report_path"]).exists())
+            self.assertIn("human_report_path", payload)
+            self.assertTrue(Path(payload["human_report_path"]).exists())
 
     def test_once_mode_writes_template_and_waits_for_host_without_fixture(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -110,6 +120,71 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(payload["current_work_item"]["work_item_type"], "scan_message_list")
             self.assertEqual(Path(payload["expected_input"]).resolve(), (work_dir / "message_list_observation.json").resolve())
             self.assertTrue((work_dir / "message_list_observation.template.json").exists())
+
+    def test_supervisor_does_not_inject_fixed_clock_without_fixture_host(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            supervisor = HostLoopSupervisor(
+                argparse.Namespace(
+                    data_dir=Path(temp_dir) / "data",
+                    authorization=None,
+                    goal=None,
+                    availability=None,
+                    app_id="tinder",
+                    send_mode="stage",
+                    work_dir=Path(temp_dir) / "work",
+                    max_steps=1,
+                    once=False,
+                    json=True,
+                    fixture_host=None,
+                    wait_timeout=None,
+                    poll_interval=1.0,
+                    skill_package=None,
+                )
+            )
+
+            def fake_run(command, cwd, check, capture_output, text, env):
+                self.assertNotIn("DATING_BOOST_NOW", env)
+                return subprocess.CompletedProcess(command, 0, stdout='{"schema_version": 1, "status": "ok"}', stderr="")
+
+            with patch.dict(os.environ, {}, clear=True), patch("dating_boost.host_loop.subprocess.run", fake_run):
+                payload = supervisor._run_cli_json("capabilities", "--json")
+
+        self.assertEqual(payload["status"], "ok")
+
+    def test_supervisor_preserves_structured_cli_error_reason(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            supervisor = HostLoopSupervisor(
+                argparse.Namespace(
+                    data_dir=Path(temp_dir) / "data",
+                    authorization=None,
+                    goal=None,
+                    availability=None,
+                    app_id="tinder",
+                    send_mode="stage",
+                    work_dir=Path(temp_dir) / "work",
+                    max_steps=1,
+                    once=False,
+                    json=True,
+                    fixture_host=None,
+                    wait_timeout=None,
+                    poll_interval=1.0,
+                    skill_package=None,
+                )
+            )
+
+            def fake_run(command, cwd, check, capture_output, text, env):
+                return subprocess.CompletedProcess(
+                    command,
+                    2,
+                    stdout='{"schema_version": 1, "status": "error", "reason": "authorization_expired"}',
+                    stderr="",
+                )
+
+            with patch("dating_boost.host_loop.subprocess.run", fake_run):
+                with self.assertRaises(HostLoopCommandError) as raised:
+                    supervisor._run_cli_json("operator", "session", "start")
+
+        self.assertEqual(raised.exception.payload["reason"], "authorization_expired")
 
     def _bootstrap_data_dir(self, data_dir: Path) -> None:
         for argv in (

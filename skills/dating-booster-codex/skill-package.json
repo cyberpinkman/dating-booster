@@ -2,14 +2,15 @@
   "schema_version": 1,
   "name": "dating-booster-codex",
   "package_name": "dating-booster-codex-skill",
-  "package_version": "0.1.8",
+  "package_version": "0.1.9",
   "target_host": "codex",
-  "dating_boost_min_version": "0.1.8",
+  "dating_boost_min_version": "0.1.9",
   "source_repo": "cyberpinkman/dating-booster",
   "skill_path": "skills/dating-booster-codex",
-  "source_ref": "v0.1.8",
+  "source_ref": "v0.1.9",
   "cli_package_name": "dating-booster",
   "cli_command": "dating-boost",
+  "host_loop_command": "dating-boost-host-loop",
   "bootstrap_script": "scripts/bootstrap_cli.py",
   "doctor_script": "scripts/doctor.py",
   "required_schema_versions": {
@@ -36,7 +37,7 @@
     "goal_plan": 1,
     "planner_recommendation": 1
   },
-  "source_spec_commit": "v0.1.8",
+  "source_spec_commit": "v0.1.9",
   "source_specs": [
     "docs/superpowers/specs/2026-05-25-agent-native-launch-strategy.md",
     "docs/superpowers/specs/2026-05-25-product-architecture-blueprint.md",

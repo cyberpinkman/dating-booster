@@ -13,7 +13,7 @@ verification before clicking send and recording an action result.
 
 ## Supervisor
 
-`scripts/operator_host_loop.py` supports:
+`dating-boost-host-loop` supports:
 
 - `--data-dir`
 - `--authorization`

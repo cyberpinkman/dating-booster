@@ -10,7 +10,7 @@ verification.
 Run:
 
 ```bash
-python3 scripts/operator_host_loop.py \
+dating-boost-host-loop \
   --data-dir .local/dating-boost \
   --authorization auth.json \
   --goal goal.json \
@@ -20,6 +20,9 @@ python3 scripts/operator_host_loop.py \
   --work-dir .local/dating-boost-host-loop \
   --json
 ```
+
+When running from a cloned repository, `python3 scripts/operator_host_loop.py`
+is a compatibility wrapper around the same command.
 
 Use `--send-mode stage` by default. It stages text in the input box and stops
 before sending. Use `--send-mode live` only after the user explicitly authorizes

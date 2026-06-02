@@ -119,6 +119,7 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "goal_oriented_operator": True,
             "host_loop_supervisor": True,
             "tinder_host_loop": True,
+            "host_loop_command": "dating-boost-host-loop",
             "automation_dry_run_default": True,
             "automation_external_scheduler": True,
             "appointment_ledger": True,
