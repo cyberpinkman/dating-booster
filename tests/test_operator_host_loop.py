@@ -35,6 +35,27 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(payload["agent_native_capabilities"]["host_loop_command"], "dating-boost-host-loop")
             self.assertFalse(payload["agent_native_capabilities"]["live_gui_harness"])
 
+    def test_wechat_host_loop_init_writes_wechat_authorization_template(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            work_dir = Path(temp_dir) / "work"
+
+            payload = self._run_script(
+                "init",
+                "--app-id",
+                "wechat",
+                "--data-dir",
+                str(data_dir),
+                "--work-dir",
+                str(work_dir),
+                "--json",
+            )
+
+            auth_template = json.loads((data_dir / "automation" / "auth.template.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(auth_template["app_id"], "wechat")
+            self.assertTrue((work_dir / "current_work_item.json").exists())
+
     def test_fixture_host_loop_stage_mode_stages_message_without_recording_send_result(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
@@ -202,6 +223,59 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertTrue(Path(payload["machine_report_path"]).exists())
             self.assertIn("human_report_path", payload)
             self.assertTrue(Path(payload["human_report_path"]).exists())
+
+    def test_live_mode_blocks_when_safety_is_paused(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            work_dir = Path(temp_dir) / "work"
+            self._run_cli(["safety", "pause", "--data-dir", str(data_dir), "--reason", "manual-stop", "--json"])
+
+            payload = self._run_script(
+                "--fixture-host",
+                str(FIXTURE_DIR),
+                "--data-dir",
+                str(data_dir),
+                "--work-dir",
+                str(work_dir),
+                "--send-mode",
+                "live",
+                "--max-steps",
+                "8",
+                "--json",
+            )
+
+            self.assertEqual(payload["status"], "blocked")
+            self.assertEqual(payload["stop_reason"], "safety_paused")
+            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+
+    def test_live_mode_requires_explicit_live_send_authorization(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            work_dir = Path(temp_dir) / "work"
+            auth_path = Path(temp_dir) / "auth_without_live.json"
+            auth = json.loads((FIXTURE_DIR / "auth.json").read_text(encoding="utf-8"))
+            auth.pop("live_send", None)
+            self._write_json(auth_path, auth)
+
+            payload = self._run_script(
+                "--fixture-host",
+                str(FIXTURE_DIR),
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(auth_path),
+                "--work-dir",
+                str(work_dir),
+                "--send-mode",
+                "live",
+                "--max-steps",
+                "8",
+                "--json",
+            )
+
+            self.assertEqual(payload["status"], "blocked")
+            self.assertEqual(payload["stop_reason"], "live_send_authorization_required")
+            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
 
     def test_once_mode_writes_template_and_waits_for_host_without_fixture(self):
         with tempfile.TemporaryDirectory() as temp_dir:

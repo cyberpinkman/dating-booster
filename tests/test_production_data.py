@@ -80,7 +80,7 @@ class ProductionDataCliTests(unittest.TestCase):
             self.assertEqual(doctor_exit, 0)
             self.assertEqual(doctor_payload["status"], "ok")
             self.assertEqual(doctor_payload["storage_backend"], "sqlite")
-            self.assertEqual(doctor_payload["schema_versions"]["data_store"], 1)
+            self.assertEqual(doctor_payload["schema_versions"]["data_store"], 2)
             self.assertEqual(caps_exit, 0)
             self.assertEqual(caps_payload["storage_capabilities"]["storage_backend"], "sqlite")
             self.assertTrue(caps_payload["storage_capabilities"]["sqlite"])

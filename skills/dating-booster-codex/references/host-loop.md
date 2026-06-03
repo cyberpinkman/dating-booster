@@ -1,20 +1,36 @@
 # Tinder Host Loop
 
 Use this workflow when the user wants Codex to run a real Tinder host loop with
-iPhone Mirroring. This is not a native GUI harness: `dating-boost` drives the
-operator state machine and Codex performs observation, paste, click, and
-verification.
+iPhone Mirroring. `dating-boost-host-loop` drives the operator state machine.
+`dating-boost harness ...` provides the native stage/navigation harness for
+iPhone Mirroring diagnostics, screenshots/OCR, safe Tinder profile-tab
+navigation, profile reading, and chat/profile opening chains. Codex still
+performs semantic screen understanding and must verify staged text before any
+send.
 
 ## Start
 
 Run doctor first:
 
 ```bash
+dating-boost harness doctor --app-id tinder --json
+dating-boost harness tinder launch --dry-run --json
+dating-boost harness tinder open-profile --dry-run --json
+dating-boost harness tinder open-profile --launch-if-needed --json
+dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
+dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
 dating-boost-host-loop doctor \
   --data-dir .local/dating-boost \
   --app-id tinder \
   --json
 ```
+
+Use `harness tinder observe` before selecting an action or workflow. Use the
+workflow commands only as dry-run plans until a fresh observation confirms the
+current Tinder page matches the expected starting state. They are
+navigation-only reading/profile-refresh chains and never authorize send, like,
+super-like, unmatch, report, or profile edit actions.
 
 If configuration files are missing, generate templates:
 

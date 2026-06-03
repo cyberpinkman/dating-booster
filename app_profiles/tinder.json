@@ -17,6 +17,74 @@
     "Verify staged text exactly equals payload_text before send.",
     "If input position drifts, exit and reopen the thread."
   ],
+  "native_gui_harness": {
+    "backend": "iphone_mirroring_macos",
+    "supported_stage_actions": [
+      "doctor",
+      "screenshot",
+      "launch_app",
+      "observe_screen",
+      "open_self_profile",
+      "open_self_profile_preview",
+      "profile_photo_next",
+      "profile_photo_previous",
+      "open_full_profile",
+      "profile_scroll_down",
+      "profile_scroll_up",
+      "expand_visible_profile_section",
+      "close_full_profile",
+      "close_preview",
+      "open_chats",
+      "matches_carousel_next",
+      "matches_carousel_previous",
+      "open_new_match",
+      "open_conversation",
+      "open_thread_profile"
+    ],
+    "launch_navigation": {
+      "intent": "ios_search_launch",
+      "requires_verified_screen_state": "ios_home_screen",
+      "steps": ["tap_ios_search", "tap_tinder_suggestion_icon", "type_app_name", "press_return"],
+      "primary_path": ["tap_ios_search", "tap_tinder_suggestion_icon"],
+      "fallback_path": ["type_app_name", "press_return"]
+    },
+    "self_profile_navigation": {
+      "intent": "tap_tinder_profile_tab",
+      "tap_ratio": {"x": 0.88, "y": 0.94},
+      "requires_verified_tinder_screen": true,
+      "verification_markers": ["Edit Profile", "编辑资料", "Settings", "设置"]
+    },
+    "self_profile_preview_navigation": {
+      "intent": "tap_self_profile_avatar",
+      "tap_ratio": {"x": 0.14, "y": 0.13},
+      "description": "Open the user's profile preview from the self profile page."
+    },
+    "profile_photo_navigation": {
+      "next_photo_tap_ratio": {"x": 0.86, "y": 0.45},
+      "previous_photo_tap_ratio": {"x": 0.14, "y": 0.45},
+      "applies_to": ["self_profile_preview", "match_profile_preview", "full_profile"]
+    },
+    "profile_detail_navigation": {
+      "open_full_profile_tap_ratio": {"x": 0.90, "y": 0.82},
+      "read_down_swipe": {"from": {"x": 0.50, "y": 0.78}, "to": {"x": 0.50, "y": 0.32}},
+      "read_up_swipe": {"from": {"x": 0.50, "y": 0.32}, "to": {"x": 0.50, "y": 0.78}},
+      "expand_visible_section_tap_ratio": {"x": 0.50, "y": 0.76},
+      "close_full_profile_tap_ratio": {"x": 0.90, "y": 0.08},
+      "close_preview_tap_ratio": {"x": 0.90, "y": 0.08}
+    },
+    "chat_navigation": {
+      "open_chats_tab_tap_ratio": {"x": 0.66, "y": 0.94},
+      "new_matches_carousel_swipe_left": {"from": {"x": 0.82, "y": 0.20}, "to": {"x": 0.24, "y": 0.20}},
+      "new_matches_carousel_swipe_right": {"from": {"x": 0.24, "y": 0.20}, "to": {"x": 0.82, "y": 0.20}},
+      "new_match_card_base_tap_ratio": {"x": 0.15, "y": 0.20},
+      "conversation_row_base_tap_ratio": {"x": 0.50, "y": 0.30},
+      "conversation_avatar_tap_ratio": {"x": 0.14, "y": 0.30},
+      "thread_profile_avatar_tap_ratio": {"x": 0.13, "y": 0.08},
+      "reply_required_marker": "等你回应"
+    },
+    "high_level_workflows": ["self-profile-read", "chat-read-match-profile"],
+    "blocked_actions": ["send", "like", "super_like", "unmatch", "report", "profile_edit"]
+  },
   "post_send_verification": [
     "Record succeeded only after a fresh screenshot shows the sent bubble.",
     "If not verifiable, record unknown."

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +59,7 @@ class JsonStorage:
     def write_json(self, relative_path: Path, data: dict[str, Any]) -> None:
         path = self._resolve_path(relative_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_suffix(path.suffix + ".tmp")
+        temp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         try:
             temp_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             with temp_path.open("r+", encoding="utf-8") as handle:
@@ -75,7 +76,7 @@ class JsonStorage:
     def append_jsonl(self, relative_path: Path, data: dict[str, Any]) -> None:
         path = self._resolve_path(relative_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_suffix(path.suffix + ".tmp")
+        temp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         try:
             existing = path.read_text(encoding="utf-8") if path.exists() else ""
             temp_path.write_text(existing + json.dumps(data, sort_keys=True) + "\n", encoding="utf-8")

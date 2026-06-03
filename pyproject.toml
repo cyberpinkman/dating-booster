@@ -1,9 +1,9 @@
 [project]
 name = "dating-booster"
-version = "0.2.0"
+version = "1.0.0-rc.1"
 description = "Local-first dating workflow copilot experiments."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["cryptography>=42,<47"]
 
 [project.optional-dependencies]
 openai = ["openai>=2,<3"]
@@ -12,6 +12,7 @@ test = ["pytest>=8"]
 [project.scripts]
 dating-boost = "dating_boost.cli:main"
 dating-boost-host-loop = "dating_boost.host_loop:main"
+dating-boostd = "dating_boost.core.daemon:daemon_entry"
 
 [tool.setuptools.packages.find]
 include = ["dating_boost*"]

@@ -14,6 +14,39 @@
     "Mac WeChat can usually accept clipboard paste directly.",
     "Verify staged text before pressing Enter or clicking send."
   ],
+  "native_gui_harness": {
+    "backend": "macos_wechat_desktop",
+    "supported_stage_actions": [
+      "doctor",
+      "screenshot",
+      "launch_app",
+      "observe_screen",
+      "stage_draft"
+    ],
+    "launch_navigation": {
+      "intent": "activate_wechat_application",
+      "requires_macos_application": "WeChat",
+      "steps": ["activate_wechat_application"]
+    },
+    "screen_observation": {
+      "target": "wechat_screen",
+      "redacts_raw_ocr_text": true,
+      "layout_hints": [
+        "conversation_window_present",
+        "chat_list_present",
+        "message_input_marker_present",
+        "unread_marker_present"
+      ]
+    },
+    "draft_staging": {
+      "intent": "paste_clipboard_into_wechat_input",
+      "steps": ["copy_draft_to_clipboard", "paste_clipboard_into_wechat_input"],
+      "does_not_send": true,
+      "requires_user_confirmation_before_send": true,
+      "verification": "Host must compare the staged text visually before pressing Enter or clicking Send."
+    },
+    "blocked_actions": ["send", "payments", "calls", "contact_exchange_without_user"]
+  },
   "post_send_verification": [
     "Record succeeded only after the outbound bubble appears."
   ],

@@ -29,13 +29,13 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(metadata["package_name"], "dating-booster-codex-skill")
         self.assertEqual(metadata["target_host"], "codex")
-        self.assertEqual(metadata["package_version"], "0.2.0")
-        self.assertEqual(metadata["dating_boost_min_version"], "0.2.0")
+        self.assertEqual(metadata["package_version"], "1.0.0-rc.1")
+        self.assertEqual(metadata["dating_boost_min_version"], "1.0.0-rc.1")
         self.assertEqual(metadata["source_repo"], "cyberpinkman/dating-booster")
         self.assertEqual(metadata["skill_path"], "skills/dating-booster-codex")
         self.assertNotIn(metadata["source_ref"], {"main", "master", "codex/mvp-intelligence"})
         self.assertEqual(metadata["source_ref"], f"v{metadata['package_version']}")
-        self.assertRegex(metadata["source_ref"], r"^v\d+\.\d+\.\d+$")
+        self.assertRegex(metadata["source_ref"], r"^v\d+\.\d+\.\d+(?:-rc\.\d+)?$")
         self.assertNotIn(metadata["source_spec_commit"], {"main", "master", "codex/mvp-intelligence"})
         self.assertTrue(
             metadata["source_spec_commit"] == metadata["source_ref"]
@@ -57,11 +57,12 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(metadata["required_schema_versions"]["planner_assessment"], 1)
         self.assertEqual(metadata["required_schema_versions"]["goal_plan"], 1)
         self.assertEqual(metadata["required_schema_versions"]["planner_recommendation"], 1)
-        self.assertEqual(metadata["required_schema_versions"]["data_store"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["data_store"], 2)
         self.assertEqual(metadata["required_schema_versions"]["migration"], 1)
         self.assertEqual(metadata["required_schema_versions"]["automation_lock"], 1)
         self.assertEqual(metadata["required_schema_versions"]["confirmation"], 1)
         self.assertEqual(metadata["required_schema_versions"]["production_smoke"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["backup_recovery_key"], 1)
         for command in ("planner update", "planner get", "planner recommend", "planner event-log"):
             self.assertIn(command, metadata["required_commands"])
         for schema_name, schema_version in metadata["required_schema_versions"].items():
@@ -128,6 +129,8 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("user readiness", skill_text)
         self.assertIn("needs_user_profile", skill_text)
         self.assertIn("low_investment_repair", skill_text)
+        self.assertIn("harness wechat stage-draft --text-file", skill_text)
+        self.assertNotIn("harness wechat stage-draft --text ", skill_text)
 
     def test_skill_reference_files_describe_reusable_workflows_and_contracts(self):
         workflows_text = (SKILL_DIR / "references" / "workflows.md").read_text(encoding="utf-8").lower()
@@ -142,6 +145,15 @@ class SkillPackageTests(unittest.TestCase):
 
         for workflow_name in ("draft", "profile refresh", "send", "feedback"):
             self.assertIn(workflow_name, workflows_text)
+        for harness_phrase in (
+            "self-profile-read",
+            "chat-read-match-profile",
+            "profile-photo-next",
+            "open-conversation",
+            "open-thread-profile",
+            "expand-visible-profile-section",
+        ):
+            self.assertIn(harness_phrase, workflows_text)
         for command in (
             "memory ingest-observation",
             "context build",
@@ -180,6 +192,16 @@ class SkillPackageTests(unittest.TestCase):
             "confirmation create",
             "confirmation confirm",
             "confirmation validate",
+            "harness doctor",
+            "harness screenshot",
+            "harness tinder launch",
+            "harness tinder open-profile",
+            "harness tinder observe",
+            "harness tinder action",
+            "harness tinder workflow",
+            "harness wechat launch",
+            "harness wechat observe",
+            "harness wechat stage-draft",
         ):
             self.assertTrue(command in workflows_text or command in host_loop_text, command)
         for phrase in (
@@ -191,6 +213,8 @@ class SkillPackageTests(unittest.TestCase):
             "position drift",
             "reopen the chat thread",
             "foreground app copy",
+            "--text-file",
+            "shell history",
             "result_status",
         ):
             self.assertIn(phrase, workflows_text)
@@ -305,7 +329,8 @@ class SkillPackageTests(unittest.TestCase):
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in version.split("."))
+    normalized = version.replace("-rc.", ".")
+    return tuple(int(part) for part in normalized.split("."))
 
 
 if __name__ == "__main__":

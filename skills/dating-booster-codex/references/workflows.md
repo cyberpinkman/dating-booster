@@ -17,6 +17,107 @@ policy, and audit tools. They do not replace the repository specs.
 9. Stop before viewing dating app content if compatibility fails.
 10. Warn, but do not automatically stop, if `source_spec_commit` differs while
    version, schema, and command checks pass.
+11. For real iPhone Mirroring work, run `dating-boost harness doctor --app-id tinder --json`.
+12. Use `dating-boost harness tinder launch --dry-run --json`,
+    `dating-boost harness tinder open-profile --dry-run --json`, and the
+    relevant `harness tinder action/workflow --dry-run --json` before executing
+    Tinder navigation.
+13. For real macOS WeChat work, run `dating-boost harness doctor --app-id wechat --window-title WeChat --json`,
+    `dating-boost harness wechat launch --dry-run --json`, and
+    `dating-boost harness wechat observe --json` before staging any draft.
+
+## Native GUI Harness
+
+The native harness is for stage/navigation work only. It may diagnose iPhone
+Mirroring, capture a screenshot/OCR artifact, and navigate Tinder through
+bounded profile/chat reading chains. It must not send messages, like,
+super-like, unmatch, report, or edit profile data.
+
+```bash
+dating-boost harness doctor --app-id tinder --json
+dating-boost harness screenshot --app-id tinder --output iphone-mirroring.png --json
+dating-boost harness tinder launch --dry-run --json
+dating-boost harness tinder launch --output-dir .local/dating-boost-harness --json
+dating-boost harness tinder open-profile --dry-run --json
+dating-boost harness tinder open-profile --launch-if-needed --output-dir .local/dating-boost-harness --json
+dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
+dating-boost harness tinder action profile-photo-next --dry-run --json
+dating-boost harness tinder action open-conversation --row-index 1 --target row --dry-run --json
+dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness doctor --app-id wechat --window-title WeChat --json
+dating-boost harness screenshot --app-id wechat --window-title WeChat --output wechat.png --json
+dating-boost harness wechat launch --dry-run --json
+dating-boost harness wechat observe --output-dir .local/dating-boost-harness --json
+dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json
+```
+
+If doctor reports `iphone_mirroring_locked`, ask the user to unlock iPhone
+Mirroring. Tinder launch is allowed only from a verified iOS home screen. If
+profile or chat navigation returns `tinder_foreground_not_verified`, or launch
+returns `ios_home_screen_not_verified`, do not click arbitrary coordinates;
+first establish the foreground screen from a fresh screenshot/OCR observation.
+
+Supported atomic Tinder actions:
+
+- `open-chats`
+- `matches-carousel-next`
+- `matches-carousel-previous`
+- `open-new-match`
+- `open-conversation`
+- `open-thread-profile`
+- `open-self-profile-preview`
+- `profile-photo-next`
+- `profile-photo-previous`
+- `open-full-profile`
+- `profile-scroll-down`
+- `profile-scroll-up`
+- `expand-visible-profile-section`
+- `close-full-profile`
+- `close-preview`
+
+Supported high-level workflows:
+
+- `self-profile-read`: from the user's profile page, tap the avatar, move
+  through preview photos, enter full-profile read mode, scroll profile content,
+  tap the visible expand-control area, exit full read mode, and return to the
+  self profile page.
+- `chat-read-match-profile`: open the chats tab, optionally move the new-match
+  carousel, open a visible new match and a visible conversation row, tap the
+  thread avatar, move through the match profile preview, enter full-profile
+  read mode, scroll profile content, tap the visible expand-control area, and
+  exit back through profile preview.
+
+Use `open-conversation --row-index N --target row` for message-list rows and
+`--target avatar` only when the avatar target is clearly visible. Treat the
+top horizontal carousel as new or not-yet-started matches; treat the vertical
+message list as opened conversations. The text marker `等你回应` is only an
+observation cue that the match sent the latest message; it is not by itself an
+authorization to draft or send.
+
+Use `harness tinder observe` before and after bounded navigation. It returns
+redacted `layout_hints`, not raw OCR text. The hints distinguish `page:
+chats`, `new_matches_carousel_present`, `conversation_list_present`,
+`reply_required_marker_present`, `page: self_profile`, active tab hints, and
+visible profile expand controls. If `observe` returns `needs_verification`,
+do not execute a navigation action until the current screen has been understood
+from a fresh screenshot.
+
+For macOS WeChat, `harness wechat observe` returns redacted `layout_hints`, not
+raw OCR text. The hints distinguish `page: conversation`, `page: chat_list`,
+message-input markers, and unread markers. `harness wechat stage-draft` copies
+the draft to the macOS clipboard and sends `Cmd+V` to the current WeChat input
+focus. It does not press Enter or click Send. Prefer `--text-file` so private
+draft text is not written into shell history or process arguments. Use it only
+after the draft has passed `workflow draft` or `policy check-draft`, and
+visually verify the staged text before any manual send.
+
+The action `expand-visible-profile-section` is a bounded tap for a visibly
+folded profile section such as `查看所有...项信息`. Use it only after a fresh
+observation confirms such an expand control is currently visible. If the
+profile layout, subscription state, language, or viewport differs from the
+expected contract, stop and capture a new observation instead of probing stale
+coordinates.
 
 ## Production Data And Confirmation
 

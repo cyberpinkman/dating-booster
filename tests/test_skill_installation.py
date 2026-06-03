@@ -30,9 +30,9 @@ class SkillInstallationTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["skill_version"], "0.2.0")
+        self.assertEqual(payload["skill_version"], "1.0.0-rc.1")
         self.assertTrue(payload["cli_found"])
-        self.assertEqual(payload["cli_version"], "0.2.0")
+        self.assertEqual(payload["cli_version"], "1.0.0-rc.1")
         self.assertTrue(payload["capabilities_ok"])
         self.assertEqual(payload["missing_commands"], [])
         self.assertEqual(payload["schema_mismatches"], [])

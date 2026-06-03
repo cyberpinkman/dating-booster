@@ -1,21 +1,36 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import shutil
 import sqlite3
+import tempfile
+import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.encryption import (
+    BACKUP_RECOVERY_KEY_SCHEMA_VERSION as ENCRYPTION_BACKUP_RECOVERY_KEY_SCHEMA_VERSION,
+    EncryptionError,
+    LOCAL_KEY_NAME,
+    PayloadCipher,
+    payload_is_encrypted,
+)
 
-DATA_STORE_SCHEMA_VERSION = 1
+DATA_STORE_SCHEMA_VERSION = 2
 MIGRATION_SCHEMA_VERSION = 1
 AUTOMATION_LOCK_SCHEMA_VERSION = 1
 CONFIRMATION_SCHEMA_VERSION = 1
+ENCRYPTED_PAYLOAD_SCHEMA_VERSION = 1
+KEYCHAIN_BINDING_SCHEMA_VERSION = 1
+DIAGNOSTIC_BUNDLE_SCHEMA_VERSION = 1
+RELEASE_MANIFEST_SCHEMA_VERSION = 1
+BACKUP_RECOVERY_KEY_SCHEMA_VERSION = ENCRYPTION_BACKUP_RECOVERY_KEY_SCHEMA_VERSION
 PRODUCTION_DB_NAME = "dating_boost.sqlite3"
 KNOWN_SCHEMA_VERSIONS = {1, 2}
 BLOCKED_DRAFT_TEXT_KEYS = {
@@ -38,6 +53,7 @@ class ProductionDataStore:
     def __init__(self, root: Path):
         self.root = root.resolve()
         self.db_path = self.root / PRODUCTION_DB_NAME
+        self._cipher = PayloadCipher(self.root)
 
     def ensure_schema(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -92,6 +108,10 @@ class ProductionDataStore:
             )
             self._set_metadata(conn, "data_store_schema_version", str(DATA_STORE_SCHEMA_VERSION))
             self._set_metadata(conn, "storage_backend", "sqlite")
+            self._set_metadata(conn, "encrypted_payload_schema_version", str(ENCRYPTED_PAYLOAD_SCHEMA_VERSION))
+            self._set_metadata(conn, "keychain_binding_schema_version", str(KEYCHAIN_BINDING_SCHEMA_VERSION))
+            self._set_metadata(conn, "encryption", "enabled")
+            self._set_metadata(conn, "encryption_provider", self._cipher.provider.provider_name)
 
     def doctor(self) -> dict[str, Any]:
         if not self.db_path.exists():
@@ -101,18 +121,38 @@ class ProductionDataStore:
                 "storage_backend": "json",
                 "db_path": str(self.db_path),
                 "schema_versions": _schema_versions(),
+                "encryption": {
+                    "status": "not_initialized",
+                    "encrypted_payload_schema_version": ENCRYPTED_PAYLOAD_SCHEMA_VERSION,
+                    "keychain_binding_schema_version": KEYCHAIN_BINDING_SCHEMA_VERSION,
+                },
                 "checks": {
                     "sqlite_db_exists": False,
                     "schema_ok": False,
                     "migration_ok": False,
+                    "encryption_ok": False,
                 },
             }
-        self.ensure_schema()
-        with self._connect() as conn:
-            metadata = dict(conn.execute("SELECT key, value FROM metadata").fetchall())
-            document_count = int(conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
-            audit_event_count = int(conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0])
+        try:
+            self.ensure_schema()
+            with self._connect() as conn:
+                metadata = dict(conn.execute("SELECT key, value FROM metadata").fetchall())
+                document_count = int(conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+                audit_event_count = int(conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0])
+                verification = self._verify_encrypted_payloads(conn)
+        except EncryptionError:
+            return self._blocked_doctor("payload_decryption_failed")
+        except sqlite3.DatabaseError:
+            return self._blocked_doctor("sqlite_unreadable")
         migration_ok = metadata.get("migration_schema_version") == str(MIGRATION_SCHEMA_VERSION)
+        encryption = self._cipher.status_without_creating_key()
+        encryption_ok = (
+            metadata.get("encryption") == "enabled"
+            and verification["encrypted_documents"] == document_count
+            and verification["encrypted_audit_events"] == audit_event_count
+            and verification["encrypted_idempotency"] == verification["idempotency_count"]
+            and verification["encrypted_confirmations"] == verification["confirmation_count"]
+        )
         return {
             "schema_version": DATA_STORE_SCHEMA_VERSION,
             "status": "ok" if migration_ok else "needs_migration",
@@ -121,10 +161,19 @@ class ProductionDataStore:
             "schema_versions": _schema_versions(),
             "document_count": document_count,
             "audit_event_count": audit_event_count,
+            "encrypted_payload_count": verification["encrypted_documents"],
+            "encryption": {
+                "status": "encrypted" if encryption_ok else "unknown",
+                "provider": encryption.provider,
+                "key_id": encryption.key_id,
+                "encrypted_payload_schema_version": ENCRYPTED_PAYLOAD_SCHEMA_VERSION,
+                "keychain_binding_schema_version": KEYCHAIN_BINDING_SCHEMA_VERSION,
+            },
             "checks": {
                 "sqlite_db_exists": True,
                 "schema_ok": metadata.get("data_store_schema_version") == str(DATA_STORE_SCHEMA_VERSION),
                 "migration_ok": migration_ok,
+                "encryption_ok": encryption_ok,
             },
         }
 
@@ -137,7 +186,8 @@ class ProductionDataStore:
             if self.db_path.exists():
                 self.db_path.unlink()
             return {
-                "schema_version": MIGRATION_SCHEMA_VERSION,
+                "schema_version": DATA_STORE_SCHEMA_VERSION,
+                "migration_schema_version": MIGRATION_SCHEMA_VERSION,
                 "status": "blocked",
                 "reason": exc.reason,
                 "path": exc.path,
@@ -163,7 +213,7 @@ class ProductionDataStore:
                     (
                         item["path"],
                         item["schema_version"],
-                        json.dumps(item["payload"], ensure_ascii=False, sort_keys=True),
+                        self._encode_document(item["path"], item["payload"]),
                         migrated_at,
                     ),
                 )
@@ -182,7 +232,7 @@ class ProductionDataStore:
                         event["stream"],
                         event["event_id"],
                         payload.get("target_match_id"),
-                        json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                        self._encode_audit_event(event["stream"], event["event_id"], payload),
                         str(payload.get("created_at") or migrated_at),
                     ),
                 )
@@ -190,10 +240,14 @@ class ProductionDataStore:
             self._set_metadata(conn, "migration_schema_version", str(MIGRATION_SCHEMA_VERSION))
             self._set_metadata(conn, "migrated_at", migrated_at)
             self._set_metadata(conn, "backup_dir", str(backup_dir))
+            self._set_metadata(conn, "encryption", "enabled")
+            self._set_metadata(conn, "encryption_provider", self._cipher.status().provider)
         return {
-            "schema_version": MIGRATION_SCHEMA_VERSION,
+            "schema_version": DATA_STORE_SCHEMA_VERSION,
+            "migration_schema_version": MIGRATION_SCHEMA_VERSION,
             "status": "ok",
             "storage_backend": "sqlite",
+            "encryption": self._encryption_payload(),
             "db_path": str(self.db_path),
             "backup_dir": str(backup_dir),
             "migrated_documents": len(documents),
@@ -201,7 +255,10 @@ class ProductionDataStore:
         }
 
     def export(self, output: Path) -> dict[str, Any]:
-        migration_status = self._migration_status()
+        try:
+            migration_status = self._migration_status()
+        except sqlite3.DatabaseError:
+            return self._blocked_export("sqlite_unreadable", output)
         if migration_status.get("status") != "ok":
             return {
                 "schema_version": DATA_STORE_SCHEMA_VERSION,
@@ -211,25 +268,31 @@ class ProductionDataStore:
                 "db_path": str(self.db_path),
             }
         output = output.resolve()
-        with self._connect() as conn:
-            documents = [
-                {
-                    "path": row["path"],
-                    "schema_version": row["schema_version"],
-                    "payload": _redact_if_blocked(json.loads(row["payload_json"])),
-                }
-                for row in conn.execute("SELECT path, schema_version, payload_json FROM documents ORDER BY path")
-            ]
-            audit_stream = [
-                _redact_if_blocked(json.loads(row["payload_json"]))
-                for row in conn.execute(
-                    "SELECT payload_json FROM audit_events ORDER BY created_at, stream, event_id"
-                )
-            ]
-            metadata = dict(conn.execute("SELECT key, value FROM metadata").fetchall())
+        try:
+            with self._connect() as conn:
+                documents = [
+                    {
+                        "path": row["path"],
+                        "schema_version": row["schema_version"],
+                        "payload": _redact_if_blocked(self._decode_document(row["path"], row["payload_json"])),
+                    }
+                    for row in conn.execute("SELECT path, schema_version, payload_json FROM documents ORDER BY path")
+                ]
+                audit_stream = [
+                    _redact_if_blocked(self._decode_audit_event(row["stream"], row["event_id"], row["payload_json"]))
+                    for row in conn.execute(
+                        "SELECT stream, event_id, payload_json FROM audit_events ORDER BY created_at, stream, event_id"
+                    )
+                ]
+                metadata = dict(conn.execute("SELECT key, value FROM metadata").fetchall())
+        except EncryptionError:
+            return self._blocked_export("payload_decryption_failed", output)
+        except sqlite3.DatabaseError:
+            return self._blocked_export("sqlite_unreadable", output)
         export_payload = {
             "schema_version": DATA_STORE_SCHEMA_VERSION,
             "storage_backend": "sqlite",
+            "encryption": self._encryption_payload(),
             "exported_at": _now_iso(),
             "metadata": metadata,
             "documents": documents,
@@ -265,7 +328,7 @@ class ProductionDataStore:
                 (
                     relative_path,
                     schema_version,
-                    json.dumps(_redact_if_blocked(payload), ensure_ascii=False, sort_keys=True),
+                    self._encode_document(relative_path, _redact_if_blocked(payload)),
                     _now_iso(),
                 ),
             )
@@ -287,7 +350,7 @@ class ProductionDataStore:
                     relative_path,
                     event_id,
                     payload.get("target_match_id"),
-                    json.dumps(_redact_if_blocked(payload), ensure_ascii=False, sort_keys=True),
+                    self._encode_audit_event(relative_path, event_id, _redact_if_blocked(payload)),
                     str(payload.get("created_at") or _now_iso()),
                 ),
             )
@@ -334,15 +397,8 @@ class ProductionDataStore:
                         "reason": "match_id_required",
                         "required_confirm_token": required,
                     }
-                pattern = f"%{match_id}%"
-                deleted_documents = conn.execute(
-                    "DELETE FROM documents WHERE path LIKE ? OR payload_json LIKE ?",
-                    (pattern, pattern),
-                ).rowcount
-                deleted_events = conn.execute(
-                    "DELETE FROM audit_events WHERE target_match_id = ? OR payload_json LIKE ?",
-                    (match_id, pattern),
-                ).rowcount
+                deleted_documents = self._delete_match_documents(conn, match_id)
+                deleted_events = self._delete_match_audit_events(conn, match_id)
                 json_cleanup = self._delete_match_from_json_files(match_id)
             elif scope == "archived":
                 deleted_documents = conn.execute("DELETE FROM documents WHERE path LIKE 'archived/%'").rowcount
@@ -362,6 +418,221 @@ class ProductionDataStore:
             "deleted_documents": max(deleted_documents, 0),
             "deleted_events": max(deleted_events, 0),
             "json_cleanup": json_cleanup if scope == "match" else None,
+        }
+
+    def backup(self, output: Path, *, recovery_passphrase: str | None = None) -> dict[str, Any]:
+        migration_status = self._migration_status()
+        if migration_status.get("status") != "ok":
+            return {
+                "schema_version": DATA_STORE_SCHEMA_VERSION,
+                "status": "blocked",
+                "reason": "needs_migration",
+                "db_path": str(self.db_path),
+            }
+        if not recovery_passphrase:
+            return {
+                "schema_version": DATA_STORE_SCHEMA_VERSION,
+                "status": "blocked",
+                "reason": "recovery_passphrase_required",
+                "db_path": str(self.db_path),
+            }
+        output = output.resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as conn:
+            conn.execute("PRAGMA wal_checkpoint(FULL)")
+            metadata = dict(conn.execute("SELECT key, value FROM metadata").fetchall())
+        manifest = {
+            "schema_version": DATA_STORE_SCHEMA_VERSION,
+            "backup_format": "dating_boost_sqlite_zip",
+            "created_at": _now_iso(),
+            "encrypted": True,
+            "db_file": PRODUCTION_DB_NAME,
+            "metadata": metadata,
+            "key_recovery": "passphrase",
+            "recovery_key": self._cipher.encrypt_recovery_key(recovery_passphrase),
+        }
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
+            archive.write(self.db_path, PRODUCTION_DB_NAME)
+        return {
+            "schema_version": DATA_STORE_SCHEMA_VERSION,
+            "status": "ok",
+            "encrypted": True,
+            "output": str(output),
+            "key_recovery": "passphrase",
+        }
+
+    def restore(self, input_path: Path, *, confirm: str, recovery_passphrase: str | None = None) -> dict[str, Any]:
+        if confirm != "restore":
+            return {
+                "schema_version": DATA_STORE_SCHEMA_VERSION,
+                "status": "blocked",
+                "reason": "confirm_token_mismatch",
+                "required_confirm_token": "restore",
+            }
+        input_path = input_path.resolve()
+        with zipfile.ZipFile(input_path) as archive:
+            manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+            if manifest.get("backup_format") != "dating_boost_sqlite_zip":
+                return {
+                    "schema_version": DATA_STORE_SCHEMA_VERSION,
+                    "status": "blocked",
+                    "reason": "invalid_backup_format",
+                }
+            db_bytes = archive.read(str(manifest.get("db_file") or PRODUCTION_DB_NAME))
+        recovery_key = manifest.get("recovery_key")
+        restored_key: bytes | None = None
+        if isinstance(recovery_key, dict):
+            if not recovery_passphrase:
+                return {
+                    "schema_version": DATA_STORE_SCHEMA_VERSION,
+                    "status": "blocked",
+                    "reason": "recovery_passphrase_required",
+                    "input": str(input_path),
+                }
+            try:
+                restored_key = self._cipher.decrypt_recovery_key(recovery_key, recovery_passphrase)
+            except EncryptionError:
+                return {
+                    "schema_version": DATA_STORE_SCHEMA_VERSION,
+                    "status": "blocked",
+                    "reason": "recovery_passphrase_invalid",
+                    "input": str(input_path),
+                }
+        elif isinstance(manifest.get("local_key_material"), str):
+            try:
+                restored_key = base64.b64decode(str(manifest["local_key_material"]))
+            except Exception:
+                return {
+                    "schema_version": DATA_STORE_SCHEMA_VERSION,
+                    "status": "blocked",
+                    "reason": "legacy_local_key_invalid",
+                    "input": str(input_path),
+                }
+            if len(restored_key) != 32:
+                return {
+                    "schema_version": DATA_STORE_SCHEMA_VERSION,
+                    "status": "blocked",
+                    "reason": "legacy_local_key_invalid",
+                    "input": str(input_path),
+                }
+        elif manifest.get("encrypted"):
+            return {
+                "schema_version": DATA_STORE_SCHEMA_VERSION,
+                "status": "blocked",
+                "reason": "recovery_key_missing",
+                "input": str(input_path),
+            }
+        temp_parent = self.root.parent
+        temp_parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=f".{self.root.name}.restore-", dir=temp_parent) as temp_dir:
+            temp_root = Path(temp_dir) / "data"
+            temp_root.mkdir(parents=True, exist_ok=True)
+            temp_store = ProductionDataStore(temp_root)
+            if restored_key is not None:
+                temp_store._cipher.store_raw_key(restored_key)
+            temp_store.db_path.write_bytes(db_bytes)
+            if not _sqlite_integrity_ok(temp_store.db_path):
+                return {
+                    "schema_version": DATA_STORE_SCHEMA_VERSION,
+                    "status": "blocked",
+                    "reason": "backup_sqlite_integrity_failed",
+                    "input": str(input_path),
+                }
+            doctor = temp_store.doctor()
+            if doctor.get("status") != "ok":
+                return {
+                    "schema_version": DATA_STORE_SCHEMA_VERSION,
+                    "status": "blocked",
+                    "reason": str(doctor.get("reason") or "backup_doctor_failed"),
+                    "input": str(input_path),
+                    "doctor": doctor,
+                }
+            self._replace_root_with(temp_root)
+        return {
+            "schema_version": DATA_STORE_SCHEMA_VERSION,
+            "status": "ok",
+            "input": str(input_path),
+            "db_path": str(self.db_path),
+            "encrypted": bool(manifest.get("encrypted")),
+            "key_recovery": manifest.get("key_recovery") or "legacy_local_key",
+        }
+
+    def rekey(self) -> dict[str, Any]:
+        self.ensure_schema()
+        old_key = self._cipher.provider.load_or_create_key()
+        with self._connect() as conn:
+            documents = [
+                {
+                    "path": row["path"],
+                    "schema_version": row["schema_version"],
+                    "payload": self._decode_document(row["path"], row["payload_json"]),
+                }
+                for row in conn.execute("SELECT path, schema_version, payload_json FROM documents ORDER BY path")
+            ]
+            audit_events = [
+                {
+                    "stream": row["stream"],
+                    "event_id": row["event_id"],
+                    "target_match_id": row["target_match_id"],
+                    "payload": self._decode_audit_event(row["stream"], row["event_id"], row["payload_json"]),
+                    "created_at": row["created_at"],
+                }
+                for row in conn.execute(
+                    "SELECT stream, event_id, target_match_id, payload_json, created_at FROM audit_events ORDER BY stream, event_id"
+                )
+            ]
+            idempotency_rows = [
+                {
+                    "idempotency_key": row["idempotency_key"],
+                    "run_id": row["run_id"],
+                    "response": self._decode_idempotency(row["idempotency_key"], row["response_json"]),
+                    "created_at": row["created_at"],
+                }
+                for row in conn.execute("SELECT idempotency_key, run_id, response_json, created_at FROM idempotency")
+            ]
+            confirmation_rows = [
+                {
+                    **dict(row),
+                    "payload": self._decode_confirmation(row["confirmation_id"], row["payload_json"]),
+                }
+                for row in conn.execute("SELECT * FROM confirmations")
+            ]
+        try:
+            self._cipher.rotate_key()
+            rekeyed_at = _now_iso()
+            with self._connect() as conn:
+                for item in documents:
+                    conn.execute(
+                        "UPDATE documents SET payload_json = ?, updated_at = ? WHERE path = ?",
+                        (self._encode_document(item["path"], item["payload"]), rekeyed_at, item["path"]),
+                    )
+                for item in audit_events:
+                    conn.execute(
+                        "UPDATE audit_events SET payload_json = ? WHERE stream = ? AND event_id = ?",
+                        (self._encode_audit_event(item["stream"], item["event_id"], item["payload"]), item["stream"], item["event_id"]),
+                    )
+                for item in idempotency_rows:
+                    conn.execute(
+                        "UPDATE idempotency SET response_json = ? WHERE idempotency_key = ?",
+                        (self._encode_idempotency(item["idempotency_key"], item["response"]), item["idempotency_key"]),
+                    )
+                for item in confirmation_rows:
+                    conn.execute(
+                        "UPDATE confirmations SET payload_json = ? WHERE confirmation_id = ?",
+                        (self._encode_confirmation(item["confirmation_id"], item["payload"]), item["confirmation_id"]),
+                    )
+                self._set_metadata(conn, "rekeyed_at", rekeyed_at)
+                self._set_metadata(conn, "encryption_provider", self._cipher.status().provider)
+        except Exception:
+            self._cipher.provider.store_key(old_key)
+            raise
+        return {
+            "schema_version": DATA_STORE_SCHEMA_VERSION,
+            "status": "ok",
+            "encryption": self._encryption_payload(),
+            "rekeyed_documents": len(documents),
+            "rekeyed_events": len(audit_events),
         }
 
     def acquire_lock(
@@ -431,6 +702,35 @@ class ProductionDataStore:
                 "UPDATE locks SET status = 'released', expires_at = ? WHERE lock_name = ? AND run_id = ?",
                 (now_text, lock_name, run_id),
             )
+            if lock.get("run_id") != run_id:
+                lock["schema_version"] = AUTOMATION_LOCK_SCHEMA_VERSION
+                lock["lock_name"] = lock_name
+                lock["status"] = "mismatch"
+                lock["released_at"] = None
+                return lock
+        lock["schema_version"] = AUTOMATION_LOCK_SCHEMA_VERSION
+        lock["lock_name"] = lock_name
+        lock["status"] = "released"
+        lock["released_at"] = now_text
+        return lock
+
+    def force_release_lock(self, lock_name: str, *, now: str | None = None) -> dict[str, Any]:
+        self.ensure_schema()
+        now_text = now or _now_iso()
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM locks WHERE lock_name = ?", (lock_name,)).fetchone()
+            if row is None:
+                return {
+                    "schema_version": AUTOMATION_LOCK_SCHEMA_VERSION,
+                    "lock_name": lock_name,
+                    "status": "missing",
+                    "released_at": now_text,
+                }
+            lock = dict(row)
+            conn.execute(
+                "UPDATE locks SET status = 'released', expires_at = ? WHERE lock_name = ?",
+                (now_text, lock_name),
+            )
         lock["schema_version"] = AUTOMATION_LOCK_SCHEMA_VERSION
         lock["lock_name"] = lock_name
         lock["status"] = "released"
@@ -472,7 +772,7 @@ class ProductionDataStore:
             ).fetchone()
         if row is None:
             return None
-        return json.loads(row["response_json"])
+        return self._decode_idempotency(idempotency_key, row["response_json"])
 
     def store_idempotency(self, idempotency_key: str, *, run_id: str, response: dict[str, Any]) -> None:
         self.ensure_schema()
@@ -486,7 +786,7 @@ class ProductionDataStore:
                 (
                     idempotency_key,
                     run_id,
-                    json.dumps(response, ensure_ascii=False, sort_keys=True),
+                    self._encode_idempotency(idempotency_key, response),
                     _now_iso(),
                 ),
             )
@@ -543,7 +843,7 @@ class ProductionDataStore:
                     precondition_hash,
                     expires_at,
                     now,
-                    json.dumps(payload_json, ensure_ascii=False, sort_keys=True),
+                    self._encode_confirmation(confirmation_id, payload_json),
                 ),
             )
         return payload_json
@@ -761,6 +1061,8 @@ class ProductionDataStore:
                 continue
             if path.name == PRODUCTION_DB_NAME or path.name.startswith(f"{PRODUCTION_DB_NAME}-"):
                 continue
+            if path.name == LOCAL_KEY_NAME:
+                continue
             if path.suffix not in {".json", ".jsonl"}:
                 continue
             files.append(path)
@@ -775,6 +1077,147 @@ class ProductionDataStore:
         if metadata.get("migration_schema_version") != str(MIGRATION_SCHEMA_VERSION):
             return {"status": "needs_migration", "storage_backend": "sqlite"}
         return {"status": "ok", "storage_backend": "sqlite"}
+
+    def _blocked_doctor(self, reason: str) -> dict[str, Any]:
+        return {
+            "schema_version": DATA_STORE_SCHEMA_VERSION,
+            "status": "blocked",
+            "reason": reason,
+            "storage_backend": "sqlite",
+            "db_path": str(self.db_path),
+            "schema_versions": _schema_versions(),
+            "encryption": {
+                "status": "unknown",
+                "provider": self._cipher.provider.provider_name,
+                "key_id": None,
+                "encrypted_payload_schema_version": ENCRYPTED_PAYLOAD_SCHEMA_VERSION,
+                "keychain_binding_schema_version": KEYCHAIN_BINDING_SCHEMA_VERSION,
+            },
+            "checks": {
+                "sqlite_db_exists": self.db_path.exists(),
+                "schema_ok": False,
+                "migration_ok": False,
+                "encryption_ok": False,
+            },
+        }
+
+    def _blocked_export(self, reason: str, output: Path) -> dict[str, Any]:
+        return {
+            "schema_version": DATA_STORE_SCHEMA_VERSION,
+            "status": "blocked",
+            "reason": reason,
+            "storage_backend": "sqlite",
+            "db_path": str(self.db_path),
+            "output": str(output.resolve()),
+        }
+
+    def _verify_encrypted_payloads(self, conn: sqlite3.Connection) -> dict[str, int]:
+        counts = {
+            "encrypted_documents": 0,
+            "encrypted_audit_events": 0,
+            "encrypted_idempotency": 0,
+            "idempotency_count": 0,
+            "encrypted_confirmations": 0,
+            "confirmation_count": 0,
+        }
+        for row in conn.execute("SELECT path, payload_json FROM documents"):
+            stored = row["payload_json"]
+            if payload_is_encrypted(stored):
+                counts["encrypted_documents"] += 1
+            self._decode_document(row["path"], stored)
+        for row in conn.execute("SELECT stream, event_id, payload_json FROM audit_events"):
+            stored = row["payload_json"]
+            if payload_is_encrypted(stored):
+                counts["encrypted_audit_events"] += 1
+            self._decode_audit_event(row["stream"], row["event_id"], stored)
+        for row in conn.execute("SELECT idempotency_key, response_json FROM idempotency"):
+            counts["idempotency_count"] += 1
+            stored = row["response_json"]
+            if payload_is_encrypted(stored):
+                counts["encrypted_idempotency"] += 1
+            self._decode_idempotency(row["idempotency_key"], stored)
+        for row in conn.execute("SELECT confirmation_id, payload_json FROM confirmations"):
+            counts["confirmation_count"] += 1
+            stored = row["payload_json"]
+            if payload_is_encrypted(stored):
+                counts["encrypted_confirmations"] += 1
+            self._decode_confirmation(row["confirmation_id"], stored)
+        return counts
+
+    def _replace_root_with(self, source_root: Path) -> None:
+        self.root.parent.mkdir(parents=True, exist_ok=True)
+        backup_root = self.root.parent / f".{self.root.name}.restore-backup-{_digest({'root': str(self.root), 'at': _now_iso()})[:12]}"
+        had_existing = self.root.exists()
+        if had_existing:
+            self.root.rename(backup_root)
+        try:
+            source_root.rename(self.root)
+        except Exception:
+            if had_existing and backup_root.exists() and not self.root.exists():
+                backup_root.rename(self.root)
+            raise
+        if had_existing and backup_root.exists():
+            _remove_path_if_exists(backup_root)
+
+    def _encode_document(self, path: str, payload: Any) -> str:
+        return self._cipher.encrypt_json(payload, associated_data=f"document:{path}")
+
+    def _decode_document(self, path: str, stored: str) -> Any:
+        return self._cipher.decrypt_json(stored, associated_data=f"document:{path}")
+
+    def _encode_audit_event(self, stream: str, event_id: str, payload: Any) -> str:
+        return self._cipher.encrypt_json(payload, associated_data=f"audit:{stream}:{event_id}")
+
+    def _decode_audit_event(self, stream: str, event_id: str, stored: str) -> Any:
+        return self._cipher.decrypt_json(stored, associated_data=f"audit:{stream}:{event_id}")
+
+    def _encode_idempotency(self, idempotency_key: str, payload: Any) -> str:
+        return self._cipher.encrypt_json(payload, associated_data=f"idempotency:{idempotency_key}")
+
+    def _decode_idempotency(self, idempotency_key: str, stored: str) -> Any:
+        return self._cipher.decrypt_json(stored, associated_data=f"idempotency:{idempotency_key}")
+
+    def _encode_confirmation(self, confirmation_id: str, payload: Any) -> str:
+        return self._cipher.encrypt_json(payload, associated_data=f"confirmation:{confirmation_id}")
+
+    def _decode_confirmation(self, confirmation_id: str, stored: str) -> Any:
+        return self._cipher.decrypt_json(stored, associated_data=f"confirmation:{confirmation_id}")
+
+    def _encryption_payload(self) -> dict[str, Any]:
+        status = self._cipher.status()
+        return {
+            "status": "encrypted" if status.enabled else "disabled",
+            "provider": status.provider,
+            "key_id": status.key_id,
+            "encrypted_payload_schema_version": ENCRYPTED_PAYLOAD_SCHEMA_VERSION,
+            "keychain_binding_schema_version": KEYCHAIN_BINDING_SCHEMA_VERSION,
+        }
+
+    def _delete_match_documents(self, conn: sqlite3.Connection, match_id: str) -> int:
+        deleted = 0
+        for row in conn.execute("SELECT path, payload_json FROM documents").fetchall():
+            path = str(row["path"])
+            should_delete = match_id in path
+            if not should_delete:
+                payload = self._decode_document(path, row["payload_json"])
+                should_delete = _contains_match_reference(payload, match_id)
+            if should_delete:
+                deleted += conn.execute("DELETE FROM documents WHERE path = ?", (path,)).rowcount
+        return deleted
+
+    def _delete_match_audit_events(self, conn: sqlite3.Connection, match_id: str) -> int:
+        deleted = 0
+        for row in conn.execute("SELECT stream, event_id, target_match_id, payload_json FROM audit_events").fetchall():
+            should_delete = row["target_match_id"] == match_id
+            if not should_delete:
+                payload = self._decode_audit_event(row["stream"], row["event_id"], row["payload_json"])
+                should_delete = _contains_match_reference(payload, match_id)
+            if should_delete:
+                deleted += conn.execute(
+                    "DELETE FROM audit_events WHERE stream = ? AND event_id = ?",
+                    (row["stream"], row["event_id"]),
+                ).rowcount
+        return deleted
 
     def _delete_match_from_json_files(self, match_id: str) -> dict[str, int]:
         deleted_files = 0
@@ -886,7 +1329,24 @@ def _schema_versions() -> dict[str, int]:
         "migration": MIGRATION_SCHEMA_VERSION,
         "automation_lock": AUTOMATION_LOCK_SCHEMA_VERSION,
         "confirmation": CONFIRMATION_SCHEMA_VERSION,
+        "encrypted_payload": ENCRYPTED_PAYLOAD_SCHEMA_VERSION,
+        "keychain_binding": KEYCHAIN_BINDING_SCHEMA_VERSION,
+        "backup_recovery_key": BACKUP_RECOVERY_KEY_SCHEMA_VERSION,
+        "diagnostic_bundle": DIAGNOSTIC_BUNDLE_SCHEMA_VERSION,
+        "release_manifest": RELEASE_MANIFEST_SCHEMA_VERSION,
     }
+
+
+def _sqlite_integrity_ok(db_path: Path) -> bool:
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute("PRAGMA integrity_check").fetchone()
+            return bool(row and row[0] == "ok")
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        return False
 
 
 def _redact_if_blocked(payload: Any) -> Any:

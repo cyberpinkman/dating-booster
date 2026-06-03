@@ -11,7 +11,7 @@ Preferred GitHub install path is documented in `INSTALL_FROM_GITHUB.md`.
 For local development from the repository root:
 
 ```bash
-python3 -m pip install -e .
+python3 -m pip install -e ".[test]"
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
 cp -R skills/dating-booster-codex "${CODEX_HOME:-$HOME/.codex}/skills/"
 ```
@@ -37,6 +37,7 @@ python3 skills/dating-booster-codex/scripts/bootstrap_cli.py
 Then run:
 
 ```bash
+dating-boost release doctor --json
 dating-boost data doctor --data-dir .local/dating-boost --json
 dating-boost capabilities --json --data-dir .local/dating-boost
 ```
@@ -48,6 +49,11 @@ Then compare the output with `skills/dating-booster-codex/skill-package.json`:
 - `supported_commands` must contain every `required_commands` entry.
 - Run `dating-boost data migrate --data-dir .local/dating-boost --json` if
   data doctor reports `needs_migration`.
+- Public production requires encrypted storage. Data doctor should report
+  `encryption.status: encrypted`; on macOS the production key provider is
+  Keychain.
+- For managed sessions, check `dating-boost daemon status --data-dir .local/dating-boost --json`
+  and use `dating-boost safety status --data-dir .local/dating-boost --json`.
 - A different `source_spec_commit` is a warning if version, schema, and command
   checks pass.
 
@@ -75,6 +81,20 @@ For real Tinder stage-mode private smoke, read
 `references/production-stage-runbook.md`. The run must stop at
 `staged_waiting_user_confirmation` and save replay, audit export, and staged
 verification artifacts.
+
+## Public Production Defaults
+
+- macOS is the only public GUI platform target.
+- SQLite payloads are encrypted by default.
+- Backups require a recovery passphrase from `DATING_BOOST_RECOVERY_PASSPHRASE`,
+  `--recovery-passphrase-file`, or explicit `--recovery-passphrase`; the backup
+  stores a passphrase-wrapped recovery key, not an unwrapped local data key.
+- The local daemon supervises locks, heartbeat, recovery, and safety state; it
+  does not observe or click apps.
+- Diagnostics are local redacted bundles only; there is no network telemetry.
+- Live send is not the default. It requires `--send-mode live`, `live_send: true`
+  in authorization, an unpaused safety switch, staged-text verification, and
+  post-action verification.
 
 ## First Real Manual Workflow
 

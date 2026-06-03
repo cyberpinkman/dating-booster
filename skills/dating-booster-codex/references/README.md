@@ -18,5 +18,10 @@ Reference files:
 - `contracts.md`: minimal JSON contracts for observations, drafts, and action results.
 - `observation-authoring.md`: rules for converting visible screen content into
   observation JSON without over-inference.
+- `production-stage-runbook.md`: production install, diagnostics, Tinder stage
+  smoke, and macOS WeChat stage smoke.
+- `host-loop.md`: supervised host-loop command sequence and recovery notes.
+- `planner-authoring.md`: planner update and recommendation authoring rules.
 - `drafting-framework.md`: Chinese host-agent drafting strategy for dating replies.
 - `naturalness-checklist.md`: human-context validation checklist and bad to better examples.
+- `start-prompts.md`: operator-facing start prompts for Codex runs.

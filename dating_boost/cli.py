@@ -14,7 +14,10 @@ from dating_boost.core.action_audit import ActionAuditRepository
 from dating_boost.core.automation import AutomationRepository
 from dating_boost.core.capabilities import build_capabilities
 from dating_boost.core.context_pack import build_context_pack
+from dating_boost.core.daemon import DaemonRepository
+from dating_boost.core.diagnostics import DiagnosticsRepository
 from dating_boost.core.feedback import create_feedback_event
+from dating_boost.core.gui_harness import NativeGuiHarness
 from dating_boost.core.identity import resolve_match_identity
 from dating_boost.core.models import Divergence, MemoryItem, ReplyMode, UserProfile
 from dating_boost.core.observation_authoring import (
@@ -25,6 +28,7 @@ from dating_boost.core.observation_authoring import (
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.planner import PlannerRepository, planner_context_items
 from dating_boost.core.production_store import ProductionDataStore
+from dating_boost.core.release import release_doctor
 from dating_boost.core.replay import latest_replay_markdown, latest_replay_payload
 from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
 from dating_boost.core.scan_authoring import (
@@ -34,6 +38,7 @@ from dating_boost.core.scan_authoring import (
     validate_scan_batch,
 )
 from dating_boost.core.skill_doctor import run_skill_doctor
+from dating_boost.core.safety import SafetyRepository
 from dating_boost.intelligence.backends import ModelBackend, OpenAIBackend, ScriptedBackend
 from dating_boost.intelligence.reply_generator import DraftResponse, generate_reply
 from dating_boost.evals.runner import run_conversation_eval
@@ -102,6 +107,166 @@ def main(argv: list[str] | None = None) -> int:
     data_delete_parser.add_argument("--confirm", required=True)
     data_delete_parser.add_argument("--json", action="store_true")
     data_delete_parser.set_defaults(handler=_handle_data_delete)
+    data_unlock_parser = data_subparsers.add_parser("unlock")
+    data_unlock_parser.add_argument("--data-dir", required=True, type=Path)
+    data_unlock_parser.add_argument("--json", action="store_true")
+    data_unlock_parser.set_defaults(handler=_handle_data_unlock)
+    data_lock_parser = data_subparsers.add_parser("lock")
+    data_lock_parser.add_argument("--data-dir", required=True, type=Path)
+    data_lock_parser.add_argument("--json", action="store_true")
+    data_lock_parser.set_defaults(handler=_handle_data_lock)
+    data_rekey_parser = data_subparsers.add_parser("rekey")
+    data_rekey_parser.add_argument("--data-dir", required=True, type=Path)
+    data_rekey_parser.add_argument("--json", action="store_true")
+    data_rekey_parser.set_defaults(handler=_handle_data_rekey)
+    data_backup_parser = data_subparsers.add_parser("backup")
+    data_backup_parser.add_argument("--data-dir", required=True, type=Path)
+    data_backup_parser.add_argument("--output", required=True, type=Path)
+    data_backup_parser.add_argument("--recovery-passphrase")
+    data_backup_parser.add_argument("--recovery-passphrase-file", type=Path)
+    data_backup_parser.add_argument("--json", action="store_true")
+    data_backup_parser.set_defaults(handler=_handle_data_backup)
+    data_restore_parser = data_subparsers.add_parser("restore")
+    data_restore_parser.add_argument("--data-dir", required=True, type=Path)
+    data_restore_parser.add_argument("--input", required=True, type=Path)
+    data_restore_parser.add_argument("--confirm", required=True)
+    data_restore_parser.add_argument("--recovery-passphrase")
+    data_restore_parser.add_argument("--recovery-passphrase-file", type=Path)
+    data_restore_parser.add_argument("--json", action="store_true")
+    data_restore_parser.set_defaults(handler=_handle_data_restore)
+
+    safety_parser = subparsers.add_parser("safety", help="Global local safety switch commands.")
+    safety_subparsers = safety_parser.add_subparsers(dest="safety_command", required=True)
+    safety_pause_parser = safety_subparsers.add_parser("pause")
+    safety_pause_parser.add_argument("--data-dir", required=True, type=Path)
+    safety_pause_parser.add_argument("--reason", required=True)
+    safety_pause_parser.add_argument("--json", action="store_true")
+    safety_pause_parser.set_defaults(handler=_handle_safety_pause)
+    safety_resume_parser = safety_subparsers.add_parser("resume")
+    safety_resume_parser.add_argument("--data-dir", required=True, type=Path)
+    safety_resume_parser.add_argument("--json", action="store_true")
+    safety_resume_parser.set_defaults(handler=_handle_safety_resume)
+    safety_status_parser = safety_subparsers.add_parser("status")
+    safety_status_parser.add_argument("--data-dir", required=True, type=Path)
+    safety_status_parser.add_argument("--json", action="store_true")
+    safety_status_parser.set_defaults(handler=_handle_safety_status)
+
+    daemon_parser = subparsers.add_parser("daemon", help="Local daemon supervisor commands.")
+    daemon_subparsers = daemon_parser.add_subparsers(dest="daemon_command", required=True)
+    daemon_run_parser = daemon_subparsers.add_parser("run")
+    daemon_run_parser.add_argument("--data-dir", required=True, type=Path)
+    daemon_run_parser.add_argument("--once", action="store_true")
+    daemon_run_parser.add_argument("--json", action="store_true")
+    daemon_run_parser.set_defaults(handler=_handle_daemon_run)
+    for command, handler in (
+        ("install", _handle_daemon_install),
+        ("uninstall", _handle_daemon_uninstall),
+        ("status", _handle_daemon_status),
+        ("stop", _handle_daemon_stop),
+    ):
+        daemon_subparser = daemon_subparsers.add_parser(command)
+        daemon_subparser.add_argument("--data-dir", required=True, type=Path)
+        daemon_subparser.add_argument("--dry-run", action="store_true")
+        daemon_subparser.add_argument("--json", action="store_true")
+        daemon_subparser.set_defaults(handler=handler)
+
+    diagnostics_parser = subparsers.add_parser("diagnostics", help="Local redacted diagnostics commands.")
+    diagnostics_subparsers = diagnostics_parser.add_subparsers(dest="diagnostics_command", required=True)
+    diagnostics_doctor_parser = diagnostics_subparsers.add_parser("doctor")
+    diagnostics_doctor_parser.add_argument("--data-dir", required=True, type=Path)
+    diagnostics_doctor_parser.add_argument("--json", action="store_true")
+    diagnostics_doctor_parser.set_defaults(handler=_handle_diagnostics_doctor)
+    diagnostics_bundle_parser = diagnostics_subparsers.add_parser("bundle")
+    diagnostics_bundle_parser.add_argument("--data-dir", required=True, type=Path)
+    diagnostics_bundle_parser.add_argument("--output", required=True, type=Path)
+    diagnostics_bundle_parser.add_argument("--json", action="store_true")
+    diagnostics_bundle_parser.set_defaults(handler=_handle_diagnostics_bundle)
+
+    harness_parser = subparsers.add_parser("harness", help="Native GUI harness diagnostics and safe navigation.")
+    harness_subparsers = harness_parser.add_subparsers(dest="harness_command", required=True)
+    harness_doctor_parser = harness_subparsers.add_parser("doctor")
+    harness_doctor_parser.add_argument("--app-id", default="tinder")
+    harness_doctor_parser.add_argument("--window-title")
+    harness_doctor_parser.add_argument("--no-capture", action="store_true")
+    harness_doctor_parser.add_argument("--output", type=Path)
+    harness_doctor_parser.add_argument("--json", action="store_true")
+    harness_doctor_parser.set_defaults(handler=_handle_harness_doctor)
+    harness_screenshot_parser = harness_subparsers.add_parser("screenshot")
+    harness_screenshot_parser.add_argument("--app-id", default="tinder")
+    harness_screenshot_parser.add_argument("--window-title")
+    harness_screenshot_parser.add_argument("--output", required=True, type=Path)
+    harness_screenshot_parser.add_argument("--json", action="store_true")
+    harness_screenshot_parser.set_defaults(handler=_handle_harness_screenshot)
+    harness_tinder_parser = harness_subparsers.add_parser("tinder")
+    harness_tinder_subparsers = harness_tinder_parser.add_subparsers(dest="harness_tinder_command", required=True)
+    harness_tinder_launch_parser = harness_tinder_subparsers.add_parser("launch")
+    harness_tinder_launch_parser.add_argument("--window-title", default="iPhone Mirroring")
+    harness_tinder_launch_parser.add_argument("--dry-run", action="store_true")
+    harness_tinder_launch_parser.add_argument("--output-dir", type=Path)
+    harness_tinder_launch_parser.add_argument("--json", action="store_true")
+    harness_tinder_launch_parser.set_defaults(handler=_handle_harness_tinder_launch)
+    harness_tinder_profile_parser = harness_tinder_subparsers.add_parser("open-profile")
+    harness_tinder_profile_parser.add_argument("--window-title", default="iPhone Mirroring")
+    harness_tinder_profile_parser.add_argument("--dry-run", action="store_true")
+    harness_tinder_profile_parser.add_argument("--launch-if-needed", action="store_true")
+    harness_tinder_profile_parser.add_argument("--output-dir", type=Path)
+    harness_tinder_profile_parser.add_argument("--json", action="store_true")
+    harness_tinder_profile_parser.set_defaults(handler=_handle_harness_tinder_open_profile)
+    harness_tinder_observe_parser = harness_tinder_subparsers.add_parser("observe")
+    harness_tinder_observe_parser.add_argument("--window-title", default="iPhone Mirroring")
+    harness_tinder_observe_parser.add_argument("--output-dir", type=Path)
+    harness_tinder_observe_parser.add_argument("--json", action="store_true")
+    harness_tinder_observe_parser.set_defaults(handler=_handle_harness_tinder_observe)
+    harness_tinder_action_parser = harness_tinder_subparsers.add_parser("action")
+    harness_tinder_action_parser.add_argument("action")
+    harness_tinder_action_parser.add_argument("--window-title", default="iPhone Mirroring")
+    harness_tinder_action_parser.add_argument("--dry-run", action="store_true")
+    harness_tinder_action_parser.add_argument("--output-dir", type=Path)
+    harness_tinder_action_parser.add_argument("--row-index", type=int)
+    harness_tinder_action_parser.add_argument("--match-index", type=int)
+    harness_tinder_action_parser.add_argument("--target", choices=["row", "avatar"], default="row")
+    harness_tinder_action_parser.add_argument("--json", action="store_true")
+    harness_tinder_action_parser.set_defaults(handler=_handle_harness_tinder_action)
+    harness_tinder_workflow_parser = harness_tinder_subparsers.add_parser("workflow")
+    harness_tinder_workflow_parser.add_argument("workflow")
+    harness_tinder_workflow_parser.add_argument("--window-title", default="iPhone Mirroring")
+    harness_tinder_workflow_parser.add_argument("--dry-run", action="store_true")
+    harness_tinder_workflow_parser.add_argument("--output-dir", type=Path)
+    harness_tinder_workflow_parser.add_argument("--photo-steps", type=int)
+    harness_tinder_workflow_parser.add_argument("--scroll-steps", type=int)
+    harness_tinder_workflow_parser.add_argument("--carousel-swipes", type=int)
+    harness_tinder_workflow_parser.add_argument("--conversation-row", type=int)
+    harness_tinder_workflow_parser.add_argument("--profile-scroll-steps", type=int)
+    harness_tinder_workflow_parser.add_argument("--json", action="store_true")
+    harness_tinder_workflow_parser.set_defaults(handler=_handle_harness_tinder_workflow)
+    harness_wechat_parser = harness_subparsers.add_parser("wechat")
+    harness_wechat_subparsers = harness_wechat_parser.add_subparsers(dest="harness_wechat_command", required=True)
+    harness_wechat_launch_parser = harness_wechat_subparsers.add_parser("launch")
+    harness_wechat_launch_parser.add_argument("--window-title", default="WeChat")
+    harness_wechat_launch_parser.add_argument("--dry-run", action="store_true")
+    harness_wechat_launch_parser.add_argument("--output-dir", type=Path)
+    harness_wechat_launch_parser.add_argument("--json", action="store_true")
+    harness_wechat_launch_parser.set_defaults(handler=_handle_harness_wechat_launch)
+    harness_wechat_observe_parser = harness_wechat_subparsers.add_parser("observe")
+    harness_wechat_observe_parser.add_argument("--window-title", default="WeChat")
+    harness_wechat_observe_parser.add_argument("--output-dir", type=Path)
+    harness_wechat_observe_parser.add_argument("--json", action="store_true")
+    harness_wechat_observe_parser.set_defaults(handler=_handle_harness_wechat_observe)
+    harness_wechat_stage_parser = harness_wechat_subparsers.add_parser("stage-draft")
+    harness_wechat_stage_parser.add_argument("--window-title", default="WeChat")
+    wechat_draft_source = harness_wechat_stage_parser.add_mutually_exclusive_group(required=True)
+    wechat_draft_source.add_argument("--text")
+    wechat_draft_source.add_argument("--text-file", type=Path)
+    harness_wechat_stage_parser.add_argument("--dry-run", action="store_true")
+    harness_wechat_stage_parser.add_argument("--output-dir", type=Path)
+    harness_wechat_stage_parser.add_argument("--json", action="store_true")
+    harness_wechat_stage_parser.set_defaults(handler=_handle_harness_wechat_stage_draft)
+
+    release_parser = subparsers.add_parser("release", help="Public release diagnostics.")
+    release_subparsers = release_parser.add_subparsers(dest="release_command", required=True)
+    release_doctor_parser = release_subparsers.add_parser("doctor")
+    release_doctor_parser.add_argument("--json", action="store_true")
+    release_doctor_parser.set_defaults(handler=_handle_release_doctor)
 
     confirmation_parser = subparsers.add_parser("confirmation", help="Create and validate send confirmations.")
     confirmation_subparsers = confirmation_parser.add_subparsers(dest="confirmation_command", required=True)
@@ -135,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Enable high-risk autonomous mode for this action after accepting the risks.",
     )
+    authorize_parser.add_argument("--data-dir", type=Path)
     authorize_parser.set_defaults(handler=_handle_authorize)
 
     init_parser = subparsers.add_parser("init-profile", help="Initialize local user profile memory.")
@@ -246,6 +412,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     policy_check_action_parser.add_argument("action", choices=[action.value for action in Action])
     policy_check_action_parser.add_argument("--autonomous", action="store_true")
+    policy_check_action_parser.add_argument("--data-dir", type=Path)
     policy_check_action_parser.set_defaults(handler=_handle_policy_check_action)
     policy_check_draft_parser = policy_subparsers.add_parser(
         "check-draft",
@@ -505,7 +672,7 @@ def _handle_skill_doctor(args: argparse.Namespace) -> int:
 def _handle_data_doctor(args: argparse.Namespace) -> int:
     payload = ProductionDataStore(args.data_dir).doctor()
     _print_json(payload)
-    return 0
+    return 0 if payload.get("status") != "blocked" else 2
 
 
 def _handle_data_migrate(args: argparse.Namespace) -> int:
@@ -526,6 +693,247 @@ def _handle_data_delete(args: argparse.Namespace) -> int:
         match_id=args.match_id,
         confirm=args.confirm,
     )
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_data_unlock(args: argparse.Namespace) -> int:
+    payload = ProductionDataStore(args.data_dir).doctor()
+    payload = {
+        "schema_version": payload["schema_version"],
+        "status": "ok" if payload.get("encryption", {}).get("status") != "unknown" else "blocked",
+        "encryption": payload.get("encryption"),
+        "db_path": payload.get("db_path"),
+    }
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_data_lock(args: argparse.Namespace) -> int:
+    _print_json(
+        {
+            "schema_version": 2,
+            "status": "ok",
+            "data_dir": str(args.data_dir.resolve()),
+            "note": "no plaintext key cache is kept by this CLI process",
+        }
+    )
+    return 0
+
+
+def _handle_data_rekey(args: argparse.Namespace) -> int:
+    payload = ProductionDataStore(args.data_dir).rekey()
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_data_backup(args: argparse.Namespace) -> int:
+    passphrase = _recovery_passphrase(args)
+    payload = ProductionDataStore(args.data_dir).backup(args.output, recovery_passphrase=passphrase)
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_data_restore(args: argparse.Namespace) -> int:
+    passphrase = _recovery_passphrase(args)
+    payload = ProductionDataStore(args.data_dir).restore(
+        args.input,
+        confirm=args.confirm,
+        recovery_passphrase=passphrase,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _recovery_passphrase(args: argparse.Namespace) -> str | None:
+    explicit = getattr(args, "recovery_passphrase", None)
+    if explicit:
+        return str(explicit)
+    file_path = getattr(args, "recovery_passphrase_file", None)
+    if file_path is not None:
+        return Path(file_path).read_text(encoding="utf-8").rstrip("\r\n")
+    return os.environ.get("DATING_BOOST_RECOVERY_PASSPHRASE")
+
+
+def _handle_safety_pause(args: argparse.Namespace) -> int:
+    payload = SafetyRepository(args.data_dir).pause(reason=args.reason, created_at=_now_iso())
+    _print_json(payload)
+    return 0
+
+
+def _handle_safety_resume(args: argparse.Namespace) -> int:
+    payload = SafetyRepository(args.data_dir).resume(created_at=_now_iso())
+    _print_json(payload)
+    return 0
+
+
+def _handle_safety_status(args: argparse.Namespace) -> int:
+    payload = SafetyRepository(args.data_dir).status()
+    _print_json(payload)
+    return 0
+
+
+def _handle_daemon_run(args: argparse.Namespace) -> int:
+    payload = DaemonRepository(args.data_dir).run(once=args.once, owner="dating-boostd", now=_now_iso())
+    _print_json(payload)
+    return 0 if payload.get("status") != "blocked" else 2
+
+
+def _handle_daemon_install(args: argparse.Namespace) -> int:
+    payload = DaemonRepository(args.data_dir).install(dry_run=args.dry_run)
+    _print_json(payload)
+    return 0
+
+
+def _handle_daemon_uninstall(args: argparse.Namespace) -> int:
+    payload = DaemonRepository(args.data_dir).uninstall(dry_run=args.dry_run)
+    _print_json(payload)
+    return 0
+
+
+def _handle_daemon_status(args: argparse.Namespace) -> int:
+    payload = DaemonRepository(args.data_dir).status()
+    _print_json(payload)
+    return 0
+
+
+def _handle_daemon_stop(args: argparse.Namespace) -> int:
+    payload = DaemonRepository(args.data_dir).stop(now=_now_iso())
+    _print_json(payload)
+    return 0
+
+
+def _handle_diagnostics_doctor(args: argparse.Namespace) -> int:
+    payload = DiagnosticsRepository(args.data_dir).doctor()
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_diagnostics_bundle(args: argparse.Namespace) -> int:
+    payload = DiagnosticsRepository(args.data_dir).bundle(args.output)
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_harness_doctor(args: argparse.Namespace) -> int:
+    harness = NativeGuiHarness(app_id=args.app_id, window_title=_harness_window_title(args.app_id, args.window_title))
+    if args.app_id == "wechat":
+        payload = harness.doctor_wechat(capture=not args.no_capture, output=args.output)
+    else:
+        payload = harness.doctor(capture=not args.no_capture, output=args.output)
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "degraded"} else 2
+
+
+def _handle_harness_screenshot(args: argparse.Namespace) -> int:
+    payload = NativeGuiHarness(
+        app_id=args.app_id,
+        window_title=_harness_window_title(args.app_id, args.window_title),
+    ).capture_window(output=args.output)
+    payload.pop("text", None)
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_harness_tinder_launch(args: argparse.Namespace) -> int:
+    payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).launch_tinder(
+        dry_run=args.dry_run,
+        output_dir=args.output_dir,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_tinder_open_profile(args: argparse.Namespace) -> int:
+    payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).open_tinder_profile(
+        dry_run=args.dry_run,
+        output_dir=args.output_dir,
+        launch_if_needed=args.launch_if_needed,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_tinder_observe(args: argparse.Namespace) -> int:
+    payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).observe_tinder_screen(
+        output_dir=args.output_dir,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_tinder_action(args: argparse.Namespace) -> int:
+    options = {
+        "row_index": args.row_index,
+        "match_index": args.match_index,
+        "target": args.target,
+    }
+    payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).run_tinder_action(
+        args.action,
+        dry_run=args.dry_run,
+        output_dir=args.output_dir,
+        **{key: value for key, value in options.items() if value is not None},
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_tinder_workflow(args: argparse.Namespace) -> int:
+    options = {
+        "photo_steps": args.photo_steps,
+        "scroll_steps": args.scroll_steps,
+        "carousel_swipes": args.carousel_swipes,
+        "conversation_row": args.conversation_row,
+        "profile_scroll_steps": args.profile_scroll_steps,
+    }
+    payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).run_tinder_workflow(
+        args.workflow,
+        dry_run=args.dry_run,
+        output_dir=args.output_dir,
+        **{key: value for key, value in options.items() if value is not None},
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_wechat_launch(args: argparse.Namespace) -> int:
+    payload = NativeGuiHarness(app_id="wechat", window_title=args.window_title).launch_wechat(
+        dry_run=args.dry_run,
+        output_dir=args.output_dir,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_wechat_observe(args: argparse.Namespace) -> int:
+    payload = NativeGuiHarness(app_id="wechat", window_title=args.window_title).observe_wechat_screen(
+        output_dir=args.output_dir,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_wechat_stage_draft(args: argparse.Namespace) -> int:
+    draft_text = args.text if args.text is not None else args.text_file.read_text(encoding="utf-8")
+    payload = NativeGuiHarness(app_id="wechat", window_title=args.window_title).stage_wechat_draft(
+        draft_text,
+        dry_run=args.dry_run,
+        output_dir=args.output_dir,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _harness_window_title(app_id: str, explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    if app_id == "wechat":
+        return "WeChat"
+    return "iPhone Mirroring"
+
+
+def _handle_release_doctor(args: argparse.Namespace) -> int:
+    payload = release_doctor()
     _print_json(payload)
     return 0 if payload.get("status") == "ok" else 2
 
@@ -569,6 +977,17 @@ def _handle_policy_check_action(args: argparse.Namespace) -> int:
 
 
 def _print_action_decision(args: argparse.Namespace) -> int:
+    data_dir = getattr(args, "data_dir", None)
+    if data_dir is not None and SafetyRepository(data_dir).is_paused():
+        _print_json(
+            {
+                "allowed": False,
+                "action": Action(args.action).value,
+                "autonomous": bool(args.autonomous),
+                "reason": "safety_paused",
+            }
+        )
+        return 2
     decision = authorize_action(
         Action(args.action),
         autonomous=args.autonomous,

@@ -14,6 +14,7 @@ from typing import Any
 
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.production_store import ProductionDataStore
+from dating_boost.core.safety import SafetyRepository
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -187,6 +188,7 @@ class HostLoopSupervisor:
                 "allowed_match_ids": [],
                 "allowed_actions": ["send_message"],
                 "autonomous_send": False,
+                "live_send": False,
                 "autonomous_nudge": True,
                 "goal_ids": ["goal_meet_in_person"],
                 "quiet_hours": [],
@@ -531,6 +533,11 @@ class HostLoopSupervisor:
                 current=work_item,
                 extra={"next_host_action": "review_staged_text_and_confirm_or_cancel"},
             )
+        if SafetyRepository(self.data_dir).is_paused():
+            return self._finish("blocked", "safety_paused", current=work_item)
+        authorization = _read_json(self._authorization_path())
+        if authorization.get("live_send") is not True:
+            return self._finish("blocked", "live_send_authorization_required", current=work_item)
 
         result_path = self._work_file(work_item, "action_result")
         if self.fixture_host is not None and not result_path.exists():

@@ -12,6 +12,7 @@ Local-first GUI automation experiments for dating workflows.
 - Blocked by default: sending messages, liking profiles, super-likes, unmatching, reporting, profile edits, and proposing meetings.
 - High-risk actions require explicit human confirmation unless experimental autonomous mode is enabled for a single action.
 - Autonomous mode is off by default. Users can explicitly enable it after reading and accepting the risk.
+- Public production defaults are macOS-only, encrypted local storage, stage-first GUI operation, and local-only diagnostics.
 
 ## Autonomous mode
 
@@ -27,6 +28,44 @@ python3 -m dating_boost.cli send_message --autonomous
 
 The action gate does not execute GUI actions. It only reports whether a local
 workflow is allowed to proceed.
+
+## Public production install
+
+The public production channel is `1.0.0-rc.1`. Install from PyPI or from the
+GitHub release artifact, then run the local release and skill checks:
+
+```bash
+python3 -m pip install "dating-booster==1.0.0rc1"
+dating-boost release doctor --json
+dating-boost data doctor --data-dir .local/dating-boost --json
+dating-boost capabilities --data-dir .local/dating-boost --json
+```
+
+On macOS, Dating Booster encrypts SQLite payloads by default. The preferred
+production key provider is macOS Keychain; CI and local tests may set
+`DATING_BOOST_KEY_PROVIDER=local`. Backups read
+`DATING_BOOST_RECOVERY_PASSPHRASE` from the environment; restore automation can
+use `--recovery-passphrase-file`. Use:
+
+```bash
+dating-boost data migrate --data-dir .local/dating-boost --json
+dating-boost data backup --data-dir .local/dating-boost --output dating-boost-backup.zip --json
+dating-boost data rekey --data-dir .local/dating-boost --json
+dating-boost diagnostics bundle --data-dir .local/dating-boost --output diagnostics.zip --json
+```
+
+The daemon is a local supervisor only. It owns locks, heartbeat, recovery, and
+kill-switch state; it does not observe screens or click apps:
+
+```bash
+dating-boost daemon install --data-dir .local/dating-boost --json
+dating-boost daemon status --data-dir .local/dating-boost --json
+dating-boost safety pause --data-dir .local/dating-boost --reason manual-stop --json
+```
+
+Default to `--send-mode stage`. `--send-mode live` requires explicit
+authorization with `live_send: true`, an unpaused safety switch, staged-text
+verification, and post-action verification.
 
 ## Agent-native Codex workflow
 
@@ -52,12 +91,47 @@ The Codex-first skill package lives at `skills/dating-booster-codex/`.
 Installation and startup instructions live at
 `skills/dating-booster-codex/INSTALL.md`.
 
+## Project structure
+
+- `dating_boost/cli.py`: CLI routing for local memory, policy, operator, data,
+  diagnostics, and native harness commands.
+- `dating_boost/core/gui_harness.py`: native GUI harness adapters. Tinder uses
+  iPhone Mirroring; WeChat uses the macOS desktop application window.
+- `dating_boost/host_loop.py`: host-loop supervisor for staged/live work items.
+- `app_profiles/`: app-specific contracts. `tinder.json` and `wechat.json`
+  declare each app's observation, staging, GUI harness, and blocked-action
+  rules. `app_profiles/README.md` defines the profile contract and extension
+  checklist for new dating apps.
+- `skills/dating-booster-codex/`: installable Codex skill plus operational
+  references and smoke/runbook docs.
+- `docs/README.md`: repository map, current app support matrix, and app
+  expansion path.
+- `tests/fixtures/host_loop/tinder/`: deterministic Tinder host-loop fixtures.
+- `tests/test_gui_harness.py`: GUI harness contracts for Tinder and macOS
+  WeChat.
+
 Shortest Codex-host path:
 
 ```bash
+dating-boost harness doctor --app-id tinder --json
+dating-boost harness tinder launch --dry-run --json
+dating-boost harness tinder open-profile --dry-run --json
+dating-boost harness tinder open-profile --launch-if-needed --json
+dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
+dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
 dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json
 dating-boost-host-loop init --data-dir .local/dating-boost --work-dir .local/dating-boost-host-loop --app-id tinder --json
 dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+```
+
+Mac WeChat desktop harness path:
+
+```bash
+dating-boost harness doctor --app-id wechat --window-title WeChat --json
+dating-boost harness wechat launch --dry-run --json
+dating-boost harness wechat observe --output-dir .local/dating-boost-harness --json
+dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json
 ```
 
 Use `--send-mode stage` first. It only stages text and verifies the input box;
@@ -66,6 +140,24 @@ current wait point, `dating-boost-host-loop resume` after interruption, and
 `dating-boost replay latest --data-dir .local/dating-boost --format md` for a
 run replay. `--send-mode live` is only for explicitly authorized ordinary
 chat messages and still requires staged-text and post-send verification.
+The native GUI harness can diagnose iPhone Mirroring, screenshot/OCR the
+mirrored window, launch Tinder from a verified iOS home screen, and navigate
+Tinder through navigation-only profile and chat reading chains. Covered
+navigation includes the self profile tab, self profile preview, photo
+next/previous, full profile read mode, profile scroll/visible-section expand,
+chat tab, new-match carousel movement, conversation opening, thread-avatar
+profile opening, and preview/full-profile exit. `harness tinder observe`
+returns redacted page/layout hints for the self profile, chat page, new-match
+carousel, conversation list, visible expand controls, and `等你回应` markers.
+It does not provide an
+autonomous live-send harness and never authorizes send, like, super-like,
+unmatch, report, or profile-edit actions by itself.
+
+The macOS WeChat harness can activate WeChat, screenshot/OCR the desktop
+window, return redacted chat/layout hints, and stage a draft into the current
+message input via clipboard paste. It never presses Enter, clicks Send, starts
+calls, opens payments, or exchanges contacts by itself. The host must visually
+verify staged text before any manual send.
 
 Fully managed/autonomous runs require the user self model first:
 
@@ -111,8 +203,10 @@ python3 -m dating_boost.cli operator stop --data-dir .local/dating-boost
 python3 -m dating_boost.cli operator report latest --data-dir .local/dating-boost
 ```
 
-This mode does not include a live iPhone Mirroring harness. After each ordinary
-send, the host agent must verify the result and call `operator record-action-result`.
+This mode includes a stage/navigation iPhone Mirroring harness for diagnostics,
+screenshots, OCR, safe Tinder profile navigation, profile reading, and chat
+navigation. It does not include a live-send harness. After each ordinary send,
+the host agent must verify the result and call `operator record-action-result`.
 
 Host-executed action results are appended to
 `.local/dating-boost/audit/action_results.jsonl`. If a sent message or other
@@ -152,5 +246,6 @@ manual/OCR/VLM analysis JSON that maps to the same `AppObservation` contract:
 python3 -m dating_boost.cli observe-screenshot --data-dir .local/dating-boost --screenshot path/to/screenshot.png --analysis path/to/analysis.json
 ```
 
-This MVP still does not execute GUI actions, send messages, operate iPhone
-Mirroring, or include a mock dating-app harness.
+The fixture MVP path above still does not execute GUI actions or send messages.
+Use `dating-boost harness ...` only for native stage/navigation paths such as
+iPhone Mirroring Tinder navigation or macOS WeChat draft staging.

@@ -26,6 +26,7 @@ Then run `python3 scripts/doctor.py --json --data-dir .local/dating-boost` again
 Finally run:
 
 ```bash
+dating-boost release doctor --json
 dating-boost data doctor --data-dir .local/dating-boost --json
 dating-boost capabilities --json --data-dir .local/dating-boost
 ```
@@ -43,7 +44,11 @@ Load this package's `skill-package.json` and compare it with the capabilities JS
 - Every `required_commands` entry must exist in `supported_commands`.
 - `schema_version` for capabilities must be supported by this skill package.
 - `storage_capabilities.storage_backend` should be `sqlite` before production smoke.
+- `storage_capabilities.encrypted_default` must be true for public production.
+- `storage_capabilities.backup_requires_recovery_passphrase` must be true for public backups.
 - `agent_native_capabilities.ci_tested_version` should match the installed tool version.
+- `agent_native_capabilities.local_daemon` should be true for public production workflows.
+- `diagnostic_capabilities.local_redacted_bundle` should be true.
 - If `source_spec_commit` differs from the local repo commit, report a warning. Continue only if version, schema, and command checks pass.
 
 If doctor, bootstrap, data doctor, migration, or capabilities fails; returns invalid JSON; has an incompatible `schema_version`; is too old; lacks a required schema version; or does not list the required commands, stop before observing dating app content and tell the user the local Dating Booster tool is incompatible.
@@ -72,6 +77,12 @@ High-risk actions require explicit user confirmation and the local policy switch
 - Proposing a meeting or exchanging contact details.
 
 Do not treat autonomous mode as permission to bypass app rules, rate limits, verification, account restrictions, or user judgment.
+
+For public production, treat the local safety switch as authoritative. If
+`dating-boost safety status --data-dir .local/dating-boost --json` reports
+paused, do not send, paste, stage, or continue a live host loop until the user
+explicitly resumes it. Live sends require `--send-mode live`, authorization with
+`live_send: true`, exact staged-text verification, and post-action verification.
 
 ## Default Draft Output
 
@@ -142,6 +153,55 @@ reason to hand off.
 14. Record user feedback with `dating-boost feedback record` when useful.
 
 ## iPhone Mirroring Input
+
+Before relying on iPhone Mirroring for real Tinder work, run:
+
+```bash
+dating-boost harness doctor --app-id tinder --json
+dating-boost harness tinder launch --dry-run --json
+dating-boost harness tinder open-profile --dry-run --json
+dating-boost harness tinder open-profile --launch-if-needed --json
+dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
+dating-boost harness tinder action profile-photo-next --dry-run --json
+dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
+```
+
+Use `dating-boost harness tinder open-profile --json` only for safe navigation
+to the Tinder profile tab after doctor confirms the mirrored window is unlocked
+and Tinder is foreground. If iPhone Mirroring is on a verified iOS home screen,
+use `--launch-if-needed` to launch Tinder through iOS search before opening the
+profile tab. Use `harness tinder action` for one bounded navigation step and
+`harness tinder workflow` for the two supported reading chains:
+`self-profile-read` and `chat-read-match-profile`. Use `harness tinder observe`
+to get redacted page/layout hints before choosing a chain; it reports page
+state and markers such as new-match carousel presence, conversation-list
+presence, `等你回应`, and visible profile expand controls without returning raw
+OCR text. The native harness may diagnose the mirrored window, capture
+screenshots/OCR, launch Tinder, move through profile photo/read states, open
+chats, open visible conversations, and open profile previews from thread
+avatars. It must not send, like, super-like, unmatch, report, or edit profile
+data.
+
+## macOS WeChat Input
+
+For real macOS WeChat work, use the desktop WeChat harness instead of iPhone
+Mirroring:
+
+```bash
+dating-boost harness doctor --app-id wechat --window-title WeChat --json
+dating-boost harness wechat launch --dry-run --json
+dating-boost harness wechat observe --output-dir .local/dating-boost-harness --json
+dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json
+```
+
+Use `harness wechat observe` to get redacted page/layout hints before drafting
+or staging. Use `harness wechat stage-draft` only to paste an already
+policy-checked draft into the current WeChat input box. It copies the draft to
+the macOS clipboard and sends `Cmd+V`; it must not press Enter or click Send.
+Prefer `--text-file` so private draft text is not written into shell history or
+process arguments. The host must visually verify staged text before any manual
+send and must record the final result from a fresh post-action observation.
 
 When executing a `send_message` action through iPhone Mirroring, treat text
 entry as unreliable until verified. For Chinese or long messages, prefer:
