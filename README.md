@@ -1,51 +1,95 @@
 # dating-booster
 
-Local-first GUI automation experiments for dating workflows.
+## 结论 / Summary
 
-## Boundary statement
+中文：Dating Booster 是一个本地优先的 dating workflow 工具层。它为 Codex
+这类 host agent 提供本地记忆、上下文、策略检查、草稿生成、GUI stage harness、
+审计、诊断和恢复能力。它不是私有 API 客户端，也不负责绕过 App 风控。
 
-这是一个不使用私有 API、不做绕过、由用户本地授权运行的 GUI automation experiment；它仍可能违反目标 App 的条款，并可能导致账号封禁。项目不提供规避检测或规模化滥用能力。
+English: Dating Booster is a local-first tool layer for dating workflows. It
+gives host agents such as Codex local memory, context, policy checks, draft
+workflows, GUI stage harnesses, audit logs, diagnostics, and recovery. It is
+not a private API client and does not provide app risk-control bypasses.
 
-## Default behavior
+## 安全边界 / Safety Boundary
 
-- Allowed by default: observe, summarize, draft replies, and paste drafts.
-- Blocked by default: sending messages, liking profiles, super-likes, unmatching, reporting, profile edits, and proposing meetings.
-- High-risk actions require explicit human confirmation unless experimental autonomous mode is enabled for a single action.
-- Autonomous mode is off by default. Users can explicitly enable it after reading and accepting the risk.
-- Public production defaults are macOS-only, encrypted local storage, stage-first GUI operation, and local-only diagnostics.
+中文：这是一个不使用私有 API、不做绕过、由用户本地授权运行的 GUI automation
+experiment；它仍可能违反目标 App 的条款，并可能导致账号封禁。项目不提供规避
+检测、批量运营、账号池、刷赞、自动邀约或规模化滥用能力。
 
-## Autonomous mode
+English: This is a GUI automation experiment that uses local user
+authorization, not private APIs or bypasses. It may still violate target app
+terms and may cause account restrictions. The project does not provide
+anti-detection, bulk operation, account farming, like automation, auto-invite,
+or scale-out abuse features.
 
-Autonomous mode is experimental and high-risk. It is controlled by an explicit local switch and remains disabled by default. Enabling it is not a claim that a target app permits automation; it only means the local tool is allowed to execute high-risk actions after the user has accepted the risk.
+| 类别 / Category | 默认行为 / Default |
+| --- | --- |
+| 允许 / Allowed | observe, summarize, draft replies, paste or stage drafts |
+| 阻止 / Blocked | send messages, like, super-like, unmatch, report, edit profile, propose meetings, payments, calls |
+| 高风险动作 / High-risk actions | require explicit human confirmation unless one experimental action is deliberately authorized |
+| 自主模式 / Autonomous mode | off by default, experimental, local switch only |
+| 生产默认 / Production defaults | macOS-only, encrypted local storage, stage-first GUI operation, local-only diagnostics |
 
-## CLI
+`--send-mode stage` 是默认路径：只准备、粘贴或 staging 草稿，不点击发送。
+`--send-mode live` 只用于明确授权的普通聊天消息，并且仍需要 `live_send: true`、
+安全开关未暂停、staged-text verification 和 post-action verification。
 
-```bash
-python3 -m dating_boost.cli observe
-python3 -m dating_boost.cli send_message
-python3 -m dating_boost.cli send_message --autonomous
-```
+`--send-mode stage` is the default path: it prepares, pastes, or stages drafts
+without clicking send. `--send-mode live` is only for explicitly authorized
+ordinary chat messages and still requires `live_send: true`, an unpaused safety
+switch, staged-text verification, and post-action verification.
 
-The action gate does not execute GUI actions. It only reports whether a local
-workflow is allowed to proceed.
+## 当前 App 支持 / Current App Support
 
-## Public production install
+| App | 支持状态 / Support | Native harness | 发送归属 / Send ownership |
+| --- | --- | --- | --- |
+| Tinder | host loop, profile/chat navigation, observation, draft workflow | iPhone Mirroring on macOS | stage/navigation only; no autonomous GUI send harness |
+| WeChat / 微信 | app profile, host-loop app id, desktop observation, draft staging | macOS WeChat desktop window | stage draft only; never presses Enter or clicks Send |
+| Bumble | contract-only placeholder | none | not supported |
+| 她说 / Ta Shuo | contract-only placeholder | none | not supported |
 
-The public production channel is `1.0.0-rc.1`. Install from PyPI or from the
-GitHub release artifact, then run the local release and skill checks:
+更多 app 的扩展入口是 `app_profiles/README.md` 和 `docs/README.md`。新增 app
+应先落 app profile，再决定是否实现 native observation、navigation 或 draft
+staging。
+
+For more apps, start from `app_profiles/README.md` and `docs/README.md`. Add
+the app profile first, then decide whether native observation, navigation, or
+draft staging is justified.
+
+## 安装和启动检查 / Install And Startup Checks
+
+Public production channel: `1.0.0-rc.1`.
 
 ```bash
 python3 -m pip install "dating-booster==1.0.0rc1"
 dating-boost release doctor --json
 dating-boost data doctor --data-dir .local/dating-boost --json
-dating-boost capabilities --data-dir .local/dating-boost --json
+dating-boost capabilities --json --data-dir .local/dating-boost
 ```
 
-On macOS, Dating Booster encrypts SQLite payloads by default. The preferred
+中文：任何 host agent 在观察 dating app 可见内容前，必须先跑 capabilities 并
+检查版本、schema、命令和存储能力是否兼容。
+
+English: Before any host agent observes visible dating app content, run
+capabilities and verify version, schema, command, and storage compatibility.
+
+Codex-first skill package:
+
+- Skill path: `skills/dating-booster-codex/`
+- Install doc: `skills/dating-booster-codex/INSTALL.md`
+- Agent references: `skills/dating-booster-codex/references/`
+
+## 本地数据和守护进程 / Local Data And Supervisor
+
+中文：macOS 生产默认加密 SQLite payload。生产 key provider 首选 macOS
+Keychain；CI 和本地测试可设置 `DATING_BOOST_KEY_PROVIDER=local`。备份恢复口令
+从 `DATING_BOOST_RECOVERY_PASSPHRASE` 或 `--recovery-passphrase-file` 读取。
+
+English: On macOS, production defaults encrypt SQLite payloads. The preferred
 production key provider is macOS Keychain; CI and local tests may set
-`DATING_BOOST_KEY_PROVIDER=local`. Backups read
-`DATING_BOOST_RECOVERY_PASSPHRASE` from the environment; restore automation can
-use `--recovery-passphrase-file`. Use:
+`DATING_BOOST_KEY_PROVIDER=local`. Backup recovery passphrases come from
+`DATING_BOOST_RECOVERY_PASSPHRASE` or `--recovery-passphrase-file`.
 
 ```bash
 dating-boost data migrate --data-dir .local/dating-boost --json
@@ -55,7 +99,7 @@ dating-boost diagnostics bundle --data-dir .local/dating-boost --output diagnost
 ```
 
 The daemon is a local supervisor only. It owns locks, heartbeat, recovery, and
-kill-switch state; it does not observe screens or click apps:
+kill-switch state. It does not observe screens or click apps.
 
 ```bash
 dating-boost daemon install --data-dir .local/dating-boost --json
@@ -63,54 +107,30 @@ dating-boost daemon status --data-dir .local/dating-boost --json
 dating-boost safety pause --data-dir .local/dating-boost --reason manual-stop --json
 ```
 
-Default to `--send-mode stage`. `--send-mode live` requires explicit
-authorization with `live_send: true`, an unpaused safety switch, staged-text
-verification, and post-action verification.
+## Agent-native 工作流 / Agent-native Workflow
 
-## Agent-native Codex workflow
+中文：Dating Booster 不需要拥有 LLM 调用。Codex 或其他 host agent 负责可见屏幕
+理解和草稿生成；Dating Booster 负责本地状态、上下文、策略、工作流契约和
+host-executed action audit。
 
-Dating Booster can also be used as a lightweight local tool layer for a host
-agent such as Codex. In this mode, Codex can use computer use plus iPhone
-Mirroring after the user authorizes the Mac to operate the iPhone screen.
-Dating Booster does not need to own the LLM call; it provides local
-memory/context/policy/workflow contracts and host-executed action audit.
+English: Dating Booster does not need to own the LLM call. Codex or another
+host agent owns visible-screen understanding and draft generation. Dating
+Booster owns local state, context, policy, workflow contracts, and
+host-executed action audit.
 
-Before any host agent observes visible dating app content, run:
+Startup command:
 
 ```bash
 python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 ```
 
-The host agent may process visible dating app content, screenshots, profile
-text, conversation text, and generated drafts. Users should only run this mode
-if they accept that privacy boundary. High-risk actions still require explicit
-policy checks and user confirmation unless autonomous mode is deliberately
-enabled.
+Host agents may process visible dating app content, screenshots, profile text,
+conversation text, and generated drafts. Users should only run this mode if
+they accept that privacy boundary.
 
-The Codex-first skill package lives at `skills/dating-booster-codex/`.
-Installation and startup instructions live at
-`skills/dating-booster-codex/INSTALL.md`.
+## Native GUI Harness 快速路径 / Native GUI Harness Quick Paths
 
-## Project structure
-
-- `dating_boost/cli.py`: CLI routing for local memory, policy, operator, data,
-  diagnostics, and native harness commands.
-- `dating_boost/core/gui_harness.py`: native GUI harness adapters. Tinder uses
-  iPhone Mirroring; WeChat uses the macOS desktop application window.
-- `dating_boost/host_loop.py`: host-loop supervisor for staged/live work items.
-- `app_profiles/`: app-specific contracts. `tinder.json` and `wechat.json`
-  declare each app's observation, staging, GUI harness, and blocked-action
-  rules. `app_profiles/README.md` defines the profile contract and extension
-  checklist for new dating apps.
-- `skills/dating-booster-codex/`: installable Codex skill plus operational
-  references and smoke/runbook docs.
-- `docs/README.md`: repository map, current app support matrix, and app
-  expansion path.
-- `tests/fixtures/host_loop/tinder/`: deterministic Tinder host-loop fixtures.
-- `tests/test_gui_harness.py`: GUI harness contracts for Tinder and macOS
-  WeChat.
-
-Shortest Codex-host path:
+### Tinder via iPhone Mirroring
 
 ```bash
 dating-boost harness doctor --app-id tinder --json
@@ -120,12 +140,22 @@ dating-boost harness tinder open-profile --launch-if-needed --json
 dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
 dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
 dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
-dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json
-dating-boost-host-loop init --data-dir .local/dating-boost --work-dir .local/dating-boost-host-loop --app-id tinder --json
-dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
 ```
 
-Mac WeChat desktop harness path:
+中文：Tinder harness 可诊断 iPhone Mirroring、截图/OCR、从已验证 iOS home
+screen 启动 Tinder，并执行只读导航：self profile、profile preview、照片切换、
+full profile、profile scroll/expand、chat tab、new-match carousel、
+conversation opening、thread-avatar profile opening 和退出 preview/full profile。
+它不会授权 send、like、super-like、unmatch、report 或 profile edit。
+
+English: The Tinder harness can diagnose iPhone Mirroring, screenshot/OCR the
+mirrored window, launch Tinder from a verified iOS home screen, and perform
+read-only navigation through self profile, profile preview, photos, full
+profile, profile scroll/expand, chat tab, new-match carousel, conversation
+opening, thread-avatar profile opening, and preview/full-profile exits. It does
+not authorize send, like, super-like, unmatch, report, or profile edit.
+
+### macOS WeChat / 微信桌面端
 
 ```bash
 dating-boost harness doctor --app-id wechat --window-title WeChat --json
@@ -134,32 +164,54 @@ dating-boost harness wechat observe --output-dir .local/dating-boost-harness --j
 dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json
 ```
 
-Use `--send-mode stage` first. It only stages text and verifies the input box;
-it does not click send. Use `dating-boost-host-loop status` to inspect the
-current wait point, `dating-boost-host-loop resume` after interruption, and
+中文：WeChat harness 可激活微信桌面窗口、截图/OCR、返回 redacted layout hints，
+并用 clipboard paste 把草稿放入当前消息输入框。它不会按 Enter、不会点击 Send、
+不会发起通话、不会处理支付、不会交换联系方式。优先使用 `--text-file`，避免
+私密草稿进入 shell history 或 process args。host 必须人工或视觉验证 staged text。
+
+English: The WeChat harness can activate the desktop WeChat window,
+screenshot/OCR it, return redacted layout hints, and paste a prepared draft into
+the current message input with the clipboard. It never presses Enter, clicks
+Send, starts calls, handles payments, or exchanges contacts. Prefer
+`--text-file` so private drafts do not enter shell history or process args. The
+host must visually verify staged text.
+
+## Host Loop 快速路径 / Host Loop Quick Path
+
+```bash
+dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json
+dating-boost-host-loop init --data-dir .local/dating-boost --work-dir .local/dating-boost-host-loop --app-id tinder --json
+dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+```
+
+中文：使用 `dating-boost-host-loop status` 检查等待点，使用
+`dating-boost-host-loop resume` 从中断恢复，使用
+`dating-boost replay latest --data-dir .local/dating-boost --format md` 查看
+run replay。高风险结果必须来自新的 post-action observation；无法验证时记录
+`unknown`，不能记录 `succeeded`。
+
+English: Use `dating-boost-host-loop status` to inspect the current wait point,
+`dating-boost-host-loop resume` after interruption, and
 `dating-boost replay latest --data-dir .local/dating-boost --format md` for a
-run replay. `--send-mode live` is only for explicitly authorized ordinary
-chat messages and still requires staged-text and post-send verification.
-The native GUI harness can diagnose iPhone Mirroring, screenshot/OCR the
-mirrored window, launch Tinder from a verified iOS home screen, and navigate
-Tinder through navigation-only profile and chat reading chains. Covered
-navigation includes the self profile tab, self profile preview, photo
-next/previous, full profile read mode, profile scroll/visible-section expand,
-chat tab, new-match carousel movement, conversation opening, thread-avatar
-profile opening, and preview/full-profile exit. `harness tinder observe`
-returns redacted page/layout hints for the self profile, chat page, new-match
-carousel, conversation list, visible expand controls, and `等你回应` markers.
-It does not provide an
-autonomous live-send harness and never authorizes send, like, super-like,
-unmatch, report, or profile-edit actions by itself.
+run replay. High-risk results require a fresh post-action observation. If a
+result cannot be verified, record `unknown`, not `succeeded`.
 
-The macOS WeChat harness can activate WeChat, screenshot/OCR the desktop
-window, return redacted chat/layout hints, and stage a draft into the current
-message input via clipboard paste. It never presses Enter, clicks Send, starts
-calls, opens payments, or exchanges contacts by itself. The host must visually
-verify staged text before any manual send.
+Host-executed action results are appended to:
 
-Fully managed/autonomous runs require the user self model first:
+```text
+.local/dating-boost/audit/action_results.jsonl
+```
+
+## 用户自我模型和自主准备 / User Model And Autonomous Readiness
+
+中文：完全托管或自主 runs 需要用户自我模型。自主 readiness 需要 dating profile 和
+self interview 两类输入，至少五条 low-risk shareable materials，至少两条
+low-investment repair materials，以及至少一条 date/meeting preference material。
+
+English: Fully managed or autonomous runs require the user self model.
+Autonomous readiness requires both dating profile and self interview inputs, at
+least five low-risk shareable materials, at least two low-investment repair
+materials, and at least one date/meeting preference material.
 
 ```bash
 python3 -m dating_boost.cli user interview template --json
@@ -168,10 +220,7 @@ python3 -m dating_boost.cli user ingest-interview --data-dir .local/dating-boost
 python3 -m dating_boost.cli user readiness --data-dir .local/dating-boost --mode autonomous --json
 ```
 
-Autonomous readiness requires both profile sources, at least five low-risk
-shareable materials, at least two low-investment repair materials, and at least
-one date/meeting preference material.
-Its required commands are:
+Preferred Codex-first draft workflow:
 
 ```bash
 python3 -m dating_boost.cli workflow draft --data-dir .local/dating-boost --observation observation.json --draft draft.json --mode adaptive
@@ -184,38 +233,13 @@ python3 -m dating_boost.cli action record-result --data-dir .local/dating-boost 
 python3 -m dating_boost.cli feedback record --data-dir .local/dating-boost --match-id match_alex --draft-id draft_1 --mode adaptive --label accepted
 ```
 
-`workflow draft` is the preferred Codex-first path. The host agent still owns
-screen understanding and draft generation; Dating Booster ingests the
-observation, builds context, checks the host draft against policy, and can
-record feedback in one local command.
+## Fixture MVP / Local Intelligence Workflow
 
-Goal-oriented operator sessions use the same boundary: the host agent observes
-Tinder and executes ordinary sends, while Dating Booster owns local state,
-next-work selection, scheduling, duplicate prevention, appointment handoff, and
-progress reports.
+中文：下面路径使用 fixture 和手工 observation，可在不执行 GUI action、不发送消息的
+情况下跑完整本地智能流程。
 
-```bash
-python3 -m dating_boost.cli operator session start --data-dir .local/dating-boost --authorization auth.json
-python3 -m dating_boost.cli operator next --data-dir .local/dating-boost
-python3 -m dating_boost.cli operator ingest-observation --data-dir .local/dating-boost --input observation.json
-python3 -m dating_boost.cli operator record-action-result --data-dir .local/dating-boost --input action_result.json
-python3 -m dating_boost.cli operator stop --data-dir .local/dating-boost
-python3 -m dating_boost.cli operator report latest --data-dir .local/dating-boost
-```
-
-This mode includes a stage/navigation iPhone Mirroring harness for diagnostics,
-screenshots, OCR, safe Tinder profile navigation, profile reading, and chat
-navigation. It does not include a live-send harness. After each ordinary send,
-the host agent must verify the result and call `operator record-action-result`.
-
-Host-executed action results are appended to
-`.local/dating-boost/audit/action_results.jsonl`. If a sent message or other
-high-risk action cannot be verified from a fresh post-action observation, record
-the result as `unknown`, not `succeeded`.
-
-## MVP intelligence workflow
-
-The current MVP can run a local fixture/manual-observation workflow end to end:
+English: The path below uses fixtures and manual observations. It runs the
+local intelligence workflow without executing GUI actions or sending messages.
 
 ```bash
 python3 -m dating_boost.cli init-profile --data-dir .local/dating-boost --input tests/fixtures/intelligence/user_profile.json
@@ -225,27 +249,86 @@ python3 -m dating_boost.cli feedback --data-dir .local/dating-boost --match-id "
 python3 -m unittest discover -s tests
 ```
 
-`--backend scripted --scripted-backend-output ...` is for deterministic local
-tests and fixture demos. The production LLM path is `--backend openai`:
+Production LLM backend:
 
 ```bash
 python3 -m dating_boost.cli draft --data-dir .local/dating-boost --match-id "$MATCH_ID" --mode adaptive --backend openai --model gpt-4.1-mini
 ```
 
-The OpenAI backend requires the optional OpenAI SDK, e.g.
-`pip install 'dating-booster[openai]'` after packaging/installing the project, or
-`pip install 'openai>=2,<3'` in a local development environment.
+The OpenAI backend requires the optional OpenAI SDK:
 
-Draft output is privacy-minimized by default. Add `--debug-context` only when
-you explicitly want to inspect the context pack in terminal output.
+```bash
+pip install 'dating-booster[openai]'
+```
 
-Screenshots can be imported without GUI actions by pairing an image with a
-manual/OCR/VLM analysis JSON that maps to the same `AppObservation` contract:
+Screenshots can be imported without GUI actions:
 
 ```bash
 python3 -m dating_boost.cli observe-screenshot --data-dir .local/dating-boost --screenshot path/to/screenshot.png --analysis path/to/analysis.json
 ```
 
-The fixture MVP path above still does not execute GUI actions or send messages.
-Use `dating-boost harness ...` only for native stage/navigation paths such as
-iPhone Mirroring Tinder navigation or macOS WeChat draft staging.
+Draft output is privacy-minimized by default. Add `--debug-context` only when
+you explicitly want to inspect the context pack in terminal output.
+
+## 项目结构 / Project Structure
+
+| Path | 作用 / Purpose |
+| --- | --- |
+| `dating_boost/cli.py` | CLI routing for memory, policy, operator, data, diagnostics, release, daemon/safety, confirmation, and harness commands |
+| `dating_boost/core/gui_harness.py` | native GUI harness adapters: Tinder uses iPhone Mirroring, WeChat uses macOS desktop |
+| `dating_boost/host_loop.py` | supervised host-loop runner for staged/live work items |
+| `dating_boost/core/capabilities.py` | machine-readable startup contract for agents and skill installers |
+| `app_profiles/` | app-specific contracts; see `app_profiles/README.md` |
+| `skills/dating-booster-codex/` | installable Codex skill plus operational references and smoke/runbook docs |
+| `docs/README.md` | repository map, current app support matrix, and expansion path |
+| `tests/fixtures/` | deterministic fixtures for local and host-loop tests |
+| `tests/test_gui_harness.py` | GUI harness contracts for Tinder and macOS WeChat |
+
+## 新 App 扩展路径 / App Expansion Path
+
+1. 新增或更新 `app_profiles/<app_id>.json`。
+2. 先确定 support level：contract-only、native observation、native navigation、
+   native draft staging 或 host-loop integration。
+3. 如需 native GUI support，在 `dating_boost/core/gui_harness.py` 实现 backend。
+4. 只有在 harness contract 可测试后，才在 `dating_boost/cli.py` 暴露 app-specific
+   commands。
+5. 在 `dating_boost/core/capabilities.py` 增加 supported commands 和 capability
+   flags。
+6. 在 `tests/fixtures/` 和 `tests/` 增加 deterministic fixtures 与 focused tests。
+7. 更新 `README.md`、`app_profiles/README.md`、`docs/README.md` 和 Codex skill
+   references。
+8. 发布前运行 targeted unit tests 和 `dating-boost capabilities --json`。
+
+1. Add or update `app_profiles/<app_id>.json`.
+2. Decide the support level: contract-only, native observation, native
+   navigation, native draft staging, or host-loop integration.
+3. If native GUI support is needed, implement the backend in
+   `dating_boost/core/gui_harness.py`.
+4. Expose app-specific commands in `dating_boost/cli.py` only after the harness
+   contract is testable.
+5. Add supported commands and capability flags in
+   `dating_boost/core/capabilities.py`.
+6. Add deterministic fixtures and focused tests under `tests/fixtures/` and
+   `tests/`.
+7. Update `README.md`, `app_profiles/README.md`, `docs/README.md`, and Codex
+   skill references.
+8. Before publishing, run targeted unit tests and `dating-boost capabilities --json`.
+
+## 验证 / Verification
+
+```bash
+python3 -m unittest tests.test_gui_harness tests.test_skill_package
+python3 -m unittest tests.test_operator_host_loop.OperatorHostLoopTests.test_wechat_host_loop_init_writes_wechat_authorization_template
+python3 -m py_compile dating_boost/core/gui_harness.py dating_boost/cli.py dating_boost/core/capabilities.py dating_boost/host_loop.py
+```
+
+旧的最小 action gate 仍可用于策略检查演示；它不执行 GUI action：
+
+```bash
+python3 -m dating_boost.cli observe
+python3 -m dating_boost.cli send_message
+python3 -m dating_boost.cli send_message --autonomous
+```
+
+The minimal action gate remains available for policy-check demos. It does not
+execute GUI actions.
