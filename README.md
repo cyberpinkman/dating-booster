@@ -2,22 +2,22 @@
 
 ## 结论 / Summary
 
-中文：Dating Booster 是一个本地优先的 dating workflow 工具层。它为 Codex
+Dating Booster 是一个本地优先的 dating workflow 工具层。它为 Codex
 这类 host agent 提供本地记忆、上下文、策略检查、草稿生成、GUI stage harness、
 审计、诊断和恢复能力。它不是私有 API 客户端，也不负责绕过 App 风控。
 
-English: Dating Booster is a local-first tool layer for dating workflows. It
+Dating Booster is a local-first tool layer for dating workflows. It
 gives host agents such as Codex local memory, context, policy checks, draft
 workflows, GUI stage harnesses, audit logs, diagnostics, and recovery. It is
 not a private API client and does not provide app risk-control bypasses.
 
 ## 安全边界 / Safety Boundary
 
-中文：这是一个不使用私有 API、不做绕过、由用户本地授权运行的 GUI automation
+这是一个不使用私有 API、不做绕过、由用户本地授权运行的 GUI automation
 experiment；它仍可能违反目标 App 的条款，并可能导致账号封禁。项目不提供规避
 检测、批量运营、账号池、刷赞、自动邀约或规模化滥用能力。
 
-English: This is a GUI automation experiment that uses local user
+This is a GUI automation experiment that uses local user
 authorization, not private APIs or bypasses. It may still violate target app
 terms and may cause account restrictions. The project does not provide
 anti-detection, bulk operation, account farming, like automation, auto-invite,
@@ -68,10 +68,10 @@ dating-boost data doctor --data-dir .local/dating-boost --json
 dating-boost capabilities --json --data-dir .local/dating-boost
 ```
 
-中文：任何 host agent 在观察 dating app 可见内容前，必须先跑 capabilities 并
+任何 host agent 在观察 dating app 可见内容前，必须先跑 capabilities 并
 检查版本、schema、命令和存储能力是否兼容。
 
-English: Before any host agent observes visible dating app content, run
+Before any host agent observes visible dating app content, run
 capabilities and verify version, schema, command, and storage compatibility.
 
 Codex-first skill package:
@@ -82,11 +82,11 @@ Codex-first skill package:
 
 ## 本地数据和守护进程 / Local Data And Supervisor
 
-中文：macOS 生产默认加密 SQLite payload。生产 key provider 首选 macOS
+macOS 生产默认加密 SQLite payload。生产 key provider 首选 macOS
 Keychain；CI 和本地测试可设置 `DATING_BOOST_KEY_PROVIDER=local`。备份恢复口令
 从 `DATING_BOOST_RECOVERY_PASSPHRASE` 或 `--recovery-passphrase-file` 读取。
 
-English: On macOS, production defaults encrypt SQLite payloads. The preferred
+On macOS, production defaults encrypt SQLite payloads. The preferred
 production key provider is macOS Keychain; CI and local tests may set
 `DATING_BOOST_KEY_PROVIDER=local`. Backup recovery passphrases come from
 `DATING_BOOST_RECOVERY_PASSPHRASE` or `--recovery-passphrase-file`.
@@ -109,11 +109,11 @@ dating-boost safety pause --data-dir .local/dating-boost --reason manual-stop --
 
 ## Agent-native 工作流 / Agent-native Workflow
 
-中文：Dating Booster 不需要拥有 LLM 调用。Codex 或其他 host agent 负责可见屏幕
+Dating Booster 不需要拥有 LLM 调用。Codex 或其他 host agent 负责可见屏幕
 理解和草稿生成；Dating Booster 负责本地状态、上下文、策略、工作流契约和
 host-executed action audit。
 
-English: Dating Booster does not need to own the LLM call. Codex or another
+Dating Booster does not need to own the LLM call. Codex or another
 host agent owns visible-screen understanding and draft generation. Dating
 Booster owns local state, context, policy, workflow contracts, and
 host-executed action audit.
@@ -142,13 +142,13 @@ dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2
 dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
 ```
 
-中文：Tinder harness 可诊断 iPhone Mirroring、截图/OCR、从已验证 iOS home
+Tinder harness 可诊断 iPhone Mirroring、截图/OCR、从已验证 iOS home
 screen 启动 Tinder，并执行只读导航：self profile、profile preview、照片切换、
 full profile、profile scroll/expand、chat tab、new-match carousel、
 conversation opening、thread-avatar profile opening 和退出 preview/full profile。
 它不会授权 send、like、super-like、unmatch、report 或 profile edit。
 
-English: The Tinder harness can diagnose iPhone Mirroring, screenshot/OCR the
+The Tinder harness can diagnose iPhone Mirroring, screenshot/OCR the
 mirrored window, launch Tinder from a verified iOS home screen, and perform
 read-only navigation through self profile, profile preview, photos, full
 profile, profile scroll/expand, chat tab, new-match carousel, conversation
@@ -164,12 +164,12 @@ dating-boost harness wechat observe --output-dir .local/dating-boost-harness --j
 dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json
 ```
 
-中文：WeChat harness 可激活微信桌面窗口、截图/OCR、返回 redacted layout hints，
+WeChat harness 可激活微信桌面窗口、截图/OCR、返回 redacted layout hints，
 并用 clipboard paste 把草稿放入当前消息输入框。它不会按 Enter、不会点击 Send、
 不会发起通话、不会处理支付、不会交换联系方式。优先使用 `--text-file`，避免
 私密草稿进入 shell history 或 process args。host 必须人工或视觉验证 staged text。
 
-English: The WeChat harness can activate the desktop WeChat window,
+The WeChat harness can activate the desktop WeChat window,
 screenshot/OCR it, return redacted layout hints, and paste a prepared draft into
 the current message input with the clipboard. It never presses Enter, clicks
 Send, starts calls, handles payments, or exchanges contacts. Prefer
@@ -184,13 +184,13 @@ dating-boost-host-loop init --data-dir .local/dating-boost --work-dir .local/dat
 dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
 ```
 
-中文：使用 `dating-boost-host-loop status` 检查等待点，使用
+使用 `dating-boost-host-loop status` 检查等待点，使用
 `dating-boost-host-loop resume` 从中断恢复，使用
 `dating-boost replay latest --data-dir .local/dating-boost --format md` 查看
 run replay。高风险结果必须来自新的 post-action observation；无法验证时记录
 `unknown`，不能记录 `succeeded`。
 
-English: Use `dating-boost-host-loop status` to inspect the current wait point,
+Use `dating-boost-host-loop status` to inspect the current wait point,
 `dating-boost-host-loop resume` after interruption, and
 `dating-boost replay latest --data-dir .local/dating-boost --format md` for a
 run replay. High-risk results require a fresh post-action observation. If a
@@ -204,11 +204,11 @@ Host-executed action results are appended to:
 
 ## 用户自我模型和自主准备 / User Model And Autonomous Readiness
 
-中文：完全托管或自主 runs 需要用户自我模型。自主 readiness 需要 dating profile 和
+完全托管或自主 runs 需要用户自我模型。自主 readiness 需要 dating profile 和
 self interview 两类输入，至少五条 low-risk shareable materials，至少两条
 low-investment repair materials，以及至少一条 date/meeting preference material。
 
-English: Fully managed or autonomous runs require the user self model.
+Fully managed or autonomous runs require the user self model.
 Autonomous readiness requires both dating profile and self interview inputs, at
 least five low-risk shareable materials, at least two low-investment repair
 materials, and at least one date/meeting preference material.
@@ -235,10 +235,10 @@ python3 -m dating_boost.cli feedback record --data-dir .local/dating-boost --mat
 
 ## Fixture MVP / Local Intelligence Workflow
 
-中文：下面路径使用 fixture 和手工 observation，可在不执行 GUI action、不发送消息的
+下面路径使用 fixture 和手工 observation，可在不执行 GUI action、不发送消息的
 情况下跑完整本地智能流程。
 
-English: The path below uses fixtures and manual observations. It runs the
+The path below uses fixtures and manual observations. It runs the
 local intelligence workflow without executing GUI actions or sending messages.
 
 ```bash
