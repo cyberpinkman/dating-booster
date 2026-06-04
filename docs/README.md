@@ -11,6 +11,16 @@ The repository is open-sourced under the MIT License. See `LICENSE`.
 
 本仓库使用 MIT License 开源，见 `LICENSE`。
 
+Stable test-user installers are host-specific:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cyberpinkman/dating-booster/main/scripts/install-claude-code.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cyberpinkman/dating-booster/main/scripts/install-codex.sh | bash
+```
+
+稳定测试安装入口按 host 拆分。新增 host 时新增自己的 installer，不修改已有
+Claude Code 或 Codex installer。
+
 ## Top-Level Layout / 顶层结构
 
 - `dating_boost/`: Python package and CLI entrypoints。核心 Python 包和 CLI 入口。

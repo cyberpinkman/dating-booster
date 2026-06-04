@@ -16,6 +16,7 @@ from dating_boost.host_loop import HostLoopSupervisor, _parse_args
 ADAPTER_DIR = Path("agent_adapters/claude-code")
 ADAPTER_PACKAGE = ADAPTER_DIR / "adapter-package.json"
 ADAPTER_SKILL = ADAPTER_DIR / "skills" / "dating-booster" / "SKILL.md"
+CODEX_SKILL_DIR = Path("skills/dating-booster-codex")
 
 
 class ClaudeCodeAdapterTests(unittest.TestCase):
@@ -155,6 +156,10 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         self.assertIn("resources/agent_adapters/claude-code/INSTALL.md", package_data)
         self.assertIn("resources/agent_adapters/shared/references/contracts.md", package_data)
         self.assertIn("resources/agent_adapters/shared/references/workflows.md", package_data)
+        self.assertIn("resources/agent_adapters/codex/dating-booster-codex/SKILL.md", package_data)
+        self.assertIn("resources/agent_adapters/codex/dating-booster-codex/skill-package.json", package_data)
+        self.assertIn("resources/agent_adapters/codex/dating-booster-codex/scripts/doctor.py", package_data)
+        self.assertIn("resources/agent_adapters/codex/dating-booster-codex/references/workflows.md", package_data)
 
     def test_release_workflow_builds_claude_code_adapter_artifact(self):
         workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -185,6 +190,79 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         self.assertIn("Claude Code", readme)
         self.assertIn("dating-boost adapter claude-code install", readme)
         self.assertIn(".claude/skills/dating-booster", readme)
+
+    def test_adapter_codex_install_supports_dry_run_and_project_install(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dry_exit, dry_payload = self._run_cli([
+                "adapter",
+                "codex",
+                "install",
+                "--scope",
+                "project",
+                "--target",
+                str(root),
+                "--dry-run",
+                "--json",
+            ])
+            target_path = root / ".codex" / "skills" / "dating-booster-codex"
+            self.assertEqual(dry_exit, 0)
+            self.assertEqual(dry_payload["status"], "dry_run")
+            self.assertEqual(dry_payload["target_path"], str(target_path))
+            self.assertFalse(target_path.exists())
+
+            install_exit, install_payload = self._run_cli([
+                "adapter",
+                "codex",
+                "install",
+                "--scope",
+                "project",
+                "--target",
+                str(root),
+                "--json",
+            ])
+
+            self.assertEqual(install_exit, 0)
+            self.assertEqual(install_payload["status"], "ok")
+            self.assertEqual(install_payload["target_path"], str(target_path))
+            self.assertTrue((target_path / "SKILL.md").exists())
+            self.assertTrue((target_path / "skill-package.json").exists())
+            self.assertTrue((target_path / "scripts" / "doctor.py").exists())
+            self.assertTrue((target_path / "references" / "contracts.md").exists())
+            self.assertFalse(any("__pycache__" in file_info["target"] for file_info in install_payload["files"]))
+
+    def test_adapter_codex_doctor_reports_ok(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            exit_code, payload = self._run_cli([
+                "adapter",
+                "codex",
+                "doctor",
+                "--data-dir",
+                temp_dir,
+                "--json",
+            ])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["target_host"], "codex")
+        self.assertEqual(payload["skill_doctor"]["status"], "ok")
+
+    def test_stable_shell_installers_are_host_specific(self):
+        claude_installer = Path("scripts/install-claude-code.sh")
+        codex_installer = Path("scripts/install-codex.sh")
+        common = Path("scripts/lib/install-agent-common.sh")
+        claude_text = claude_installer.read_text(encoding="utf-8")
+        codex_text = codex_installer.read_text(encoding="utf-8")
+        common_text = common.read_text(encoding="utf-8")
+
+        self.assertIn("adapter claude-code install", claude_text)
+        self.assertIn("adapter claude-code doctor", claude_text)
+        self.assertNotIn("adapter codex", claude_text)
+        self.assertIn("adapter codex install", codex_text)
+        self.assertIn("adapter codex doctor", codex_text)
+        self.assertNotIn("adapter claude-code", codex_text)
+        self.assertIn("git+https://github.com/cyberpinkman/dating-booster.git@", common_text)
+        self.assertIn("DATING_BOOST_INSTALL_REF", common_text)
 
     def _run_cli(self, argv: list[str]) -> tuple[int, dict]:
         output = StringIO()

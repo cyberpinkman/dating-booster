@@ -13,6 +13,7 @@ from dating_boost.core.skill_doctor import run_skill_doctor
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_AGENT_ADAPTERS_DIR = ROOT / "agent_adapters"
+SOURCE_CODEX_SKILL_DIR = ROOT / "skills" / "dating-booster-codex"
 SOURCE_CLAUDE_CODE_ADAPTER_DIR = SOURCE_AGENT_ADAPTERS_DIR / "claude-code"
 SOURCE_SHARED_REFERENCES_DIR = SOURCE_AGENT_ADAPTERS_DIR / "shared" / "references"
 PACKAGED_AGENT_ADAPTERS_DIR = resources.files("dating_boost.resources").joinpath("agent_adapters")
@@ -38,6 +39,36 @@ def install_claude_code_adapter(*, scope: str, target: Path | None, dry_run: boo
             for source, destination in planned_files
         ],
         "next_action": "run dating-boost adapter claude-code doctor --data-dir .local/dating-boost --json",
+    }
+    if dry_run:
+        return payload
+
+    for source, destination in planned_files:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+    return payload
+
+
+def install_codex_adapter(*, scope: str, target: Path | None, dry_run: bool) -> dict[str, Any]:
+    target_path = _codex_skill_target_path(scope=scope, target=target)
+    planned_files = _codex_install_files(target_path)
+    skill_root = _codex_skill_dir()
+    payload = {
+        "schema_version": 1,
+        "status": "dry_run" if dry_run else "ok",
+        "target_host": "codex",
+        "scope": scope,
+        "target_path": str(target_path),
+        "source_path": str(skill_root),
+        "adapter_package": _display_resource_path(_codex_skill_package()),
+        "files": [
+            {
+                "source": str(source),
+                "target": str(destination),
+            }
+            for source, destination in planned_files
+        ],
+        "next_action": "run dating-boost adapter codex doctor --data-dir .local/dating-boost --json",
     }
     if dry_run:
         return payload
@@ -86,6 +117,44 @@ def run_claude_code_adapter_doctor(data_dir: Path) -> dict[str, Any]:
     }
 
 
+def run_codex_adapter_doctor(data_dir: Path) -> dict[str, Any]:
+    package_source = _codex_skill_package()
+    with _adapter_package_path(package_source) as package_path:
+        skill_doctor = run_skill_doctor(package_path, data_dir)
+    capabilities = build_capabilities(data_dir)
+    agent_caps = capabilities.get("agent_native_capabilities") or {}
+    target_host = _adapter_target_host(package_source)
+    issues: list[str] = []
+
+    if target_host != "codex":
+        issues.append("target_host_mismatch")
+    if skill_doctor.get("status") != "ok":
+        issues.append("skill_doctor_failed")
+    if agent_caps.get("codex_skill") is not True:
+        issues.append("codex_skill_capability_missing")
+    if "codex" not in set(agent_caps.get("host_agent_adapters") or []):
+        issues.append("host_agent_adapter_missing")
+
+    status = "ok" if not issues else "blocked"
+    return {
+        "schema_version": 1,
+        "status": status,
+        "target_host": "codex",
+        "adapter_package": _display_resource_path(package_source),
+        "data_dir": str(data_dir.resolve()),
+        "skill_doctor": skill_doctor,
+        "issues": issues,
+        "capabilities": {
+            "tool_version": capabilities.get("tool_version"),
+            "git_commit": capabilities.get("git_commit"),
+            "host_agent_adapters": agent_caps.get("host_agent_adapters"),
+            "supported_app_profiles": agent_caps.get("supported_app_profiles"),
+            "codex_skill": agent_caps.get("codex_skill"),
+        },
+        "next_action": "ready" if status == "ok" else "stop",
+    }
+
+
 def _claude_skill_target_path(*, scope: str, target: Path | None) -> Path:
     if target is None:
         base = Path.cwd() if scope == "project" else Path.home()
@@ -95,6 +164,19 @@ def _claude_skill_target_path(*, scope: str, target: Path | None) -> Path:
     if scope == "user" and base.name == ".claude":
         return base / "skills" / "dating-booster"
     return base / ".claude" / "skills" / "dating-booster"
+
+
+def _codex_skill_target_path(*, scope: str, target: Path | None) -> Path:
+    if target is None:
+        base = Path.cwd() if scope == "project" else Path(
+            str(_codex_home())
+        )
+    else:
+        base = target
+    base = base.expanduser().absolute()
+    if base.name == ".codex":
+        return base / "skills" / "dating-booster-codex"
+    return base / ".codex" / "skills" / "dating-booster-codex"
 
 
 def _claude_install_files(target_path: Path) -> list[tuple[Any, Path]]:
@@ -110,10 +192,24 @@ def _claude_install_files(target_path: Path) -> list[tuple[Any, Path]]:
     ]
 
 
+def _codex_install_files(target_path: Path) -> list[tuple[Any, Path]]:
+    skill_root = _codex_skill_dir()
+    return [
+        (source, target_path / relative_path)
+        for source, relative_path in _resource_tree_files(skill_root)
+    ]
+
+
 def _claude_code_adapter_dir() -> Any:
     if (SOURCE_CLAUDE_CODE_ADAPTER_DIR / "adapter-package.json").exists():
         return SOURCE_CLAUDE_CODE_ADAPTER_DIR
     return PACKAGED_AGENT_ADAPTERS_DIR.joinpath("claude-code")
+
+
+def _codex_skill_dir() -> Any:
+    if (SOURCE_CODEX_SKILL_DIR / "skill-package.json").exists():
+        return SOURCE_CODEX_SKILL_DIR
+    return PACKAGED_AGENT_ADAPTERS_DIR.joinpath("codex", "dating-booster-codex")
 
 
 def _shared_references_dir() -> Any:
@@ -124,6 +220,31 @@ def _shared_references_dir() -> Any:
 
 def _claude_code_adapter_package() -> Any:
     return _claude_code_adapter_dir().joinpath("adapter-package.json")
+
+
+def _codex_skill_package() -> Any:
+    return _codex_skill_dir().joinpath("skill-package.json")
+
+
+def _codex_home() -> Path:
+    import os
+
+    value = os.environ.get("CODEX_HOME")
+    return Path(value).expanduser() if value else Path.home() / ".codex"
+
+
+def _resource_tree_files(root: Any, relative_root: Path | None = None) -> list[tuple[Any, Path]]:
+    relative_root = relative_root or Path()
+    files: list[tuple[Any, Path]] = []
+    for child in sorted(root.iterdir(), key=lambda item: item.name):
+        if child.name == "__pycache__" or child.name.endswith(".pyc"):
+            continue
+        relative_path = relative_root / child.name
+        if child.is_dir():
+            files.extend(_resource_tree_files(child, relative_path))
+        else:
+            files.append((child, relative_path))
+    return files
 
 
 def _adapter_package_path(package_source: Any) -> ContextManager[Path]:

@@ -67,6 +67,8 @@ SCHEMA_VERSIONS: dict[str, int] = {
 
 SUPPORTED_COMMANDS: list[str] = [
     "capabilities",
+    "adapter codex install",
+    "adapter codex doctor",
     "adapter claude-code install",
     "adapter claude-code doctor",
     "init-profile",

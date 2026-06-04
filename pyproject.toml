@@ -32,6 +32,15 @@ dating_boost = [
     "resources/agent_adapters/claude-code/skills/dating-booster/SKILL.md",
     "resources/agent_adapters/shared/references/contracts.md",
     "resources/agent_adapters/shared/references/workflows.md",
+    "resources/agent_adapters/codex/dating-booster-codex/INSTALL.md",
+    "resources/agent_adapters/codex/dating-booster-codex/INSTALL_FROM_GITHUB.md",
+    "resources/agent_adapters/codex/dating-booster-codex/SKILL.md",
+    "resources/agent_adapters/codex/dating-booster-codex/skill-package.json",
+    "resources/agent_adapters/codex/dating-booster-codex/examples/codex-first-workflow.md",
+    "resources/agent_adapters/codex/dating-booster-codex/scripts/bootstrap_cli.py",
+    "resources/agent_adapters/codex/dating-booster-codex/scripts/doctor.py",
+    "resources/agent_adapters/codex/dating-booster-codex/references/*.md",
+    "resources/agent_adapters/codex/dating-booster-codex/references/workflows.md",
 ]
 
 [tool.pytest.ini_options]

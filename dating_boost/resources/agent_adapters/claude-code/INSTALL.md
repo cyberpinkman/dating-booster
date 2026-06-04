@@ -7,6 +7,12 @@ python3 -m pip install "dating-booster==1.0.0rc1"
 dating-boost release doctor --json
 ```
 
+For GitHub-based test installs, use the stable Claude Code installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cyberpinkman/dating-booster/main/scripts/install-claude-code.sh | bash
+```
+
 Install the Claude Code skill into the current project:
 
 ```bash

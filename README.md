@@ -121,6 +121,18 @@ write `~/.claude/skills/dating-booster/`. The Claude Code skill only explains
 how Claude Code should call Dating Booster; memory, policy, planner, harness,
 app profiles, and audit still come from the same CLI/core contracts.
 
+Testing users can install the CLI plus one complete host skill with a single
+host-specific command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cyberpinkman/dating-booster/main/scripts/install-claude-code.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cyberpinkman/dating-booster/main/scripts/install-codex.sh | bash
+```
+
+测试用户可以用上面的 host-specific installer 从 GitHub 安装 CLI 并安装完整
+skill。Claude Code 和 Codex 是独立入口；后续新增 Hermes、OpenClaw 等 host 时，
+应新增对应 installer，而不是改已有 installer 的行为。
+
 ## 本地数据和守护进程 / Local Data And Supervisor
 
 macOS 生产默认加密 SQLite payload。生产 key provider 首选 macOS

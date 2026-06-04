@@ -10,7 +10,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from dating_boost.core.agent_adapters import install_claude_code_adapter, run_claude_code_adapter_doctor
+from dating_boost.core.agent_adapters import (
+    install_claude_code_adapter,
+    install_codex_adapter,
+    run_claude_code_adapter_doctor,
+    run_codex_adapter_doctor,
+)
 from dating_boost.core.action_audit import ActionAuditRepository
 from dating_boost.core.automation import AutomationRepository
 from dating_boost.core.capabilities import build_capabilities
@@ -89,6 +94,20 @@ def main(argv: list[str] | None = None) -> int:
 
     adapter_parser = subparsers.add_parser("adapter", help="Host-agent adapter installation and diagnostics.")
     adapter_subparsers = adapter_parser.add_subparsers(dest="adapter_command", required=True)
+
+    codex_parser = adapter_subparsers.add_parser("codex", help="Codex adapter commands.")
+    codex_subparsers = codex_parser.add_subparsers(dest="codex_command", required=True)
+    codex_install_parser = codex_subparsers.add_parser("install")
+    codex_install_parser.add_argument("--scope", choices=["project", "user"], default="user")
+    codex_install_parser.add_argument("--target", type=Path)
+    codex_install_parser.add_argument("--dry-run", action="store_true")
+    codex_install_parser.add_argument("--json", action="store_true")
+    codex_install_parser.set_defaults(handler=_handle_adapter_codex_install)
+    codex_doctor_parser = codex_subparsers.add_parser("doctor")
+    codex_doctor_parser.add_argument("--data-dir", required=True, type=Path)
+    codex_doctor_parser.add_argument("--json", action="store_true")
+    codex_doctor_parser.set_defaults(handler=_handle_adapter_codex_doctor)
+
     claude_parser = adapter_subparsers.add_parser("claude-code", help="Claude Code adapter commands.")
     claude_subparsers = claude_parser.add_subparsers(dest="claude_code_command", required=True)
     claude_install_parser = claude_subparsers.add_parser("install")
@@ -713,6 +732,18 @@ def _handle_adapter_claude_code_install(args: argparse.Namespace) -> int:
 
 def _handle_adapter_claude_code_doctor(args: argparse.Namespace) -> int:
     payload = run_claude_code_adapter_doctor(args.data_dir)
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_adapter_codex_install(args: argparse.Namespace) -> int:
+    payload = install_codex_adapter(scope=args.scope, target=args.target, dry_run=args.dry_run)
+    _print_json(payload)
+    return 0 if payload["status"] in {"ok", "dry_run"} else 2
+
+
+def _handle_adapter_codex_doctor(args: argparse.Namespace) -> int:
+    payload = run_codex_adapter_doctor(args.data_dir)
     _print_json(payload)
     return 0 if payload["status"] == "ok" else 2
 
