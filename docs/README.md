@@ -7,6 +7,10 @@ Dating Booster is a local-first dating workflow tool layer: the host agent
 observes visible app UI, while Dating Booster owns local memory, policy,
 planning, audit, and safe staging contracts.
 
+The repository is open-sourced under the MIT License. See `LICENSE`.
+
+本仓库使用 MIT License 开源，见 `LICENSE`。
+
 ## Top-Level Layout / 顶层结构
 
 - `dating_boost/`: Python package and CLI entrypoints。核心 Python 包和 CLI 入口。
@@ -29,13 +33,16 @@ planning, audit, and safe staging contracts.
   `app_profiles/README.md`。
 - `schemas/`: formal JSON contracts such as `app_profile.schema.json`。正式
   JSON contract。
-- `agent_adapters/`: shared and host-specific adapter docs for Codex, Claude
-  Code, and future hosts。面向 Codex、Claude Code 和后续 host 的 adapter 文档。
+- `agent_adapters/`: shared and host-specific adapter packages/docs for Codex,
+  Claude Code, and future hosts。面向 Codex、Claude Code 和后续 host 的 adapter
+  包与文档。
 - `docs/ARCHITECTURE.md`: expansion architecture for host agents, dating apps,
   goals, workflows, and memory。面向更多 agent、更多 app、更多目标和更智能
   workflow/memory 的扩展架构。
 - `skills/dating-booster-codex/`: installable Codex skill, scripts, examples,
   and operational references。Codex skill、脚本、示例和运行手册。
+- `agent_adapters/claude-code/`: installable Claude Code adapter package and
+  skill content。Claude Code adapter package 与 skill 内容。
 - `scripts/`: local smoke and host-loop helper scripts。本地 smoke 与 host-loop
   辅助脚本。
 - `tests/`: contract, policy, storage, host-loop, skill, and harness tests。契约、
@@ -62,8 +69,8 @@ not get placeholder profiles and do not appear in capabilities.
 Use `docs/ARCHITECTURE.md` as the source map for future expansion. It separates
 four axes that should not be mixed in one-off patches:
 
-- host agent adapters: Codex first, then Claude Code, Hermes, OpenClaw, and
-  MCP-compatible hosts.
+- host agent adapters: Codex and Claude Code are installable now; Hermes,
+  OpenClaw, and MCP-compatible hosts should reuse the same adapter contract.
 - app support profiles: Tinder and WeChat at runtime; Bumble, Ta Shuo/tashuo,
   Hinge, and other mainstream apps stay as roadmap candidates until testable.
 - goal type registry: `meet_in_person` first, then additional goals with their
@@ -85,8 +92,10 @@ four axes that should not be mixed in one-off patches:
   app-window automation details。原生窗口自动化细节只应在这里。
 - Capabilities: `dating_boost/core/capabilities.py` is the machine-readable
   startup contract for agents and skill installers。agent/skill 的机器可读启动契约。
-- Skill: `skills/dating-booster-codex/SKILL.md` is the Codex operating
-  contract。Codex 运行契约，references 必须和 CLI capabilities 保持一致。
+- Host adapters: `skills/dating-booster-codex/SKILL.md` and
+  `agent_adapters/claude-code/skills/dating-booster/SKILL.md` are host-specific
+  operating contracts。Codex 与 Claude Code 的运行契约必须和 CLI capabilities
+  保持一致。
 
 ## App Expansion Path / App 扩展路径
 
@@ -131,6 +140,7 @@ four axes that should not be mixed in one-off patches:
 
 ```bash
 python3 -m unittest tests.test_gui_harness tests.test_skill_package
+python3 -m unittest tests.test_claude_code_adapter
 python3 -m unittest tests.test_operator_host_loop.OperatorHostLoopTests.test_wechat_host_loop_init_writes_wechat_authorization_template
 python3 -m py_compile dating_boost/core/gui_harness.py dating_boost/cli.py dating_boost/core/capabilities.py dating_boost/host_loop.py
 ```

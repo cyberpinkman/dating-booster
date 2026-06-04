@@ -134,7 +134,10 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
         self.assertNotIn("skills/dating-booster-codex/references", shared_text)
         self.assertIn("not copy codex", (adapter_root / "README.md").read_text(encoding="utf-8").lower())
         self.assertIn("skills/dating-booster-codex", codex_text)
-        self.assertIn("p1 planned adapter", claude_text)
+        self.assertIn("dating-boost adapter claude-code install", claude_text)
+        self.assertIn(".claude/skills/dating-booster", claude_text)
+        self.assertIn("agent_adapters/shared/references/contracts.md", claude_text)
+        self.assertIn("agent_adapters/shared/references/workflows.md", claude_text)
         self.assertIn("reuse", claude_text)
 
     def test_observation_authoring_guide_covers_screen_to_json_rules(self):

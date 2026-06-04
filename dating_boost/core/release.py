@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def release_manifest() -> dict[str, Any]:
     skill_package = ROOT / "skills" / "dating-booster-codex" / "skill-package.json"
+    claude_code_adapter = ROOT / "agent_adapters" / "claude-code" / "adapter-package.json"
     pyproject = ROOT / "pyproject.toml"
     dist_version = __version__.replace("-rc.", "rc")
     return {
@@ -28,20 +29,24 @@ def release_manifest() -> dict[str, Any]:
             "wheel": f"dating_booster-{dist_version}-py3-none-any.whl",
             "sdist": f"dating_booster-{dist_version}.tar.gz",
             "skill_package": f"dating-booster-codex-{__version__}.tar.gz",
+            "claude_code_adapter": f"dating-booster-claude-code-{__version__}.tar.gz",
         },
         "artifact_sources": {
             "pyproject": str(pyproject),
             "skill_package": str(skill_package),
+            "claude_code_adapter": str(claude_code_adapter.relative_to(ROOT)),
         },
         "source_hashes": {
             "pyproject.toml": _file_sha256(pyproject),
             "skill-package.json": _file_sha256(skill_package),
+            "claude-code/adapter-package.json": _file_sha256(claude_code_adapter),
         },
         "schema_versions": dict(SCHEMA_VERSIONS),
         "release_capabilities": {
             "pypi": True,
             "github_release": True,
             "skill_package": True,
+            "claude_code_adapter": True,
             "trusted_publishing": True,
             "macos_ci": True,
             "redacted_diagnostics": True,
@@ -54,6 +59,7 @@ def release_doctor() -> dict[str, Any]:
     issues: list[str] = []
     pyproject_path = ROOT / "pyproject.toml"
     skill_package_path = ROOT / "skills" / "dating-booster-codex" / "skill-package.json"
+    claude_code_adapter_path = ROOT / "agent_adapters" / "claude-code" / "adapter-package.json"
     try:
         pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
@@ -61,16 +67,20 @@ def release_doctor() -> dict[str, Any]:
         issues.append("pyproject_unreadable")
     if pyproject.get("project", {}).get("version") != __version__:
         issues.append("pyproject_version_mismatch")
-    try:
-        skill = json.loads(skill_package_path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        skill = {}
-        issues.append("skill_package_unreadable")
-    for key in ("package_version", "dating_boost_min_version"):
-        if skill.get(key) != __version__:
-            issues.append(f"{key}_mismatch")
-    if skill.get("source_ref") != f"v{__version__}":
-        issues.append("source_ref_mismatch")
+    _validate_release_package(
+        skill_package_path,
+        issues,
+        unreadable_issue="skill_package_unreadable",
+        issue_prefix="",
+        expected_target_host="codex",
+    )
+    _validate_release_package(
+        claude_code_adapter_path,
+        issues,
+        unreadable_issue="claude_code_adapter_unreadable",
+        issue_prefix="claude_code_adapter_",
+        expected_target_host="claude_code",
+    )
     if not _release_workflow_isolated():
         issues.append("release_workflow_artifact_isolation_missing")
     if _strict_release_mode():
@@ -85,6 +95,28 @@ def release_doctor() -> dict[str, Any]:
         "status": "ok" if not issues else "blocked",
         "issues": issues,
     }
+
+
+def _validate_release_package(
+    package_path: Path,
+    issues: list[str],
+    *,
+    unreadable_issue: str,
+    issue_prefix: str,
+    expected_target_host: str,
+) -> None:
+    try:
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        issues.append(unreadable_issue)
+        return
+    for key in ("package_version", "dating_boost_min_version"):
+        if package.get(key) != __version__:
+            issues.append(f"{issue_prefix}{key}_mismatch")
+    if package.get("source_ref") != f"v{__version__}":
+        issues.append(f"{issue_prefix}source_ref_mismatch")
+    if package.get("target_host") != expected_target_host:
+        issues.append(f"{issue_prefix}target_host_mismatch")
 
 
 def _file_sha256(path: Path) -> str:
@@ -128,4 +160,7 @@ def _release_workflow_isolated() -> bool:
         "python -m build --outdir dist/python" in text
         and "packages-dir: dist/python" in text
         and "dist/skill/*" in text
+        and "dating-booster-codex-${GITHUB_REF_NAME#v}.tar.gz" in text
+        and "dating-booster-claude-code-${GITHUB_REF_NAME#v}.tar.gz" in text
+        and "-C agent_adapters claude-code" in text
     )

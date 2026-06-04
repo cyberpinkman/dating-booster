@@ -10,6 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.agent_adapters import install_claude_code_adapter, run_claude_code_adapter_doctor
 from dating_boost.core.action_audit import ActionAuditRepository
 from dating_boost.core.automation import AutomationRepository
 from dating_boost.core.capabilities import build_capabilities
@@ -85,6 +86,21 @@ def main(argv: list[str] | None = None) -> int:
     skill_doctor_parser.add_argument("--data-dir", required=True, type=Path)
     skill_doctor_parser.add_argument("--json", action="store_true")
     skill_doctor_parser.set_defaults(handler=_handle_skill_doctor)
+
+    adapter_parser = subparsers.add_parser("adapter", help="Host-agent adapter installation and diagnostics.")
+    adapter_subparsers = adapter_parser.add_subparsers(dest="adapter_command", required=True)
+    claude_parser = adapter_subparsers.add_parser("claude-code", help="Claude Code adapter commands.")
+    claude_subparsers = claude_parser.add_subparsers(dest="claude_code_command", required=True)
+    claude_install_parser = claude_subparsers.add_parser("install")
+    claude_install_parser.add_argument("--scope", choices=["project", "user"], default="project")
+    claude_install_parser.add_argument("--target", type=Path)
+    claude_install_parser.add_argument("--dry-run", action="store_true")
+    claude_install_parser.add_argument("--json", action="store_true")
+    claude_install_parser.set_defaults(handler=_handle_adapter_claude_code_install)
+    claude_doctor_parser = claude_subparsers.add_parser("doctor")
+    claude_doctor_parser.add_argument("--data-dir", required=True, type=Path)
+    claude_doctor_parser.add_argument("--json", action="store_true")
+    claude_doctor_parser.set_defaults(handler=_handle_adapter_claude_code_doctor)
 
     data_parser = subparsers.add_parser("data", help="SQLite data-store diagnostics and privacy commands.")
     data_subparsers = data_parser.add_subparsers(dest="data_command", required=True)
@@ -685,6 +701,18 @@ def _handle_capabilities(args: argparse.Namespace) -> int:
 
 def _handle_skill_doctor(args: argparse.Namespace) -> int:
     payload = run_skill_doctor(args.package, args.data_dir)
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_adapter_claude_code_install(args: argparse.Namespace) -> int:
+    payload = install_claude_code_adapter(scope=args.scope, target=args.target, dry_run=args.dry_run)
+    _print_json(payload)
+    return 0 if payload["status"] in {"ok", "dry_run"} else 2
+
+
+def _handle_adapter_claude_code_doctor(args: argparse.Namespace) -> int:
+    payload = run_claude_code_adapter_doctor(args.data_dir)
     _print_json(payload)
     return 0 if payload["status"] == "ok" else 2
 

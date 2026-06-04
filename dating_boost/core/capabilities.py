@@ -67,6 +67,8 @@ SCHEMA_VERSIONS: dict[str, int] = {
 
 SUPPORTED_COMMANDS: list[str] = [
     "capabilities",
+    "adapter claude-code install",
+    "adapter claude-code doctor",
     "init-profile",
     "import-observation",
     "observe-screenshot",
@@ -201,6 +203,9 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "delete": True,
         },
         "agent_native_capabilities": {
+            "host_agent_adapters": ["codex", "claude_code"],
+            "codex_skill": True,
+            "claude_code_adapter": True,
             "host_executed_action_audit": True,
             "workflow_draft_runner": True,
             "automation_session": True,

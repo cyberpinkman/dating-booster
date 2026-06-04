@@ -31,28 +31,29 @@ core, but they must not fork domain rules.
 
 | Priority | Axis | Immediate shape | Long-term shape |
 | --- | --- | --- | --- |
-| P1 | More host agents | Codex plus Claude Code docs/package plan | Codex, Claude Code, Hermes, OpenClaw, and MCP-compatible hosts |
+| P1 | More host agents | Codex and Claude Code installable adapters | Codex, Claude Code, Hermes, OpenClaw, and MCP-compatible hosts |
 | P1 | More dating apps | App support profiles for Tinder and WeChat; roadmap candidates include Bumble, tashuo, Hinge, and other mainstream apps | New apps graduate into runtime profiles only after fixtures, preflight, and harness or host-loop tests exist |
 | P2 | More user goals | `meet_in_person` remains the first supported goal | Goal type registry with goal-specific milestones, policy rules, handoff rules, and context requirements |
 | P3 | Smarter workflows and memory | Planner, topic lifecycle, feedback, and match-local goal plans | Memory evolution with stronger provenance, learned preferences, scenario-specific workflows, and self-improving summaries |
 
 ## Host Agent Adapter Axis
 
-Codex is the first adapter, not the architecture. Future Claude Code, Hermes,
-OpenClaw, and other host agents should use the same local CLI contracts and
-future MCP tools.
+Codex is the first adapter, not the architecture. Claude Code now has its own
+installable adapter package. Future Hermes, OpenClaw, and other host agents
+should use the same local CLI contracts and future MCP tools.
 
-Codex 是第一个 adapter，不是架构本体。Claude Code、Hermes、OpenClaw 等后续
-host agent 必须复用相同本地 CLI contract 和未来 MCP tools。
+Codex 是第一个 adapter，不是架构本体。Claude Code 已有独立可安装 adapter
+package。Hermes、OpenClaw 等后续 host agent 必须复用相同本地 CLI contract 和未来
+MCP tools。
 
 Rules:
 
 - Keep `dating_boost/core/*`, `dating_boost/policy/*`, `dating_boost/perception/*`,
   and `dating_boost/intelligence/*` free of host-agent assumptions.
 - Treat `skills/dating-booster-codex/` as one host agent adapter package.
-  `agent_adapters/` owns shared and host-specific adapter docs; future
-  installable packages should follow `skills/dating-booster-<host>/` only when
-  that host has a real installer/package surface.
+  Treat `agent_adapters/claude-code/` as the Claude Code adapter package because
+  Claude Code discovers `.claude/skills/<name>/` through an installer instead of
+  Codex's skill package path.
 - Shared workflow truth should live in core CLI schemas, capabilities, app
   profiles, and common docs. Host packages may explain how that host runs the
   tools, but no duplicated domain logic.
@@ -166,8 +167,8 @@ Future memory evolution should follow these rules:
 
 For a new host agent adapter:
 
-1. Add or update host adapter docs under `skills/dating-booster-<host>/` or a
-   documented future adapter path.
+1. Add or update host adapter docs under a host-specific adapter path such as
+   `agent_adapters/<host>/`.
 2. Reuse CLI/capabilities contracts; avoid host-specific domain logic.
 3. Document privacy boundaries for visible dating app content.
 4. Add a smoke test or install check if the package becomes installable.

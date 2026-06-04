@@ -34,6 +34,7 @@ jobs:
         run: |
           mkdir -p dist/skill
           tar -czf "dist/skill/dating-booster-codex-${GITHUB_REF_NAME#v}.tar.gz" -C skills dating-booster-codex
+          tar -czf "dist/skill/dating-booster-claude-code-${GITHUB_REF_NAME#v}.tar.gz" -C agent_adapters claude-code
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:

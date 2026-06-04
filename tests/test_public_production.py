@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import unittest
 import zipfile
 from contextlib import redirect_stdout
@@ -412,6 +413,15 @@ class PublicProductionTests(unittest.TestCase):
         self.assertTrue(payload["release_capabilities"]["pypi"])
         self.assertTrue(payload["release_capabilities"]["github_release"])
         self.assertTrue(payload["release_capabilities"]["skill_package"])
+
+    def test_repository_declares_mit_license(self):
+        license_text = Path("LICENSE").read_text(encoding="utf-8")
+        pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+        self.assertTrue(license_text.startswith("MIT License"))
+        self.assertIn("Permission is hereby granted, free of charge", license_text)
+        self.assertEqual(pyproject["project"]["license"]["text"], "MIT")
+        self.assertIn("License :: OSI Approved :: MIT License", pyproject["project"]["classifiers"])
 
     def test_release_doctor_blocks_tag_mismatch_in_strict_release_mode(self):
         with patch.dict(os.environ, {"DATING_BOOST_RELEASE_STRICT": "1", "GITHUB_REF_NAME": "v9.9.9"}):

@@ -11,6 +11,12 @@ gives host agents such as Codex local memory, context, policy checks, draft
 workflows, GUI stage harnesses, audit logs, diagnostics, and recovery. It is
 not a private API client and does not provide app risk-control bypasses.
 
+## 开源许可 / License
+
+本项目使用 MIT License 开源，见 `LICENSE`。
+
+This project is open-sourced under the MIT License. See `LICENSE`.
+
 ## 安全边界 / Safety Boundary
 
 这是一个不使用私有 API、不做绕过、由用户本地授权运行的 GUI automation
@@ -90,6 +96,30 @@ Codex-first skill package:
 - Skill path: `skills/dating-booster-codex/`
 - Install doc: `skills/dating-booster-codex/INSTALL.md`
 - Agent references: `skills/dating-booster-codex/references/`
+
+Claude Code adapter:
+
+```bash
+dating-boost adapter claude-code install --scope project --target . --json
+dating-boost adapter claude-code doctor --data-dir .local/dating-boost --json
+```
+
+项目级安装会写入 `.claude/skills/dating-booster/`，适合把 Dating Booster 能力随
+当前仓库交给 Claude Code 使用。用户级安装使用：
+
+```bash
+dating-boost adapter claude-code install --scope user --json
+```
+
+这会写入 `~/.claude/skills/dating-booster/`。Claude Code skill 只描述
+Claude Code 如何调用 Dating Booster；memory、policy、planner、harness、app profile
+和 audit 仍由同一套 CLI/core contract 承担。
+
+Project installs write `.claude/skills/dating-booster/`, which lets Claude Code
+discover the Dating Booster skill for the current repository. User installs
+write `~/.claude/skills/dating-booster/`. The Claude Code skill only explains
+how Claude Code should call Dating Booster; memory, policy, planner, harness,
+app profiles, and audit still come from the same CLI/core contracts.
 
 ## 本地数据和守护进程 / Local Data And Supervisor
 
@@ -321,10 +351,11 @@ you explicitly want to inspect the context pack in terminal output.
 | `dating_boost/core/goals.py` | goal type registry; `meet_in_person` is the first registered goal |
 | `dating_boost/harness/` | shared native harness building blocks: window parsing, screen state, input backends |
 | `app_profiles/` | app-specific contracts; see `app_profiles/README.md` |
-| `agent_adapters/` | shared and host-specific adapter docs for Codex, Claude Code, and future hosts |
+| `agent_adapters/` | shared and host-specific adapter packages/docs for Codex, Claude Code, and future hosts |
 | `schemas/app_profile.schema.json` | formal app profile schema used by profile contract tests |
 | `docs/ARCHITECTURE.md` | expansion architecture for host agents, dating apps, goals, workflows, and memory |
 | `skills/dating-booster-codex/` | installable Codex skill plus operational references and smoke/runbook docs |
+| `agent_adapters/claude-code/` | installable Claude Code adapter package and skill content |
 | `docs/README.md` | repository map, current app support matrix, and expansion path |
 | `tests/fixtures/` | deterministic fixtures for local and host-loop tests |
 | `tests/test_gui_harness.py` | GUI harness contracts for Tinder and macOS WeChat |
@@ -363,6 +394,7 @@ you explicitly want to inspect the context pack in terminal output.
 
 ```bash
 python3 -m unittest tests.test_gui_harness tests.test_skill_package
+python3 -m unittest tests.test_claude_code_adapter
 python3 -m unittest tests.test_operator_host_loop.OperatorHostLoopTests.test_wechat_host_loop_init_writes_wechat_authorization_template
 python3 -m py_compile dating_boost/core/gui_harness.py dating_boost/cli.py dating_boost/core/capabilities.py dating_boost/host_loop.py
 ```

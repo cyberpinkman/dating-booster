@@ -101,7 +101,17 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--fixture-host", type=Path)
     parser.add_argument("--wait-timeout", type=float, default=None)
     parser.add_argument("--poll-interval", type=float, default=1.0)
+    parser.add_argument("--adapter-package", type=Path)
     parser.add_argument("--skill-package", type=Path)
+
+
+def _explicit_adapter_package(args: argparse.Namespace) -> Path | None:
+    adapter_package = getattr(args, "adapter_package", None)
+    legacy_skill_package = getattr(args, "skill_package", None)
+    if adapter_package is not None and legacy_skill_package is not None:
+        if adapter_package.expanduser().resolve() != legacy_skill_package.expanduser().resolve():
+            raise HostLoopError("conflicting --adapter-package and --skill-package values")
+    return adapter_package or legacy_skill_package
 
 
 class HostLoopSupervisor:
@@ -114,7 +124,7 @@ class HostLoopSupervisor:
         self.staged_verifications: list[dict[str, Any]] = []
         self.action_results_recorded: list[dict[str, Any]] = []
         self.operator_session_active = False
-        self.skill_package_path = self._resolve_skill_package_path(getattr(args, "skill_package", None))
+        self.skill_package_path = self._resolve_skill_package_path(_explicit_adapter_package(args))
         self.app_profile = _load_app_profile(getattr(args, "app_id", "tinder"))
 
     def doctor(self) -> tuple[dict[str, Any], int]:
@@ -742,9 +752,12 @@ class HostLoopSupervisor:
         candidates: list[Path] = []
         if explicit is not None:
             candidates.append(explicit)
-        env_path = os.environ.get("DATING_BOOST_SKILL_PACKAGE")
-        if env_path:
-            candidates.append(Path(env_path))
+        adapter_env_path = os.environ.get("DATING_BOOST_ADAPTER_PACKAGE")
+        if adapter_env_path:
+            candidates.append(Path(adapter_env_path))
+        skill_env_path = os.environ.get("DATING_BOOST_SKILL_PACKAGE")
+        if skill_env_path:
+            candidates.append(Path(skill_env_path))
         candidates.extend(
             [
                 ROOT / "skills" / "dating-booster-codex" / "skill-package.json",
@@ -760,7 +773,7 @@ class HostLoopSupervisor:
             if resolved.exists():
                 return resolved
         raise HostLoopError(
-            "missing skill-package.json; pass --skill-package or set DATING_BOOST_SKILL_PACKAGE"
+            "missing adapter package; pass --adapter-package or --skill-package, or set DATING_BOOST_ADAPTER_PACKAGE"
         )
 
     def _waiting(self, expected: str, path: Path, work_item: dict[str, Any]) -> dict[str, Any]:
