@@ -2,7 +2,7 @@
   "schema_version": 1,
   "app_id": "wechat",
   "display_name": "WeChat",
-  "support_level": "native_draft_staging",
+  "support_level": "managed_live_send",
   "host_loop_supported": true,
   "host_loop_send_modes": ["stage", "live"],
   "message_list_observation": [

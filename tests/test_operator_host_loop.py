@@ -435,6 +435,91 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(payload["stop_reason"], "live_send_authorization_required")
             self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
 
+    def test_live_mode_blocks_authorization_match_mismatch_before_action_result(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            work_dir = Path(temp_dir) / "work"
+            auth_path = Path(temp_dir) / "auth_wrong_match.json"
+            payload_text = "今晚可以聊十分钟吗？"
+            payload_hash = hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
+            self._write_json(auth_path, {
+                "schema_version": 1,
+                "authorization_id": "auth_tinder_live",
+                "scope": "send_chat_messages",
+                "app_id": "tinder",
+                "expires_at": "2026-06-05T00:00:00Z",
+                "allowed_match_ids": ["match_bea"],
+                "allowed_actions": ["send_message"],
+                "autonomous_send": True,
+                "live_send": True,
+                "requires_post_action_verification": True,
+                "revoked_at": None,
+            })
+            supervisor = HostLoopSupervisor(
+                argparse.Namespace(
+                    data_dir=data_dir,
+                    authorization=auth_path,
+                    goal=None,
+                    availability=None,
+                    app_id="tinder",
+                    send_mode="live",
+                    managed_gui_send=False,
+                    work_dir=work_dir,
+                    max_steps=1,
+                    once=False,
+                    json=True,
+                    fixture_host=None,
+                    wait_timeout=None,
+                    poll_interval=1.0,
+                    adapter_package=None,
+                    skill_package=None,
+                )
+            )
+            work_dir.mkdir(parents=True, exist_ok=True)
+            work_item = {
+                "schema_version": 1,
+                "work_item_id": "work_tinder_send",
+                "work_item_type": "send_message",
+                "action_request_id": "act_tinder_send",
+                "match_id": "match_ada",
+                "candidate_key": "tinder_ada",
+                "payload_text": payload_text,
+                "payload_hash": payload_hash,
+                "precondition_hash": "pre_hash",
+                "autonomous_audit_binding": {
+                    "schema_version": 1,
+                    "binding_type": "autonomous_authorization",
+                    "authorization_id": "auth_tinder_live",
+                    "action": "send_message",
+                    "target_match_id": "match_ada",
+                    "payload_hash": payload_hash,
+                    "precondition_hash": "pre_hash",
+                },
+                "pre_action_observation_id": "obs_before",
+                "requires_post_action_verification": True,
+                "policy": {"allowed": True},
+                "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
+            }
+            staged_path = supervisor._work_file(work_item, "staged_verification")
+            self._write_json(staged_path, {
+                "schema_version": 1,
+                "verification_type": "staged_text",
+                "action_request_id": work_item["action_request_id"],
+                "match_id": work_item["match_id"],
+                "candidate_key": work_item["candidate_key"],
+                "expected_payload_hash": payload_hash,
+                "expected_payload_text": payload_text,
+                "result_status": "succeeded",
+                "staged_text": payload_text,
+                "evidence": {"verification": "Input box text was checked before send."},
+            })
+
+            payload = supervisor._handle_send_message(work_item)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["stop_reason"], "authorization_match_not_allowed")
+        self.assertFalse(any(path.name.startswith("action_result.") for path in work_dir.glob("*.json")))
+
     def test_managed_wechat_live_send_runs_harness_with_text_file_and_records_result(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -485,7 +570,11 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "payload_text": payload_text,
                 "payload_hash": payload_hash,
                 "precondition_hash": "pre_hash",
-                "autonomous_audit_binding": "audit_binding",
+                "autonomous_audit_binding": _audit_binding(
+                    authorization_id="auth_wechat_live",
+                    target_match_id="match_wechat",
+                    payload_hash=payload_hash,
+                ),
                 "pre_action_observation_id": "obs_before",
                 "policy": {"allowed": True},
                 "requires_post_action_verification": True,
@@ -741,6 +830,11 @@ class OperatorHostLoopTests(unittest.TestCase):
             work_item = _wechat_managed_work_item(payload_text, payload_hash)
             work_item["match_id"] = "match_tinder"
             work_item["candidate_key"] = "tinder_ada"
+            work_item["autonomous_audit_binding"] = _audit_binding(
+                authorization_id="auth_tinder_live",
+                target_match_id="match_tinder",
+                payload_hash=payload_hash,
+            )
             work_item["target_binding"] = {"required_visible_text": ["Ada"], "target_match_id": "match_tinder"}
             recorded_result: dict[str, object] = {}
 
@@ -758,6 +852,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                         "post_action_observation_id": "gui_post_send_tinder_1234",
                         "evidence": {
                             "staged_text_verified": True,
+                            "input_cleared_after_send": True,
                             "post_action_screen_captured": True,
                             "outbound_message_verified": True,
                         },
@@ -944,6 +1039,18 @@ def _action_result_for_work_item(work_item: dict) -> dict:
     }
 
 
+def _audit_binding(*, authorization_id: str, target_match_id: str, payload_hash: str, precondition_hash: str = "pre_hash") -> dict:
+    return {
+        "schema_version": 1,
+        "binding_type": "autonomous_authorization",
+        "authorization_id": authorization_id,
+        "action": "send_message",
+        "target_match_id": target_match_id,
+        "payload_hash": payload_hash,
+        "precondition_hash": precondition_hash,
+    }
+
+
 def _wechat_managed_work_item(payload_text: str, payload_hash: str) -> dict:
     return {
         "schema_version": 1,
@@ -955,7 +1062,11 @@ def _wechat_managed_work_item(payload_text: str, payload_hash: str) -> dict:
         "payload_text": payload_text,
         "payload_hash": payload_hash,
         "precondition_hash": "pre_hash",
-        "autonomous_audit_binding": "audit_binding",
+        "autonomous_audit_binding": _audit_binding(
+            authorization_id="auth_wechat_live",
+            target_match_id="match_wechat",
+            payload_hash=payload_hash,
+        ),
         "pre_action_observation_id": "obs_before",
         "requires_post_action_verification": True,
         "policy": {"allowed": True},

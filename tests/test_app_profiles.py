@@ -62,6 +62,13 @@ class AppProfileContractTests(unittest.TestCase):
                     self.assertTrue(harness["backend"])
                     self.assertTrue(harness["supported_stage_actions"])
                     self.assertIn("blocked_actions", harness)
+                    exposes_live_send = (
+                        "live" in profile["host_loop_send_modes"]
+                        or bool(harness.get("supported_live_actions"))
+                        or "live_send" in harness
+                    )
+                    if exposes_live_send:
+                        self.assertEqual(profile["support_level"], "managed_live_send")
 
 
 if __name__ == "__main__":

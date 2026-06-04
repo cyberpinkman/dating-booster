@@ -25,6 +25,11 @@ from dating_boost.core.diagnostics import DiagnosticsRepository
 from dating_boost.core.feedback import create_feedback_event
 from dating_boost.core.gui_harness import NativeGuiHarness
 from dating_boost.core.identity import resolve_match_identity
+from dating_boost.core.live_send_contract import (
+    live_send_action_request_block_reason,
+    live_send_authorization_block_reason,
+    validate_live_send_contract,
+)
 from dating_boost.core.models import Divergence, MemoryItem, ReplyMode, UserProfile
 from dating_boost.core.observation_authoring import (
     normalize_observation,
@@ -1121,27 +1126,23 @@ def _live_send_cli_block_payload(args: argparse.Namespace, *, app_id: str, draft
             "reason": "action_request_required_for_live_send",
             "next_host_action": "provide_policy_checked_action_request",
         }
-    authorization = _read_json_object(args.authorization)
-    auth_reason = _live_send_authorization_block_reason(authorization, app_id=app_id)
-    if auth_reason is not None:
-        return {
-            "schema_version": 1,
-            "status": "blocked",
-            "app_id": app_id,
-            "action": "send_message",
-            "reason": auth_reason,
-            "next_host_action": "provide_explicit_live_send_authorization",
-        }
     action_request = _read_json_object(args.action_request)
-    action_reason = _live_send_action_request_block_reason(action_request, draft_text)
-    if action_reason is not None:
+    authorization = _read_json_object(args.authorization)
+    reason = validate_live_send_contract(
+        authorization,
+        action_request,
+        app_id=app_id,
+        draft_text=draft_text,
+        data_dir=args.data_dir,
+    )
+    if reason is not None:
         return {
             "schema_version": 1,
             "status": "blocked",
             "app_id": app_id,
             "action": "send_message",
-            "reason": action_reason,
-            "next_host_action": "provide_policy_checked_action_request",
+            "reason": reason,
+            "next_host_action": _live_send_next_host_action(reason),
         }
     return None
 
@@ -1151,32 +1152,7 @@ def _wechat_live_send_authorization_block_reason(authorization: dict[str, Any]) 
 
 
 def _live_send_authorization_block_reason(authorization: dict[str, Any], *, app_id: str) -> str | None:
-    if authorization.get("scope") != "send_chat_messages":
-        return "authorization_scope_not_send_chat_messages"
-    if authorization.get("app_id") != app_id:
-        return "authorization_app_mismatch"
-    if authorization.get("revoked_at"):
-        return "authorization_revoked"
-    expires_at = authorization.get("expires_at")
-    if isinstance(expires_at, str):
-        try:
-            expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-            now = datetime.fromisoformat(_now_iso().replace("Z", "+00:00"))
-            if expires <= now:
-                return "authorization_expired"
-        except ValueError:
-            return "authorization_expired"
-    else:
-        return "authorization_expired"
-    if authorization.get("autonomous_send") is not True:
-        return "authorization_autonomous_send_disabled"
-    if authorization.get("live_send") is not True:
-        return "live_send_authorization_required"
-    if "send_message" not in authorization.get("allowed_actions", []):
-        return "authorization_action_not_allowed"
-    if authorization.get("requires_post_action_verification") is not True:
-        return "authorization_requires_post_action_verification"
-    return None
+    return live_send_authorization_block_reason(authorization, app_id=app_id)
 
 
 def _wechat_live_send_action_request_block_reason(action_request: dict[str, Any], draft_text: str) -> str | None:
@@ -1184,30 +1160,19 @@ def _wechat_live_send_action_request_block_reason(action_request: dict[str, Any]
 
 
 def _live_send_action_request_block_reason(action_request: dict[str, Any], draft_text: str) -> str | None:
-    if action_request.get("action") != "send_message":
-        return "action_request_not_send_message"
-    if not isinstance(action_request.get("action_request_id"), str) or not action_request["action_request_id"].strip():
-        return "action_request_id_required"
-    expected_hash = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
-    if action_request.get("payload_hash") != expected_hash:
-        return "action_request_payload_hash_mismatch"
-    if action_request.get("requires_post_action_verification") is not True:
-        return "action_request_requires_post_action_verification"
-    policy = action_request.get("policy")
-    if not isinstance(policy, dict) or policy.get("allowed") is not True:
-        return "action_request_policy_not_allowed"
-    target_binding = action_request.get("target_binding")
-    if not isinstance(target_binding, dict):
-        return "action_request_target_binding_required"
-    required_visible_text = target_binding.get("required_visible_text")
-    visible_name = target_binding.get("visible_name")
-    has_required_marker = (
-        isinstance(required_visible_text, list)
-        and any(isinstance(item, str) and item.strip() for item in required_visible_text)
-    ) or (isinstance(visible_name, str) and visible_name.strip())
-    if not has_required_marker:
-        return "action_request_target_binding_required"
-    return None
+    return live_send_action_request_block_reason(
+        action_request,
+        draft_text,
+        authorization={},
+        app_id=str(action_request.get("app_id") or ""),
+        data_dir=None,
+    )
+
+
+def _live_send_next_host_action(reason: str) -> str:
+    if reason.startswith("authorization_") or reason == "live_send_authorization_required":
+        return "provide_explicit_live_send_authorization"
+    return "provide_policy_checked_action_request"
 
 
 def _harness_window_title(app_id: str, explicit: str | None) -> str:

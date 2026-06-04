@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.live_send_contract import validate_live_send_contract
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.safety import SafetyRepository
@@ -598,8 +599,9 @@ class HostLoopSupervisor:
         if SafetyRepository(self.data_dir).is_paused():
             return self._finish("blocked", "safety_paused", current=work_item)
         authorization = _read_json(self._authorization_path())
-        if authorization.get("live_send") is not True:
-            return self._finish("blocked", "live_send_authorization_required", current=work_item)
+        contract_reason = self._live_send_contract_block_reason(work_item, authorization)
+        if contract_reason is not None:
+            return self._finish("blocked", contract_reason, current=work_item)
 
         result_path = self._work_file(work_item, "action_result")
         if self.fixture_host is not None and not result_path.exists():
@@ -626,13 +628,19 @@ class HostLoopSupervisor:
             return self._finish("blocked", "safety_paused", current=work_item)
         authorization_path = self._authorization_path()
         authorization = _read_json(authorization_path)
-        if authorization.get("live_send") is not True:
-            return self._finish("blocked", "live_send_authorization_required", current=work_item)
 
         draft_path = self.work_dir / f"managed_payload.{_safe_name(str(work_item.get('work_item_id') or 'send'))}.txt"
         action_request_path = self.work_dir / f"managed_action_request.{_safe_name(str(work_item.get('work_item_id') or 'send'))}.json"
-        action_request = dict(work_item)
-        action_request["target_binding"] = _target_binding_for_work_item(work_item, self._pending_scan_batch_or_none())
+        action_request = self._live_send_action_request(work_item)
+        contract_reason = validate_live_send_contract(
+            authorization,
+            action_request,
+            app_id=self.args.app_id,
+            draft_text=str(work_item.get("payload_text") or ""),
+            data_dir=self.data_dir,
+        )
+        if contract_reason is not None:
+            return self._finish("blocked", contract_reason, current=work_item)
         draft_path.write_text(str(work_item.get("payload_text") or ""), encoding="utf-8")
         _write_json(action_request_path, action_request)
         try:
@@ -713,6 +721,22 @@ class HostLoopSupervisor:
         self._append_timeline("action_result", work_item, {"path": str(result_path), "recorded": recorded})
         self._clear_host_work_item(work_item, consume=True)
         return None
+
+    def _live_send_contract_block_reason(self, work_item: dict[str, Any], authorization: dict[str, Any]) -> str | None:
+        return validate_live_send_contract(
+            authorization,
+            self._live_send_action_request(work_item),
+            app_id=self.args.app_id,
+            draft_text=str(work_item.get("payload_text") or ""),
+            data_dir=self.data_dir,
+        )
+
+    def _live_send_action_request(self, work_item: dict[str, Any]) -> dict[str, Any]:
+        action_request = dict(work_item)
+        action_request.setdefault("action", "send_message")
+        action_request.setdefault("app_id", self.args.app_id)
+        action_request["target_binding"] = _target_binding_for_work_item(work_item, self._pending_scan_batch_or_none())
+        return action_request
 
     def _bootstrap_fixture_profile(self) -> None:
         if self.fixture_host is None:
@@ -1258,6 +1282,7 @@ def _redacted_managed_send_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def _managed_gui_send_required_evidence(app_id: str) -> tuple[str, ...]:
     common = (
         "staged_text_verified",
+        "input_cleared_after_send",
         "post_action_screen_captured",
         "outbound_message_verified",
     )

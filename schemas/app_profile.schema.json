@@ -59,6 +59,56 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "host_loop_send_modes": {
+            "contains": {"const": "live"}
+          }
+        },
+        "required": ["host_loop_send_modes"]
+      },
+      "then": {
+        "properties": {
+          "support_level": {"const": "managed_live_send"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "native_gui_harness": {
+            "properties": {
+              "supported_live_actions": {"minItems": 1}
+            },
+            "required": ["supported_live_actions"]
+          }
+        },
+        "required": ["native_gui_harness"]
+      },
+      "then": {
+        "properties": {
+          "support_level": {"const": "managed_live_send"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "native_gui_harness": {
+            "required": ["live_send"]
+          }
+        },
+        "required": ["native_gui_harness"]
+      },
+      "then": {
+        "properties": {
+          "support_level": {"const": "managed_live_send"}
+        }
+      }
+    }
+  ],
   "$defs": {
     "nonEmptyStringArray": {
       "type": "array",

@@ -39,4 +39,12 @@ Live send requires all of these:
 - exact staged text verification
 - post-action verification
 
+The action request must bind the send before any native harness executes:
+
+- `payload_hash`: SHA-256 hex digest of the exact draft text file.
+- `match_id` or `target_match_id`: target match identity.
+- `target_binding.target_match_id`: must equal the target match identity.
+- `target_binding.required_visible_text` or `target_binding.visible_name`: visible marker required on the current conversation page.
+- Either a confirmed `confirmation_id` plus `confirmation_payload_hash` and `confirmation_precondition_hash`, or an `autonomous_audit_binding` whose `authorization_id`, `target_match_id`, `payload_hash`, and `precondition_hash` match the action request.
+
 If any evidence is missing, block or return `needs_verification`.

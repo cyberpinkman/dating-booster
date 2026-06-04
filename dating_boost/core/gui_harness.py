@@ -826,6 +826,7 @@ class NativeGuiHarness:
         payload["evidence"] = {
             "staged_text_verified": payload["staged_text_verified"],
             "send_input_backend": send_result.get("input_backend"),
+            "input_cleared_after_send": outbound_verification.get("input_cleared_after_send") is True,
             "post_action_screen_captured": post_screen_captured,
             "outbound_message_verified": outbound_verified,
             "post_action_observation_id": post_observation_id,
@@ -1267,7 +1268,10 @@ def _verify_tinder_outbound_message(
         "observed_expected_text_occurrences": observed_stats["expected_text_occurrences"],
         "staged_expected_text_occurrences": staged_stats["expected_text_occurrences"] if staged_stats else None,
         "staged_text_hash": staged_stats["text_hash"] if staged_stats else None,
+        "input_cleared_after_send": not _tinder_send_marker_visible(observed_text),
     }
+    if extra["input_cleared_after_send"] is not True:
+        return {**result, **extra, "status": "needs_verification", "reason": "outbound_message_not_verified"}
     if staged_stats and observed_stats["normalized_text_hash"] == staged_stats["normalized_text_hash"]:
         return {**result, **extra, "status": "needs_verification", "reason": "outbound_message_not_verified"}
     return {**result, **extra, "status": "ok"}
@@ -1302,6 +1306,14 @@ def _expected_text_observation_stats(text: str, expected_text: str) -> dict[str,
         "text_character_count": len(text) if text else None,
         "expected_text_occurrences": normalized_text.count(normalized_expected) if normalized_expected else 0,
     }
+
+
+def _tinder_send_marker_visible(text: str) -> bool:
+    for line in text.splitlines():
+        stripped = line.strip().lower()
+        if stripped in {"send", "发送"}:
+            return True
+    return False
 
 
 def _tap_step(intent: str, *, x: float, y: float) -> dict[str, Any]:
