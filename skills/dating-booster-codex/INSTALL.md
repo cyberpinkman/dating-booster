@@ -87,14 +87,18 @@ verification artifacts.
 - macOS is the only public GUI platform target.
 - SQLite payloads are encrypted by default.
 - Backups require a recovery passphrase from `DATING_BOOST_RECOVERY_PASSPHRASE`,
-  `--recovery-passphrase-file`, or explicit `--recovery-passphrase`; the backup
-  stores a passphrase-wrapped recovery key, not an unwrapped local data key.
+  or `--recovery-passphrase-file`; the backup stores a passphrase-wrapped
+  recovery key, not an unwrapped local data key. Do not pass recovery
+  passphrases through argv.
 - The local daemon supervises locks, heartbeat, recovery, and safety state; it
   does not observe or click apps.
 - Diagnostics are local redacted bundles only; there is no network telemetry.
 - Live send is not the default. It requires `--send-mode live`, `live_send: true`
   in authorization, an unpaused safety switch, staged-text verification, and
-  post-action verification.
+  post-action verification. macOS WeChat fully managed sending also requires
+  `--managed-gui-send` or the explicit `harness wechat send-message
+  --text-file ... --action-request ...` path, plus target-chat binding and
+  outbound-bubble verification.
 
 ## First Real Manual Workflow
 

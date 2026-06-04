@@ -73,7 +73,7 @@ class AgentNativeCliTests(unittest.TestCase):
             self.assertIn("agent_native_capabilities", payload)
             self.assertTrue(payload["storage_capabilities"]["sqlite"])
             self.assertTrue(payload["storage_capabilities"]["backup_requires_recovery_passphrase"])
-            self.assertEqual(payload["storage_capabilities"]["backup_recovery_passphrase_sources"], ["env", "file", "argv"])
+            self.assertEqual(payload["storage_capabilities"]["backup_recovery_passphrase_sources"], ["env", "file"])
             self.assertTrue(payload["memory_capabilities"]["export"])
             self.assertTrue(payload["memory_capabilities"]["delete"])
             self.assertTrue(payload["policy_capabilities"]["confirmation_contract"])

@@ -2,6 +2,9 @@
   "schema_version": 1,
   "app_id": "tinder",
   "display_name": "Tinder",
+  "support_level": "native_navigation",
+  "host_loop_supported": true,
+  "host_loop_send_modes": ["stage", "live"],
   "message_list_observation": [
     "Observe only visible rows.",
     "Use candidate_key = visible_name + row_index + latest_preview_hash.",

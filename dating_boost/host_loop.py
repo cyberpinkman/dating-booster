@@ -73,6 +73,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--availability", type=Path)
     parser.add_argument("--app-id", default="tinder")
     parser.add_argument("--send-mode", choices=["stage", "live"], default="stage")
+    parser.add_argument("--managed-gui-send", action="store_true")
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--once", action="store_true")
@@ -129,6 +130,16 @@ class HostLoopSupervisor:
             details["skill_doctor_error"] = str(exc)
             return self._doctor_payload("needs_skill_upgrade", missing, "run_skill_bootstrap_or_upgrade", details), 2
 
+        details["app_profile"] = {
+            "app_id": self.app_profile.get("app_id"),
+            "support_level": self.app_profile.get("support_level"),
+            "host_loop_supported": self.app_profile.get("host_loop_supported"),
+            "profile_path": self.app_profile.get("_path"),
+        }
+        if self.app_profile.get("host_loop_supported") is not True:
+            missing.append("host_loop_supported_app")
+            return self._doctor_payload("blocked", missing, "choose_supported_host_loop_app", details), 2
+
         readiness = self._run_cli_json(
             "user",
             "readiness",
@@ -158,10 +169,6 @@ class HostLoopSupervisor:
             missing.append("authorization")
             return self._doctor_payload("needs_authorization", missing, "create_or_pass_authorization", details), 0
 
-        details["app_profile"] = {
-            "app_id": self.app_profile.get("app_id"),
-            "profile_path": self.app_profile.get("_path"),
-        }
         if warnings:
             details["warnings"] = warnings
         return self._doctor_payload("ready", missing, "start_or_resume_host_loop", details), 0
@@ -298,6 +305,23 @@ class HostLoopSupervisor:
                 staged.unlink()
             self._append_timeline("stage_retry_requested", current, {"reason": "user_requested_retry"})
             return self._finish("waiting_for_host", "staged_text_retry_requested", current=current, extra={"next_host_action": "clear_input_and_restage"}), 0
+        staged_path = self._work_file(current, "staged_verification")
+        if not staged_path.exists():
+            return self._finish(
+                "blocked",
+                "staged_verification_required_before_confirmation",
+                current=current,
+                extra={
+                    "expected_input": str(staged_path),
+                    "next_host_action": "write_staged_verification_before_confirming",
+                },
+            ), 0
+        staged = _read_json(staged_path)
+        verification = _validate_staged_verification(staged, current)
+        self.staged_verifications.append(verification)
+        self._append_timeline("staged_verification", current, {"path": str(staged_path), "verification": verification})
+        if verification["status"] != "ok":
+            return self._finish("blocked", verification["reason"], current=current), 0
         action_result = getattr(self.args, "action_result", None)
         if action_result is not None:
             result = _read_json(action_result)
@@ -421,12 +445,18 @@ class HostLoopSupervisor:
             return self._finish("error", str(exc)), 2
 
     def _preflight(self) -> None:
+        if self.app_profile.get("host_loop_supported") is not True:
+            raise HostLoopError(f"host loop is not supported for app_id={self.args.app_id}")
+        send_modes = self.app_profile.get("host_loop_send_modes")
+        if isinstance(send_modes, list) and send_modes and self.args.send_mode not in set(str(mode) for mode in send_modes):
+            raise HostLoopError(f"send_mode {self.args.send_mode} is not supported for app_id={self.args.app_id}")
         capabilities = self._run_cli_json("capabilities", "--json", "--data-dir", str(self.data_dir))
         agent_caps = capabilities.get("agent_native_capabilities", {})
         if not agent_caps.get("host_loop_supervisor"):
             raise HostLoopError("capabilities missing host_loop_supervisor")
-        if not agent_caps.get("tinder_host_loop"):
-            raise HostLoopError("capabilities missing tinder_host_loop")
+        host_loop_apps = set(agent_caps.get("host_loop_app_profiles") or [])
+        if self.args.app_id not in host_loop_apps:
+            raise HostLoopError(f"capabilities missing host loop support for app_id={self.args.app_id}")
         if agent_caps.get("live_gui_harness"):
             raise HostLoopError("this supervisor expects live_gui_harness=false")
 
@@ -474,7 +504,7 @@ class HostLoopSupervisor:
             if fixture.exists():
                 shutil.copyfile(fixture, path)
         if not path.exists():
-            _write_json(_template_path(path), _message_list_template(work_item, self.args.app_id))
+            _write_json(_template_path(path), _message_list_template(work_item, self.app_profile))
             waiting = self._waiting("message_list_observation", path, work_item)
             if waiting.get("status") != "host_input_ready":
                 return waiting
@@ -496,7 +526,7 @@ class HostLoopSupervisor:
             if fixture.exists():
                 shutil.copyfile(fixture, path)
         if not path.exists():
-            _write_json(_template_path(path), _thread_template(work_item, self.args.app_id))
+            _write_json(_template_path(path), _thread_template(work_item, self.app_profile))
             waiting = self._waiting("thread_observation", path, work_item)
             if waiting.get("status") != "host_input_ready":
                 return waiting
@@ -511,6 +541,8 @@ class HostLoopSupervisor:
         return None
 
     def _handle_send_message(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
+        if self.args.send_mode == "live" and getattr(self.args, "managed_gui_send", False):
+            return self._handle_managed_gui_send(work_item)
         staged_path = self._work_file(work_item, "staged_verification")
         if self.fixture_host is not None and not staged_path.exists():
             _write_json(staged_path, _staged_verification(work_item, result_status="succeeded"))
@@ -557,6 +589,106 @@ class HostLoopSupervisor:
         self._consume(result_path)
         return None
 
+    def _handle_managed_gui_send(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
+        if self.args.app_id != "wechat":
+            return self._finish("blocked", f"managed_gui_send_not_supported_for_app:{self.args.app_id}", current=work_item)
+        if SafetyRepository(self.data_dir).is_paused():
+            return self._finish("blocked", "safety_paused", current=work_item)
+        authorization_path = self._authorization_path()
+        authorization = _read_json(authorization_path)
+        if authorization.get("live_send") is not True:
+            return self._finish("blocked", "live_send_authorization_required", current=work_item)
+
+        draft_path = self.work_dir / f"managed_payload.{_safe_name(str(work_item.get('work_item_id') or 'send'))}.txt"
+        action_request_path = self.work_dir / f"managed_action_request.{_safe_name(str(work_item.get('work_item_id') or 'send'))}.json"
+        action_request = dict(work_item)
+        action_request["target_binding"] = _target_binding_for_work_item(work_item, self._pending_scan_batch_or_none())
+        draft_path.write_text(str(work_item.get("payload_text") or ""), encoding="utf-8")
+        _write_json(action_request_path, action_request)
+        try:
+            harness_payload = self._run_cli_json(
+                "harness",
+                "wechat",
+                "send-message",
+                "--data-dir",
+                str(self.data_dir),
+                "--authorization",
+                str(authorization_path),
+                "--text-file",
+                str(draft_path),
+                "--action-request",
+                str(action_request_path),
+                "--output-dir",
+                str(self.work_dir / "harness"),
+                "--json",
+                allow_error=True,
+            )
+        finally:
+            if draft_path.exists():
+                draft_path.unlink()
+            if action_request_path.exists():
+                action_request_path.unlink()
+
+        self._append_timeline("managed_gui_send", work_item, {"harness": _redacted_managed_send_payload(harness_payload)})
+        if harness_payload.get("status") != "ok":
+            return self._finish(
+                "blocked",
+                str(harness_payload.get("reason") or "managed_gui_send_failed"),
+                current=work_item,
+                extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
+            )
+        harness_evidence = harness_payload.get("evidence") if isinstance(harness_payload.get("evidence"), dict) else {}
+        if not harness_payload.get("post_action_observation_id"):
+            return self._finish(
+                "blocked",
+                "post_action_observation_required",
+                current=work_item,
+                extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
+            )
+        required_evidence = (
+            "staged_text_verified",
+            "input_cleared_after_send",
+            "post_action_screen_captured",
+            "outbound_message_verified",
+        )
+        if any(harness_evidence.get(key) is not True for key in required_evidence):
+            return self._finish(
+                "blocked",
+                "managed_gui_send_verification_incomplete",
+                current=work_item,
+                extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
+            )
+
+        verification = {
+            "status": "ok",
+            "action_request_id": work_item.get("action_request_id"),
+            "payload_hash": work_item.get("payload_hash"),
+            "verification_method": "managed_wechat_accessibility",
+        }
+        self.staged_verifications.append(verification)
+        result_payload = {
+            "action_request_id": work_item.get("action_request_id"),
+            "action": "send_message",
+            "target_match_id": work_item.get("match_id"),
+            "payload_hash": work_item.get("payload_hash"),
+            "precondition_hash": work_item.get("precondition_hash"),
+            "autonomous_audit_binding": work_item.get("autonomous_audit_binding"),
+            "pre_action_observation_id": work_item.get("pre_action_observation_id"),
+            "post_action_observation_id": harness_payload.get("post_action_observation_id"),
+            "result_status": "succeeded",
+            "evidence": {
+                "managed_gui_send": True,
+                **harness_evidence,
+            },
+        }
+        result_path = self._work_file(work_item, "action_result")
+        _write_json(result_path, result_payload)
+        recorded = self._run_cli_json("operator", "record-action-result", "--data-dir", str(self.data_dir), "--input", str(result_path))
+        self.action_results_recorded.append(recorded)
+        self._append_timeline("action_result", work_item, {"path": str(result_path), "recorded": recorded})
+        self._clear_host_work_item(work_item, consume=True)
+        return None
+
     def _bootstrap_fixture_profile(self) -> None:
         if self.fixture_host is None:
             return
@@ -575,6 +707,15 @@ class HostLoopSupervisor:
         if path is None:
             raise HostLoopError("missing authorization; pass --authorization")
         return path
+
+    def _pending_scan_batch_or_none(self) -> dict[str, Any] | None:
+        path = self.data_dir / "operator" / "pending_scan_batch.json"
+        if not path.exists():
+            return None
+        try:
+            return _read_json(path)
+        except HostLoopError:
+            return None
 
     def _fixture_file(self, filename: str) -> Path | None:
         if self.fixture_host is None:
@@ -800,7 +941,9 @@ class HostLoopCommandError(RuntimeError):
         super().__init__(f"dating-boost {' '.join(command)} failed: {reason}")
 
 
-def _message_list_template(work_item: dict[str, Any], app_id: str) -> dict[str, Any]:
+def _message_list_template(work_item: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    app_id = str(profile.get("app_id") or "unknown")
+    display_name = str(profile.get("display_name") or app_id)
     return {
         "schema_version": 1,
         "observation_type": "message_list",
@@ -812,7 +955,7 @@ def _message_list_template(work_item: dict[str, Any], app_id: str) -> dict[str, 
         "screenshot_ref": "",
         "provenance": {
             "author": "host_agent",
-            "evidence": "Tinder message list observed through iPhone Mirroring.",
+            "evidence": _message_list_evidence(profile),
         },
         "message_list_snapshot": {
             "entries": [
@@ -831,14 +974,15 @@ def _message_list_template(work_item: dict[str, Any], app_id: str) -> dict[str, 
                         "profile_cues": [],
                         "conversation_fingerprint": "TODO",
                     },
-                    "evidence": "Visible Tinder row.",
+                    "evidence": f"Visible {display_name} row.",
                 }
             ]
         },
     }
 
 
-def _thread_template(work_item: dict[str, Any], app_id: str) -> dict[str, Any]:
+def _thread_template(work_item: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    app_id = str(profile.get("app_id") or "unknown")
     candidate_key = str(work_item.get("candidate_key") or "TODO")
     return {
         "schema_version": 1,
@@ -904,7 +1048,7 @@ def _thread_template(work_item: dict[str, Any], app_id: str) -> dict[str, Any]:
                 "visible_name": "TODO",
                 "profile_cues": [],
                 "conversation_fingerprint": "TODO",
-                "evidence": "Visible Tinder chat header and messages.",
+                "evidence": _thread_identity_evidence(profile),
             },
             "profile_observation": {
                 "profile_text": "",
@@ -926,7 +1070,7 @@ def _thread_template(work_item: dict[str, Any], app_id: str) -> dict[str, Any]:
             "element_observations": [],
             "exception_state": "none",
             "provenance": {
-                "evidence": "Host-agent screen read from iPhone Mirroring.",
+                "evidence": _thread_provenance_evidence(profile),
             },
             "raw_ref": None,
         },
@@ -1063,6 +1207,98 @@ def _try_read_json_object(text: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def _redacted_managed_send_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "schema_version",
+        "status",
+        "reason",
+        "app_id",
+        "action",
+        "mode",
+        "draft_fingerprint",
+        "draft_character_count",
+        "staged_text_verification",
+        "post_send_verification",
+        "post_action_observation_id",
+        "evidence",
+        "clipboard_restored",
+    }
+    return {key: value for key, value in payload.items() if key in allowed}
+
+
+def _target_binding_for_work_item(work_item: dict[str, Any], pending_scan_batch: dict[str, Any] | None) -> dict[str, Any]:
+    existing = work_item.get("target_binding")
+    if isinstance(existing, dict):
+        binding = dict(existing)
+    else:
+        binding = {}
+    binding.setdefault("target_match_id", work_item.get("match_id"))
+    binding.setdefault("candidate_key", work_item.get("candidate_key"))
+    required = list(binding.get("required_visible_text") or []) if isinstance(binding.get("required_visible_text"), list) else []
+
+    thread = _thread_observation_for_work_item(work_item, pending_scan_batch)
+    entry = _message_list_entry_for_work_item(work_item, pending_scan_batch)
+    thread_observation = thread.get("observation") if isinstance(thread, dict) else None
+    thread_hints = thread_observation.get("match_identity_hints") if isinstance(thread_observation, dict) else None
+    entry_hints = entry.get("match_identity_hints") if isinstance(entry, dict) else None
+    visible_name = (
+        _stripped_or_none(binding.get("visible_name"))
+        or _stripped_or_none(thread_hints.get("visible_name") if isinstance(thread_hints, dict) else None)
+        or _stripped_or_none(entry_hints.get("visible_name") if isinstance(entry_hints, dict) else None)
+        or _stripped_or_none(entry.get("visible_name") if isinstance(entry, dict) else None)
+    )
+    fingerprint = (
+        _stripped_or_none(binding.get("conversation_fingerprint"))
+        or _stripped_or_none(thread_hints.get("conversation_fingerprint") if isinstance(thread_hints, dict) else None)
+        or _stripped_or_none(entry_hints.get("conversation_fingerprint") if isinstance(entry_hints, dict) else None)
+    )
+    if visible_name:
+        binding.setdefault("visible_name", visible_name)
+        required.append(str(binding.get("visible_name") or visible_name).strip())
+    if fingerprint:
+        binding.setdefault("conversation_fingerprint", fingerprint)
+
+    unique_required: list[str] = []
+    for item in required:
+        text = str(item).strip()
+        if text and text not in unique_required:
+            unique_required.append(text)
+    binding["required_visible_text"] = unique_required
+    return binding
+
+
+def _thread_observation_for_work_item(
+    work_item: dict[str, Any],
+    pending_scan_batch: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(pending_scan_batch, dict):
+        return None
+    candidate_key = str(work_item.get("candidate_key") or "")
+    for item in pending_scan_batch.get("thread_observations", []):
+        if isinstance(item, dict) and str(item.get("candidate_key") or "") == candidate_key:
+            return item
+    return None
+
+
+def _message_list_entry_for_work_item(
+    work_item: dict[str, Any],
+    pending_scan_batch: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(pending_scan_batch, dict):
+        return None
+    candidate_key = str(work_item.get("candidate_key") or "")
+    snapshot = pending_scan_batch.get("message_list_snapshot")
+    entries = snapshot.get("entries", []) if isinstance(snapshot, dict) else []
+    for item in entries:
+        if isinstance(item, dict) and str(item.get("candidate_key") or "") == candidate_key:
+            return item
+    return None
+
+
+def _stripped_or_none(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _data_dir_path(data_dir: Path, value: Any) -> str | None:
     if not isinstance(value, str) or not value:
         return None
@@ -1096,13 +1332,57 @@ def _host_instructions(profile: dict[str, Any], work_item_type: str) -> dict[str
         "open_thread": "thread_observation",
         "send_message": "stage_send_verification",
     }.get(work_item_type, "known_gui_pitfalls")
+    native = profile.get("native_gui_harness")
+    native_blocked_actions = native.get("blocked_actions", []) if isinstance(native, dict) else []
+    native_live_send = native.get("live_send") if isinstance(native, dict) else None
     return {
         "app_id": profile.get("app_id"),
         "display_name": profile.get("display_name"),
+        "support_level": profile.get("support_level"),
+        "host_loop_supported": profile.get("host_loop_supported"),
+        "host_loop_send_modes": profile.get("host_loop_send_modes", []),
         "instructions": profile.get(key, []),
         "known_gui_pitfalls": profile.get("known_gui_pitfalls", []),
         "unsupported_actions": profile.get("unsupported_actions", []),
+        "native_blocked_actions": native_blocked_actions,
+        "native_live_send": native_live_send,
     }
+
+
+def _message_list_evidence(profile: dict[str, Any]) -> str:
+    app_id = str(profile.get("app_id") or "unknown")
+    display_name = str(profile.get("display_name") or app_id)
+    backend = _native_backend(profile)
+    if backend == "iphone_mirroring_macos":
+        return f"{display_name} message list observed through iPhone Mirroring."
+    if backend == "macos_wechat_desktop":
+        return f"{display_name} chat list observed from the macOS desktop window."
+    return f"{display_name} visible message list observed by the host agent."
+
+
+def _thread_identity_evidence(profile: dict[str, Any]) -> str:
+    app_id = str(profile.get("app_id") or "unknown")
+    display_name = str(profile.get("display_name") or app_id)
+    return f"Visible {display_name} chat header and messages."
+
+
+def _thread_provenance_evidence(profile: dict[str, Any]) -> str:
+    app_id = str(profile.get("app_id") or "unknown")
+    display_name = str(profile.get("display_name") or app_id)
+    backend = _native_backend(profile)
+    if backend == "iphone_mirroring_macos":
+        return f"Host-agent screen read from iPhone Mirroring for {display_name}."
+    if backend == "macos_wechat_desktop":
+        return f"Host-agent screen read from the macOS {display_name} desktop window."
+    return f"Host-agent screen read from visible {display_name} UI."
+
+
+def _native_backend(profile: dict[str, Any]) -> str:
+    native = profile.get("native_gui_harness")
+    if not isinstance(native, dict):
+        return ""
+    backend = native.get("backend")
+    return str(backend) if backend is not None else ""
 
 
 def _next_host_action(status: str, work_item: dict[str, Any] | None, send_mode: str) -> str:

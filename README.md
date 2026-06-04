@@ -32,12 +32,14 @@ or scale-out abuse features.
 | 生产默认 / Production defaults | macOS-only, encrypted local storage, stage-first GUI operation, local-only diagnostics |
 
 `--send-mode stage` 是默认路径：只准备、粘贴或 staging 草稿，不点击发送。
-`--send-mode live` 只用于明确授权的普通聊天消息，并且仍需要 `live_send: true`、
-安全开关未暂停、staged-text verification 和 post-action verification。
+`--send-mode live` 只用于明确授权的普通聊天消息。WeChat 的全托管发送还必须显式传
+`--managed-gui-send`，并且仍需要 `live_send: true`、安全开关未暂停、
+草稿文本精确校验和发送后验证。
 
 `--send-mode stage` is the default path: it prepares, pastes, or stages drafts
 without clicking send. `--send-mode live` is only for explicitly authorized
-ordinary chat messages and still requires `live_send: true`, an unpaused safety
+ordinary chat messages. Managed WeChat sending must also pass
+`--managed-gui-send` and still requires `live_send: true`, an unpaused safety
 switch, staged-text verification, and post-action verification.
 
 ## 当前 App 支持 / Current App Support
@@ -45,7 +47,7 @@ switch, staged-text verification, and post-action verification.
 | App | 支持状态 / Support | Native harness | 发送归属 / Send ownership |
 | --- | --- | --- | --- |
 | Tinder | host loop, profile/chat navigation, observation, draft workflow | iPhone Mirroring on macOS | stage/navigation only; no autonomous GUI send harness |
-| WeChat / 微信 | app profile, host-loop app id, desktop observation, draft staging | macOS WeChat desktop window | stage draft only; never presses Enter or clicks Send |
+| WeChat / 微信 | app profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | stage by default; `send-message` can press Enter only after explicit live-send authorization and verification |
 | Bumble | contract-only placeholder | none | not supported |
 | 她说 / Ta Shuo | contract-only placeholder | none | not supported |
 
@@ -162,19 +164,28 @@ dating-boost harness doctor --app-id wechat --window-title WeChat --json
 dating-boost harness wechat launch --dry-run --json
 dating-boost harness wechat observe --output-dir .local/dating-boost-harness --json
 dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json
+dating-boost harness wechat send-message --text-file wechat-draft.txt --dry-run --json
 ```
 
-WeChat harness 可激活微信桌面窗口、截图/OCR、返回 redacted layout hints，
-并用 clipboard paste 把草稿放入当前消息输入框。它不会按 Enter、不会点击 Send、
-不会发起通话、不会处理支付、不会交换联系方式。优先使用 `--text-file`，避免
-私密草稿进入 shell history 或 process args。host 必须人工或视觉验证 staged text。
+WeChat harness 可激活微信桌面窗口、截图/OCR、返回已脱敏的布局提示，
+并通过剪贴板粘贴把草稿放入当前消息输入框。默认路径不会按 Enter、不会点击
+Send；全托管发送只能走 `harness wechat send-message`，并且必须满足显式授权、
+`live_send: true`、安全开关未暂停、policy-checked action request、目标聊天绑定校验、
+输入框文本精确匹配和发送后 outbound bubble 校验。它不会发起通话、不会处理支付、
+不会交换联系方式。优先使用 `--text-file`，避免私密草稿进入 shell history 或进程参数。
+真实 staging/send 必须传 `--data-dir`，以便全局安全暂停能阻断 paste/send。
 
 The WeChat harness can activate the desktop WeChat window,
 screenshot/OCR it, return redacted layout hints, and paste a prepared draft into
-the current message input with the clipboard. It never presses Enter, clicks
-Send, starts calls, handles payments, or exchanges contacts. Prefer
-`--text-file` so private drafts do not enter shell history or process args. The
-host must visually verify staged text.
+the current message input with the clipboard. The default path never presses
+Enter or clicks Send. Fully managed sending is available only through
+`harness wechat send-message` with explicit authorization, `live_send: true`,
+an active safety switch, a policy-checked action request, target-chat binding
+verification, exact input-text verification, and outbound-bubble post-action
+verification. It does not start calls, handle payments, or exchange contacts.
+Prefer `--text-file` so private drafts do not enter shell history or process
+args. Real staging/send must pass `--data-dir` so the global safety pause can
+block paste/send.
 
 ## Host Loop 快速路径 / Host Loop Quick Path
 
@@ -182,6 +193,7 @@ host must visually verify staged text.
 dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json
 dating-boost-host-loop init --data-dir .local/dating-boost --work-dir .local/dating-boost-host-loop --app-id tinder --json
 dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+dating-boost-host-loop run --data-dir .local/dating-boost --authorization wechat-auth.json --goal goal.json --availability availability.json --app-id wechat --send-mode live --managed-gui-send --work-dir .local/dating-boost-host-loop --json
 ```
 
 使用 `dating-boost-host-loop status` 检查等待点，使用

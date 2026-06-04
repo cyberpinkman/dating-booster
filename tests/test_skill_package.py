@@ -130,6 +130,7 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("needs_user_profile", skill_text)
         self.assertIn("low_investment_repair", skill_text)
         self.assertIn("harness wechat stage-draft --text-file", skill_text)
+        self.assertIn("harness wechat send-message --text-file", skill_text)
         self.assertNotIn("harness wechat stage-draft --text ", skill_text)
 
     def test_skill_reference_files_describe_reusable_workflows_and_contracts(self):
@@ -202,6 +203,7 @@ class SkillPackageTests(unittest.TestCase):
             "harness wechat launch",
             "harness wechat observe",
             "harness wechat stage-draft",
+            "harness wechat send-message",
         ):
             self.assertTrue(command in workflows_text or command in host_loop_text, command)
         for phrase in (

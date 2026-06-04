@@ -75,9 +75,29 @@ expose unrelated personal content, so keep the test boundary explicit.
 5. If the draft passes policy, write the approved draft to a local text file
    and run `dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json`.
 6. Execute `stage-draft` only after confirming the active WeChat chat input is
-   the intended target. The harness must not press Enter or click Send.
+   the intended target. Real staging must include `--data-dir .local/dating-boost`
+   so the global safety pause can block paste. Stage mode must not press Enter
+   or click Send.
 7. The host must visually verify exact staged text before any manual send.
 8. Record the final action result only from a fresh post-action observation.
+
+## WeChat Managed Live Smoke
+
+Managed live smoke is opt-in and should use a dedicated test contact.
+
+1. Confirm the safety switch is not paused.
+2. Use an authorization JSON with `app_id: wechat`, `live_send: true`,
+   `autonomous_send: true`, `allowed_actions: ["send_message"]`, unexpired
+   timestamps, and `requires_post_action_verification: true`.
+3. Run `dating-boost harness wechat send-message --text-file wechat-draft.txt
+   --data-dir .local/dating-boost --authorization wechat-auth.json
+   --action-request action-request.json --dry-run --json`.
+4. For a host-loop run, use `dating-boost-host-loop run ... --app-id wechat
+   --send-mode live --managed-gui-send`.
+5. Record `succeeded` only when the action request is policy-checked and
+   hash-bound to the draft, the target chat is verified, the harness returns
+   exact staged-text verification, the input is cleared after pressing Return,
+   the outbound bubble is verified, and a `post_action_observation_id` exists.
 
 ## Tinder Live Smoke
 

@@ -50,6 +50,7 @@ dating-boost harness screenshot --app-id wechat --window-title WeChat --output w
 dating-boost harness wechat launch --dry-run --json
 dating-boost harness wechat observe --output-dir .local/dating-boost-harness --json
 dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json
+dating-boost harness wechat send-message --text-file wechat-draft.txt --dry-run --json
 ```
 
 If doctor reports `iphone_mirroring_locked`, ask the user to unlock iPhone
@@ -107,10 +108,20 @@ For macOS WeChat, `harness wechat observe` returns redacted `layout_hints`, not
 raw OCR text. The hints distinguish `page: conversation`, `page: chat_list`,
 message-input markers, and unread markers. `harness wechat stage-draft` copies
 the draft to the macOS clipboard and sends `Cmd+V` to the current WeChat input
-focus. It does not press Enter or click Send. Prefer `--text-file` so private
-draft text is not written into shell history or process arguments. Use it only
-after the draft has passed `workflow draft` or `policy check-draft`, and
-visually verify the staged text before any manual send.
+focus. Stage mode does not press Enter or click Send. Prefer `--text-file` so
+private draft text is not written into shell history or process arguments. Real
+staging must include `--data-dir` so the global safety pause can block paste.
+Use it only after the draft has passed `workflow draft` or `policy check-draft`.
+
+For explicitly authorized fully managed macOS WeChat sends, use
+`harness wechat send-message --text-file ... --data-dir ... --authorization ...
+--action-request ...` or `dating-boost-host-loop run --app-id wechat
+--send-mode live --managed-gui-send ...`. The authorization must include
+`live_send: true` and `autonomous_send: true`; the action request must be
+policy-checked, hash-bound to the text file, and include target-chat binding.
+The harness must verify the target chat, verify the focused input text exactly
+before pressing Return, and verify the outbound bubble from fresh post-action
+evidence before the result can be recorded as `succeeded`.
 
 The action `expand-visible-profile-section` is a bounded tap for a visibly
 folded profile section such as `查看所有...项信息`. Use it only after a fresh

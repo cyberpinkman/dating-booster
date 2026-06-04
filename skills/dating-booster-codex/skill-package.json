@@ -157,6 +157,7 @@
     "harness wechat launch",
     "harness wechat observe",
     "harness wechat stage-draft",
+    "harness wechat send-message",
     "release doctor"
   ]
 }

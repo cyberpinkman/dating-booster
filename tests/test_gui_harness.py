@@ -21,6 +21,9 @@ class FakeRunner:
         screenshot_bytes: bytes | None = None,
         missing_commands: set[str] | None = None,
         window_name: str = "iPhone Mirroring",
+        paste_focus_override: str | None = None,
+        return_key_clears_focus: bool = True,
+        screenshot_fail_at: set[int] | None = None,
     ):
         self.ocr_texts = list(ocr_text) if isinstance(ocr_text, list) else [ocr_text]
         self.frontmost = frontmost
@@ -28,9 +31,17 @@ class FakeRunner:
         self.missing_commands = missing_commands or set()
         self.window_name = window_name
         self.commands: list[list[str]] = []
+        self.command_inputs: list[tuple[list[str], str | None]] = []
+        self.clipboard_text = "previous clipboard"
+        self.focused_text = ""
+        self.paste_focus_override = paste_focus_override
+        self.return_key_clears_focus = return_key_clears_focus
+        self.screenshot_fail_at = screenshot_fail_at or set()
+        self.screenshot_calls = 0
 
     def run(self, command: list[str], *, input: str | None = None):
         self.commands.append(command)
+        self.command_inputs.append((command, input))
         if command[:2] == ["command", "-v"]:
             if command[2] in self.missing_commands:
                 return _result(returncode=1)
@@ -38,9 +49,21 @@ class FakeRunner:
         if command and command[0] == "osascript" and any("get {frontmost" in item for item in command):
             frontmost = "true" if self.frontmost else "false"
             return _result(stdout=f"{frontmost}, 100, 50, 350, 760, {self.window_name}\n")
+        if command and command[0] == "osascript" and any("focused UI element" in item for item in command):
+            return _result(stdout=f"{self.focused_text}\n")
+        if command and command[0] == "osascript" and any('keystroke "v"' in item for item in command):
+            self.focused_text = self.clipboard_text if self.paste_focus_override is None else self.paste_focus_override
+            return _result(stdout="")
+        if command and command[0] == "osascript" and any("key code 36" in item for item in command):
+            if self.return_key_clears_focus:
+                self.focused_text = ""
+            return _result(stdout="")
         if command and command[0] == "osascript":
             return _result(stdout="")
         if command and command[0] == "screencapture":
+            self.screenshot_calls += 1
+            if self.screenshot_calls in self.screenshot_fail_at:
+                return _result(stderr="screen permission denied", returncode=1)
             output = Path(command[-1])
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_bytes(self.screenshot_bytes or b"fake png")
@@ -49,6 +72,11 @@ class FakeRunner:
             if len(self.ocr_texts) > 1:
                 return _result(stdout=self.ocr_texts.pop(0))
             return _result(stdout=self.ocr_texts[0])
+        if command and command[0] == "pbpaste":
+            return _result(stdout=self.clipboard_text)
+        if command and command[0] == "pbcopy":
+            self.clipboard_text = input or ""
+            return _result(stdout="")
         return _result(stdout="")
 
 
@@ -68,7 +96,7 @@ def _run_cli_json(argv: list[str]) -> tuple[int, dict[str, object]]:
 
 
 class GuiHarnessTests(unittest.TestCase):
-    def test_capabilities_expose_stage_gui_harness_without_live_send_harness(self):
+    def test_capabilities_expose_stage_gui_harness_and_opt_in_managed_wechat_send(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output = StringIO()
             with redirect_stdout(output):
@@ -88,6 +116,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertIn("harness wechat launch", payload["supported_commands"])
         self.assertIn("harness wechat observe", payload["supported_commands"])
         self.assertIn("harness wechat stage-draft", payload["supported_commands"])
+        self.assertIn("harness wechat send-message", payload["supported_commands"])
         self.assertTrue(payload["agent_native_capabilities"]["iphone_mirroring_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["stage_gui_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["tinder_gui_launch"])
@@ -99,6 +128,9 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["agent_native_capabilities"]["wechat_gui_launch"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_chat_observation_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_draft_stage_harness"])
+        self.assertTrue(payload["agent_native_capabilities"]["managed_gui_send"])
+        self.assertFalse(payload["agent_native_capabilities"]["managed_gui_send_default"])
+        self.assertTrue(payload["agent_native_capabilities"]["wechat_live_send_harness"])
         self.assertFalse(payload["agent_native_capabilities"]["live_gui_harness"])
 
     def test_doctor_blocks_when_iphone_mirroring_is_locked(self):
@@ -433,45 +465,380 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(any(command and command[0] == "pbcopy" for command in runner.commands))
         self.assertTrue(any('keystroke "v"' in " ".join(command) for command in runner.commands))
         self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
+        self.assertTrue(payload["clipboard_restored"])
+        self.assertEqual(runner.clipboard_text, "previous clipboard")
+        pbcopy_inputs = [input_text for command, input_text in runner.command_inputs if command and command[0] == "pbcopy"]
+        self.assertEqual(pbcopy_inputs, ["今晚可以聊十分钟吗？", "previous clipboard"])
 
-    def test_cli_exposes_wechat_observe_and_stage_draft(self):
-        with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
-            harness_class.return_value.observe_wechat_screen.return_value = {
-                "schema_version": 1,
-                "status": "ok",
-                "app_id": "wechat",
-                "screen_state": "wechat_chat",
-                "layout_hints": {"page": "conversation"},
-            }
-            observe_exit, observe_payload = _run_cli_json(["harness", "wechat", "observe", "--json"])
+    def test_wechat_send_message_dry_run_is_explicit_live_send_plan(self):
+        runner = FakeRunner(ocr_text="微信\nAda\n发送\n", window_name="WeChat")
+        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
 
-            harness_class.return_value.stage_wechat_draft.return_value = {
-                "schema_version": 1,
-                "status": "ok",
-                "app_id": "wechat",
-                "action": "stage_draft",
-                "mode": "dry_run",
-            }
-            stage_exit, stage_payload = _run_cli_json([
-                "harness",
-                "wechat",
-                "stage-draft",
-                "--text",
-                "今晚可以聊十分钟吗？",
-                "--dry-run",
-                "--json",
-            ])
+        payload = harness.send_wechat_message("今晚可以聊十分钟吗？", dry_run=True)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "send_message")
+        self.assertTrue(payload["live_send"])
+        self.assertTrue(payload["requires_explicit_authorization"])
+        self.assertNotIn("send", payload["blocked_actions"])
+        self.assertEqual(
+            [step["intent"] for step in payload["planned_steps"]],
+            [
+                "stage_draft_with_accessibility_verification",
+                "press_return_to_send_wechat_message",
+                "verify_input_cleared_and_capture_post_action_screen",
+            ],
+        )
+        self.assertFalse(runner.commands)
+        self.assertNotIn("今晚可以聊十分钟吗", json.dumps(payload, ensure_ascii=False))
+
+    def test_wechat_send_message_verifies_staged_text_before_pressing_return(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "微信\nAda\n昨天 21:14\n在吗\n发送\n",
+                "微信\nAda\n昨天 21:14\n在吗\n发送\n",
+                "微信\nAda\n昨天 21:15\n今晚可以聊十分钟吗？\n发送\n",
+            ],
+            window_name="WeChat",
+        )
+        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+
+        payload = harness.send_wechat_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["stage_status"], "ok")
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+        self.assertTrue(payload["staged_text_verification"]["expected_payload_hash"])
+        self.assertTrue(payload["evidence"]["staged_text_verified"])
+        self.assertTrue(payload["evidence"]["input_cleared_after_send"])
+        self.assertTrue(payload["evidence"]["post_action_screen_captured"])
+        self.assertTrue(payload["evidence"]["outbound_message_verified"])
+        self.assertIn("post_action_observation_id", payload)
+        self.assertTrue(any("key code 36" in " ".join(command) for command in runner.commands))
+        self.assertEqual(runner.clipboard_text, "previous clipboard")
+        self.assertNotIn("今晚可以聊十分钟吗", json.dumps(payload, ensure_ascii=False))
+
+    def test_wechat_send_message_blocks_when_target_binding_mismatches_before_staging(self):
+        runner = FakeRunner(
+            ocr_text="微信\nZara\n昨天 21:14\n在吗\n发送\n",
+            window_name="WeChat",
+        )
+        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+
+        payload = harness.send_wechat_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "target_binding_mismatch")
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+        self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
+
+    def test_wechat_send_message_needs_verification_when_outbound_bubble_is_not_seen(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "微信\nAda\n昨天 21:14\n在吗\n发送\n",
+                "微信\nAda\n昨天 21:14\n在吗\n发送\n",
+                "微信\nAda\n昨天 21:14\n在吗\n发送\n",
+                "微信\nAda\n昨天 21:14\n在吗\n发送\n",
+            ],
+            window_name="WeChat",
+        )
+        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+
+        payload = harness.send_wechat_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
+        )
+
+        self.assertEqual(payload["status"], "needs_verification")
+        self.assertEqual(payload["reason"], "outbound_message_not_verified")
+        self.assertFalse(payload["evidence"]["outbound_message_verified"])
+
+    def test_wechat_send_message_blocks_when_staged_text_mismatches(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "微信\nAda\n昨天 21:14\n在吗\n发送\n",
+                "微信\nAda\n昨天 21:14\n在吗\n发送\n",
+            ],
+            window_name="WeChat",
+            paste_focus_override="错误草稿",
+        )
+        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+
+        payload = harness.send_wechat_message("今晚可以聊十分钟吗？", dry_run=False)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "staged_text_mismatch")
+        self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
+
+    def test_wechat_send_message_needs_verification_when_post_screen_capture_fails(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "微信\nAda\n昨天 21:14\n在吗\n发送\n",
+                "微信\nAda\n昨天 21:14\n在吗\n发送\n",
+            ],
+            window_name="WeChat",
+            screenshot_fail_at={3},
+        )
+        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+
+        payload = harness.send_wechat_message("今晚可以聊十分钟吗？", dry_run=False)
+
+        self.assertEqual(payload["status"], "needs_verification")
+        self.assertEqual(payload["reason"], "post_action_screen_not_captured")
+        self.assertFalse(payload["evidence"]["post_action_screen_captured"])
+
+    def test_cli_exposes_wechat_observe_stage_draft_and_send_message(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            draft_path = Path(temp_dir) / "wechat-draft.txt"
+            draft_path.write_text("今晚可以聊十分钟吗？", encoding="utf-8")
+            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+                harness_class.return_value.observe_wechat_screen.return_value = {
+                    "schema_version": 1,
+                    "status": "ok",
+                    "app_id": "wechat",
+                    "screen_state": "wechat_chat",
+                    "layout_hints": {"page": "conversation"},
+                }
+                observe_exit, observe_payload = _run_cli_json(["harness", "wechat", "observe", "--json"])
+
+                harness_class.return_value.stage_wechat_draft.return_value = {
+                    "schema_version": 1,
+                    "status": "ok",
+                    "app_id": "wechat",
+                    "action": "stage_draft",
+                    "mode": "dry_run",
+                }
+                stage_exit, stage_payload = _run_cli_json([
+                    "harness",
+                    "wechat",
+                    "stage-draft",
+                    "--text-file",
+                    str(draft_path),
+                    "--dry-run",
+                    "--json",
+                ])
+                harness_class.return_value.send_wechat_message.return_value = {
+                    "schema_version": 1,
+                    "status": "ok",
+                    "app_id": "wechat",
+                    "action": "send_message",
+                    "mode": "dry_run",
+                }
+                send_exit, send_payload = _run_cli_json([
+                    "harness",
+                    "wechat",
+                    "send-message",
+                    "--text-file",
+                    str(draft_path),
+                    "--dry-run",
+                    "--json",
+                ])
 
         self.assertEqual(observe_exit, 0)
         self.assertEqual(observe_payload["layout_hints"]["page"], "conversation")
         self.assertEqual(stage_exit, 0)
         self.assertEqual(stage_payload["action"], "stage_draft")
+        self.assertEqual(send_exit, 0)
+        self.assertEqual(send_payload["action"], "send_message")
         harness_class.return_value.observe_wechat_screen.assert_called_once()
         harness_class.return_value.stage_wechat_draft.assert_called_once_with(
             "今晚可以聊十分钟吗？",
             dry_run=True,
             output_dir=None,
         )
+        harness_class.return_value.send_wechat_message.assert_called_once_with(
+            "今晚可以聊十分钟吗？",
+            dry_run=True,
+            output_dir=None,
+            target_binding=None,
+        )
+
+    def test_cli_wechat_real_stage_requires_data_dir_and_respects_safety_pause(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            draft_path = root / "wechat-draft.txt"
+            data_dir = root / "data"
+            draft_path.write_text("今晚可以聊十分钟吗？", encoding="utf-8")
+            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+                missing_data_exit, missing_data_payload = _run_cli_json([
+                    "harness",
+                    "wechat",
+                    "stage-draft",
+                    "--text-file",
+                    str(draft_path),
+                    "--json",
+                ])
+                pause_exit, _pause_payload = _run_cli_json([
+                    "safety",
+                    "pause",
+                    "--data-dir",
+                    str(data_dir),
+                    "--reason",
+                    "manual-stop",
+                    "--json",
+                ])
+                paused_exit, paused_payload = _run_cli_json([
+                    "harness",
+                    "wechat",
+                    "stage-draft",
+                    "--text-file",
+                    str(draft_path),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ])
+
+        self.assertEqual(missing_data_exit, 2)
+        self.assertEqual(missing_data_payload["reason"], "data_dir_required_for_safety_check")
+        self.assertEqual(pause_exit, 0)
+        self.assertEqual(paused_exit, 2)
+        self.assertEqual(paused_payload["reason"], "safety_paused")
+        harness_class.assert_not_called()
+
+    def test_cli_wechat_real_send_requires_data_dir_authorization_and_safety_active(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            draft_path = root / "wechat-draft.txt"
+            data_dir = root / "data"
+            auth_path = root / "auth.json"
+            draft_path.write_text("今晚可以聊十分钟吗？", encoding="utf-8")
+            auth_path.write_text(json.dumps({
+                "schema_version": 1,
+                "authorization_id": "auth_wechat_live",
+                "scope": "send_chat_messages",
+                "app_id": "wechat",
+                "expires_at": "2026-06-05T00:00:00Z",
+                "allowed_actions": ["send_message"],
+                "autonomous_send": True,
+                "live_send": True,
+                "requires_post_action_verification": True,
+                "revoked_at": None,
+            }), encoding="utf-8")
+            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+                missing_data_exit, missing_data_payload = _run_cli_json([
+                    "harness",
+                    "wechat",
+                    "send-message",
+                    "--text-file",
+                    str(draft_path),
+                    "--authorization",
+                    str(auth_path),
+                    "--json",
+                ])
+                missing_auth_exit, missing_auth_payload = _run_cli_json([
+                    "harness",
+                    "wechat",
+                    "send-message",
+                    "--text-file",
+                    str(draft_path),
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ])
+                missing_action_exit, missing_action_payload = _run_cli_json([
+                    "harness",
+                    "wechat",
+                    "send-message",
+                    "--text-file",
+                    str(draft_path),
+                    "--data-dir",
+                    str(data_dir),
+                    "--authorization",
+                    str(auth_path),
+                    "--json",
+                ])
+                _run_cli_json([
+                    "safety",
+                    "pause",
+                    "--data-dir",
+                    str(data_dir),
+                    "--reason",
+                    "manual-stop",
+                    "--json",
+                ])
+                paused_exit, paused_payload = _run_cli_json([
+                    "harness",
+                    "wechat",
+                    "send-message",
+                    "--text-file",
+                    str(draft_path),
+                    "--data-dir",
+                    str(data_dir),
+                    "--authorization",
+                    str(auth_path),
+                    "--json",
+                ])
+
+        self.assertEqual(missing_data_exit, 2)
+        self.assertEqual(missing_data_payload["reason"], "data_dir_required_for_safety_check")
+        self.assertEqual(missing_auth_exit, 2)
+        self.assertEqual(missing_auth_payload["reason"], "authorization_required_for_live_send")
+        self.assertEqual(missing_action_exit, 2)
+        self.assertEqual(missing_action_payload["reason"], "action_request_required_for_live_send")
+        self.assertEqual(paused_exit, 2)
+        self.assertEqual(paused_payload["reason"], "safety_paused")
+        harness_class.assert_not_called()
+
+    def test_cli_wechat_real_send_requires_policy_allowed_action_request(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            draft_path = root / "wechat-draft.txt"
+            data_dir = root / "data"
+            auth_path = root / "auth.json"
+            action_path = root / "action_request.json"
+            draft_text = "今晚可以聊十分钟吗？"
+            draft_path.write_text(draft_text, encoding="utf-8")
+            auth_path.write_text(json.dumps({
+                "schema_version": 1,
+                "authorization_id": "auth_wechat_live",
+                "scope": "send_chat_messages",
+                "app_id": "wechat",
+                "expires_at": "2026-06-05T00:00:00Z",
+                "allowed_actions": ["send_message"],
+                "autonomous_send": True,
+                "live_send": True,
+                "requires_post_action_verification": True,
+                "revoked_at": None,
+            }), encoding="utf-8")
+            action_path.write_text(json.dumps({
+                "schema_version": 1,
+                "action_request_id": "act_wechat_send",
+                "action": "send_message",
+                "match_id": "match_ada",
+                "candidate_key": "wechat_ada",
+                "payload_hash": "wrong_hash",
+                "requires_post_action_verification": True,
+                "policy": {"allowed": True},
+                "target_binding": {"required_visible_text": ["Ada"]},
+            }), encoding="utf-8")
+            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+                exit_code, payload = _run_cli_json([
+                    "harness",
+                    "wechat",
+                    "send-message",
+                    "--text-file",
+                    str(draft_path),
+                    "--data-dir",
+                    str(data_dir),
+                    "--authorization",
+                    str(auth_path),
+                    "--action-request",
+                    str(action_path),
+                    "--json",
+                ])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["reason"], "action_request_payload_hash_mismatch")
+        harness_class.assert_not_called()
 
     def test_cli_wechat_doctor_and_screenshot_default_to_wechat_window_title(self):
         with tempfile.TemporaryDirectory() as temp_dir:

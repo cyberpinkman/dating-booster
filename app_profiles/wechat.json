@@ -2,6 +2,9 @@
   "schema_version": 1,
   "app_id": "wechat",
   "display_name": "WeChat",
+  "support_level": "native_draft_staging",
+  "host_loop_supported": true,
+  "host_loop_send_modes": ["stage", "live"],
   "message_list_observation": [
     "Use the visible chat list as the message list equivalent.",
     "Only include test contacts explicitly authorized by the user."
@@ -23,6 +26,7 @@
       "observe_screen",
       "stage_draft"
     ],
+    "supported_live_actions": ["send_message"],
     "launch_navigation": {
       "intent": "activate_wechat_application",
       "requires_macos_application": "WeChat",
@@ -44,6 +48,17 @@
       "does_not_send": true,
       "requires_user_confirmation_before_send": true,
       "verification": "Host must compare the staged text visually before pressing Enter or clicking Send."
+    },
+    "live_send": {
+      "intent": "press_return_after_exact_staged_text_verification",
+      "default_enabled": false,
+      "requires_authorization_fields": ["autonomous_send", "live_send", "allowed_actions", "requires_post_action_verification"],
+      "requires_safety_active": true,
+      "requires_policy_checked_action_request": true,
+      "requires_target_binding_verification": true,
+      "requires_exact_staged_text_verification": true,
+      "requires_post_action_verification": true,
+      "requires_outbound_bubble_verification": true
     },
     "blocked_actions": ["send", "payments", "calls", "contact_exchange_without_user"]
   },

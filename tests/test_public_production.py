@@ -66,6 +66,10 @@ class PublicProductionTests(unittest.TestCase):
             data_dir = root / "data"
             restore_dir = root / "restore"
             backup_path = root / "backup.zip"
+            passphrase_file = root / "passphrase.txt"
+            wrong_passphrase_file = root / "wrong-passphrase.txt"
+            passphrase_file.write_text("correct horse battery staple\n", encoding="utf-8")
+            wrong_passphrase_file.write_text("wrong passphrase\n", encoding="utf-8")
             self._write_json(
                 data_dir / "matches" / "match_ada" / "match.json",
                 {"schema_version": 1, "match_id": "match_ada", "display_name": "Ada private London detail"},
@@ -79,19 +83,18 @@ class PublicProductionTests(unittest.TestCase):
             backup_without_key_exit, backup_without_key_payload, _ = self._run(
                 ["data", "backup", "--data-dir", str(data_dir), "--output", str(backup_path), "--json"]
             )
-            backup_exit, backup_payload, _ = self._run(
-                [
-                    "data",
-                    "backup",
-                    "--data-dir",
-                    str(data_dir),
-                    "--output",
-                    str(backup_path),
-                    "--recovery-passphrase",
-                    "correct horse battery staple",
-                    "--json",
-                ]
-            )
+            with patch.dict(os.environ, {"DATING_BOOST_RECOVERY_PASSPHRASE": "correct horse battery staple"}):
+                backup_exit, backup_payload, _ = self._run(
+                    [
+                        "data",
+                        "backup",
+                        "--data-dir",
+                        str(data_dir),
+                        "--output",
+                        str(backup_path),
+                        "--json",
+                    ]
+                )
             rekey_exit, rekey_payload, _ = self._run(["data", "rekey", "--data-dir", str(data_dir), "--json"])
             after_export = root / "after.json"
             self._run(["data", "export", "--data-dir", str(data_dir), "--output", str(after_export), "--json"])
@@ -105,8 +108,8 @@ class PublicProductionTests(unittest.TestCase):
                     str(backup_path),
                     "--confirm",
                     "restore",
-                    "--recovery-passphrase",
-                    "wrong passphrase",
+                    "--recovery-passphrase-file",
+                    str(wrong_passphrase_file),
                     "--json",
                 ]
             )
@@ -120,8 +123,8 @@ class PublicProductionTests(unittest.TestCase):
                     str(backup_path),
                     "--confirm",
                     "restore",
-                    "--recovery-passphrase",
-                    "correct horse battery staple",
+                    "--recovery-passphrase-file",
+                    str(passphrase_file),
                     "--json",
                 ]
             )
@@ -186,6 +189,8 @@ class PublicProductionTests(unittest.TestCase):
             backup_path = root / "backup.zip"
             corrupt_backup_path = root / "corrupt-backup.zip"
             existing_export_path = root / "existing.json"
+            passphrase_file = root / "passphrase.txt"
+            passphrase_file.write_text("correct horse battery staple\n", encoding="utf-8")
             self._write_json(
                 source_dir / "matches" / "match_ada" / "match.json",
                 {"schema_version": 1, "match_id": "match_ada", "display_name": "Ada private London detail"},
@@ -196,19 +201,18 @@ class PublicProductionTests(unittest.TestCase):
             )
             self._run(["data", "migrate", "--data-dir", str(source_dir), "--json"])
             self._run(["data", "migrate", "--data-dir", str(restore_dir), "--json"])
-            self._run(
-                [
-                    "data",
-                    "backup",
-                    "--data-dir",
-                    str(source_dir),
-                    "--output",
-                    str(backup_path),
-                    "--recovery-passphrase",
-                    "correct horse battery staple",
-                    "--json",
-                ]
-            )
+            with patch.dict(os.environ, {"DATING_BOOST_RECOVERY_PASSPHRASE": "correct horse battery staple"}):
+                self._run(
+                    [
+                        "data",
+                        "backup",
+                        "--data-dir",
+                        str(source_dir),
+                        "--output",
+                        str(backup_path),
+                        "--json",
+                    ]
+                )
             with zipfile.ZipFile(backup_path) as archive:
                 manifest_bytes = archive.read("manifest.json")
             with zipfile.ZipFile(corrupt_backup_path, "w") as archive:
@@ -225,8 +229,8 @@ class PublicProductionTests(unittest.TestCase):
                     str(corrupt_backup_path),
                     "--confirm",
                     "restore",
-                    "--recovery-passphrase",
-                    "correct horse battery staple",
+                    "--recovery-passphrase-file",
+                    str(passphrase_file),
                     "--json",
                 ]
             )

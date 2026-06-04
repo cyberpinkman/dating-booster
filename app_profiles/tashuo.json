@@ -2,6 +2,9 @@
   "schema_version": 1,
   "app_id": "tashuo",
   "display_name": "她说",
+  "support_level": "contract_only",
+  "host_loop_supported": false,
+  "host_loop_send_modes": [],
   "message_list_observation": [
     "Observe only the visible conversation list.",
     "Use visible name, row position, and latest preview hash for candidate_key."

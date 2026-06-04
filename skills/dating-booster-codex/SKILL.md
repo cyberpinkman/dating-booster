@@ -83,6 +83,8 @@ For public production, treat the local safety switch as authoritative. If
 paused, do not send, paste, stage, or continue a live host loop until the user
 explicitly resumes it. Live sends require `--send-mode live`, authorization with
 `live_send: true`, exact staged-text verification, and post-action verification.
+For macOS WeChat fully managed sending, also require `--managed-gui-send` and
+the `harness wechat send-message --text-file ...` path.
 
 ## Default Draft Output
 
@@ -193,15 +195,29 @@ dating-boost harness doctor --app-id wechat --window-title WeChat --json
 dating-boost harness wechat launch --dry-run --json
 dating-boost harness wechat observe --output-dir .local/dating-boost-harness --json
 dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json
+dating-boost harness wechat send-message --text-file wechat-draft.txt --dry-run --json
 ```
 
 Use `harness wechat observe` to get redacted page/layout hints before drafting
 or staging. Use `harness wechat stage-draft` only to paste an already
 policy-checked draft into the current WeChat input box. It copies the draft to
-the macOS clipboard and sends `Cmd+V`; it must not press Enter or click Send.
+the macOS clipboard and sends `Cmd+V`; stage mode must not press Enter or click Send.
 Prefer `--text-file` so private draft text is not written into shell history or
-process arguments. The host must visually verify staged text before any manual
-send and must record the final result from a fresh post-action observation.
+process arguments. Real WeChat staging must include `--data-dir` so the global
+safety pause can block paste.
+
+Use `harness wechat send-message --text-file ...` only when the user has
+explicitly authorized fully managed macOS WeChat sending. Real execution must
+include `--data-dir`, `--authorization`, and `--action-request`; the
+authorization must be unexpired, match `app_id: wechat`, set
+`autonomous_send: true`, set `live_send: true`, allow `send_message`, and
+require post-action verification. The action request must be policy-checked,
+hash-bound to the text file, and include target-chat binding evidence. The
+harness must verify the target chat, exactly verify the focused input text
+before pressing Return, then verify the outbound bubble from fresh post-action
+evidence and return a `post_action_observation_id`. If target binding,
+staged-text, outbound-bubble, or post-action verification is missing, do not
+record `succeeded`.
 
 When executing a `send_message` action through iPhone Mirroring, treat text
 entry as unreliable until verified. For Chinese or long messages, prefer:

@@ -2,6 +2,9 @@
   "schema_version": 1,
   "app_id": "bumble",
   "display_name": "Bumble",
+  "support_level": "contract_only",
+  "host_loop_supported": false,
+  "host_loop_send_modes": [],
   "message_list_observation": [
     "Observe only visible matches and chats.",
     "Use a stable candidate_key based on visible name, row position, and preview hash."
