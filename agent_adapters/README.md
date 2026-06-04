@@ -13,6 +13,10 @@ installation and operating notes.
 - `claude-code/`: installable Claude Code adapter package. It writes
   `.claude/skills/dating-booster/` or `~/.claude/skills/dating-booster/` through
   `dating-boost adapter claude-code install`.
+- `openclaw/`: installable OpenClaw-compatible adapter package. It writes
+  `.openclaw/skills/dating-booster/` or `~/.openclaw/skills/dating-booster/`
+  through `dating-boost adapter openclaw install`. Hermes uses the
+  OpenClaw-compatible skill contract through `dating-boost adapter hermes`.
 
 ## Rules
 
@@ -20,8 +24,9 @@ installation and operating notes.
 - Do not fork memory, policy, planner, or app-profile domain logic.
 - If a host differs only in tool invocation wording, keep the core contract in
   `shared/` and document the host-specific invocation in that adapter.
-- Future Hermes, OpenClaw, and MCP-oriented adapters should follow the same
-  structure.
+- Future MCP-oriented adapters should follow the same structure. Hermes should
+  remain an OpenClaw-compatible wrapper unless a separate Hermes-native package
+  is implemented and verified.
 
 ## Adapter Install Checks
 
@@ -29,6 +34,10 @@ installation and operating notes.
 dating-boost adapter claude-code install --scope project --target . --dry-run --json
 dating-boost adapter claude-code doctor --data-dir .local/dating-boost --json
 dating-boost-host-loop doctor --adapter-package agent_adapters/claude-code/adapter-package.json --data-dir .local/dating-boost --json
+dating-boost adapter openclaw install --scope project --target . --dry-run --json
+dating-boost adapter openclaw doctor --data-dir .local/dating-boost --json
+dating-boost adapter hermes doctor --data-dir .local/dating-boost --json
+dating-boost-host-loop doctor --adapter-package agent_adapters/openclaw/adapter-package.json --data-dir .local/dating-boost --json
 ```
 
 Host-loop keeps `--skill-package` for Codex-era compatibility, but new adapters

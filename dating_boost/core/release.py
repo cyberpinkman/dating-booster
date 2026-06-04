@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def release_manifest() -> dict[str, Any]:
     skill_package = ROOT / "skills" / "dating-booster-codex" / "skill-package.json"
     claude_code_adapter = ROOT / "agent_adapters" / "claude-code" / "adapter-package.json"
+    openclaw_adapter = ROOT / "agent_adapters" / "openclaw" / "adapter-package.json"
     pyproject = ROOT / "pyproject.toml"
     dist_version = __version__.replace("-rc.", "rc")
     return {
@@ -30,16 +31,19 @@ def release_manifest() -> dict[str, Any]:
             "sdist": f"dating_booster-{dist_version}.tar.gz",
             "skill_package": f"dating-booster-codex-{__version__}.tar.gz",
             "claude_code_adapter": f"dating-booster-claude-code-{__version__}.tar.gz",
+            "openclaw_adapter": f"dating-booster-openclaw-{__version__}.tar.gz",
         },
         "artifact_sources": {
             "pyproject": str(pyproject),
             "skill_package": str(skill_package),
             "claude_code_adapter": str(claude_code_adapter.relative_to(ROOT)),
+            "openclaw_adapter": str(openclaw_adapter.relative_to(ROOT)),
         },
         "source_hashes": {
             "pyproject.toml": _file_sha256(pyproject),
             "skill-package.json": _file_sha256(skill_package),
             "claude-code/adapter-package.json": _file_sha256(claude_code_adapter),
+            "openclaw/adapter-package.json": _file_sha256(openclaw_adapter),
         },
         "schema_versions": dict(SCHEMA_VERSIONS),
         "release_capabilities": {
@@ -47,6 +51,8 @@ def release_manifest() -> dict[str, Any]:
             "github_release": True,
             "skill_package": True,
             "claude_code_adapter": True,
+            "openclaw_adapter": True,
+            "hermes_openclaw_compatible_adapter": True,
             "trusted_publishing": True,
             "macos_ci": True,
             "redacted_diagnostics": True,
@@ -60,6 +66,7 @@ def release_doctor() -> dict[str, Any]:
     pyproject_path = ROOT / "pyproject.toml"
     skill_package_path = ROOT / "skills" / "dating-booster-codex" / "skill-package.json"
     claude_code_adapter_path = ROOT / "agent_adapters" / "claude-code" / "adapter-package.json"
+    openclaw_adapter_path = ROOT / "agent_adapters" / "openclaw" / "adapter-package.json"
     try:
         pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
@@ -80,6 +87,13 @@ def release_doctor() -> dict[str, Any]:
         unreadable_issue="claude_code_adapter_unreadable",
         issue_prefix="claude_code_adapter_",
         expected_target_host="claude_code",
+    )
+    _validate_release_package(
+        openclaw_adapter_path,
+        issues,
+        unreadable_issue="openclaw_adapter_unreadable",
+        issue_prefix="openclaw_adapter_",
+        expected_target_host="openclaw",
     )
     if not _release_workflow_isolated():
         issues.append("release_workflow_artifact_isolation_missing")
@@ -162,5 +176,7 @@ def _release_workflow_isolated() -> bool:
         and "dist/skill/*" in text
         and "dating-booster-codex-${GITHUB_REF_NAME#v}.tar.gz" in text
         and "dating-booster-claude-code-${GITHUB_REF_NAME#v}.tar.gz" in text
+        and "dating-booster-openclaw-${GITHUB_REF_NAME#v}.tar.gz" in text
         and "-C agent_adapters claude-code" in text
+        and "-C agent_adapters openclaw" in text
     )

@@ -121,6 +121,26 @@ write `~/.claude/skills/dating-booster/`. The Claude Code skill only explains
 how Claude Code should call Dating Booster; memory, policy, planner, harness,
 app profiles, and audit still come from the same CLI/core contracts.
 
+OpenClaw adapter:
+
+```bash
+dating-boost adapter openclaw install --scope project --target . --json
+dating-boost adapter openclaw doctor --data-dir .local/dating-boost --json
+```
+
+项目级安装会写入 `.openclaw/skills/dating-booster/`。Hermes 通过同一个
+OpenClaw-compatible skill contract 使用 Dating Booster，不声明独立 Hermes-native
+adapter：
+
+```bash
+dating-boost adapter hermes install --scope project --target . --json
+dating-boost adapter hermes doctor --data-dir .local/dating-boost --json
+```
+
+The OpenClaw adapter writes `.openclaw/skills/dating-booster/`. Hermes uses the
+same OpenClaw-compatible skill contract through the `adapter hermes` commands;
+it is not a separate Hermes-native adapter package.
+
 For test users, send the repository URL to their host agent and let the agent
 clone, inspect, and install from source:
 
@@ -139,9 +159,17 @@ python3 -m dating_boost.cli adapter codex install --scope user --json
 python3 -m dating_boost.cli adapter codex doctor --data-dir ~/.dating-boost --json
 ```
 
+OpenClaw or Hermes-compatible users should replace the last two commands with:
+
+```bash
+python3 -m dating_boost.cli adapter openclaw install --scope user --json
+python3 -m dating_boost.cli adapter openclaw doctor --data-dir ~/.dating-boost --json
+python3 -m dating_boost.cli adapter hermes doctor --data-dir ~/.dating-boost --json
+```
+
 测试用户入口是仓库链接。让 agent 自己 clone、阅读 README/skill、安装 CLI，并用
-对应 host 的 `adapter <host> install|doctor` 完成安装。后续新增 Hermes、OpenClaw
-等 host 时，新增对应 adapter，不修改 Claude Code 或 Codex 的既有安装语义。
+对应 host 的 `adapter <host> install|doctor` 完成安装。后续新增其他 host 时，
+新增对应 adapter，不修改 Claude Code、Codex 或 OpenClaw 的既有安装语义。
 
 ## 本地数据和守护进程 / Local Data And Supervisor
 
@@ -378,6 +406,7 @@ you explicitly want to inspect the context pack in terminal output.
 | `docs/ARCHITECTURE.md` | expansion architecture for host agents, dating apps, goals, workflows, and memory |
 | `skills/dating-booster-codex/` | installable Codex skill plus operational references and smoke/runbook docs |
 | `agent_adapters/claude-code/` | installable Claude Code adapter package and skill content |
+| `agent_adapters/openclaw/` | installable OpenClaw-compatible adapter package; Hermes uses this skill contract |
 | `docs/README.md` | repository map, current app support matrix, and expansion path |
 | `tests/fixtures/` | deterministic fixtures for local and host-loop tests |
 | `tests/test_gui_harness.py` | GUI harness contracts for Tinder and macOS WeChat |
@@ -417,6 +446,7 @@ you explicitly want to inspect the context pack in terminal output.
 ```bash
 python3 -m unittest tests.test_gui_harness tests.test_skill_package
 python3 -m unittest tests.test_claude_code_adapter
+python3 -m pytest tests/test_openclaw_adapter.py
 python3 -m unittest tests.test_operator_host_loop.OperatorHostLoopTests.test_wechat_host_loop_init_writes_wechat_authorization_template
 python3 -m py_compile dating_boost/core/gui_harness.py dating_boost/cli.py dating_boost/core/capabilities.py dating_boost/host_loop.py
 ```

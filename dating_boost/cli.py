@@ -13,8 +13,10 @@ from typing import Any
 from dating_boost.core.agent_adapters import (
     install_claude_code_adapter,
     install_codex_adapter,
+    install_openclaw_adapter,
     run_claude_code_adapter_doctor,
     run_codex_adapter_doctor,
+    run_openclaw_adapter_doctor,
 )
 from dating_boost.core.action_audit import ActionAuditRepository
 from dating_boost.core.automation import AutomationRepository
@@ -125,6 +127,35 @@ def main(argv: list[str] | None = None) -> int:
     claude_doctor_parser.add_argument("--data-dir", required=True, type=Path)
     claude_doctor_parser.add_argument("--json", action="store_true")
     claude_doctor_parser.set_defaults(handler=_handle_adapter_claude_code_doctor)
+
+    openclaw_parser = adapter_subparsers.add_parser("openclaw", help="OpenClaw adapter commands.")
+    openclaw_subparsers = openclaw_parser.add_subparsers(dest="openclaw_command", required=True)
+    openclaw_install_parser = openclaw_subparsers.add_parser("install")
+    openclaw_install_parser.add_argument("--scope", choices=["project", "user"], default="project")
+    openclaw_install_parser.add_argument("--target", type=Path)
+    openclaw_install_parser.add_argument("--dry-run", action="store_true")
+    openclaw_install_parser.add_argument("--json", action="store_true")
+    openclaw_install_parser.set_defaults(handler=_handle_adapter_openclaw_install)
+    openclaw_doctor_parser = openclaw_subparsers.add_parser("doctor")
+    openclaw_doctor_parser.add_argument("--data-dir", required=True, type=Path)
+    openclaw_doctor_parser.add_argument("--json", action="store_true")
+    openclaw_doctor_parser.set_defaults(handler=_handle_adapter_openclaw_doctor)
+
+    hermes_parser = adapter_subparsers.add_parser(
+        "hermes",
+        help="Hermes adapter commands using the OpenClaw-compatible skill contract.",
+    )
+    hermes_subparsers = hermes_parser.add_subparsers(dest="hermes_command", required=True)
+    hermes_install_parser = hermes_subparsers.add_parser("install")
+    hermes_install_parser.add_argument("--scope", choices=["project", "user"], default="project")
+    hermes_install_parser.add_argument("--target", type=Path)
+    hermes_install_parser.add_argument("--dry-run", action="store_true")
+    hermes_install_parser.add_argument("--json", action="store_true")
+    hermes_install_parser.set_defaults(handler=_handle_adapter_hermes_install)
+    hermes_doctor_parser = hermes_subparsers.add_parser("doctor")
+    hermes_doctor_parser.add_argument("--data-dir", required=True, type=Path)
+    hermes_doctor_parser.add_argument("--json", action="store_true")
+    hermes_doctor_parser.set_defaults(handler=_handle_adapter_hermes_doctor)
 
     data_parser = subparsers.add_parser("data", help="SQLite data-store diagnostics and privacy commands.")
     data_subparsers = data_parser.add_subparsers(dest="data_command", required=True)
@@ -737,6 +768,40 @@ def _handle_adapter_claude_code_install(args: argparse.Namespace) -> int:
 
 def _handle_adapter_claude_code_doctor(args: argparse.Namespace) -> int:
     payload = run_claude_code_adapter_doctor(args.data_dir)
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_adapter_openclaw_install(args: argparse.Namespace) -> int:
+    payload = install_openclaw_adapter(
+        scope=args.scope,
+        target=args.target,
+        dry_run=args.dry_run,
+        target_host="openclaw",
+    )
+    _print_json(payload)
+    return 0 if payload["status"] in {"ok", "dry_run"} else 2
+
+
+def _handle_adapter_openclaw_doctor(args: argparse.Namespace) -> int:
+    payload = run_openclaw_adapter_doctor(args.data_dir, target_host="openclaw")
+    _print_json(payload)
+    return 0 if payload["status"] == "ok" else 2
+
+
+def _handle_adapter_hermes_install(args: argparse.Namespace) -> int:
+    payload = install_openclaw_adapter(
+        scope=args.scope,
+        target=args.target,
+        dry_run=args.dry_run,
+        target_host="hermes",
+    )
+    _print_json(payload)
+    return 0 if payload["status"] in {"ok", "dry_run"} else 2
+
+
+def _handle_adapter_hermes_doctor(args: argparse.Namespace) -> int:
+    payload = run_openclaw_adapter_doctor(args.data_dir, target_host="hermes")
     _print_json(payload)
     return 0 if payload["status"] == "ok" else 2
 

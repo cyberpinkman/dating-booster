@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE_AGENT_ADAPTERS_DIR = ROOT / "agent_adapters"
 SOURCE_CODEX_SKILL_DIR = ROOT / "skills" / "dating-booster-codex"
 SOURCE_CLAUDE_CODE_ADAPTER_DIR = SOURCE_AGENT_ADAPTERS_DIR / "claude-code"
+SOURCE_OPENCLAW_ADAPTER_DIR = SOURCE_AGENT_ADAPTERS_DIR / "openclaw"
 SOURCE_SHARED_REFERENCES_DIR = SOURCE_AGENT_ADAPTERS_DIR / "shared" / "references"
 PACKAGED_AGENT_ADAPTERS_DIR = resources.files("dating_boost.resources").joinpath("agent_adapters")
 
@@ -39,6 +40,47 @@ def install_claude_code_adapter(*, scope: str, target: Path | None, dry_run: boo
             for source, destination in planned_files
         ],
         "next_action": "run dating-boost adapter claude-code doctor --data-dir .local/dating-boost --json",
+    }
+    if dry_run:
+        return payload
+
+    for source, destination in planned_files:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+    return payload
+
+
+def install_openclaw_adapter(
+    *,
+    scope: str,
+    target: Path | None,
+    dry_run: bool,
+    target_host: str = "openclaw",
+) -> dict[str, Any]:
+    compatibility_target = "openclaw"
+    target_path = _openclaw_skill_target_path(scope=scope, target=target)
+    planned_files = _openclaw_install_files(target_path)
+    adapter_root = _openclaw_adapter_dir()
+    payload = {
+        "schema_version": 1,
+        "status": "dry_run" if dry_run else "ok",
+        "target_host": target_host,
+        "compatibility_target": compatibility_target,
+        "compatibility_mode": "openclaw_skill",
+        "scope": scope,
+        "target_path": str(target_path),
+        "source_path": str(adapter_root.joinpath("skills", "dating-booster")),
+        "adapter_package": _display_resource_path(_openclaw_adapter_package()),
+        "files": [
+            {
+                "source": str(source),
+                "target": str(destination),
+            }
+            for source, destination in planned_files
+        ],
+        "next_action": (
+            f"run dating-boost adapter {target_host} doctor --data-dir .local/dating-boost --json"
+        ),
     }
     if dry_run:
         return payload
@@ -77,6 +119,56 @@ def install_codex_adapter(*, scope: str, target: Path | None, dry_run: bool) -> 
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(source.read_bytes())
     return payload
+
+
+def run_openclaw_adapter_doctor(data_dir: Path, *, target_host: str = "openclaw") -> dict[str, Any]:
+    package_source = _openclaw_adapter_package()
+    with _adapter_package_path(package_source) as package_path:
+        skill_doctor = run_skill_doctor(package_path, data_dir)
+    capabilities = build_capabilities(data_dir)
+    agent_caps = capabilities.get("agent_native_capabilities") or {}
+    package_target_host = _adapter_target_host(package_source)
+    issues: list[str] = []
+
+    if target_host not in {"openclaw", "hermes"}:
+        issues.append("unsupported_target_host")
+    if package_target_host != "openclaw":
+        issues.append("target_host_mismatch")
+    if skill_doctor.get("status") != "ok":
+        issues.append("skill_doctor_failed")
+    if agent_caps.get("openclaw_adapter") is not True:
+        issues.append("openclaw_adapter_capability_missing")
+    if "openclaw" not in set(agent_caps.get("host_agent_adapters") or []):
+        issues.append("host_agent_adapter_missing")
+    if target_host == "hermes":
+        if agent_caps.get("hermes_openclaw_compatible_adapter") is not True:
+            issues.append("hermes_openclaw_compatible_adapter_capability_missing")
+        if "hermes" not in set(agent_caps.get("host_agent_adapters") or []):
+            issues.append("hermes_host_agent_adapter_missing")
+
+    status = "ok" if not issues else "blocked"
+    return {
+        "schema_version": 1,
+        "status": status,
+        "target_host": target_host,
+        "compatibility_target": "openclaw",
+        "compatibility_mode": "openclaw_skill",
+        "adapter_package": _display_resource_path(package_source),
+        "data_dir": str(data_dir.resolve()),
+        "skill_doctor": skill_doctor,
+        "issues": issues,
+        "capabilities": {
+            "tool_version": capabilities.get("tool_version"),
+            "git_commit": capabilities.get("git_commit"),
+            "host_agent_adapters": agent_caps.get("host_agent_adapters"),
+            "supported_app_profiles": agent_caps.get("supported_app_profiles"),
+            "openclaw_adapter": agent_caps.get("openclaw_adapter"),
+            "hermes_openclaw_compatible_adapter": agent_caps.get(
+                "hermes_openclaw_compatible_adapter"
+            ),
+        },
+        "next_action": "ready" if status == "ok" else "stop",
+    }
 
 
 def run_claude_code_adapter_doctor(data_dir: Path) -> dict[str, Any]:
@@ -179,8 +271,32 @@ def _codex_skill_target_path(*, scope: str, target: Path | None) -> Path:
     return base / ".codex" / "skills" / "dating-booster-codex"
 
 
+def _openclaw_skill_target_path(*, scope: str, target: Path | None) -> Path:
+    if target is None:
+        base = Path.cwd() if scope == "project" else Path.home()
+    else:
+        base = target
+    base = base.expanduser().absolute()
+    if base.name == ".openclaw":
+        return base / "skills" / "dating-booster"
+    return base / ".openclaw" / "skills" / "dating-booster"
+
+
 def _claude_install_files(target_path: Path) -> list[tuple[Any, Path]]:
     adapter_root = _claude_code_adapter_dir()
+    shared_references = _shared_references_dir()
+    return [
+        (adapter_root.joinpath("skills", "dating-booster", "SKILL.md"), target_path / "SKILL.md"),
+        (adapter_root.joinpath("adapter-package.json"), target_path / "adapter-package.json"),
+        (adapter_root.joinpath("README.md"), target_path / "README.md"),
+        (adapter_root.joinpath("INSTALL.md"), target_path / "INSTALL.md"),
+        (shared_references.joinpath("contracts.md"), target_path / "references" / "contracts.md"),
+        (shared_references.joinpath("workflows.md"), target_path / "references" / "workflows.md"),
+    ]
+
+
+def _openclaw_install_files(target_path: Path) -> list[tuple[Any, Path]]:
+    adapter_root = _openclaw_adapter_dir()
     shared_references = _shared_references_dir()
     return [
         (adapter_root.joinpath("skills", "dating-booster", "SKILL.md"), target_path / "SKILL.md"),
@@ -206,6 +322,12 @@ def _claude_code_adapter_dir() -> Any:
     return PACKAGED_AGENT_ADAPTERS_DIR.joinpath("claude-code")
 
 
+def _openclaw_adapter_dir() -> Any:
+    if (SOURCE_OPENCLAW_ADAPTER_DIR / "adapter-package.json").exists():
+        return SOURCE_OPENCLAW_ADAPTER_DIR
+    return PACKAGED_AGENT_ADAPTERS_DIR.joinpath("openclaw")
+
+
 def _codex_skill_dir() -> Any:
     if (SOURCE_CODEX_SKILL_DIR / "skill-package.json").exists():
         return SOURCE_CODEX_SKILL_DIR
@@ -220,6 +342,10 @@ def _shared_references_dir() -> Any:
 
 def _claude_code_adapter_package() -> Any:
     return _claude_code_adapter_dir().joinpath("adapter-package.json")
+
+
+def _openclaw_adapter_package() -> Any:
+    return _openclaw_adapter_dir().joinpath("adapter-package.json")
 
 
 def _codex_skill_package() -> Any:
