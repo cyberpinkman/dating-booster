@@ -22,7 +22,7 @@ WECHAT_HARNESS_BACKEND = "macos_wechat_desktop"
 HARNESS_BACKEND = IPHONE_MIRRORING_HARNESS_BACKEND
 BLOCKED_GUI_ACTIONS = ["send", "like", "super_like", "unmatch", "report", "profile_edit"]
 WECHAT_BLOCKED_GUI_ACTIONS = ["send", "payments", "calls", "contact_exchange_without_user"]
-TINDER_FOREGROUND_STATES = {"tinder_home", "tinder_messages", "tinder_self_profile", "tinder_unknown"}
+TINDER_FOREGROUND_STATES = {"tinder_home", "tinder_messages", "tinder_conversation", "tinder_self_profile", "tinder_unknown"}
 WECHAT_FOREGROUND_STATES = {"wechat_chat", "wechat_chat_list", "wechat_unknown"}
 
 
@@ -711,6 +711,172 @@ class NativeGuiHarness:
             return payload
         return self._execute_planned_steps(payload, output_dir=output_dir)
 
+    def send_tinder_message(
+        self,
+        draft_text: str,
+        *,
+        dry_run: bool = False,
+        output_dir: Path | None = None,
+        target_binding: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        input_step = {
+            "intent": "tap_tinder_message_input",
+            "tap_ratio": {"x": 0.45, "y": 0.92},
+            "risk": "live_send_precondition",
+            "requires_verified_tinder_thread": True,
+        }
+        paste_step = {
+            "intent": "paste_clipboard_into_tinder_message_input",
+            "risk": "live_send_precondition",
+            "requires_exact_text_match": True,
+        }
+        send_step = {
+            "intent": "tap_tinder_send_button",
+            "tap_ratio": {"x": 0.90, "y": 0.92},
+            "risk": "live_send",
+            "requires_explicit_authorization": True,
+        }
+        payload = {
+            **self._base_payload("ok"),
+            "action": "send_message",
+            "target": "tinder_message_input",
+            "mode": "dry_run" if dry_run else "execute",
+            "planned_steps": [input_step, paste_step, send_step],
+            "draft_fingerprint": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
+            "draft_character_count": len(draft_text),
+            "blocked_actions": ["like", "super_like", "unmatch", "report", "profile_edit"],
+            "live_send": True,
+            "requires_explicit_authorization": True,
+        }
+        if dry_run:
+            return payload
+        if output_dir is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        preflight_output = output_dir / "iphone_mirroring.tinder.before_send_message.png" if output_dir is not None else None
+        preflight = self.doctor(capture=True, output=preflight_output)
+        payload["preflight"] = preflight
+        if preflight["status"] != "ok":
+            payload.update({"status": "blocked", "reason": preflight.get("reason") or "tinder_preflight_not_verified"})
+            return payload
+        window = _window_from_payload(preflight.get("window") or {})
+
+        if target_binding is not None:
+            target_verification = self._verify_tinder_target_binding(target_binding, output_dir=output_dir)
+            payload["target_binding_verification"] = target_verification
+            if target_verification.get("status") != "ok":
+                payload.update({
+                    "status": "blocked",
+                    "reason": target_verification.get("reason") or "target_binding_mismatch",
+                })
+                return payload
+
+        baseline_output = output_dir / "iphone_mirroring.tinder.before_stage_message.png" if output_dir is not None else None
+        baseline_screen = self.capture_window(output=baseline_output, window=window)
+        payload["pre_stage_observation"] = _redacted_screen(baseline_screen)
+        if baseline_screen.get("status") != "ok":
+            payload.update({"status": "blocked", "reason": baseline_screen.get("reason") or "pre_stage_screen_not_captured"})
+            return payload
+        if baseline_screen.get("state") != "tinder_conversation":
+            payload.update({"status": "blocked", "reason": "tinder_conversation_not_verified"})
+            return payload
+
+        previous_clipboard = self._read_clipboard()
+        payload["previous_clipboard_read"] = previous_clipboard["status"] == "ok"
+        if previous_clipboard["status"] != "ok":
+            payload.update({"status": "blocked", "reason": previous_clipboard.get("reason")})
+            return payload
+        copy_result = self._copy_to_clipboard(draft_text)
+        payload["draft_clipboard_copy"] = copy_result["status"] == "ok"
+        if copy_result["status"] != "ok":
+            payload.update({"status": "blocked", "reason": copy_result.get("reason")})
+            return payload
+
+        executed_steps: list[dict[str, Any]] = []
+        stage_ready = False
+        try:
+            input_result = self._click_ratio(window, input_step["tap_ratio"])
+            executed_steps.append({**input_step, "result": input_result})
+            if input_result["status"] != "ok":
+                payload.update({"status": "blocked", "reason": input_result.get("reason"), "executed_steps": executed_steps})
+                return payload
+            time.sleep(0.2)
+
+            paste_result = self._paste_clipboard_into_frontmost_app()
+            executed_steps.append({**paste_step, "result": paste_result})
+            if paste_result["status"] != "ok":
+                payload.update({"status": "blocked", "reason": paste_result.get("reason"), "executed_steps": executed_steps})
+                return payload
+            time.sleep(0.3)
+
+            staged_output = output_dir / "iphone_mirroring.tinder.after_stage_message.png" if output_dir is not None else None
+            staged_screen = self.capture_window(output=staged_output, window=window)
+            staged_verification = _verify_staged_tinder_message(
+                staged_screen,
+                draft_text,
+                baseline_screen=baseline_screen,
+            )
+            payload["staged_text_verification"] = staged_verification
+            payload["staged_text_verified"] = staged_verification.get("status") == "ok"
+            if staged_verification.get("status") != "ok":
+                payload.update({
+                    "status": "blocked",
+                    "reason": staged_verification.get("reason") or "staged_text_not_verified",
+                    "executed_steps": executed_steps,
+                })
+                return payload
+            stage_ready = True
+        finally:
+            restore_result = self._copy_to_clipboard(previous_clipboard.get("text", ""))
+            payload["clipboard_restored"] = restore_result["status"] == "ok"
+            payload["clipboard_restore_status"] = restore_result["status"]
+            if restore_result["status"] != "ok":
+                payload["clipboard_restore_reason"] = restore_result.get("reason")
+
+        if not stage_ready:
+            return payload
+        if payload["clipboard_restored"] is not True:
+            payload.update({
+                "status": "blocked",
+                "reason": "clipboard_restore_failed",
+                "executed_steps": executed_steps,
+            })
+            return payload
+
+        send_result = self._click_ratio(window, send_step["tap_ratio"])
+        executed_steps.append({**send_step, "result": send_result})
+        payload["executed_steps"] = executed_steps
+        if send_result["status"] != "ok":
+            payload.update({"status": "blocked", "reason": send_result.get("reason")})
+            return payload
+
+        time.sleep(0.5)
+        post_output = output_dir / "iphone_mirroring.tinder.after_send_message.png" if output_dir is not None else None
+        post_screen = self.capture_window(output=post_output, window=window)
+        payload["post_action_observation"] = _redacted_screen(post_screen)
+        post_id_source = f"{payload['draft_fingerprint']}:{post_screen.get('path') or _now_iso()}:{uuid4().hex}"
+        post_observation_id = "gui_post_send_" + hashlib.sha256(post_id_source.encode("utf-8")).hexdigest()[:16]
+        payload["post_action_observation_id"] = post_observation_id
+        post_screen_captured = post_screen.get("status") == "ok"
+        outbound_verification = _verify_tinder_outbound_message(
+            post_screen,
+            draft_text,
+            staged_screen=staged_screen,
+        )
+        payload["outbound_message_verification"] = outbound_verification
+        outbound_verified = outbound_verification.get("status") == "ok"
+        payload["evidence"] = {
+            "staged_text_verified": payload["staged_text_verified"],
+            "send_input_backend": send_result.get("input_backend"),
+            "post_action_screen_captured": post_screen_captured,
+            "outbound_message_verified": outbound_verified,
+            "post_action_observation_id": post_observation_id,
+        }
+        if not post_screen_captured:
+            payload.update({"status": "needs_verification", "reason": "post_action_screen_not_captured"})
+        elif not outbound_verified:
+            payload.update({"status": "needs_verification", "reason": "outbound_message_not_verified"})
+        return payload
+
     def _execute_planned_steps(self, payload: dict[str, Any], *, output_dir: Path | None = None) -> dict[str, Any]:
         if output_dir is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -872,6 +1038,46 @@ class NativeGuiHarness:
             return {"status": "blocked", "reason": "clipboard_paste_failed", "stderr": _short(result.stderr)}
         return {"status": "ok", "input_backend": "applescript_accessibility"}
 
+    def _verify_tinder_target_binding(
+        self,
+        target_binding: dict[str, Any],
+        *,
+        output_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        markers = _target_binding_required_markers(target_binding)
+        base = {
+            "verification_method": "tinder_screen_ocr_required_visible_text",
+            "target_match_id": target_binding.get("target_match_id"),
+            "candidate_key": target_binding.get("candidate_key"),
+            "required_marker_hashes": [_hash_text(marker) for marker in markers],
+        }
+        if not markers:
+            return {**base, "status": "blocked", "reason": "target_binding_required"}
+        window = self._window_info()
+        if window is None:
+            return {**base, "status": "blocked", "reason": "iphone_mirroring_window_not_found"}
+        output = output_dir / "iphone_mirroring.tinder.target_binding.png" if output_dir is not None else None
+        screen = self.capture_window(output=output, window=window)
+        observed_text = str(screen.get("text") or "")
+        normalized = _normalize_text(observed_text)
+        matched = [marker for marker in markers if _normalize_text(marker) in normalized]
+        result = {
+            **base,
+            "screen": _redacted_screen(screen),
+            "screen_state": screen.get("state", "unknown"),
+            "observed_text_hash": _hash_text(observed_text) if observed_text else None,
+            "matched_marker_hashes": [_hash_text(marker) for marker in matched],
+        }
+        if screen.get("status") != "ok":
+            return {**result, "status": "blocked", "reason": "target_binding_screen_capture_failed"}
+        if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
+            return {**result, "status": "blocked", "reason": screen.get("state")}
+        if screen.get("state") != "tinder_conversation":
+            return {**result, "status": "blocked", "reason": "target_binding_chat_not_verified"}
+        if len(matched) != len(markers):
+            return {**result, "status": "blocked", "reason": "target_binding_mismatch"}
+        return {**result, "status": "ok"}
+
     def _verify_wechat_target_binding(
         self,
         target_binding: dict[str, Any],
@@ -954,7 +1160,7 @@ class NativeGuiHarness:
 
     def _command_checks(self) -> dict[str, dict[str, Any]]:
         commands = ("osascript", "screencapture", "tesseract", "xcrun")
-        if self.app_id == "wechat":
+        if self.app_id in {"tinder", "wechat"}:
             commands = (*commands, "pbcopy", "pbpaste")
         return {
             name: {"available": self._command_available(name)}
@@ -990,6 +1196,8 @@ def classify_screen_text(text: str) -> str:
         return "tinder_self_profile"
     if "个人资料" in normalized and any(marker in normalized for marker in ("完善个人资料", "添加一条", "设置")):
         return "tinder_self_profile"
+    if _looks_like_tinder_conversation_text(normalized):
+        return "tinder_conversation"
     if "等你回应" in normalized or ("配对" in normalized and any(marker in normalized for marker in ("消息", "聊天"))):
         return "tinder_messages"
     if all(marker in normalized for marker in ("滑动", "探索", "聊天", "个人资料")):
@@ -1210,9 +1418,84 @@ def _target_binding_required_markers(target_binding: dict[str, Any]) -> list[str
     return unique
 
 
+def _looks_like_tinder_conversation_text(normalized_text: str) -> bool:
+    history_marker = any(marker in normalized_text for marker in ("昨天", "今天", "分钟前", "am", "pm", ":"))
+    app_or_history_marker = "tinder" in normalized_text or history_marker
+    return app_or_history_marker and history_marker and _tinder_message_input_marker_present(normalized_text)
+
+
+def _tinder_message_input_marker_present(normalized_text: str) -> bool:
+    english_input = bool(re.search(r"\b(message|send)\b", normalized_text))
+    chinese_input = any(marker in normalized_text for marker in ("发送", "输入消息", "发消息", "说点什么"))
+    return english_input or chinese_input
+
+
+def _verify_staged_tinder_message(
+    screen: dict[str, Any],
+    expected_text: str,
+    *,
+    baseline_screen: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    observed_text = str(screen.get("text") or "")
+    text_matches = bool(
+        expected_text
+        and (expected_text in observed_text or _normalize_text(expected_text) in _normalize_text(observed_text))
+    )
+    observed_stats = _expected_text_observation_stats(observed_text, expected_text)
+    baseline_text = str(baseline_screen.get("text") or "") if isinstance(baseline_screen, dict) else ""
+    baseline_stats = _expected_text_observation_stats(baseline_text, expected_text) if baseline_text else None
+    result = {
+        "verification_method": "tinder_staged_message_ocr_payload_text",
+        "expected_payload_hash": _hash_text(expected_text),
+        "expected_character_count": len(expected_text),
+        "observed_text_hash": observed_stats["text_hash"],
+        "observed_character_count": observed_stats["text_character_count"],
+        "observed_expected_text_occurrences": observed_stats["expected_text_occurrences"],
+        "baseline_expected_text_occurrences": baseline_stats["expected_text_occurrences"] if baseline_stats else None,
+        "baseline_text_hash": baseline_stats["text_hash"] if baseline_stats else None,
+        "screen": _redacted_screen(screen),
+    }
+    if screen.get("status") != "ok":
+        return {**result, "status": "blocked", "reason": screen.get("reason") or "stage_screen_not_captured"}
+    if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
+        return {**result, "status": "blocked", "reason": screen.get("state")}
+    if not text_matches:
+        return {**result, "status": "needs_verification", "reason": "staged_text_not_verified"}
+    if baseline_stats and observed_stats["expected_text_occurrences"] <= baseline_stats["expected_text_occurrences"]:
+        return {**result, "status": "needs_verification", "reason": "staged_text_not_newly_visible"}
+    return {**result, "status": "ok"}
+
+
+def _verify_tinder_outbound_message(
+    screen: dict[str, Any],
+    expected_text: str,
+    *,
+    staged_screen: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result = _verify_outbound_message(screen, expected_text)
+    if result.get("status") != "ok":
+        return result
+    observed_text = str(screen.get("text") or "")
+    staged_text = str(staged_screen.get("text") or "") if isinstance(staged_screen, dict) else ""
+    observed_stats = _expected_text_observation_stats(observed_text, expected_text)
+    staged_stats = _expected_text_observation_stats(staged_text, expected_text) if staged_text else None
+    extra = {
+        "verification_method": "tinder_post_send_ocr_payload_text_delta",
+        "observed_expected_text_occurrences": observed_stats["expected_text_occurrences"],
+        "staged_expected_text_occurrences": staged_stats["expected_text_occurrences"] if staged_stats else None,
+        "staged_text_hash": staged_stats["text_hash"] if staged_stats else None,
+    }
+    if staged_stats and observed_stats["normalized_text_hash"] == staged_stats["normalized_text_hash"]:
+        return {**result, **extra, "status": "needs_verification", "reason": "outbound_message_not_verified"}
+    return {**result, **extra, "status": "ok"}
+
+
 def _verify_outbound_message(screen: dict[str, Any], expected_text: str) -> dict[str, Any]:
     observed_text = str(screen.get("text") or "")
-    text_matches = bool(expected_text and expected_text in observed_text)
+    text_matches = bool(
+        expected_text
+        and (expected_text in observed_text or _normalize_text(expected_text) in _normalize_text(observed_text))
+    )
     result = {
         "verification_method": "wechat_post_send_ocr_payload_text",
         "expected_payload_hash": _hash_text(expected_text),
@@ -1227,12 +1510,24 @@ def _verify_outbound_message(screen: dict[str, Any], expected_text: str) -> dict
     return {**result, "status": "ok"}
 
 
+def _expected_text_observation_stats(text: str, expected_text: str) -> dict[str, Any]:
+    normalized_text = _normalize_text(text)
+    normalized_expected = _normalize_text(expected_text)
+    return {
+        "text_hash": _hash_text(text) if text else None,
+        "normalized_text_hash": _hash_text(normalized_text) if normalized_text else None,
+        "text_character_count": len(text) if text else None,
+        "expected_text_occurrences": normalized_text.count(normalized_expected) if normalized_expected else 0,
+    }
+
+
 def _tinder_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
     state = str(screen.get("state") or "unknown")
     normalized = _normalize_text(str(screen.get("text") or ""))
     page = {
         "tinder_home": "home",
         "tinder_messages": "chats",
+        "tinder_conversation": "conversation",
         "tinder_self_profile": "self_profile",
         "tinder_unknown": "unknown_tinder",
     }.get(state, "unknown")

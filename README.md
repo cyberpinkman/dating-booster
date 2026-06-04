@@ -32,21 +32,22 @@ or scale-out abuse features.
 | 生产默认 / Production defaults | macOS-only, encrypted local storage, stage-first GUI operation, local-only diagnostics |
 
 `--send-mode stage` 是默认路径：只准备、粘贴或 staging 草稿，不点击发送。
-`--send-mode live` 只用于明确授权的普通聊天消息。WeChat 的全托管发送还必须显式传
+`--send-mode live` 只用于明确授权的普通聊天消息。Tinder/WeChat 的全托管发送还必须显式传
 `--managed-gui-send`，并且仍需要 `live_send: true`、安全开关未暂停、
-草稿文本精确校验和发送后验证。
+policy-checked action request、目标聊天绑定、草稿文本精确校验和发送后验证。
 
 `--send-mode stage` is the default path: it prepares, pastes, or stages drafts
 without clicking send. `--send-mode live` is only for explicitly authorized
-ordinary chat messages. Managed WeChat sending must also pass
+ordinary chat messages. Managed Tinder/WeChat sending must also pass
 `--managed-gui-send` and still requires `live_send: true`, an unpaused safety
-switch, staged-text verification, and post-action verification.
+switch, a policy-checked action request, target-chat binding, staged-text
+verification, and post-action verification.
 
 ## 当前 App 支持 / Current App Support
 
 | App | 支持状态 / Support | Native harness | 发送归属 / Send ownership |
 | --- | --- | --- | --- |
-| Tinder | host loop, profile/chat navigation, observation, draft workflow | iPhone Mirroring on macOS | stage/navigation only; no autonomous GUI send harness |
+| Tinder | host loop, profile/chat navigation, observation, draft workflow, opt-in managed live send | iPhone Mirroring on macOS | stage by default; `send-message` can click Send only after explicit live-send authorization and verification |
 | WeChat / 微信 | app profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | stage by default; `send-message` can press Enter only after explicit live-send authorization and verification |
 | Bumble | contract-only placeholder | none | not supported |
 | 她说 / Ta Shuo | contract-only placeholder | none | not supported |
@@ -142,20 +143,30 @@ dating-boost harness tinder open-profile --launch-if-needed --json
 dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
 dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
 dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
 ```
 
 Tinder harness 可诊断 iPhone Mirroring、截图/OCR、从已验证 iOS home
 screen 启动 Tinder，并执行只读导航：self profile、profile preview、照片切换、
 full profile、profile scroll/expand、chat tab、new-match carousel、
 conversation opening、thread-avatar profile opening 和退出 preview/full profile。
-它不会授权 send、like、super-like、unmatch、report 或 profile edit。
+默认路径不会点击 Send。全托管发送只能走 `harness tinder send-message`，
+并且必须满足显式授权、`live_send: true`、安全开关未暂停、
+policy-checked action request、目标聊天绑定校验、staged text OCR 校验和
+发送后 outbound bubble 校验。它不会授权 like、super-like、unmatch、report 或
+profile edit。
 
 The Tinder harness can diagnose iPhone Mirroring, screenshot/OCR the
 mirrored window, launch Tinder from a verified iOS home screen, and perform
 read-only navigation through self profile, profile preview, photos, full
 profile, profile scroll/expand, chat tab, new-match carousel, conversation
 opening, thread-avatar profile opening, and preview/full-profile exits. It does
-not authorize send, like, super-like, unmatch, report, or profile edit.
+not click Send by default. Fully managed sending is available only through
+`harness tinder send-message` with explicit authorization, `live_send: true`,
+an active safety switch, a policy-checked action request, target-chat binding
+verification, staged-text OCR verification, and outbound-bubble post-action
+verification. It does not authorize like, super-like, unmatch, report, or
+profile edit.
 
 ### macOS WeChat / 微信桌面端
 

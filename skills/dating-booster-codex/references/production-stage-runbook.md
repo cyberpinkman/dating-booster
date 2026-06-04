@@ -101,18 +101,25 @@ Managed live smoke is opt-in and should use a dedicated test contact.
 
 ## Tinder Live Smoke
 
-Live smoke is optional and requires a dedicated manual test account. It is not
-the default public workflow.
+Managed live smoke is opt-in and requires a dedicated Tinder test account. It
+is not the default public workflow.
 
 1. Confirm the safety switch is not paused.
-2. Use an authorization JSON with `live_send: true`, `autonomous_send: true`,
-   unexpired timestamps, and `requires_post_action_verification: true`.
-3. Run `dating-boost-host-loop run ... --send-mode live`.
-4. The host must verify exact staged text before send and verify a fresh
-   outbound bubble after send.
-5. Record `unknown`, not `succeeded`, if post-action evidence is missing,
+2. Use an authorization JSON with `app_id: tinder`, `live_send: true`,
+   `autonomous_send: true`, `allowed_actions: ["send_message"]`, unexpired
+   timestamps, and `requires_post_action_verification: true`.
+3. Run `dating-boost harness tinder send-message --text-file tinder-draft.txt
+   --data-dir .local/dating-boost --authorization tinder-auth.json
+   --action-request action-request.json --dry-run --json`.
+4. For a host-loop run, use `dating-boost-host-loop run ... --app-id tinder
+   --send-mode live --managed-gui-send`.
+5. Record `succeeded` only when the action request is policy-checked and
+   hash-bound to the draft, the target chat is verified, the harness returns
+   staged-text OCR verification, the outbound bubble is verified, and a
+   `post_action_observation_id` exists.
+6. Record `unknown`, not `succeeded`, if post-action evidence is missing,
    stale, truncated, or mismatched.
-6. Save only redacted replay, export, diagnostic bundle, and smoke result.
+7. Save only redacted replay, export, diagnostic bundle, and smoke result.
 
 ## Artifacts
 

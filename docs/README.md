@@ -38,7 +38,7 @@ planning, audit, and safe staging contracts.
 
 | App | Current support / 当前支持 | Native harness | Send ownership / 发送归属 |
 | --- | --- | --- | --- |
-| Tinder | Host-loop, profile/chat navigation, observation, draft workflow | iPhone Mirroring on macOS | Stage/navigation only; no autonomous GUI send harness |
+| Tinder | Host-loop, profile/chat navigation, observation, draft workflow, opt-in managed live send | iPhone Mirroring on macOS | Stage by default; managed send only with explicit authorization and verification |
 | WeChat / 微信 | App profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | Stage by default; managed send only with explicit authorization and verification |
 | Bumble | Contract-only profile | None | Not supported |
 | Ta Shuo / 她说 | Contract-only profile | None | Not supported |
@@ -90,10 +90,10 @@ host-loop apps are controlled by `host_loop_app_profiles` and each profile's
   scale-out automation。不要加入私有 API、绕过、反检测或账号规模化能力。
 - Do not let a harness send messages, likes, reports, payments, calls, or
   profile edits unless policy, confirmation, staged-text verification, and
-  post-action verification explicitly support that action。Managed WeChat send
+  post-action verification explicitly support that action。Managed Tinder/WeChat send
   also needs policy-checked action requests, target-chat binding, and outbound
   bubble verification。除非策略、确认、staged-text verification 和 post-action
-  verification 明确支持，否则 harness 不得执行高风险动作；WeChat 全托管发送还必须有
+  verification 明确支持，否则 harness 不得执行高风险动作；Tinder/WeChat 全托管发送还必须有
   policy-checked action request、目标聊天绑定和 outbound bubble 校验。
 - Prefer paste-based draft staging for Chinese text。中文草稿优先 paste staging，
   避免直接输入导致文本损坏。

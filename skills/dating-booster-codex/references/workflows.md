@@ -28,10 +28,11 @@ policy, and audit tools. They do not replace the repository specs.
 
 ## Native GUI Harness
 
-The native harness is for stage/navigation work only. It may diagnose iPhone
-Mirroring, capture a screenshot/OCR artifact, and navigate Tinder through
-bounded profile/chat reading chains. It must not send messages, like,
-super-like, unmatch, report, or edit profile data.
+The native harness is stage/navigation-first. It may diagnose iPhone Mirroring,
+capture a screenshot/OCR artifact, navigate Tinder through bounded profile/chat
+reading chains, and execute `send_message` only through the gated
+`harness tinder send-message` path. It must not like, super-like, unmatch,
+report, or edit profile data.
 
 ```bash
 dating-boost harness doctor --app-id tinder --json
@@ -45,6 +46,7 @@ dating-boost harness tinder action profile-photo-next --dry-run --json
 dating-boost harness tinder action open-conversation --row-index 1 --target row --dry-run --json
 dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
 dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
 dating-boost harness doctor --app-id wechat --window-title WeChat --json
 dating-boost harness screenshot --app-id wechat --window-title WeChat --output wechat.png --json
 dating-boost harness wechat launch --dry-run --json
@@ -113,15 +115,15 @@ private draft text is not written into shell history or process arguments. Real
 staging must include `--data-dir` so the global safety pause can block paste.
 Use it only after the draft has passed `workflow draft` or `policy check-draft`.
 
-For explicitly authorized fully managed macOS WeChat sends, use
-`harness wechat send-message --text-file ... --data-dir ... --authorization ...
---action-request ...` or `dating-boost-host-loop run --app-id wechat
+For explicitly authorized fully managed Tinder or macOS WeChat sends, use
+`harness <app> send-message --text-file ... --data-dir ... --authorization ...
+--action-request ...` or `dating-boost-host-loop run --app-id <app>
 --send-mode live --managed-gui-send ...`. The authorization must include
 `live_send: true` and `autonomous_send: true`; the action request must be
 policy-checked, hash-bound to the text file, and include target-chat binding.
-The harness must verify the target chat, verify the focused input text exactly
-before pressing Return, and verify the outbound bubble from fresh post-action
-evidence before the result can be recorded as `succeeded`.
+The harness must verify the target chat, verify the staged text exactly
+before clicking Send or pressing Return, and verify the outbound bubble from
+fresh post-action evidence before the result can be recorded as `succeeded`.
 
 The action `expand-visible-profile-section` is a bounded tap for a visibly
 folded profile section such as `查看所有...项信息`. Use it only after a fresh

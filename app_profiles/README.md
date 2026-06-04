@@ -7,7 +7,8 @@ and which actions remain unsupported.
 
 ## Files
 
-- `tinder.json`: Tinder host-loop and iPhone Mirroring navigation contract.
+- `tinder.json`: Tinder host-loop, iPhone Mirroring navigation, and
+  explicitly authorized managed live-send contract.
 - `wechat.json`: macOS WeChat desktop observation, draft-staging, and
   explicitly authorized managed live-send contract.
 - `bumble.json`: Bumble contract-only placeholder.

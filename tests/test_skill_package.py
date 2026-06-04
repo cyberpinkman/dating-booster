@@ -200,6 +200,7 @@ class SkillPackageTests(unittest.TestCase):
             "harness tinder observe",
             "harness tinder action",
             "harness tinder workflow",
+            "harness tinder send-message",
             "harness wechat launch",
             "harness wechat observe",
             "harness wechat stage-draft",

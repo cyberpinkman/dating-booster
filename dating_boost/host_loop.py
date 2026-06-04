@@ -590,7 +590,7 @@ class HostLoopSupervisor:
         return None
 
     def _handle_managed_gui_send(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
-        if self.args.app_id != "wechat":
+        if self.args.app_id not in {"tinder", "wechat"}:
             return self._finish("blocked", f"managed_gui_send_not_supported_for_app:{self.args.app_id}", current=work_item)
         if SafetyRepository(self.data_dir).is_paused():
             return self._finish("blocked", "safety_paused", current=work_item)
@@ -608,7 +608,7 @@ class HostLoopSupervisor:
         try:
             harness_payload = self._run_cli_json(
                 "harness",
-                "wechat",
+                self.args.app_id,
                 "send-message",
                 "--data-dir",
                 str(self.data_dir),
@@ -645,12 +645,7 @@ class HostLoopSupervisor:
                 current=work_item,
                 extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
             )
-        required_evidence = (
-            "staged_text_verified",
-            "input_cleared_after_send",
-            "post_action_screen_captured",
-            "outbound_message_verified",
-        )
+        required_evidence = _managed_gui_send_required_evidence(self.args.app_id)
         if any(harness_evidence.get(key) is not True for key in required_evidence):
             return self._finish(
                 "blocked",
@@ -663,7 +658,7 @@ class HostLoopSupervisor:
             "status": "ok",
             "action_request_id": work_item.get("action_request_id"),
             "payload_hash": work_item.get("payload_hash"),
-            "verification_method": "managed_wechat_accessibility",
+            "verification_method": f"managed_{self.args.app_id}_gui_send",
         }
         self.staged_verifications.append(verification)
         result_payload = {
@@ -1224,6 +1219,22 @@ def _redacted_managed_send_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "clipboard_restored",
     }
     return {key: value for key, value in payload.items() if key in allowed}
+
+
+def _managed_gui_send_required_evidence(app_id: str) -> tuple[str, ...]:
+    common = (
+        "staged_text_verified",
+        "post_action_screen_captured",
+        "outbound_message_verified",
+    )
+    if app_id == "wechat":
+        return (
+            "staged_text_verified",
+            "input_cleared_after_send",
+            "post_action_screen_captured",
+            "outbound_message_verified",
+        )
+    return common
 
 
 def _target_binding_for_work_item(work_item: dict[str, Any], pending_scan_batch: dict[str, Any] | None) -> dict[str, Any]:

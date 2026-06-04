@@ -113,6 +113,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertIn("harness tinder observe", payload["supported_commands"])
         self.assertIn("harness tinder action", payload["supported_commands"])
         self.assertIn("harness tinder workflow", payload["supported_commands"])
+        self.assertIn("harness tinder send-message", payload["supported_commands"])
         self.assertIn("harness wechat launch", payload["supported_commands"])
         self.assertIn("harness wechat observe", payload["supported_commands"])
         self.assertIn("harness wechat stage-draft", payload["supported_commands"])
@@ -123,6 +124,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["agent_native_capabilities"]["tinder_gui_navigation"])
         self.assertTrue(payload["agent_native_capabilities"]["tinder_profile_read_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["tinder_chat_navigation_harness"])
+        self.assertTrue(payload["agent_native_capabilities"]["tinder_live_send_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_host_loop"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_macos_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_gui_launch"])
@@ -377,6 +379,102 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["layout_hints"]["reply_required_marker_present"])
         self.assertIn("text_fingerprint", payload["screen"])
         self.assertNotIn("等你回应", json.dumps(payload, ensure_ascii=False))
+
+    def test_tinder_send_message_verifies_target_staged_text_and_outbound_bubble(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\n今晚可以聊十分钟吗？\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\n今晚可以聊十分钟吗？\n",
+            ]
+        )
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+        self.assertTrue(payload["evidence"]["staged_text_verified"])
+        self.assertTrue(payload["evidence"]["post_action_screen_captured"])
+        self.assertTrue(payload["evidence"]["outbound_message_verified"])
+        self.assertIn("post_action_observation_id", payload)
+        self.assertTrue(any(command and command[0] == "pbcopy" for command in runner.commands))
+        self.assertTrue(any('keystroke "v"' in " ".join(command) for command in runner.commands))
+        self.assertNotIn("今晚可以聊十分钟吗", json.dumps(payload, ensure_ascii=False))
+
+    def test_tinder_send_message_blocks_when_iphone_mirroring_is_not_frontmost(self):
+        runner = FakeRunner(
+            ocr_text="Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+            frontmost=False,
+        )
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "iphone_mirroring_not_frontmost")
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+        self.assertFalse(any('keystroke "v"' in " ".join(command) for command in runner.commands))
+
+    def test_tinder_send_message_blocks_when_target_is_only_visible_in_chat_list(self):
+        runner = FakeRunner(ocr_text="Tinder\n新的配对\n消息\nAda\n等你回应\n")
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "target_binding_chat_not_verified")
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+
+    def test_tinder_send_message_needs_verification_when_post_send_screen_matches_staged_screen(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\n今晚可以聊十分钟吗？\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\n今晚可以聊十分钟吗？\nSend\n",
+            ]
+        )
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
+        )
+
+        self.assertEqual(payload["status"], "needs_verification")
+        self.assertEqual(payload["reason"], "outbound_message_not_verified")
+        self.assertFalse(payload["evidence"]["outbound_message_verified"])
+
+    def test_tinder_send_message_blocks_when_target_binding_mismatches_before_staging(self):
+        runner = FakeRunner(ocr_text="Tinder\nZara\n昨天 21:14\n在吗\nMessage\nSend\n")
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "target_binding_mismatch")
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
 
     def test_cli_exposes_tinder_observe_with_redacted_payload(self):
         with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
@@ -824,6 +922,58 @@ class GuiHarnessTests(unittest.TestCase):
                 exit_code, payload = _run_cli_json([
                     "harness",
                     "wechat",
+                    "send-message",
+                    "--text-file",
+                    str(draft_path),
+                    "--data-dir",
+                    str(data_dir),
+                    "--authorization",
+                    str(auth_path),
+                    "--action-request",
+                    str(action_path),
+                    "--json",
+                ])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["reason"], "action_request_payload_hash_mismatch")
+        harness_class.assert_not_called()
+
+    def test_cli_tinder_real_send_requires_policy_allowed_action_request(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            draft_path = root / "tinder-draft.txt"
+            data_dir = root / "data"
+            auth_path = root / "auth.json"
+            action_path = root / "action_request.json"
+            draft_text = "今晚可以聊十分钟吗？"
+            draft_path.write_text(draft_text, encoding="utf-8")
+            auth_path.write_text(json.dumps({
+                "schema_version": 1,
+                "authorization_id": "auth_tinder_live",
+                "scope": "send_chat_messages",
+                "app_id": "tinder",
+                "expires_at": "2026-06-05T00:00:00Z",
+                "allowed_actions": ["send_message"],
+                "autonomous_send": True,
+                "live_send": True,
+                "requires_post_action_verification": True,
+                "revoked_at": None,
+            }), encoding="utf-8")
+            action_path.write_text(json.dumps({
+                "schema_version": 1,
+                "action_request_id": "act_tinder_send",
+                "action": "send_message",
+                "match_id": "match_ada",
+                "candidate_key": "tinder_ada",
+                "payload_hash": "wrong_hash",
+                "requires_post_action_verification": True,
+                "policy": {"allowed": True},
+                "target_binding": {"required_visible_text": ["Ada"]},
+            }), encoding="utf-8")
+            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+                exit_code, payload = _run_cli_json([
+                    "harness",
+                    "tinder",
                     "send-message",
                     "--text-file",
                     str(draft_path),

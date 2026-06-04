@@ -4,9 +4,9 @@ Use this workflow when the user wants Codex to run a real Tinder host loop with
 iPhone Mirroring. `dating-boost-host-loop` drives the operator state machine.
 `dating-boost harness ...` provides the native stage/navigation harness for
 iPhone Mirroring diagnostics, screenshots/OCR, safe Tinder profile-tab
-navigation, profile reading, and chat/profile opening chains. Codex still
-performs semantic screen understanding and must verify staged text before any
-send.
+navigation, profile reading, chat/profile opening chains, and gated managed
+send. Codex still performs semantic screen understanding and must verify staged
+text and outbound post-action evidence before any managed send is recorded.
 
 ## Start
 
@@ -20,6 +20,7 @@ dating-boost harness tinder open-profile --launch-if-needed --json
 dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
 dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
 dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
 dating-boost-host-loop doctor \
   --data-dir .local/dating-boost \
   --app-id tinder \
@@ -29,8 +30,12 @@ dating-boost-host-loop doctor \
 Use `harness tinder observe` before selecting an action or workflow. Use the
 workflow commands only as dry-run plans until a fresh observation confirms the
 current Tinder page matches the expected starting state. They are
-navigation-only reading/profile-refresh chains and never authorize send, like,
-super-like, unmatch, report, or profile edit actions.
+navigation-only reading/profile-refresh chains. A real send is allowed only via
+`harness tinder send-message` or `--managed-gui-send` with explicit live-send
+authorization, a policy-checked action request, target-chat binding, staged
+text verification, outbound-bubble verification, and an unpaused safety switch.
+The harness never authorizes like, super-like, unmatch, report, or profile edit
+actions.
 
 If configuration files are missing, generate templates:
 

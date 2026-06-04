@@ -2,7 +2,7 @@
   "schema_version": 1,
   "app_id": "tinder",
   "display_name": "Tinder",
-  "support_level": "native_navigation",
+  "support_level": "managed_live_send",
   "host_loop_supported": true,
   "host_loop_send_modes": ["stage", "live"],
   "message_list_observation": [
@@ -44,6 +44,7 @@
       "open_conversation",
       "open_thread_profile"
     ],
+    "supported_live_actions": ["send_message"],
     "launch_navigation": {
       "intent": "ios_search_launch",
       "requires_verified_screen_state": "ios_home_screen",
@@ -84,6 +85,17 @@
       "conversation_avatar_tap_ratio": {"x": 0.14, "y": 0.30},
       "thread_profile_avatar_tap_ratio": {"x": 0.13, "y": 0.08},
       "reply_required_marker": "等你回应"
+    },
+    "live_send": {
+      "intent": "tap_send_after_exact_staged_text_verification",
+      "default_enabled": false,
+      "requires_authorization_fields": ["autonomous_send", "live_send", "allowed_actions", "requires_post_action_verification"],
+      "requires_safety_active": true,
+      "requires_policy_checked_action_request": true,
+      "requires_target_binding_verification": true,
+      "requires_exact_staged_text_verification": true,
+      "requires_post_action_verification": true,
+      "requires_outbound_bubble_verification": true
     },
     "high_level_workflows": ["self-profile-read", "chat-read-match-profile"],
     "blocked_actions": ["send", "like", "super_like", "unmatch", "report", "profile_edit"]

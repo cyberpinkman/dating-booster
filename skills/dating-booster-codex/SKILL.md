@@ -83,8 +83,9 @@ For public production, treat the local safety switch as authoritative. If
 paused, do not send, paste, stage, or continue a live host loop until the user
 explicitly resumes it. Live sends require `--send-mode live`, authorization with
 `live_send: true`, exact staged-text verification, and post-action verification.
-For macOS WeChat fully managed sending, also require `--managed-gui-send` and
-the `harness wechat send-message --text-file ...` path.
+For Tinder or macOS WeChat fully managed sending, also require
+`--managed-gui-send` and the app-specific `harness <app> send-message
+--text-file ...` path.
 
 ## Default Draft Output
 
@@ -167,6 +168,7 @@ dating-boost harness tinder observe --output-dir .local/dating-boost-harness --j
 dating-boost harness tinder action profile-photo-next --dry-run --json
 dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
 dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
 ```
 
 Use `dating-boost harness tinder open-profile --json` only for safe navigation
@@ -181,9 +183,15 @@ state and markers such as new-match carousel presence, conversation-list
 presence, `等你回应`, and visible profile expand controls without returning raw
 OCR text. The native harness may diagnose the mirrored window, capture
 screenshots/OCR, launch Tinder, move through profile photo/read states, open
-chats, open visible conversations, and open profile previews from thread
-avatars. It must not send, like, super-like, unmatch, report, or edit profile
-data.
+chats, open visible conversations, open profile previews from thread avatars,
+and execute a fully managed `send_message` only through
+`harness tinder send-message --text-file ... --data-dir ... --authorization ...
+--action-request ...`. Real Tinder sends require unexpired authorization with
+`app_id: tinder`, `autonomous_send: true`, `live_send: true`, `send_message`
+allowed, an unpaused safety switch, a policy-checked/hash-bound action request,
+target-chat binding, staged-text OCR verification, outbound-bubble verification,
+and a `post_action_observation_id`. It must not like, super-like, unmatch,
+report, or edit profile data.
 
 ## macOS WeChat Input
 

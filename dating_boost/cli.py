@@ -237,6 +237,16 @@ def main(argv: list[str] | None = None) -> int:
     harness_tinder_workflow_parser.add_argument("--profile-scroll-steps", type=int)
     harness_tinder_workflow_parser.add_argument("--json", action="store_true")
     harness_tinder_workflow_parser.set_defaults(handler=_handle_harness_tinder_workflow)
+    harness_tinder_send_parser = harness_tinder_subparsers.add_parser("send-message")
+    harness_tinder_send_parser.add_argument("--window-title", default="iPhone Mirroring")
+    harness_tinder_send_parser.add_argument("--text-file", required=True, type=Path)
+    harness_tinder_send_parser.add_argument("--data-dir", type=Path)
+    harness_tinder_send_parser.add_argument("--authorization", type=Path)
+    harness_tinder_send_parser.add_argument("--action-request", type=Path)
+    harness_tinder_send_parser.add_argument("--dry-run", action="store_true")
+    harness_tinder_send_parser.add_argument("--output-dir", type=Path)
+    harness_tinder_send_parser.add_argument("--json", action="store_true")
+    harness_tinder_send_parser.set_defaults(handler=_handle_harness_tinder_send_message)
     harness_wechat_parser = harness_subparsers.add_parser("wechat")
     harness_wechat_subparsers = harness_wechat_parser.add_subparsers(dest="harness_wechat_command", required=True)
     harness_wechat_launch_parser = harness_wechat_subparsers.add_parser("launch")
@@ -900,6 +910,25 @@ def _handle_harness_tinder_workflow(args: argparse.Namespace) -> int:
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
 
 
+def _handle_harness_tinder_send_message(args: argparse.Namespace) -> int:
+    draft_text = args.text_file.read_text(encoding="utf-8")
+    action_request: dict[str, Any] | None = None
+    if not args.dry_run:
+        block_payload = _live_send_cli_block_payload(args, app_id="tinder", draft_text=draft_text)
+        if block_payload is not None:
+            _print_json(block_payload)
+            return 2
+        action_request = _read_json_object(args.action_request)
+    payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).send_tinder_message(
+        draft_text,
+        dry_run=args.dry_run,
+        output_dir=args.output_dir,
+        target_binding=action_request.get("target_binding") if isinstance(action_request, dict) else None,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
 def _handle_harness_wechat_launch(args: argparse.Namespace) -> int:
     payload = NativeGuiHarness(app_id="wechat", window_title=args.window_title).launch_wechat(
         dry_run=args.dry_run,
@@ -957,82 +986,11 @@ def _handle_harness_wechat_send_message(args: argparse.Namespace) -> int:
     draft_text = args.text_file.read_text(encoding="utf-8")
     action_request: dict[str, Any] | None = None
     if not args.dry_run:
-        if args.data_dir is None:
-            _print_json(
-                {
-                    "schema_version": 1,
-                    "status": "blocked",
-                    "app_id": "wechat",
-                    "action": "send_message",
-                    "reason": "data_dir_required_for_safety_check",
-                    "next_host_action": "rerun_with_data_dir_or_use_dry_run",
-                }
-            )
-            return 2
-        if args.authorization is None:
-            _print_json(
-                {
-                    "schema_version": 1,
-                    "status": "blocked",
-                    "app_id": "wechat",
-                    "action": "send_message",
-                    "reason": "authorization_required_for_live_send",
-                    "next_host_action": "provide_explicit_live_send_authorization",
-                }
-            )
-            return 2
-        if SafetyRepository(args.data_dir).is_paused():
-            _print_json(
-                {
-                    "schema_version": 1,
-                    "status": "blocked",
-                    "app_id": "wechat",
-                    "action": "send_message",
-                    "reason": "safety_paused",
-                    "next_host_action": "resume_safety_before_live_send",
-                }
-            )
-            return 2
-        if args.action_request is None:
-            _print_json(
-                {
-                    "schema_version": 1,
-                    "status": "blocked",
-                    "app_id": "wechat",
-                    "action": "send_message",
-                    "reason": "action_request_required_for_live_send",
-                    "next_host_action": "provide_policy_checked_action_request",
-                }
-            )
-            return 2
-        authorization = _read_json_object(args.authorization)
-        auth_reason = _wechat_live_send_authorization_block_reason(authorization)
-        if auth_reason is not None:
-            _print_json(
-                {
-                    "schema_version": 1,
-                    "status": "blocked",
-                    "app_id": "wechat",
-                    "action": "send_message",
-                    "reason": auth_reason,
-                    "next_host_action": "provide_explicit_live_send_authorization",
-                }
-            )
+        block_payload = _live_send_cli_block_payload(args, app_id="wechat", draft_text=draft_text)
+        if block_payload is not None:
+            _print_json(block_payload)
             return 2
         action_request = _read_json_object(args.action_request)
-        action_reason = _wechat_live_send_action_request_block_reason(action_request, draft_text)
-        if action_reason is not None:
-            _print_json(
-                {
-                    "schema_version": 1,
-                    "status": "blocked",
-                    "app_id": "wechat",
-                    "action": "send_message",
-                    "reason": action_reason,
-                    "next_host_action": "provide_policy_checked_action_request",
-                }
-            )
-            return 2
     payload = NativeGuiHarness(app_id="wechat", window_title=args.window_title).send_wechat_message(
         draft_text,
         dry_run=args.dry_run,
@@ -1043,10 +1001,76 @@ def _handle_harness_wechat_send_message(args: argparse.Namespace) -> int:
     return 0 if payload.get("status") == "ok" else 2
 
 
+def _live_send_cli_block_payload(args: argparse.Namespace, *, app_id: str, draft_text: str) -> dict[str, Any] | None:
+    if args.data_dir is None:
+        return {
+            "schema_version": 1,
+            "status": "blocked",
+            "app_id": app_id,
+            "action": "send_message",
+            "reason": "data_dir_required_for_safety_check",
+            "next_host_action": "rerun_with_data_dir_or_use_dry_run",
+        }
+    if args.authorization is None:
+        return {
+            "schema_version": 1,
+            "status": "blocked",
+            "app_id": app_id,
+            "action": "send_message",
+            "reason": "authorization_required_for_live_send",
+            "next_host_action": "provide_explicit_live_send_authorization",
+        }
+    if SafetyRepository(args.data_dir).is_paused():
+        return {
+            "schema_version": 1,
+            "status": "blocked",
+            "app_id": app_id,
+            "action": "send_message",
+            "reason": "safety_paused",
+            "next_host_action": "resume_safety_before_live_send",
+        }
+    if args.action_request is None:
+        return {
+            "schema_version": 1,
+            "status": "blocked",
+            "app_id": app_id,
+            "action": "send_message",
+            "reason": "action_request_required_for_live_send",
+            "next_host_action": "provide_policy_checked_action_request",
+        }
+    authorization = _read_json_object(args.authorization)
+    auth_reason = _live_send_authorization_block_reason(authorization, app_id=app_id)
+    if auth_reason is not None:
+        return {
+            "schema_version": 1,
+            "status": "blocked",
+            "app_id": app_id,
+            "action": "send_message",
+            "reason": auth_reason,
+            "next_host_action": "provide_explicit_live_send_authorization",
+        }
+    action_request = _read_json_object(args.action_request)
+    action_reason = _live_send_action_request_block_reason(action_request, draft_text)
+    if action_reason is not None:
+        return {
+            "schema_version": 1,
+            "status": "blocked",
+            "app_id": app_id,
+            "action": "send_message",
+            "reason": action_reason,
+            "next_host_action": "provide_policy_checked_action_request",
+        }
+    return None
+
+
 def _wechat_live_send_authorization_block_reason(authorization: dict[str, Any]) -> str | None:
+    return _live_send_authorization_block_reason(authorization, app_id="wechat")
+
+
+def _live_send_authorization_block_reason(authorization: dict[str, Any], *, app_id: str) -> str | None:
     if authorization.get("scope") != "send_chat_messages":
         return "authorization_scope_not_send_chat_messages"
-    if authorization.get("app_id") != "wechat":
+    if authorization.get("app_id") != app_id:
         return "authorization_app_mismatch"
     if authorization.get("revoked_at"):
         return "authorization_revoked"
@@ -1073,6 +1097,10 @@ def _wechat_live_send_authorization_block_reason(authorization: dict[str, Any]) 
 
 
 def _wechat_live_send_action_request_block_reason(action_request: dict[str, Any], draft_text: str) -> str | None:
+    return _live_send_action_request_block_reason(action_request, draft_text)
+
+
+def _live_send_action_request_block_reason(action_request: dict[str, Any], draft_text: str) -> str | None:
     if action_request.get("action") != "send_message":
         return "action_request_not_send_message"
     if not isinstance(action_request.get("action_request_id"), str) or not action_request["action_request_id"].strip():
