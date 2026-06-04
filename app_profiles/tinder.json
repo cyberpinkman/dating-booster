@@ -42,15 +42,16 @@
       "matches_carousel_previous",
       "open_new_match",
       "open_conversation",
-      "open_thread_profile"
+      "open_thread_profile",
+      "return_to_chats"
     ],
     "supported_live_actions": ["send_message"],
     "launch_navigation": {
-      "intent": "ios_search_launch",
-      "requires_verified_screen_state": "ios_home_screen",
-      "steps": ["tap_ios_search", "tap_tinder_suggestion_icon", "type_app_name", "press_return"],
-      "primary_path": ["tap_ios_search", "tap_tinder_suggestion_icon"],
-      "fallback_path": ["type_app_name", "press_return"]
+      "intent": "ios_home_spotlight_search_launch",
+      "requires_verified_screen_state": "not_required",
+      "steps": ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "press_return"],
+      "primary_path": ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "press_return"],
+      "fallback_path": ["open_iphone_home_screen", "tap_home_search_entry", "type_app_name", "press_return"]
     },
     "self_profile_navigation": {
       "intent": "tap_tinder_profile_tab",
@@ -70,20 +71,21 @@
     },
     "profile_detail_navigation": {
       "open_full_profile_tap_ratio": {"x": 0.90, "y": 0.82},
-      "read_down_swipe": {"from": {"x": 0.50, "y": 0.78}, "to": {"x": 0.50, "y": 0.32}},
-      "read_up_swipe": {"from": {"x": 0.50, "y": 0.32}, "to": {"x": 0.50, "y": 0.78}},
+      "read_down_wheel": {"x": 0.50, "y": 0.86, "delta_y": -20, "repeats": 18},
+      "read_up_wheel": {"x": 0.50, "y": 0.46, "delta_y": 20, "repeats": 18},
       "expand_visible_section_tap_ratio": {"x": 0.50, "y": 0.76},
       "close_full_profile_tap_ratio": {"x": 0.90, "y": 0.08},
       "close_preview_tap_ratio": {"x": 0.90, "y": 0.08}
     },
     "chat_navigation": {
       "open_chats_tab_tap_ratio": {"x": 0.66, "y": 0.94},
-      "new_matches_carousel_swipe_left": {"from": {"x": 0.82, "y": 0.20}, "to": {"x": 0.24, "y": 0.20}},
-      "new_matches_carousel_swipe_right": {"from": {"x": 0.24, "y": 0.20}, "to": {"x": 0.82, "y": 0.20}},
-      "new_match_card_base_tap_ratio": {"x": 0.15, "y": 0.20},
+      "new_matches_carousel_wheel_left": {"x": 0.56, "y": 0.30, "delta_x": -20, "repeats": 18},
+      "new_matches_carousel_wheel_right": {"x": 0.56, "y": 0.30, "delta_x": 20, "repeats": 18},
+      "new_match_card_base_tap_ratio": {"x": 0.42, "y": 0.30},
       "conversation_row_base_tap_ratio": {"x": 0.50, "y": 0.30},
       "conversation_avatar_tap_ratio": {"x": 0.14, "y": 0.30},
-      "thread_profile_avatar_tap_ratio": {"x": 0.13, "y": 0.08},
+      "thread_profile_avatar_tap_ratio": {"x": 0.50, "y": 0.14},
+      "thread_back_to_chats_tap_ratio": {"x": 0.09, "y": 0.13},
       "reply_required_marker": "等你回应"
     },
     "live_send": {
@@ -97,7 +99,7 @@
       "requires_post_action_verification": true,
       "requires_outbound_bubble_verification": true
     },
-    "high_level_workflows": ["self-profile-read", "chat-read-match-profile"],
+    "high_level_workflows": ["self-profile-read", "chat-read-match-profile", "new-match-open", "new-match-read-profile"],
     "blocked_actions": ["send", "like", "super_like", "unmatch", "report", "profile_edit"]
   },
   "post_send_verification": [

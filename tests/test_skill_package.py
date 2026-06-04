@@ -149,8 +149,11 @@ class SkillPackageTests(unittest.TestCase):
         for harness_phrase in (
             "self-profile-read",
             "chat-read-match-profile",
+            "new-match-open",
+            "new-match-read-profile",
             "profile-photo-next",
             "open-conversation",
+            "return-to-chats",
             "open-thread-profile",
             "expand-visible-profile-section",
         ):
@@ -221,6 +224,7 @@ class SkillPackageTests(unittest.TestCase):
             "result_status",
         ):
             self.assertIn(phrase, workflows_text)
+
         for field_name in (
             "observation_id",
             "match_identity_hints",
@@ -303,6 +307,36 @@ class SkillPackageTests(unittest.TestCase):
             "看情况",
         ):
             self.assertIn(phrase, checklist_text)
+
+    def test_tinder_new_match_workflows_are_documented_for_agents(self):
+        docs = {
+            "readme": Path("README.md").read_text(encoding="utf-8").lower(),
+            "skill": (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower(),
+            "workflows": (SKILL_DIR / "references" / "workflows.md").read_text(encoding="utf-8").lower(),
+            "host_loop": (SKILL_DIR / "references" / "host-loop.md").read_text(encoding="utf-8").lower(),
+            "runbook": (SKILL_DIR / "references" / "production-stage-runbook.md").read_text(encoding="utf-8").lower(),
+        }
+
+        for name, text in docs.items():
+            self.assertIn("new-match-open", text, name)
+            self.assertIn("new-match-read-profile", text, name)
+            self.assertNotIn("chat-read-match-profile --dry-run --carousel-swipes", text, name)
+            self.assertNotIn("chat-read-match-profile --carousel-swipes", text, name)
+
+    def test_tinder_app_profile_exposes_split_new_match_harness_contract(self):
+        profile = json.loads(Path("app_profiles/tinder.json").read_text(encoding="utf-8"))
+        harness = profile["native_gui_harness"]
+
+        self.assertIn("new-match-open", harness["high_level_workflows"])
+        self.assertIn("new-match-read-profile", harness["high_level_workflows"])
+        self.assertIn("return_to_chats", harness["supported_stage_actions"])
+        self.assertEqual(
+            harness["launch_navigation"]["steps"],
+            ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "press_return"],
+        )
+        self.assertIn("new_matches_carousel_wheel_left", harness["chat_navigation"])
+        self.assertEqual(harness["chat_navigation"]["new_match_card_base_tap_ratio"], {"x": 0.42, "y": 0.30})
+        self.assertEqual(harness["chat_navigation"]["thread_profile_avatar_tap_ratio"], {"x": 0.50, "y": 0.14})
 
     def test_naturalness_check_is_internal_by_default(self):
         skill_text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower()

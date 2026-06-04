@@ -26,7 +26,9 @@ agent and uses iPhone Mirroring only for observe, paste, and verify.
    Run `dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json`
    once iPhone Mirroring is unlocked to record redacted page/layout hints.
    Also dry-run `dating-boost harness tinder workflow self-profile-read --photo-steps 2 --scroll-steps 2 --dry-run --json`
-   and `dating-boost harness tinder workflow chat-read-match-profile --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --dry-run --json`
+   `dating-boost harness tinder workflow chat-read-match-profile --conversation-row 1 --profile-scroll-steps 2 --dry-run --json`,
+   `dating-boost harness tinder workflow new-match-open --carousel-swipes 1 --match-index 2 --dry-run --json`,
+   and `dating-boost harness tinder workflow new-match-read-profile --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --dry-run --json`
    before using those chains on the real GUI.
 9. Stop if capabilities, required schema versions, data doctor, harness doctor, or required
    commands mismatch.
@@ -54,6 +56,11 @@ staging, but no WeChat-specific profile navigation chain.
    bounded navigation after each screen is freshly observed. For match profile
    refreshes, it may use `dating-boost harness tinder workflow chat-read-match-profile --conversation-row N --output-dir .local/dating-boost-harness --json`
    after confirming the chat page layout.
+   For unopened matches, use `dating-boost harness tinder workflow new-match-open --match-index N --output-dir .local/dating-boost-harness --json`
+   or `dating-boost harness tinder workflow new-match-read-profile --match-index N --profile-scroll-steps 2 --output-dir .local/dating-boost-harness --json`.
+   Process one unopened match at a time; after a managed opener send, return
+   with `dating-boost harness tinder action return-to-chats --output-dir .local/dating-boost-harness --json`
+   before selecting the next visible unopened match.
 6. Codex may observe the message list, open the requested thread, paste the
    staged text into the input box, and verify the staged text.
 7. The run must stop at `staged_waiting_user_confirmation`.

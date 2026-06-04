@@ -233,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
     harness_tinder_workflow_parser.add_argument("--photo-steps", type=int)
     harness_tinder_workflow_parser.add_argument("--scroll-steps", type=int)
     harness_tinder_workflow_parser.add_argument("--carousel-swipes", type=int)
+    harness_tinder_workflow_parser.add_argument("--match-index", type=int)
     harness_tinder_workflow_parser.add_argument("--conversation-row", type=int)
     harness_tinder_workflow_parser.add_argument("--profile-scroll-steps", type=int)
     harness_tinder_workflow_parser.add_argument("--json", action="store_true")
@@ -897,6 +898,7 @@ def _handle_harness_tinder_workflow(args: argparse.Namespace) -> int:
         "photo_steps": args.photo_steps,
         "scroll_steps": args.scroll_steps,
         "carousel_swipes": args.carousel_swipes,
+        "match_index": args.match_index,
         "conversation_row": args.conversation_row,
         "profile_scroll_steps": args.profile_scroll_steps,
     }

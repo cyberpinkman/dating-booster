@@ -22,7 +22,14 @@ WECHAT_HARNESS_BACKEND = "macos_wechat_desktop"
 HARNESS_BACKEND = IPHONE_MIRRORING_HARNESS_BACKEND
 BLOCKED_GUI_ACTIONS = ["send", "like", "super_like", "unmatch", "report", "profile_edit"]
 WECHAT_BLOCKED_GUI_ACTIONS = ["send", "payments", "calls", "contact_exchange_without_user"]
-TINDER_FOREGROUND_STATES = {"tinder_home", "tinder_messages", "tinder_conversation", "tinder_self_profile", "tinder_unknown"}
+TINDER_FOREGROUND_STATES = {
+    "tinder_home",
+    "tinder_messages",
+    "tinder_conversation",
+    "tinder_self_profile",
+    "tinder_profile",
+    "tinder_unknown",
+}
 WECHAT_FOREGROUND_STATES = {"wechat_chat", "wechat_chat_list", "wechat_unknown"}
 
 
@@ -537,44 +544,13 @@ class NativeGuiHarness:
         if state in TINDER_FOREGROUND_STATES:
             payload["reason"] = "tinder_already_foreground"
             return payload
-        if state != "ios_home_screen":
-            payload.update({"status": "blocked", "reason": "ios_home_screen_not_verified"})
-            return payload
         if dry_run:
             return payload
 
         window_payload = doctor.get("window") or {}
         window = _window_from_payload(window_payload)
         executed_steps: list[dict[str, Any]] = []
-        search_step = planned_steps[0]
-        result = self._execute_step(window, search_step)
-        executed_steps.append({**search_step, "result": result})
-        if result["status"] != "ok":
-            payload.update({"status": "blocked", "reason": result["reason"], "executed_steps": executed_steps})
-            return payload
-        time.sleep(float(search_step.get("wait_after_seconds", 0.2)))
-
-        search_output = output_dir / "iphone_mirroring.after_search.png" if output_dir is not None else None
-        search_screen = self.capture_window(output=search_output, window=window)
-        payload["search_screen"] = _redacted_screen(search_screen)
-
-        suggestion_step = planned_steps[1]
-        result = self._execute_step(window, suggestion_step)
-        executed_steps.append({**suggestion_step, "result": result})
-        if result["status"] != "ok":
-            payload.update({"status": "blocked", "reason": result["reason"], "executed_steps": executed_steps})
-            return payload
-        time.sleep(float(suggestion_step.get("wait_after_seconds", 0.2)))
-
-        verification_output = output_dir / "iphone_mirroring.after_launch.png" if output_dir is not None else None
-        verification = self.capture_window(output=verification_output, window=window)
-        if verification["state"] in TINDER_FOREGROUND_STATES:
-            payload["executed_steps"] = executed_steps
-            payload["verification"] = _redacted_screen(verification)
-            return payload
-
-        fallback_steps = planned_steps[2:]
-        for step in fallback_steps:
+        for step in planned_steps:
             result = self._execute_step(window, step)
             executed_steps.append({**step, "result": result})
             if result["status"] != "ok":
@@ -582,6 +558,7 @@ class NativeGuiHarness:
                 return payload
             time.sleep(float(step.get("wait_after_seconds", 0.2)))
         payload["executed_steps"] = executed_steps
+        verification_output = output_dir / "iphone_mirroring.after_launch.png" if output_dir is not None else None
         verification = self.capture_window(output=verification_output, window=window)
         payload["verification"] = _redacted_screen(verification)
         if verification["state"] not in TINDER_FOREGROUND_STATES:
@@ -615,14 +592,14 @@ class NativeGuiHarness:
             payload.update({"status": "blocked", "reason": doctor.get("reason")})
             return payload
         state = doctor.get("screen", {}).get("state")
-        if state == "ios_home_screen" and launch_if_needed:
+        if state not in TINDER_FOREGROUND_STATES and launch_if_needed:
             planned_steps = [*_launch_tinder_steps(), profile_step]
             payload["planned_steps"] = planned_steps
             if dry_run:
                 return payload
             launch = self.launch_tinder(dry_run=False, output_dir=output_dir)
             payload["launch"] = launch
-            if launch["status"] == "blocked":
+            if launch["status"] != "ok":
                 payload.update({"status": "blocked", "reason": launch.get("reason")})
                 return payload
             doctor = self.doctor(capture=True, output=doctor_output)
@@ -899,14 +876,55 @@ class NativeGuiHarness:
                 return payload
         window = _window_from_payload(doctor.get("window") or {})
         executed_steps: list[dict[str, Any]] = []
+        profile_read_captures: list[dict[str, Any]] = []
+        profile_read_texts: list[str] = []
         for step in payload["planned_steps"]:
-            result = self._execute_step(window, step)
+            if step["intent"] == "capture_profile_read_step":
+                output = None
+                if output_dir is not None:
+                    output = output_dir / f"iphone_mirroring.profile_read_step_{len(profile_read_captures) + 1:02d}.png"
+                screen = self.capture_window(output=output, window=window)
+                result = {
+                    "status": screen.get("status", "blocked"),
+                    "screen": _redacted_screen(screen),
+                }
+                profile_read_captures.append(result["screen"])
+                profile_read_texts.append(str(screen.get("text") or ""))
+            elif step["intent"] == "safe_expand_visible_profile_section":
+                output = None
+                if output_dir is not None:
+                    output = output_dir / f"iphone_mirroring.profile_expand_check_{len(profile_read_captures) + 1:02d}.png"
+                screen = self.capture_window(output=output, window=window)
+                observed_text = str(screen.get("text") or "")
+                result = {
+                    "status": screen.get("status", "blocked"),
+                    "screen": _redacted_screen(screen),
+                    "skipped": False,
+                }
+                if result["status"] != "ok":
+                    result["reason"] = screen.get("reason") or "profile_expand_check_failed"
+                elif _tinder_profile_danger_action_visible(observed_text):
+                    result.update({"status": "ok", "skipped": True, "reason": "dangerous_profile_action_visible"})
+                elif not _tinder_profile_expand_control_visible(observed_text):
+                    result.update({"status": "ok", "skipped": True, "reason": "profile_expand_control_not_visible"})
+                else:
+                    click_result = self._click_ratio(window, step["tap_ratio"])
+                    result.update({"click_result": click_result, "status": click_result["status"]})
+                    if click_result["status"] != "ok":
+                        result["reason"] = click_result.get("reason") or "profile_expand_click_failed"
+                profile_read_captures.append(result["screen"])
+                profile_read_texts.append(observed_text)
+            else:
+                result = self._execute_step(window, step)
             executed_steps.append({**step, "result": result})
             if result["status"] != "ok":
-                payload.update({"status": "blocked", "reason": result["reason"], "executed_steps": executed_steps})
+                payload.update({"status": "blocked", "reason": result.get("reason", "tinder_action_step_failed"), "executed_steps": executed_steps})
                 return payload
             time.sleep(float(step.get("wait_after_seconds", 0.2)))
         payload["executed_steps"] = executed_steps
+        if profile_read_captures:
+            payload["profile_read_captures"] = profile_read_captures
+            payload["field_coverage"] = _tinder_profile_field_coverage("\n".join(profile_read_texts))
         after = output_dir / "iphone_mirroring.after_action.png" if output_dir is not None else None
         payload["verification"] = _redacted_screen(self.capture_window(output=after, window=window))
         return payload
@@ -993,11 +1011,70 @@ class NativeGuiHarness:
             "input_backend": "core_graphics",
         }
 
+    def _wheel_ratio(self, window: WindowInfo, wheel: dict[str, Any]) -> dict[str, Any]:
+        if not self._command_available("xcrun"):
+            return {"status": "blocked", "reason": "missing_core_graphics_wheel_backend"}
+        x = round(window.x + window.width * float(wheel.get("x", 0.5)))
+        y = round(window.y + window.height * float(wheel.get("y", 0.5)))
+        delta_y = int(wheel.get("delta_y", 0))
+        delta_x = int(wheel.get("delta_x", 0))
+        repeats = max(1, int(wheel.get("repeats", 1)))
+        interval_us = max(1000, int(wheel.get("interval_us", 18000)))
+        script_path = _core_graphics_wheel_script_path()
+        script_path.write_text(_CORE_GRAPHICS_WHEEL_SWIFT, encoding="utf-8")
+        result = self.runner.run(
+            [
+                "xcrun",
+                "swift",
+                str(script_path),
+                str(x),
+                str(y),
+                str(delta_y),
+                str(delta_x),
+                str(repeats),
+                str(interval_us),
+            ]
+        )
+        if result.returncode != 0:
+            return {"status": "blocked", "reason": "core_graphics_wheel_failed", "stderr": _short(result.stderr)}
+        return {
+            "status": "ok",
+            "point": {"x": x, "y": y},
+            "delta": {"x": delta_x, "y": delta_y},
+            "repeats": repeats,
+            "input_backend": "core_graphics_wheel",
+        }
+
+    def _click_iphone_mirroring_view_menu_item(self, item_name: str) -> dict[str, Any]:
+        result = self.runner.run(
+            [
+                "osascript",
+                "-e",
+                (
+                    f'tell application "System Events" to tell process "{self.window_title}" '
+                    f'to click menu item "{item_name}" of menu "View" of menu bar 1'
+                ),
+            ]
+        )
+        if result.returncode != 0:
+            return {"status": "blocked", "reason": "iphone_mirroring_view_menu_failed", "stderr": _short(result.stderr)}
+        return {"status": "ok", "menu_item": item_name, "input_backend": "applescript_menu"}
+
     def _execute_step(self, window: WindowInfo, step: dict[str, Any]) -> dict[str, Any]:
         if "tap_ratio" in step:
             return self._click_ratio(window, step["tap_ratio"])
         if "swipe" in step:
             return self._swipe_ratio(window, step["swipe"])
+        if "wheel" in step:
+            return self._wheel_ratio(window, step["wheel"])
+        if step["intent"] == "open_iphone_home_screen":
+            return self._click_iphone_mirroring_view_menu_item("Home Screen")
+        if step["intent"] == "open_ios_spotlight":
+            result = self._click_iphone_mirroring_view_menu_item("Spotlight")
+            if result["status"] == "ok":
+                return result
+            fallback = self._click_ratio(window, {"x": 0.5, "y": 0.84})
+            return {**fallback, "fallback_from": "spotlight_menu"}
         if step["intent"] == "type_app_name":
             result = self.runner.run(["osascript", "-e", 'tell application "System Events" to keystroke "Tinder"'])
             if result.returncode != 0:
@@ -1189,15 +1266,16 @@ def classify_screen_text(text: str) -> str:
         return "iphone_mirroring_locked"
     if "requesting to bypass" in normalized and "private window picker" in normalized:
         return "screen_permission_prompt"
-    if any(
-        marker in normalized
-        for marker in ("edit profile", "编辑资料", "编辑个人资料", "edit info")
-    ):
+    if any(marker in normalized for marker in ("edit profile", "编辑资料", "编辑个人资料", "edit info")):
         return "tinder_self_profile"
     if "个人资料" in normalized and any(marker in normalized for marker in ("完善个人资料", "添加一条", "设置")):
         return "tinder_self_profile"
+    if _looks_like_tinder_chat_list_text(normalized):
+        return "tinder_messages"
     if _looks_like_tinder_conversation_text(normalized):
         return "tinder_conversation"
+    if _looks_like_tinder_profile_text(normalized):
+        return "tinder_profile"
     if "等你回应" in normalized or ("配对" in normalized and any(marker in normalized for marker in ("消息", "聊天"))):
         return "tinder_messages"
     if all(marker in normalized for marker in ("滑动", "探索", "聊天", "个人资料")):
@@ -1246,6 +1324,8 @@ def classify_screen_image(path: Path) -> dict[str, str]:
 
 def _combine_screen_states(text_state: str, visual_state: str) -> str:
     if text_state in {"iphone_mirroring_locked", "screen_permission_prompt"}:
+        return text_state
+    if text_state not in {"unknown", "tinder_unknown"}:
         return text_state
     if visual_state == "tinder_self_profile":
         return visual_state
@@ -1418,15 +1498,41 @@ def _target_binding_required_markers(target_binding: dict[str, Any]) -> list[str
     return unique
 
 
+def _looks_like_tinder_chat_list_text(normalized_text: str) -> bool:
+    has_chat_title = "聊天" in normalized_text or "messages" in normalized_text
+    has_chat_sections = any(marker in normalized_text for marker in ("新的配对", "new matches", "消息", "messages"))
+    return has_chat_title and has_chat_sections
+
+
+def _looks_like_tinder_profile_text(normalized_text: str) -> bool:
+    profile_sections = sum(
+        1
+        for marker in ("关于我", "关键信息", "兴趣", "我想要", "基本信息", "生活方式", "about me", "interests")
+        if marker in normalized_text
+    )
+    has_identity_header = bool(re.search(r"\b[a-z][a-z0-9_ .'-]{1,30}\s+\d{2}\b", normalized_text)) or any(
+        marker in normalized_text for marker in ("已认证", "verified")
+    )
+    return profile_sections >= 2 and not _tinder_message_input_marker_present(normalized_text) and (
+        has_identity_header or profile_sections >= 3
+    )
+
+
 def _looks_like_tinder_conversation_text(normalized_text: str) -> bool:
-    history_marker = any(marker in normalized_text for marker in ("昨天", "今天", "分钟前", "am", "pm", ":"))
-    app_or_history_marker = "tinder" in normalized_text or history_marker
-    return app_or_history_marker and history_marker and _tinder_message_input_marker_present(normalized_text)
+    if _looks_like_tinder_chat_list_text(normalized_text):
+        return False
+    if _looks_like_tinder_profile_text(normalized_text):
+        return False
+    if not _tinder_message_input_marker_present(normalized_text):
+        return False
+    stable_thread_marker = any(marker in normalized_text for marker in ("gif", "send", "发送"))
+    visible_name_marker = bool(re.search(r"\b[a-z][a-z0-9_ .'-]{1,30}\b", normalized_text))
+    return stable_thread_marker or visible_name_marker
 
 
 def _tinder_message_input_marker_present(normalized_text: str) -> bool:
     english_input = bool(re.search(r"\b(message|send)\b", normalized_text))
-    chinese_input = any(marker in normalized_text for marker in ("发送", "输入消息", "发消息", "说点什么"))
+    chinese_input = any(marker in normalized_text for marker in ("发送", "输入消息", "发消息", "说点什么", "键入信息"))
     return english_input or chinese_input
 
 
@@ -1521,6 +1627,28 @@ def _expected_text_observation_stats(text: str, expected_text: str) -> dict[str,
     }
 
 
+def _tinder_profile_field_coverage(text: str) -> dict[str, bool]:
+    normalized = _normalize_text(text)
+    return {
+        "about_me": any(marker in normalized for marker in ("关于我", "about me")),
+        "key_info": any(marker in normalized for marker in ("关键信息", "key info")),
+        "interests": any(marker in normalized for marker in ("兴趣", "interests")),
+        "looking_for": any(marker in normalized for marker in ("我想要", "looking for")),
+        "basic_info": any(marker in normalized for marker in ("基本信息", "basic info")),
+        "lifestyle": any(marker in normalized for marker in ("生活方式", "lifestyle")),
+    }
+
+
+def _tinder_profile_expand_control_visible(text: str) -> bool:
+    normalized = _normalize_text(text)
+    return any(marker in normalized for marker in ("查看所有", "查看更多", "show all", "show more"))
+
+
+def _tinder_profile_danger_action_visible(text: str) -> bool:
+    normalized = _normalize_text(text)
+    return any(marker in normalized for marker in ("取消配对", "举报", "屏蔽", "unmatch", "report", "block"))
+
+
 def _tinder_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
     state = str(screen.get("state") or "unknown")
     normalized = _normalize_text(str(screen.get("text") or ""))
@@ -1529,6 +1657,7 @@ def _tinder_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
         "tinder_messages": "chats",
         "tinder_conversation": "conversation",
         "tinder_self_profile": "self_profile",
+        "tinder_profile": "profile",
         "tinder_unknown": "unknown_tinder",
     }.get(state, "unknown")
     return {
@@ -1602,31 +1731,74 @@ def _swipe_step(intent: str, *, from_x: float, from_y: float, to_x: float, to_y:
     }
 
 
+def _wheel_step(
+    intent: str,
+    *,
+    x: float,
+    y: float,
+    delta_y: int = 0,
+    delta_x: int = 0,
+    repeats: int = 18,
+) -> dict[str, Any]:
+    return {
+        "intent": intent,
+        "wheel": {
+            "x": x,
+            "y": y,
+            "delta_y": delta_y,
+            "delta_x": delta_x,
+            "repeats": repeats,
+            "interval_us": 18000,
+        },
+        "requires_verified_tinder_screen": True,
+        "risk": "navigation_only",
+    }
+
+
+def _capture_profile_read_step() -> dict[str, Any]:
+    return {
+        "intent": "capture_profile_read_step",
+        "requires_verified_tinder_screen": True,
+        "risk": "navigation_only",
+        "wait_after_seconds": 0.0,
+    }
+
+
+def _safe_expand_step() -> dict[str, Any]:
+    return {
+        "intent": "safe_expand_visible_profile_section",
+        "tap_ratio": {"x": 0.50, "y": 0.76},
+        "requires_verified_tinder_screen": True,
+        "risk": "navigation_only",
+    }
+
+
 def _tinder_action_steps(action: str, **options: Any) -> list[dict[str, Any]]:
     row_index = int(options.get("row_index") or options.get("conversation_row") or 1)
     match_index = int(options.get("match_index") or 1)
     row_y = min(0.86, 0.30 + (max(row_index, 1) - 1) * 0.12)
-    match_x = min(0.86, 0.15 + (max(match_index, 1) - 1) * 0.18)
+    match_x = min(0.86, 0.42 + (max(match_index, 1) - 1) * 0.24)
     target = str(options.get("target") or "row")
     conversation_x = 0.14 if target == "avatar" else 0.50
     actions: dict[str, list[dict[str, Any]]] = {
         "open-chats": [_tap_step("tap_chats_tab", x=0.66, y=0.94)],
-        "matches-carousel-next": [_swipe_step("swipe_new_matches_left", from_x=0.82, from_y=0.20, to_x=0.24, to_y=0.20)],
-        "matches-carousel-previous": [_swipe_step("swipe_new_matches_right", from_x=0.24, from_y=0.20, to_x=0.82, to_y=0.20)],
-        "open-new-match": [{**_tap_step("tap_new_match_card", x=match_x, y=0.20), "match_index": match_index}],
+        "matches-carousel-next": [_wheel_step("wheel_new_matches_left", x=0.56, y=0.30, delta_x=-20, repeats=18)],
+        "matches-carousel-previous": [_wheel_step("wheel_new_matches_right", x=0.56, y=0.30, delta_x=20, repeats=18)],
+        "open-new-match": [{**_tap_step("tap_new_match_card", x=match_x, y=0.30), "match_index": match_index}],
         "open-conversation": [
             {**_tap_step("tap_conversation_row", x=conversation_x, y=row_y), "row_index": row_index, "target": target}
         ],
-        "open-thread-profile": [_tap_step("tap_thread_profile_avatar", x=0.13, y=0.08)],
+        "open-thread-profile": [_tap_step("tap_thread_profile_avatar", x=0.50, y=0.14)],
         "open-self-profile-preview": [_tap_step("tap_self_profile_avatar", x=0.14, y=0.13)],
         "profile-photo-next": [_tap_step("tap_photo_next", x=0.86, y=0.45)],
         "profile-photo-previous": [_tap_step("tap_photo_previous", x=0.14, y=0.45)],
         "open-full-profile": [_tap_step("tap_profile_up_arrow", x=0.90, y=0.82)],
-        "profile-scroll-down": [_swipe_step("swipe_profile_read_down", from_x=0.50, from_y=0.78, to_x=0.50, to_y=0.32, duration_ms=450)],
-        "profile-scroll-up": [_swipe_step("swipe_profile_read_up", from_x=0.50, from_y=0.32, to_x=0.50, to_y=0.78, duration_ms=450)],
-        "expand-visible-profile-section": [_tap_step("tap_expand_visible_profile_section", x=0.50, y=0.76)],
+        "profile-scroll-down": [_wheel_step("wheel_profile_read_down", x=0.50, y=0.86, delta_y=-20, repeats=18)],
+        "profile-scroll-up": [_wheel_step("wheel_profile_read_up", x=0.50, y=0.46, delta_y=20, repeats=18)],
+        "expand-visible-profile-section": [_safe_expand_step()],
         "close-full-profile": [_tap_step("tap_profile_down_arrow", x=0.90, y=0.08)],
         "close-preview": [_tap_step("tap_preview_done", x=0.90, y=0.08)],
+        "return-to-chats": [_tap_step("tap_thread_back_to_chats", x=0.09, y=0.13)],
     }
     if action not in actions:
         raise KeyError(action)
@@ -1643,31 +1815,60 @@ def _tinder_workflow_steps(workflow: str, **options: Any) -> list[dict[str, Any]
             steps.extend(_tinder_action_steps("profile-photo-next"))
         steps.extend(_tinder_action_steps("profile-photo-previous"))
         steps.extend(_tinder_action_steps("open-full-profile"))
+        steps.append(_capture_profile_read_step())
         for _ in range(scroll_steps):
             steps.extend(_tinder_action_steps("profile-scroll-down"))
+            steps.append(_capture_profile_read_step())
         steps.extend(_tinder_action_steps("expand-visible-profile-section"))
+        steps.append(_capture_profile_read_step())
         steps.extend(_tinder_action_steps("close-full-profile"))
         steps.extend(_tinder_action_steps("close-preview"))
         return steps
     if workflow == "chat-read-match-profile":
-        carousel_swipes = max(0, int(options.get("carousel_swipes", 0)))
         profile_scroll_steps = max(0, int(options.get("profile_scroll_steps", 1)))
         conversation_row = int(options.get("conversation_row", 1))
         steps = []
-        steps.extend(_tinder_action_steps("open-chats"))
-        for _ in range(carousel_swipes):
-            steps.extend(_tinder_action_steps("matches-carousel-next"))
-        steps.extend(_tinder_action_steps("open-new-match"))
         steps.extend(_tinder_action_steps("open-chats"))
         steps.extend(_tinder_action_steps("open-conversation", row_index=conversation_row))
         steps.extend(_tinder_action_steps("open-thread-profile"))
         steps.extend(_tinder_action_steps("profile-photo-next"))
         steps.extend(_tinder_action_steps("open-full-profile"))
+        steps.append(_capture_profile_read_step())
         for _ in range(profile_scroll_steps):
             steps.extend(_tinder_action_steps("profile-scroll-down"))
+            steps.append(_capture_profile_read_step())
         steps.extend(_tinder_action_steps("expand-visible-profile-section"))
+        steps.append(_capture_profile_read_step())
         steps.extend(_tinder_action_steps("close-full-profile"))
-        steps.extend(_tinder_action_steps("close-preview"))
+        return steps
+    if workflow == "new-match-open":
+        carousel_swipes = max(0, int(options.get("carousel_swipes", 0)))
+        match_index = int(options.get("match_index", 1))
+        steps = []
+        steps.extend(_tinder_action_steps("open-chats"))
+        for _ in range(carousel_swipes):
+            steps.extend(_tinder_action_steps("matches-carousel-next"))
+        steps.extend(_tinder_action_steps("open-new-match", match_index=match_index))
+        return steps
+    if workflow == "new-match-read-profile":
+        carousel_swipes = max(0, int(options.get("carousel_swipes", 0)))
+        match_index = int(options.get("match_index", 1))
+        profile_scroll_steps = max(0, int(options.get("profile_scroll_steps", 1)))
+        steps = []
+        steps.extend(_tinder_action_steps("open-chats"))
+        for _ in range(carousel_swipes):
+            steps.extend(_tinder_action_steps("matches-carousel-next"))
+        steps.extend(_tinder_action_steps("open-new-match", match_index=match_index))
+        steps.extend(_tinder_action_steps("open-thread-profile"))
+        steps.extend(_tinder_action_steps("profile-photo-next"))
+        steps.extend(_tinder_action_steps("open-full-profile"))
+        steps.append(_capture_profile_read_step())
+        for _ in range(profile_scroll_steps):
+            steps.extend(_tinder_action_steps("profile-scroll-down"))
+            steps.append(_capture_profile_read_step())
+        steps.extend(_tinder_action_steps("expand-visible-profile-section"))
+        steps.append(_capture_profile_read_step())
+        steps.extend(_tinder_action_steps("close-full-profile"))
         return steps
     raise KeyError(workflow)
 
@@ -1675,18 +1876,14 @@ def _tinder_workflow_steps(workflow: str, **options: Any) -> list[dict[str, Any]
 def _launch_tinder_steps() -> list[dict[str, Any]]:
     return [
         {
-            "intent": "tap_ios_search",
-            "tap_ratio": {"x": 0.5, "y": 0.84},
-            "requires_verified_screen_state": "ios_home_screen",
+            "intent": "open_iphone_home_screen",
             "risk": "navigation_only",
-            "wait_after_seconds": 0.4,
+            "wait_after_seconds": 0.8,
         },
         {
-            "intent": "tap_tinder_suggestion_icon",
-            "tap_ratio": {"x": 0.39, "y": 0.31},
-            "requires_verified_screen_state": "ios_search",
+            "intent": "open_ios_spotlight",
             "risk": "navigation_only",
-            "wait_after_seconds": 1.2,
+            "wait_after_seconds": 0.4,
         },
         {
             "intent": "type_app_name",
@@ -1723,6 +1920,10 @@ def _core_graphics_click_script_path() -> Path:
 
 def _core_graphics_drag_script_path() -> Path:
     return Path(tempfile.gettempdir()) / "dating_boost_core_graphics_drag.swift"
+
+
+def _core_graphics_wheel_script_path() -> Path:
+    return Path(tempfile.gettempdir()) / "dating_boost_core_graphics_wheel.swift"
 
 
 def _normalize_text(text: str) -> str:
@@ -1776,4 +1977,27 @@ for index in 1...steps {
 let end = CGPoint(x: endX, y: endY)
 let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left)
 up?.post(tap: .cghidEventTap)
+"""
+
+
+_CORE_GRAPHICS_WHEEL_SWIFT = """\
+import CoreGraphics
+import Foundation
+
+let x = Double(CommandLine.arguments[1])!
+let y = Double(CommandLine.arguments[2])!
+let deltaY = Int32(CommandLine.arguments[3])!
+let deltaX = Int32(CommandLine.arguments[4])!
+let repeats = max(1, Int(CommandLine.arguments[5])!)
+let intervalUs = useconds_t(max(1000, Int(CommandLine.arguments[6])!))
+let point = CGPoint(x: x, y: y)
+let source = CGEventSource(stateID: .hidSystemState)
+CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
+    .post(tap: .cghidEventTap)
+usleep(50000)
+for _ in 0..<repeats {
+    CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2, wheel1: deltaY, wheel2: deltaX, wheel3: 0)?
+        .post(tap: .cghidEventTap)
+    usleep(intervalUs)
+}
 """

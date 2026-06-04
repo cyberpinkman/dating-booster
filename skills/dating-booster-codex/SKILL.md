@@ -167,24 +167,31 @@ dating-boost harness tinder open-profile --launch-if-needed --json
 dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
 dating-boost harness tinder action profile-photo-next --dry-run --json
 dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
-dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness tinder workflow new-match-open --dry-run --carousel-swipes 1 --match-index 2 --json
+dating-boost harness tinder workflow new-match-read-profile --dry-run --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
 ```
 
 Use `dating-boost harness tinder open-profile --json` only for safe navigation
-to the Tinder profile tab after doctor confirms the mirrored window is unlocked
-and Tinder is foreground. If iPhone Mirroring is on a verified iOS home screen,
-use `--launch-if-needed` to launch Tinder through iOS search before opening the
-profile tab. Use `harness tinder action` for one bounded navigation step and
-`harness tinder workflow` for the two supported reading chains:
-`self-profile-read` and `chat-read-match-profile`. Use `harness tinder observe`
-to get redacted page/layout hints before choosing a chain; it reports page
+to the Tinder profile tab after doctor confirms the mirrored window is unlocked.
+If Tinder is not already verified foreground, use `--launch-if-needed`; the
+harness returns iPhone Mirroring to Home Screen and opens Tinder through
+Spotlight before opening the profile tab. Use `harness tinder action` for one
+bounded navigation step and `harness tinder workflow` for supported chains:
+`self-profile-read`, `chat-read-match-profile`, `new-match-open`, and
+`new-match-read-profile`. Use `chat-read-match-profile` only for existing
+message-list rows. Use `new-match-open` or `new-match-read-profile` for
+unopened matches in the top carousel; after a live-send opener, run
+`harness tinder action return-to-chats` before selecting the next match. Use
+`harness tinder observe` to get redacted page/layout hints before choosing a chain; it reports page
 state and markers such as new-match carousel presence, conversation-list
 presence, `等你回应`, and visible profile expand controls without returning raw
 OCR text. The native harness may diagnose the mirrored window, capture
 screenshots/OCR, launch Tinder, move through profile photo/read states, open
-chats, open visible conversations, open profile previews from thread avatars,
-and execute a fully managed `send_message` only through
+chats, open visible conversations, open unopened matches, open profile previews
+from thread avatars, return from a thread to chats, and execute a fully managed
+`send_message` only through
 `harness tinder send-message --text-file ... --data-dir ... --authorization ...
 --action-request ...`. Real Tinder sends require unexpired authorization with
 `app_id: tinder`, `autonomous_send: true`, `live_send: true`, `send_message`

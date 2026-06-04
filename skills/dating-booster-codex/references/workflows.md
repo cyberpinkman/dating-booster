@@ -45,7 +45,9 @@ dating-boost harness tinder observe --output-dir .local/dating-boost-harness --j
 dating-boost harness tinder action profile-photo-next --dry-run --json
 dating-boost harness tinder action open-conversation --row-index 1 --target row --dry-run --json
 dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
-dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness tinder workflow new-match-open --dry-run --carousel-swipes 1 --match-index 2 --json
+dating-boost harness tinder workflow new-match-read-profile --dry-run --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
 dating-boost harness doctor --app-id wechat --window-title WeChat --json
 dating-boost harness screenshot --app-id wechat --window-title WeChat --output wechat.png --json
@@ -56,10 +58,12 @@ dating-boost harness wechat send-message --text-file wechat-draft.txt --dry-run 
 ```
 
 If doctor reports `iphone_mirroring_locked`, ask the user to unlock iPhone
-Mirroring. Tinder launch is allowed only from a verified iOS home screen. If
-profile or chat navigation returns `tinder_foreground_not_verified`, or launch
-returns `ios_home_screen_not_verified`, do not click arbitrary coordinates;
-first establish the foreground screen from a fresh screenshot/OCR observation.
+Mirroring. Tinder launch first checks only whether Tinder is already foreground.
+If it is not, the harness returns iPhone Mirroring to Home Screen, opens
+Spotlight/search, types `Tinder`, and presses Return. If profile or chat
+navigation returns `tinder_foreground_not_verified`, or launch returns
+`needs_verification`, do not click arbitrary coordinates; first establish the
+foreground screen from a fresh screenshot/OCR observation.
 
 Supported atomic Tinder actions:
 
@@ -78,6 +82,7 @@ Supported atomic Tinder actions:
 - `expand-visible-profile-section`
 - `close-full-profile`
 - `close-preview`
+- `return-to-chats`
 
 Supported high-level workflows:
 
@@ -85,11 +90,18 @@ Supported high-level workflows:
   through preview photos, enter full-profile read mode, scroll profile content,
   tap the visible expand-control area, exit full read mode, and return to the
   self profile page.
-- `chat-read-match-profile`: open the chats tab, optionally move the new-match
-  carousel, open a visible new match and a visible conversation row, tap the
-  thread avatar, move through the match profile preview, enter full-profile
-  read mode, scroll profile content, tap the visible expand-control area, and
-  exit back through profile preview.
+- `chat-read-match-profile`: open the chats tab, open a visible existing
+  conversation row, tap the thread avatar, move through the match profile
+  preview, enter full-profile read mode, scroll profile content, tap the visible
+  expand-control area, and return to the conversation.
+- `new-match-open`: open the chats tab, optionally move the new-match carousel
+  with wheel events, open one visible unopened match by `--match-index`, and
+  stop in that conversation so the host agent can draft and gated-send an
+  opener.
+- `new-match-read-profile`: open the chats tab, optionally move the new-match
+  carousel with wheel events, open one visible unopened match by `--match-index`,
+  read the match profile, and return to that conversation for the next opener
+  step.
 
 Use `open-conversation --row-index N --target row` for message-list rows and
 `--target avatar` only when the avatar target is clearly visible. Treat the
@@ -97,6 +109,13 @@ top horizontal carousel as new or not-yet-started matches; treat the vertical
 message list as opened conversations. The text marker `等你回应` is only an
 observation cue that the match sent the latest message; it is not by itself an
 authorization to draft or send.
+
+For unopened matches, do not pre-count the whole carousel unless a goal requires
+inventory. Open one visible match with `new-match-open` or
+`new-match-read-profile`, plan the opener without prior conversation context,
+send only through the managed send gate when authorized, then run
+`harness tinder action return-to-chats` and select the next visible unopened
+match.
 
 Use `harness tinder observe` before and after bounded navigation. It returns
 redacted `layout_hints`, not raw OCR text. The hints distinguish `page:

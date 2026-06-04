@@ -19,7 +19,9 @@ dating-boost harness tinder open-profile --dry-run --json
 dating-boost harness tinder open-profile --launch-if-needed --json
 dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
 dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
-dating-boost harness tinder workflow chat-read-match-profile --dry-run --carousel-swipes 1 --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness tinder workflow new-match-open --dry-run --carousel-swipes 1 --match-index 2 --json
+dating-boost harness tinder workflow new-match-read-profile --dry-run --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
 dating-boost-host-loop doctor \
   --data-dir .local/dating-boost \
@@ -30,12 +32,15 @@ dating-boost-host-loop doctor \
 Use `harness tinder observe` before selecting an action or workflow. Use the
 workflow commands only as dry-run plans until a fresh observation confirms the
 current Tinder page matches the expected starting state. They are
-navigation-only reading/profile-refresh chains. A real send is allowed only via
-`harness tinder send-message` or `--managed-gui-send` with explicit live-send
-authorization, a policy-checked action request, target-chat binding, staged
-text verification, outbound-bubble verification, and an unpaused safety switch.
-The harness never authorizes like, super-like, unmatch, report, or profile edit
-actions.
+navigation-only reading/profile-refresh/open-thread chains. Use
+`chat-read-match-profile` only for existing message rows. Use `new-match-open`
+or `new-match-read-profile` for unopened matches; after a gated opener send,
+run `harness tinder action return-to-chats` before selecting the next unopened
+match. A real send is allowed only via `harness tinder send-message` or
+`--managed-gui-send` with explicit live-send authorization, a policy-checked
+action request, target-chat binding, staged text verification, outbound-bubble
+verification, and an unpaused safety switch. The harness never authorizes like,
+super-like, unmatch, report, or profile edit actions.
 
 If configuration files are missing, generate templates:
 
