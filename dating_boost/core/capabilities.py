@@ -14,6 +14,7 @@ from dating_boost.core.production_store import (
 )
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.gui_harness import GUI_HARNESS_SCHEMA_VERSION
+from dating_boost.core.support import SUPPORT_EVIDENCE_SCHEMA_VERSION, SUPPORT_LOG_SCHEMA_VERSION
 
 
 CAPABILITIES_SCHEMA_VERSION = 1
@@ -62,6 +63,8 @@ SCHEMA_VERSIONS: dict[str, int] = {
     "daemon_event": 1,
     "daemon_job": 1,
     "diagnostic_bundle": DIAGNOSTIC_BUNDLE_SCHEMA_VERSION,
+    "support_log": SUPPORT_LOG_SCHEMA_VERSION,
+    "support_evidence": SUPPORT_EVIDENCE_SCHEMA_VERSION,
     "release_manifest": RELEASE_MANIFEST_SCHEMA_VERSION,
 }
 
@@ -144,6 +147,10 @@ SUPPORTED_COMMANDS: list[str] = [
     "daemon stop",
     "diagnostics doctor",
     "diagnostics bundle",
+    "support session start",
+    "support session stop",
+    "support record-event",
+    "support bundle",
     "harness doctor",
     "harness screenshot",
     "harness tinder launch",
@@ -280,6 +287,12 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
         },
         "diagnostic_capabilities": {
             "local_redacted_bundle": True,
+            "support_log": True,
+            "encrypted_evidence_vault": True,
+            "support_bundle_redactions": ["strict", "standard", "full-with-consent"],
+            "topic_provenance": True,
+            "clipboard_fingerprint": True,
+            "sensitive_export_requires_confirm_token": True,
             "network_telemetry": False,
         },
         "release_capabilities": {

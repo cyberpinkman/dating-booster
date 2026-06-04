@@ -187,7 +187,16 @@ dating-boost data migrate --data-dir .local/dating-boost --json
 dating-boost data backup --data-dir .local/dating-boost --output dating-boost-backup.zip --json
 dating-boost data rekey --data-dir .local/dating-boost --json
 dating-boost diagnostics bundle --data-dir .local/dating-boost --output diagnostics.zip --json
+dating-boost support session start --data-dir .local/dating-boost --host codex --app-id tinder --json
+dating-boost support bundle --data-dir .local/dating-boost --session-id <session_id> --output dating-boost-support.zip --redaction strict --json
 ```
+
+Support sessions record redacted command boundaries, topic provenance, payload
+hashes, character counts, and clipboard fingerprints. Strict support bundles do
+not include raw drafts, raw conversations, raw profile text, screenshots, or
+clipboard contents. Sensitive evidence stays encrypted locally unless the user
+explicitly requests `--redaction full-with-consent` with the required confirm
+token.
 
 The daemon is a local supervisor only. It owns locks, heartbeat, recovery, and
 kill-switch state. It does not observe screens or click apps.

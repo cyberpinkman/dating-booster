@@ -910,7 +910,14 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertIn("post_action_observation_id", payload)
         self.assertTrue(any(command and command[0] == "pbcopy" for command in runner.commands))
         self.assertTrue(any('keystroke "v"' in " ".join(command) for command in runner.commands))
+        self.assertEqual(
+            payload["previous_clipboard_fingerprint"],
+            hashlib.sha256("previous clipboard".encode("utf-8")).hexdigest(),
+        )
+        self.assertEqual(payload["previous_clipboard_character_count"], len("previous clipboard"))
+        self.assertEqual(payload["draft_clipboard_fingerprint"], payload["draft_fingerprint"])
         self.assertNotIn("今晚可以聊十分钟吗", json.dumps(payload, ensure_ascii=False))
+        self.assertNotIn("previous clipboard", json.dumps(payload, ensure_ascii=False))
 
     def test_tinder_send_message_accepts_ocr_punctuation_noise_for_staged_text(self):
         runner = FakeRunner(
@@ -1256,8 +1263,15 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
         self.assertTrue(payload["clipboard_restored"])
         self.assertEqual(runner.clipboard_text, "previous clipboard")
+        self.assertEqual(
+            payload["previous_clipboard_fingerprint"],
+            hashlib.sha256("previous clipboard".encode("utf-8")).hexdigest(),
+        )
+        self.assertEqual(payload["previous_clipboard_character_count"], len("previous clipboard"))
+        self.assertEqual(payload["draft_clipboard_fingerprint"], payload["draft_fingerprint"])
         pbcopy_inputs = [input_text for command, input_text in runner.command_inputs if command and command[0] == "pbcopy"]
         self.assertEqual(pbcopy_inputs, ["今晚可以聊十分钟吗？", "previous clipboard"])
+        self.assertNotIn("previous clipboard", json.dumps(payload, ensure_ascii=False))
 
     def test_wechat_send_message_dry_run_is_explicit_live_send_plan(self):
         runner = FakeRunner(ocr_text="微信\nAda\n发送\n", window_name="WeChat")
@@ -1309,7 +1323,12 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertIn("post_action_observation_id", payload)
         self.assertTrue(any("key code 36" in " ".join(command) for command in runner.commands))
         self.assertEqual(runner.clipboard_text, "previous clipboard")
+        self.assertEqual(
+            payload["previous_clipboard_fingerprint"],
+            hashlib.sha256("previous clipboard".encode("utf-8")).hexdigest(),
+        )
         self.assertNotIn("今晚可以聊十分钟吗", json.dumps(payload, ensure_ascii=False))
+        self.assertNotIn("previous clipboard", json.dumps(payload, ensure_ascii=False))
 
     def test_wechat_send_message_blocks_when_target_binding_mismatches_before_staging(self):
         runner = FakeRunner(

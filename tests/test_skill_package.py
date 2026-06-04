@@ -123,6 +123,8 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("long-press", skill_text)
         self.assertIn("paste", skill_text)
         self.assertIn("verify staged text", skill_text)
+        self.assertIn("support session start", skill_text)
+        self.assertIn("support bundle", skill_text)
         self.assertIn("position drift", skill_text)
         self.assertIn("reopen the chat thread", skill_text)
         self.assertIn("foreground app copy", skill_text)
@@ -199,6 +201,10 @@ class SkillPackageTests(unittest.TestCase):
             "confirmation create",
             "confirmation confirm",
             "confirmation validate",
+            "support session start",
+            "support session stop",
+            "support record-event",
+            "support bundle",
             "harness doctor",
             "harness screenshot",
             "harness tinder launch",

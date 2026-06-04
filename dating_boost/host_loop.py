@@ -16,6 +16,7 @@ from dating_boost.core.live_send_contract import validate_live_send_contract
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.safety import SafetyRepository
+from dating_boost.core.support import SupportLogRepository
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,7 +26,9 @@ REPORT_FINAL_STATUSES = {"wait", "blocked", "handoff", "scheduled_wait", "stoppe
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(sys.argv[1:] if argv is None else argv)
+    command_tokens = sys.argv[1:] if argv is None else list(argv)
+    args = _parse_args(command_tokens)
+    support_command = _host_loop_support_command_started(args, command_tokens)
 
     try:
         supervisor = HostLoopSupervisor(args)
@@ -61,6 +64,19 @@ def main(argv: list[str] | None = None) -> int:
             "next_host_action": "choose_supported_host_loop_app",
         }
         exit_code = 2
+    _record_host_loop_support_event(
+        args,
+        "host_loop_command_result",
+        {
+            "command": f"host_loop {getattr(args, 'command', 'run')}",
+            "status": payload.get("status"),
+            "reason": payload.get("reason") or payload.get("stop_reason"),
+            "app_id": payload.get("app_id"),
+            "send_mode": payload.get("send_mode"),
+            "payload": payload,
+        },
+    )
+    _host_loop_support_command_finished(support_command, args, command_tokens, exit_code)
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     else:
@@ -115,6 +131,59 @@ def _explicit_adapter_package(args: argparse.Namespace) -> Path | None:
     return adapter_package or legacy_skill_package
 
 
+def _host_loop_support_data_dir(args: argparse.Namespace) -> Path:
+    return (getattr(args, "data_dir", None) or DEFAULT_DATA_DIR).resolve()
+
+
+def _host_loop_support_command_started(args: argparse.Namespace, command_tokens: list[str]) -> dict[str, Any]:
+    marker: dict[str, Any] = {"started_monotonic": time.monotonic(), "event": None}
+    try:
+        marker["event"] = SupportLogRepository(_host_loop_support_data_dir(args)).record_command_started(
+            ["dating-boost-host-loop", *command_tokens]
+        )
+    except Exception:
+        marker["event"] = None
+    return marker
+
+
+def _host_loop_support_command_finished(
+    marker: dict[str, Any] | None,
+    args: argparse.Namespace,
+    command_tokens: list[str],
+    exit_code: int,
+) -> None:
+    if marker is None:
+        return
+    started = marker.get("started_monotonic")
+    duration_ms = 0
+    if isinstance(started, (int, float)):
+        duration_ms = max(0, int((time.monotonic() - float(started)) * 1000))
+    try:
+        SupportLogRepository(_host_loop_support_data_dir(args)).record_command_finished(
+            marker.get("event"),
+            argv=["dating-boost-host-loop", *command_tokens],
+            exit_code=exit_code,
+            duration_ms=duration_ms,
+        )
+    except Exception:
+        return
+
+
+def _record_host_loop_support_event(args: argparse.Namespace, event_type: str, payload: dict[str, Any]) -> None:
+    try:
+        repository = SupportLogRepository(_host_loop_support_data_dir(args))
+        active = repository.active_session()
+        if not active:
+            return
+        repository.record_event(
+            session_id=str(active["session_id"]),
+            event_type=event_type,
+            payload=payload,
+        )
+    except Exception:
+        return
+
+
 class HostLoopSupervisor:
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -127,6 +196,7 @@ class HostLoopSupervisor:
         self.operator_session_active = False
         self.skill_package_path = self._resolve_skill_package_path(_explicit_adapter_package(args))
         self.app_profile = _load_app_profile(getattr(args, "app_id", "tinder"))
+        self.support = SupportLogRepository(self.data_dir)
 
     def doctor(self) -> tuple[dict[str, Any], int]:
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -935,6 +1005,20 @@ class HostLoopSupervisor:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        self._record_support_event(f"host_loop_{event_type}", event)
+
+    def _record_support_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        try:
+            active = self.support.active_session()
+            if not active:
+                return
+            self.support.record_event(
+                session_id=str(active["session_id"]),
+                event_type=event_type,
+                payload=payload,
+            )
+        except Exception:
+            return
 
     def _operator_session_status(self) -> str | None:
         session_path = self.data_dir / "operator" / "session.json"

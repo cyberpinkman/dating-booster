@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -40,7 +41,7 @@ from dating_boost.core.observation_authoring import (
 )
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.planner import PlannerRepository, planner_context_items
-from dating_boost.core.production_store import ProductionDataStore
+from dating_boost.core.production_store import ProductionDataStore, payload_digest
 from dating_boost.core.release import release_doctor
 from dating_boost.core.replay import latest_replay_markdown, latest_replay_payload
 from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
@@ -52,6 +53,7 @@ from dating_boost.core.scan_authoring import (
 )
 from dating_boost.core.skill_doctor import run_skill_doctor
 from dating_boost.core.safety import SafetyRepository
+from dating_boost.core.support import SupportLogRepository, classify_text_topics, context_source_manifest
 from dating_boost.intelligence.backends import ModelBackend, OpenAIBackend, ScriptedBackend
 from dating_boost.intelligence.reply_generator import DraftResponse, generate_reply
 from dating_boost.evals.runner import run_conversation_eval
@@ -252,10 +254,45 @@ def main(argv: list[str] | None = None) -> int:
     diagnostics_bundle_parser.add_argument("--json", action="store_true")
     diagnostics_bundle_parser.set_defaults(handler=_handle_diagnostics_bundle)
 
+    support_parser = subparsers.add_parser("support", help="Local support logging and evidence bundle commands.")
+    support_subparsers = support_parser.add_subparsers(dest="support_command", required=True)
+    support_session_parser = support_subparsers.add_parser("session")
+    support_session_subparsers = support_session_parser.add_subparsers(dest="support_session_command", required=True)
+    support_session_start_parser = support_session_subparsers.add_parser("start")
+    support_session_start_parser.add_argument("--data-dir", required=True, type=Path)
+    support_session_start_parser.add_argument("--host", required=True, choices=["codex", "claude-code", "openclaw", "hermes"])
+    support_session_start_parser.add_argument("--app-id", required=True)
+    support_session_start_parser.add_argument("--json", action="store_true")
+    support_session_start_parser.set_defaults(handler=_handle_support_session_start)
+    support_session_stop_parser = support_session_subparsers.add_parser("stop")
+    support_session_stop_parser.add_argument("--data-dir", required=True, type=Path)
+    support_session_stop_parser.add_argument("--session-id", required=True)
+    support_session_stop_parser.add_argument("--json", action="store_true")
+    support_session_stop_parser.set_defaults(handler=_handle_support_session_stop)
+    support_record_parser = support_subparsers.add_parser("record-event")
+    support_record_parser.add_argument("--data-dir", required=True, type=Path)
+    support_record_parser.add_argument("--session-id", required=True)
+    support_record_parser.add_argument("--event-type", required=True)
+    support_record_parser.add_argument("--payload", required=True, type=Path)
+    support_record_parser.add_argument("--sensitive", type=Path)
+    support_record_parser.add_argument("--sensitive-kind")
+    support_record_parser.add_argument("--json", action="store_true")
+    support_record_parser.set_defaults(handler=_handle_support_record_event)
+    support_bundle_parser = support_subparsers.add_parser("bundle")
+    support_bundle_parser.add_argument("--data-dir", required=True, type=Path)
+    support_bundle_parser.add_argument("--session-id", required=True)
+    support_bundle_parser.add_argument("--output", required=True, type=Path)
+    support_bundle_parser.add_argument("--redaction", choices=["strict", "standard", "full-with-consent"], default="strict")
+    support_bundle_parser.add_argument("--include-sensitive", default="")
+    support_bundle_parser.add_argument("--confirm")
+    support_bundle_parser.add_argument("--json", action="store_true")
+    support_bundle_parser.set_defaults(handler=_handle_support_bundle)
+
     harness_parser = subparsers.add_parser("harness", help="Native GUI harness diagnostics and safe navigation.")
     harness_subparsers = harness_parser.add_subparsers(dest="harness_command", required=True)
     harness_doctor_parser = harness_subparsers.add_parser("doctor")
     harness_doctor_parser.add_argument("--app-id", default="tinder")
+    harness_doctor_parser.add_argument("--data-dir", type=Path)
     harness_doctor_parser.add_argument("--window-title")
     harness_doctor_parser.add_argument("--no-capture", action="store_true")
     harness_doctor_parser.add_argument("--output", type=Path)
@@ -263,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
     harness_doctor_parser.set_defaults(handler=_handle_harness_doctor)
     harness_screenshot_parser = harness_subparsers.add_parser("screenshot")
     harness_screenshot_parser.add_argument("--app-id", default="tinder")
+    harness_screenshot_parser.add_argument("--data-dir", type=Path)
     harness_screenshot_parser.add_argument("--window-title")
     harness_screenshot_parser.add_argument("--output", required=True, type=Path)
     harness_screenshot_parser.add_argument("--json", action="store_true")
@@ -270,12 +308,14 @@ def main(argv: list[str] | None = None) -> int:
     harness_tinder_parser = harness_subparsers.add_parser("tinder")
     harness_tinder_subparsers = harness_tinder_parser.add_subparsers(dest="harness_tinder_command", required=True)
     harness_tinder_launch_parser = harness_tinder_subparsers.add_parser("launch")
+    harness_tinder_launch_parser.add_argument("--data-dir", type=Path)
     harness_tinder_launch_parser.add_argument("--window-title", default="iPhone Mirroring")
     harness_tinder_launch_parser.add_argument("--dry-run", action="store_true")
     harness_tinder_launch_parser.add_argument("--output-dir", type=Path)
     harness_tinder_launch_parser.add_argument("--json", action="store_true")
     harness_tinder_launch_parser.set_defaults(handler=_handle_harness_tinder_launch)
     harness_tinder_profile_parser = harness_tinder_subparsers.add_parser("open-profile")
+    harness_tinder_profile_parser.add_argument("--data-dir", type=Path)
     harness_tinder_profile_parser.add_argument("--window-title", default="iPhone Mirroring")
     harness_tinder_profile_parser.add_argument("--dry-run", action="store_true")
     harness_tinder_profile_parser.add_argument("--launch-if-needed", action="store_true")
@@ -283,12 +323,14 @@ def main(argv: list[str] | None = None) -> int:
     harness_tinder_profile_parser.add_argument("--json", action="store_true")
     harness_tinder_profile_parser.set_defaults(handler=_handle_harness_tinder_open_profile)
     harness_tinder_observe_parser = harness_tinder_subparsers.add_parser("observe")
+    harness_tinder_observe_parser.add_argument("--data-dir", type=Path)
     harness_tinder_observe_parser.add_argument("--window-title", default="iPhone Mirroring")
     harness_tinder_observe_parser.add_argument("--output-dir", type=Path)
     harness_tinder_observe_parser.add_argument("--json", action="store_true")
     harness_tinder_observe_parser.set_defaults(handler=_handle_harness_tinder_observe)
     harness_tinder_action_parser = harness_tinder_subparsers.add_parser("action")
     harness_tinder_action_parser.add_argument("action")
+    harness_tinder_action_parser.add_argument("--data-dir", type=Path)
     harness_tinder_action_parser.add_argument("--window-title", default="iPhone Mirroring")
     harness_tinder_action_parser.add_argument("--dry-run", action="store_true")
     harness_tinder_action_parser.add_argument("--output-dir", type=Path)
@@ -302,6 +344,7 @@ def main(argv: list[str] | None = None) -> int:
     harness_tinder_action_parser.set_defaults(handler=_handle_harness_tinder_action)
     harness_tinder_workflow_parser = harness_tinder_subparsers.add_parser("workflow")
     harness_tinder_workflow_parser.add_argument("workflow")
+    harness_tinder_workflow_parser.add_argument("--data-dir", type=Path)
     harness_tinder_workflow_parser.add_argument("--window-title", default="iPhone Mirroring")
     harness_tinder_workflow_parser.add_argument("--dry-run", action="store_true")
     harness_tinder_workflow_parser.add_argument("--output-dir", type=Path)
@@ -326,12 +369,14 @@ def main(argv: list[str] | None = None) -> int:
     harness_wechat_parser = harness_subparsers.add_parser("wechat")
     harness_wechat_subparsers = harness_wechat_parser.add_subparsers(dest="harness_wechat_command", required=True)
     harness_wechat_launch_parser = harness_wechat_subparsers.add_parser("launch")
+    harness_wechat_launch_parser.add_argument("--data-dir", type=Path)
     harness_wechat_launch_parser.add_argument("--window-title", default="WeChat")
     harness_wechat_launch_parser.add_argument("--dry-run", action="store_true")
     harness_wechat_launch_parser.add_argument("--output-dir", type=Path)
     harness_wechat_launch_parser.add_argument("--json", action="store_true")
     harness_wechat_launch_parser.set_defaults(handler=_handle_harness_wechat_launch)
     harness_wechat_observe_parser = harness_wechat_subparsers.add_parser("observe")
+    harness_wechat_observe_parser.add_argument("--data-dir", type=Path)
     harness_wechat_observe_parser.add_argument("--window-title", default="WeChat")
     harness_wechat_observe_parser.add_argument("--output-dir", type=Path)
     harness_wechat_observe_parser.add_argument("--json", action="store_true")
@@ -513,6 +558,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     policy_check_draft_parser.add_argument("--input", required=True, type=Path)
     policy_check_draft_parser.add_argument("--context", required=True, type=Path)
+    policy_check_draft_parser.add_argument("--data-dir", type=Path)
     policy_check_draft_parser.set_defaults(handler=_handle_policy_check_draft)
 
     action_parser = subparsers.add_parser("action", help="Agent-native host action audit commands.")
@@ -730,7 +776,7 @@ def main(argv: list[str] | None = None) -> int:
     operator_get_state_parser.set_defaults(handler=_handle_operator_get_state)
 
     args = parser.parse_args(argv_list)
-    return args.handler(args)
+    return _run_handler_with_support_logging(args, command_tokens)
 
 
 def _run_authorization(argv: list[str]) -> int:
@@ -750,6 +796,32 @@ def _run_authorization(argv: list[str]) -> int:
     )
     args = parser.parse_args(argv)
     return _handle_authorize(args)
+
+
+def _run_handler_with_support_logging(args: argparse.Namespace, command_tokens: list[str]) -> int:
+    data_dir = getattr(args, "data_dir", None)
+    if data_dir is None or getattr(args, "command", None) == "support":
+        return args.handler(args)
+    repository = SupportLogRepository(data_dir)
+    started = repository.record_command_started(command_tokens)
+    start = time.monotonic()
+    try:
+        exit_code = args.handler(args)
+    except Exception:
+        repository.record_command_finished(
+            started,
+            argv=command_tokens,
+            exit_code=99,
+            duration_ms=int((time.monotonic() - start) * 1000),
+        )
+        raise
+    repository.record_command_finished(
+        started,
+        argv=command_tokens,
+        exit_code=exit_code,
+        duration_ms=int((time.monotonic() - start) * 1000),
+    )
+    return exit_code
 
 
 def _handle_capabilities(args: argparse.Namespace) -> int:
@@ -964,9 +1036,48 @@ def _handle_diagnostics_bundle(args: argparse.Namespace) -> int:
     return 0 if payload.get("status") == "ok" else 2
 
 
+def _handle_support_session_start(args: argparse.Namespace) -> int:
+    payload = SupportLogRepository(args.data_dir).start_session(host=args.host, app_id=args.app_id)
+    _print_json(payload)
+    return 0 if payload.get("status") == "active" else 2
+
+
+def _handle_support_session_stop(args: argparse.Namespace) -> int:
+    payload = SupportLogRepository(args.data_dir).stop_session(session_id=args.session_id)
+    _print_json(payload)
+    return 0 if payload.get("status") == "stopped" else 2
+
+
+def _handle_support_record_event(args: argparse.Namespace) -> int:
+    sensitive = _read_json_object(args.sensitive) if args.sensitive is not None else None
+    payload = SupportLogRepository(args.data_dir).record_event(
+        session_id=args.session_id,
+        event_type=args.event_type,
+        payload=_read_json_object(args.payload),
+        sensitive=sensitive,
+        sensitive_kind=args.sensitive_kind,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_support_bundle(args: argparse.Namespace) -> int:
+    include_sensitive = [item.strip() for item in str(args.include_sensitive or "").split(",") if item.strip()]
+    payload = SupportLogRepository(args.data_dir).bundle(
+        session_id=args.session_id,
+        output=args.output,
+        redaction=args.redaction,
+        include_sensitive=include_sensitive,
+        confirm=args.confirm,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
 def _handle_harness_doctor(args: argparse.Namespace) -> int:
     block_payload = _unsupported_native_harness_payload(args.app_id)
     if block_payload is not None:
+        _record_support_harness_result(args.data_dir, app_id=args.app_id, action="doctor", harness_payload=block_payload)
         _print_json(block_payload)
         return 2
     harness = NativeGuiHarness(app_id=args.app_id, window_title=_harness_window_title(args.app_id, args.window_title))
@@ -974,6 +1085,7 @@ def _handle_harness_doctor(args: argparse.Namespace) -> int:
         payload = harness.doctor_wechat(capture=not args.no_capture, output=args.output)
     else:
         payload = harness.doctor(capture=not args.no_capture, output=args.output)
+    _record_support_harness_result(args.data_dir, app_id=args.app_id, action="doctor", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "degraded"} else 2
 
@@ -981,6 +1093,7 @@ def _handle_harness_doctor(args: argparse.Namespace) -> int:
 def _handle_harness_screenshot(args: argparse.Namespace) -> int:
     block_payload = _unsupported_native_harness_payload(args.app_id)
     if block_payload is not None:
+        _record_support_harness_result(args.data_dir, app_id=args.app_id, action="screenshot", harness_payload=block_payload)
         _print_json(block_payload)
         return 2
     payload = NativeGuiHarness(
@@ -988,6 +1101,7 @@ def _handle_harness_screenshot(args: argparse.Namespace) -> int:
         window_title=_harness_window_title(args.app_id, args.window_title),
     ).capture_window(output=args.output)
     payload.pop("text", None)
+    _record_support_harness_result(args.data_dir, app_id=args.app_id, action="screenshot", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") == "ok" else 2
 
@@ -1009,6 +1123,7 @@ def _handle_harness_tinder_launch(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         output_dir=args.output_dir,
     )
+    _record_support_harness_result(args.data_dir, app_id="tinder", action="launch", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") == "ok" else 2
 
@@ -1019,6 +1134,7 @@ def _handle_harness_tinder_open_profile(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
         launch_if_needed=args.launch_if_needed,
     )
+    _record_support_harness_result(args.data_dir, app_id="tinder", action="open_profile", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") == "ok" else 2
 
@@ -1027,6 +1143,7 @@ def _handle_harness_tinder_observe(args: argparse.Namespace) -> int:
     payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).observe_tinder_screen(
         output_dir=args.output_dir,
     )
+    _record_support_harness_result(args.data_dir, app_id="tinder", action="observe", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
 
@@ -1047,6 +1164,7 @@ def _handle_harness_tinder_action(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
         **{key: value for key, value in options.items() if value is not None},
     )
+    _record_support_harness_result(args.data_dir, app_id="tinder", action=f"action_{args.action}", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
 
@@ -1066,6 +1184,7 @@ def _handle_harness_tinder_workflow(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
         **{key: value for key, value in options.items() if value is not None},
     )
+    _record_support_harness_result(args.data_dir, app_id="tinder", action=f"workflow_{args.workflow}", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
 
@@ -1076,6 +1195,14 @@ def _handle_harness_tinder_send_message(args: argparse.Namespace) -> int:
     if not args.dry_run:
         block_payload = _live_send_cli_block_payload(args, app_id="tinder", draft_text=draft_text)
         if block_payload is not None:
+            _record_support_harness_action(
+                args.data_dir,
+                app_id="tinder",
+                action="send_message",
+                draft_text=draft_text,
+                harness_payload=block_payload,
+                action_request=None,
+            )
             _print_json(block_payload)
             return 2
         action_request = _read_json_object(args.action_request)
@@ -1084,6 +1211,14 @@ def _handle_harness_tinder_send_message(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         output_dir=args.output_dir,
         target_binding=action_request.get("target_binding") if isinstance(action_request, dict) else None,
+    )
+    _record_support_harness_action(
+        args.data_dir,
+        app_id="tinder",
+        action="send_message",
+        draft_text=draft_text,
+        harness_payload=payload,
+        action_request=action_request,
     )
     _print_json(payload)
     return 0 if payload.get("status") == "ok" else 2
@@ -1094,6 +1229,7 @@ def _handle_harness_wechat_launch(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         output_dir=args.output_dir,
     )
+    _record_support_harness_result(args.data_dir, app_id="wechat", action="launch", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
 
@@ -1102,6 +1238,7 @@ def _handle_harness_wechat_observe(args: argparse.Namespace) -> int:
     payload = NativeGuiHarness(app_id="wechat", window_title=args.window_title).observe_wechat_screen(
         output_dir=args.output_dir,
     )
+    _record_support_harness_result(args.data_dir, app_id="wechat", action="observe", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
 
@@ -1138,6 +1275,14 @@ def _handle_harness_wechat_stage_draft(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         output_dir=args.output_dir,
     )
+    _record_support_harness_action(
+        args.data_dir,
+        app_id="wechat",
+        action="stage_draft",
+        draft_text=draft_text,
+        harness_payload=payload,
+        action_request=None,
+    )
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
 
@@ -1148,6 +1293,14 @@ def _handle_harness_wechat_send_message(args: argparse.Namespace) -> int:
     if not args.dry_run:
         block_payload = _live_send_cli_block_payload(args, app_id="wechat", draft_text=draft_text)
         if block_payload is not None:
+            _record_support_harness_action(
+                args.data_dir,
+                app_id="wechat",
+                action="send_message",
+                draft_text=draft_text,
+                harness_payload=block_payload,
+                action_request=None,
+            )
             _print_json(block_payload)
             return 2
         action_request = _read_json_object(args.action_request)
@@ -1156,6 +1309,14 @@ def _handle_harness_wechat_send_message(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         output_dir=args.output_dir,
         target_binding=action_request.get("target_binding") if isinstance(action_request, dict) else None,
+    )
+    _record_support_harness_action(
+        args.data_dir,
+        app_id="wechat",
+        action="send_message",
+        draft_text=draft_text,
+        harness_payload=payload,
+        action_request=action_request,
     )
     _print_json(payload)
     return 0 if payload.get("status") == "ok" else 2
@@ -1527,12 +1688,21 @@ def _handle_context_build(args: argparse.Namespace) -> int:
 
 
 def _handle_policy_check_draft(args: argparse.Namespace) -> int:
-    draft = _draft_from_dict(_read_json_object(args.input))
+    draft_payload = _read_json_object(args.input)
+    draft = _draft_from_dict(draft_payload)
     context_payload = _read_json_object(args.context)
     context_pack = context_payload.get("context_pack", context_payload)
     if not isinstance(context_pack, dict):
         raise ValueError("--context must contain a JSON object or a context_pack object")
     policy = evaluate_draft_content(draft, context_pack)
+    if args.data_dir is not None:
+        _record_support_policy_check_draft(
+            args.data_dir,
+            draft_payload=draft_payload,
+            draft=draft,
+            context_pack=context_pack,
+            policy=policy,
+        )
     _print_json(
         {
             "schema_version": 1,
@@ -2140,6 +2310,191 @@ def _policy_to_dict(policy: ContentPolicyDecision) -> dict[str, Any]:
         "reason": policy.reason,
         "requires_user_confirmation": policy.requires_user_confirmation,
     }
+
+
+def _record_support_policy_check_draft(
+    data_dir: Path,
+    *,
+    draft_payload: dict[str, Any],
+    draft: DraftResponse,
+    context_pack: dict[str, Any],
+    policy: ContentPolicyDecision,
+) -> None:
+    try:
+        repository = SupportLogRepository(data_dir)
+        active = repository.active_session()
+        if not active:
+            return
+        repository.record_event(
+            session_id=str(active["session_id"]),
+            event_type="draft_generated",
+            payload={
+                "command": "policy_check_draft",
+                "target_match_id": context_pack.get("match_id"),
+                "draft": _draft_to_dict(draft),
+                "context_source_manifest": context_source_manifest(context_pack),
+                "policy": _policy_to_dict(policy),
+            },
+            sensitive={
+                "draft_payload": draft_payload,
+                "draft_text": draft.best_reply,
+            },
+            sensitive_kind="draft",
+        )
+        repository.record_event(
+            session_id=str(active["session_id"]),
+            event_type="policy_check_draft",
+            payload={
+                "target_match_id": context_pack.get("match_id"),
+                "context_source_manifest": context_source_manifest(context_pack),
+                "policy": _policy_to_dict(policy),
+            },
+        )
+    except Exception:
+        return
+
+
+def _record_support_harness_result(
+    data_dir: Path | None,
+    *,
+    app_id: str,
+    action: str,
+    harness_payload: dict[str, Any],
+) -> None:
+    if data_dir is None:
+        return
+    try:
+        repository = SupportLogRepository(data_dir)
+        active = repository.active_session()
+        if not active:
+            return
+        repository.record_event(
+            session_id=str(active["session_id"]),
+            event_type=f"harness_{app_id}_{action}",
+            payload={
+                "command": f"harness {app_id} {action}",
+                "app_id": app_id,
+                "action": action,
+                "status": harness_payload.get("status"),
+                "reason": harness_payload.get("reason"),
+                "mode": harness_payload.get("mode"),
+                "screen_state": harness_payload.get("screen_state"),
+                "harness_payload_hash": payload_digest(harness_payload),
+                "harness_payload": _support_safe_harness_payload(harness_payload),
+            },
+        )
+    except Exception:
+        return
+
+
+def _record_support_harness_action(
+    data_dir: Path | None,
+    *,
+    app_id: str,
+    action: str,
+    draft_text: str,
+    harness_payload: dict[str, Any],
+    action_request: dict[str, Any] | None,
+) -> None:
+    if data_dir is None:
+        return
+    try:
+        repository = SupportLogRepository(data_dir)
+        active = repository.active_session()
+        if not active:
+            return
+        target_binding = action_request.get("target_binding") if isinstance(action_request, dict) else None
+        safe_payload = {
+            "command": f"harness {app_id} {action}",
+            "app_id": app_id,
+            "action": action,
+            "status": harness_payload.get("status"),
+            "reason": harness_payload.get("reason"),
+            "mode": harness_payload.get("mode"),
+            "target_match_id": _support_target_match_id(action_request=action_request, target_binding=target_binding),
+            "draft_fingerprint": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
+            "draft_character_count": len(draft_text),
+            "draft_topic_labels": classify_text_topics(draft_text),
+            "harness_payload_hash": payload_digest(harness_payload),
+            "harness_payload": _support_safe_harness_payload(harness_payload),
+        }
+        if isinstance(action_request, dict):
+            safe_payload["action_request_hash"] = payload_digest(action_request)
+        if isinstance(target_binding, dict):
+            safe_payload["target_binding_hash"] = payload_digest(target_binding)
+        repository.record_event(
+            session_id=str(active["session_id"]),
+            event_type=f"harness_{app_id}_{action}",
+            payload=safe_payload,
+            sensitive={
+                "draft_text": draft_text,
+                "action_request": action_request,
+                "harness_payload": harness_payload,
+            },
+            sensitive_kind="draft",
+        )
+    except Exception:
+        return
+
+
+def _support_target_match_id(
+    *,
+    action_request: dict[str, Any] | None,
+    target_binding: Any,
+) -> str | None:
+    if isinstance(action_request, dict):
+        for key in ("target_match_id", "match_id"):
+            if action_request.get(key):
+                return str(action_request[key])
+    if isinstance(target_binding, dict) and target_binding.get("target_match_id"):
+        return str(target_binding["target_match_id"])
+    return None
+
+
+def _support_safe_harness_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "schema_version",
+        "status",
+        "app_id",
+        "harness_backend",
+        "action",
+        "target",
+        "mode",
+        "reason",
+        "next_host_action",
+        "workflow",
+        "screen_state",
+        "layout_hints",
+        "planned_steps",
+        "executed_steps",
+        "live_send",
+        "requires_explicit_authorization",
+        "requires_user_confirmation_before_send",
+        "draft_fingerprint",
+        "draft_character_count",
+        "draft_clipboard_fingerprint",
+        "draft_clipboard_character_count",
+        "draft_clipboard_topic_labels",
+        "previous_clipboard_read",
+        "previous_clipboard_fingerprint",
+        "previous_clipboard_character_count",
+        "previous_clipboard_topic_labels",
+        "draft_clipboard_copy",
+        "clipboard_restored",
+        "clipboard_restore_status",
+        "clipboard_restore_reason",
+        "stage_status",
+        "staged_text_verified",
+        "staged_text_verification",
+        "post_send_verification",
+        "outbound_message_verification",
+        "target_binding_verification",
+        "subscription_paywall_recovery",
+        "paywall_recovered_and_retried",
+        "feedback_survey_recovery",
+        "evidence",
+    )
+    return {key: payload[key] for key in keys if key in payload}
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

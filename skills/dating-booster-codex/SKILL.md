@@ -49,13 +49,36 @@ Load this package's `skill-package.json` and compare it with the capabilities JS
 - `agent_native_capabilities.ci_tested_version` should match the installed tool version.
 - `agent_native_capabilities.local_daemon` should be true for public production workflows.
 - `diagnostic_capabilities.local_redacted_bundle` should be true.
+- `diagnostic_capabilities.support_log`, `encrypted_evidence_vault`, `topic_provenance`, and `clipboard_fingerprint` should be true for private-beta support.
 - If `source_spec_commit` differs from the local repo commit, report a warning. Continue only if version, schema, and command checks pass.
 
 If doctor, bootstrap, data doctor, migration, or capabilities fails; returns invalid JSON; has an incompatible `schema_version`; is too old; lacks a required schema version; or does not list the required commands, stop before observing dating app content and tell the user the local Dating Booster tool is incompatible.
 
+After compatibility checks pass and the target app id is known, start a local support session before observing dating-app content:
+
+```bash
+dating-boost support session start --data-dir .local/dating-boost --host codex --app-id tinder --json
+```
+
+Keep the returned `session_id` for this run. Commands with `--data-dir` record redacted command boundaries; draft policy checks, GUI harness stage/send commands, and `dating-boost-host-loop` commands using the same `--data-dir` also record topic provenance, hashes, clipboard fingerprints, timeline events, and encrypted sensitive evidence. Before ending the workflow, stop the session:
+
+```bash
+dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json
+```
+
+Do not run `data migrate` or `data delete` on that same data dir between support session start and support bundle export.
+
 ## Privacy Boundary
 
 In this mode, Codex is the host agent. The host agent may process visible dating app content, screenshots, profile text, conversation text, and generated drafts. Dating Booster stores local memory, context, policy decisions, feedback, and action audit records; it does not own the LLM in this workflow.
+
+For user bug reports, export a strict support bundle by default:
+
+```bash
+dating-boost support bundle --data-dir .local/dating-boost --session-id <session_id> --output dating-boost-support.zip --redaction strict --json
+```
+
+Strict bundles must not contain raw draft text, raw conversation text, raw profile text, raw screenshots, or clipboard contents. They may contain hashes, character counts, topic labels, command names, schema versions, target ids, and action outcomes. Use `--redaction full-with-consent --include-sensitive ... --confirm export-sensitive:<session_id>` only when the user explicitly asks to export sensitive evidence; never use it as the default.
 
 ## Default Action Policy
 
@@ -316,9 +339,12 @@ manually calling every operator command. Read `references/host-loop.md` first.
 Preferred one-command path:
 
 ```bash
+dating-boost support session start --data-dir .local/dating-boost --host codex --app-id tinder --json
 dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json
 dating-boost-host-loop init --data-dir .local/dating-boost --work-dir .local/dating-boost-host-loop --app-id tinder --json
 dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json
+dating-boost support bundle --data-dir .local/dating-boost --session-id <session_id> --output dating-boost-support.zip --redaction strict --json
 ```
 
 Use `dating-boost-host-loop status` to inspect the current waiting state,

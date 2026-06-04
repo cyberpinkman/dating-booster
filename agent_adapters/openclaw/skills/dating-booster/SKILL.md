@@ -49,6 +49,25 @@ migration, or capabilities fails; if required schemas or commands are missing;
 or if `agent_native_capabilities.openclaw_adapter` is not true. In Hermes mode,
 also require `agent_native_capabilities.hermes_openclaw_compatible_adapter`.
 
+After startup checks pass and the target app id is known, start a local support
+session before observing dating-app content:
+
+```bash
+dating-boost support session start --data-dir .local/dating-boost --host openclaw --app-id tinder --json
+```
+
+Use `--host hermes` when the running host is Hermes. Keep the returned
+`session_id`. Commands with `--data-dir` record redacted command boundaries;
+draft policy checks, GUI harness stage/send commands, and
+`dating-boost-host-loop` commands using the same `--data-dir` also record topic
+provenance, hashes, clipboard fingerprints, timeline events, and encrypted
+sensitive evidence.
+Stop the session before ending the workflow:
+
+```bash
+dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json
+```
+
 ## Shared Contracts
 
 Read and follow `references/contracts.md` and `references/workflows.md` from
@@ -66,6 +85,19 @@ versions, and machine reports rather than private message text.
 Dating Booster stores local memory, context, policy decisions, feedback, and
 host-executed action audit records. It does not own the LLM call in this
 workflow.
+
+For user bug reports, export a strict support bundle by default:
+
+```bash
+dating-boost support bundle --data-dir .local/dating-boost --session-id <session_id> --output dating-boost-support.zip --redaction strict --json
+```
+
+Strict bundles must not contain raw draft text, raw conversation text, raw
+profile text, raw screenshots, or clipboard contents. They may contain hashes,
+character counts, topic labels, command names, schema versions, target ids, and
+action outcomes. Use `--redaction full-with-consent --include-sensitive ...
+--confirm export-sensitive:<session_id>` only when the user explicitly asks to
+export sensitive evidence; never use it as the default.
 
 ## Core Workflow
 
@@ -188,9 +220,12 @@ Use the host loop when the host agent should act as the executor for queued
 work items:
 
 ```bash
+dating-boost support session start --data-dir .local/dating-boost --host openclaw --app-id tinder --json
 dating-boost-host-loop doctor --adapter-package agent_adapters/openclaw/adapter-package.json --data-dir .local/dating-boost --app-id tinder --json
 dating-boost-host-loop init --adapter-package agent_adapters/openclaw/adapter-package.json --data-dir .local/dating-boost --work-dir .local/dating-boost-host-loop --app-id tinder --json
 dating-boost-host-loop run --adapter-package agent_adapters/openclaw/adapter-package.json --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json
+dating-boost support bundle --data-dir .local/dating-boost --session-id <session_id> --output dating-boost-support.zip --redaction strict --json
 ```
 
 For fully managed sends, add `--send-mode live --managed-gui-send` only when

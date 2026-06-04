@@ -28,6 +28,18 @@ dating-boost data migrate --data-dir .local/dating-boost --json
 
 Stop before app observation if the adapter doctor, release doctor, data doctor, migration, or capabilities check fails; if required schemas or commands are missing; or if `agent_native_capabilities.claude_code_adapter` is not true.
 
+After startup checks pass and the target app id is known, start a local support session before observing dating-app content:
+
+```bash
+dating-boost support session start --data-dir .local/dating-boost --host claude-code --app-id tinder --json
+```
+
+Keep the returned `session_id`. Commands with `--data-dir` record redacted command boundaries; draft policy checks, GUI harness stage/send commands, and `dating-boost-host-loop` commands using the same `--data-dir` also record topic provenance, hashes, clipboard fingerprints, timeline events, and encrypted sensitive evidence. Stop the session before ending the workflow:
+
+```bash
+dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json
+```
+
 ## Shared Contracts
 
 Read and follow `references/contracts.md` and `references/workflows.md` from this installed skill directory. They are host-neutral. Do not copy Codex-specific assumptions into this workflow, and do not fork memory, policy, planner, app-profile, or harness business logic in Claude Code.
@@ -37,6 +49,14 @@ Read and follow `references/contracts.md` and `references/workflows.md` from thi
 Claude Code may process visible dating app content only for the active task after startup checks pass. Raw screenshots and OCR text should stay local. Normal diagnostics should use redacted counts, hashes, layout hints, schema versions, and machine reports rather than private message text.
 
 Dating Booster stores local memory, context, policy decisions, feedback, and host-executed action audit records. It does not own the LLM call in this workflow.
+
+For user bug reports, export a strict support bundle by default:
+
+```bash
+dating-boost support bundle --data-dir .local/dating-boost --session-id <session_id> --output dating-boost-support.zip --redaction strict --json
+```
+
+Strict bundles must not contain raw draft text, raw conversation text, raw profile text, raw screenshots, or clipboard contents. They may contain hashes, character counts, topic labels, command names, schema versions, target ids, and action outcomes. Use `--redaction full-with-consent --include-sensitive ... --confirm export-sensitive:<session_id>` only when the user explicitly asks to export sensitive evidence; never use it as the default.
 
 ## Core Workflow
 
@@ -147,9 +167,12 @@ If page identity, target binding, staged text, or post-send evidence is missing,
 Use the host loop when Claude Code should act as the executor for queued work items:
 
 ```bash
+dating-boost support session start --data-dir .local/dating-boost --host claude-code --app-id tinder --json
 dating-boost-host-loop doctor --adapter-package agent_adapters/claude-code/adapter-package.json --data-dir .local/dating-boost --app-id tinder --json
 dating-boost-host-loop init --adapter-package agent_adapters/claude-code/adapter-package.json --data-dir .local/dating-boost --work-dir .local/dating-boost-host-loop --app-id tinder --json
 dating-boost-host-loop run --adapter-package agent_adapters/claude-code/adapter-package.json --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json
+dating-boost support bundle --data-dir .local/dating-boost --session-id <session_id> --output dating-boost-support.zip --redaction strict --json
 ```
 
 For fully managed sends, add `--send-mode live --managed-gui-send` only when the authorization and action request are valid.
