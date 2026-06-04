@@ -366,7 +366,7 @@ If the step output contains `handoffs`, appointment details, contact exchange,
 or high-risk content, stop automation for that match and ask the user to take
 over.
 
-Use `references/workflows.md` for reusable workflow details and lower-level command fallbacks, `references/contracts.md` for JSON input/output contract examples, and the drafting/naturalness references for Chinese reply quality. These reference files are summaries; core code and committed specs remain the source of truth.
+Use `references/workflows.md` for reusable workflow details and lower-level command fallbacks, `references/contracts.md` for JSON input/output contract examples, and the drafting/naturalness references for Chinese reply quality. This package is the Codex host agent adapter; future Claude Code, Hermes, OpenClaw, or MCP-oriented adapters should reuse the same CLI/capabilities/app-profile contracts instead of copying Codex-only assumptions. For cross-agent, cross-app, goal, workflow, and memory expansion rules, read `docs/ARCHITECTURE.md` in the source repository. These reference files are summaries; core code and committed specs remain the source of truth.
 
 ## Post-Action Verification
 

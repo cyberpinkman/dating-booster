@@ -18,7 +18,8 @@ and workflow contracts.
 - Deterministic conversation eval fixture suite.
 - User self-model readiness thresholds for autonomous operation.
 - Replay timeline for run review.
-- Multi-app app-profile contracts for Tinder, WeChat, Bumble, and 她说.
+- Runtime app support profiles for Tinder and WeChat; Bumble, 她说, Hinge, and
+  other apps remain roadmap candidates until tests prove support.
 
 ## Non-Goals
 

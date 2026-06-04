@@ -49,16 +49,24 @@ verification, and post-action verification.
 | --- | --- | --- | --- |
 | Tinder | host loop, profile/chat navigation, observation, draft workflow, opt-in managed live send | iPhone Mirroring on macOS | stage by default; `send-message` can click Send only after explicit live-send authorization and verification |
 | WeChat / 微信 | app profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | stage by default; `send-message` can press Enter only after explicit live-send authorization and verification |
-| Bumble | contract-only placeholder | none | not supported |
-| 她说 / Ta Shuo | contract-only placeholder | none | not supported |
 
-更多 app 的扩展入口是 `app_profiles/README.md` 和 `docs/README.md`。新增 app
-应先落 app profile，再决定是否实现 native observation、navigation 或 draft
-staging。
+未支持 app 不进入 `app_profiles/` 或 `supported_app_profiles`。Bumble、Hinge、
+她说以及其他主流 dating app 先作为 roadmap candidate 记录在
+`docs/ARCHITECTURE.md`；只有具备 fixture、preflight、harness 或 host-loop 测试后，
+才新增 runtime app profile。
 
-For more apps, start from `app_profiles/README.md` and `docs/README.md`. Add
-the app profile first, then decide whether native observation, navigation, or
-draft staging is justified.
+Unsupported apps do not appear in `app_profiles/` or `supported_app_profiles`.
+Bumble, Hinge, Ta Shuo, and other mainstream dating apps are roadmap candidates
+until fixtures, preflight, harness, or host-loop tests justify a runtime app
+profile.
+
+未来扩展蓝图见 `docs/ARCHITECTURE.md`。它把扩展拆成四条独立轴：更多 host
+agent（Codex、Claude Code、Hermes、OpenClaw）、更多 dating app、更多目标类型，
+以及更智能的 workflow/memory evolution。
+
+See `docs/ARCHITECTURE.md` for the expansion architecture. It separates future
+work into four independent axes: more host agents, more dating apps, more goal
+types, and smarter workflow/memory evolution.
 
 ## 安装和启动检查 / Install And Startup Checks
 
@@ -310,7 +318,12 @@ you explicitly want to inspect the context pack in terminal output.
 | `dating_boost/core/gui_harness.py` | native GUI harness adapters: Tinder uses iPhone Mirroring, WeChat uses macOS desktop |
 | `dating_boost/host_loop.py` | supervised host-loop runner for staged/live work items |
 | `dating_boost/core/capabilities.py` | machine-readable startup contract for agents and skill installers |
+| `dating_boost/core/goals.py` | goal type registry; `meet_in_person` is the first registered goal |
+| `dating_boost/harness/` | shared native harness building blocks: window parsing, screen state, input backends |
 | `app_profiles/` | app-specific contracts; see `app_profiles/README.md` |
+| `agent_adapters/` | shared and host-specific adapter docs for Codex, Claude Code, and future hosts |
+| `schemas/app_profile.schema.json` | formal app profile schema used by profile contract tests |
+| `docs/ARCHITECTURE.md` | expansion architecture for host agents, dating apps, goals, workflows, and memory |
 | `skills/dating-booster-codex/` | installable Codex skill plus operational references and smoke/runbook docs |
 | `docs/README.md` | repository map, current app support matrix, and expansion path |
 | `tests/fixtures/` | deterministic fixtures for local and host-loop tests |
@@ -319,8 +332,8 @@ you explicitly want to inspect the context pack in terminal output.
 ## 新 App 扩展路径 / App Expansion Path
 
 1. 新增或更新 `app_profiles/<app_id>.json`。
-2. 先确定 support level：contract-only、native observation、native navigation、
-   native draft staging 或 host-loop integration。
+2. 先证明它是 runtime-supported app：至少有 fixture、preflight 和可测试的
+   observation/navigation/staging/live-send 边界。
 3. 如需 native GUI support，在 `dating_boost/core/gui_harness.py` 实现 backend。
 4. 只有在 harness contract 可测试后，才在 `dating_boost/cli.py` 暴露 app-specific
    commands。
@@ -332,8 +345,8 @@ you explicitly want to inspect the context pack in terminal output.
 8. 发布前运行 targeted unit tests 和 `dating-boost capabilities --json`。
 
 1. Add or update `app_profiles/<app_id>.json`.
-2. Decide the support level: contract-only, native observation, native
-   navigation, native draft staging, or host-loop integration.
+2. Prove it is a runtime-supported app with fixtures, preflight, and testable
+   observation/navigation/staging/live-send boundaries.
 3. If native GUI support is needed, implement the backend in
    `dating_boost/core/gui_harness.py`.
 4. Expose app-specific commands in `dating_boost/cli.py` only after the harness

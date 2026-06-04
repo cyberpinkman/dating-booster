@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.goals import DEFAULT_GOAL_TYPE, get_goal_type_definition
 from dating_boost.core.storage import JsonStorage
 from dating_boost.perception.observations import AppObservation
 
@@ -101,12 +102,14 @@ class PlannerRepository:
         observation: AppObservation,
         assessment: dict[str, Any],
         now: str,
+        goal_type: str = DEFAULT_GOAL_TYPE,
     ) -> dict[str, Any]:
         _validate_storage_id(match_id, "match_id")
         _validate_storage_id(goal_id, "goal_id")
         errors = validate_planner_assessment(assessment)["errors"]
         if errors:
             raise ValueError("; ".join(errors))
+        goal_definition = get_goal_type_definition(goal_type)
 
         existing = self.load_plan(match_id)
         topic = dict(assessment["topic"])
@@ -136,7 +139,7 @@ class PlannerRepository:
             "schema_version": GOAL_PLAN_SCHEMA_VERSION,
             "match_id": match_id,
             "goal_id": goal_id,
-            "goal_type": "meet_in_person",
+            "goal_type": goal_definition.goal_type,
             "stage": stage,
             "strategy_summary": str(
                 assessment.get("strategy_summary")

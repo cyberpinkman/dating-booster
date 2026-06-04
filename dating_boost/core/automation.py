@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.context_pack import build_context_pack
+from dating_boost.core.goals import DEFAULT_GOAL_TYPE, get_goal_type_definition
 from dating_boost.core.identity import resolve_match_identity
 from dating_boost.core.models import Divergence, ReplyMode
 from dating_boost.core.planner import PlannerRepository, planner_context_items
@@ -34,12 +35,23 @@ class AutomationRepository:
 
     def save_goal(self, payload: dict[str, Any]) -> dict[str, Any]:
         goal_id = _non_empty(payload.get("goal_id"), "goal_id")
+        goal_type = _goal_type_from_payload(payload)
+        try:
+            get_goal_type_definition(goal_type)
+        except ValueError as exc:
+            raise ValueError(f"unsupported_goal_type: {goal_type}") from exc
+        normalized = {key: value for key, value in payload.items() if key != "kind"}
+        normalized["goal_type"] = goal_type
         document = self._load_collection(Path("automation") / "goals.json", "goals")
         items = {item["goal_id"]: dict(item) for item in document["goals"]}
-        items[goal_id] = dict(payload)
+        items[goal_id] = normalized
         document["goals"] = sorted(items.values(), key=lambda item: str(item["goal_id"]))
         self._storage.write_json(Path("automation") / "goals.json", document)
-        return {"schema_version": 1, "status": "ok", "goal_id": goal_id}
+        return {"schema_version": 1, "status": "ok", "goal_id": goal_id, "goal_type": goal_type}
+
+    def load_goals_payload(self) -> dict[str, Any]:
+        document = self._load_collection(Path("automation") / "goals.json", "goals")
+        return {"schema_version": 1, "status": "ok", "goals": list(document["goals"])}
 
     def save_availability(self, payload: dict[str, Any]) -> dict[str, Any]:
         items = list(payload.get("availability", []))
@@ -206,13 +218,23 @@ class AutomationRepository:
         )
 
     def _active_goal_id(self) -> str:
+        return str(self._active_goal_payload()["goal_id"])
+
+    def _active_goal_payload(self) -> dict[str, str]:
         goals = list(self._load_collection(Path("automation") / "goals.json", "goals")["goals"])
         for goal in goals:
-            if goal.get("goal_type") == "meet_in_person":
-                return str(goal.get("goal_id") or "goal_meet")
+            if _goal_type_from_payload(goal) == DEFAULT_GOAL_TYPE:
+                return {
+                    "goal_id": str(goal.get("goal_id") or "goal_meet"),
+                    "goal_type": _goal_type_from_payload(goal),
+                }
         if goals:
-            return str(goals[0].get("goal_id") or "goal_meet")
-        return "goal_meet"
+            goal = goals[0]
+            return {
+                "goal_id": str(goal.get("goal_id") or "goal_meet"),
+                "goal_type": _goal_type_from_payload(goal),
+            }
+        return {"goal_id": "goal_meet", "goal_type": DEFAULT_GOAL_TYPE}
 
     def _planner_plans(self, states: list[dict[str, Any]]) -> list[dict[str, Any]]:
         planner = PlannerRepository(self.root)
@@ -378,12 +400,14 @@ class AutomationRepository:
             planner_assessment = thread_item.get("planner_assessment")
             if planner_assessment is not None:
                 try:
+                    active_goal = self._active_goal_payload()
                     planner_payload = PlannerRepository(self.root).update_plan(
                         match_id=match_id,
-                        goal_id=str(state.get("goal_id") or self._active_goal_id()),
+                        goal_id=str(state.get("goal_id") or active_goal["goal_id"]),
                         observation=observation,
                         assessment=dict(planner_assessment),
                         now=now,
+                        goal_type=str(active_goal["goal_type"]),
                     )
                 except (TypeError, ValueError) as exc:
                     warnings.append("planner_assessment_invalid")
@@ -1516,6 +1540,11 @@ def _non_empty(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{label} must be a non-empty string")
     return value
+
+
+def _goal_type_from_payload(payload: dict[str, Any]) -> str:
+    value = payload.get("goal_type") or payload.get("kind") or DEFAULT_GOAL_TYPE
+    return str(value).strip() or DEFAULT_GOAL_TYPE
 
 
 def _unique_strings(values: list[str]) -> list[str]:

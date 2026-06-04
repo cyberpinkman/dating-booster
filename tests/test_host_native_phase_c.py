@@ -172,17 +172,19 @@ class HostNativePhaseCTests(unittest.TestCase):
             self.assertEqual(replay_payload["status"], "ok")
             self.assertTrue(replay_payload["timeline"])
 
-    def test_multi_app_profiles_are_available_to_capabilities(self):
+    def test_runtime_app_profiles_only_include_supported_apps(self):
         exit_code, payload = self._run_cli(["capabilities", "--json"])
 
         self.assertEqual(exit_code, 0)
         caps = payload["agent_native_capabilities"]
         self.assertTrue(caps["multi_app_profiles"])
-        self.assertEqual(set(caps["supported_app_profiles"]), {"tinder", "wechat", "bumble", "tashuo"})
+        self.assertEqual(set(caps["supported_app_profiles"]), {"tinder", "wechat"})
         self.assertEqual(set(caps["host_loop_app_profiles"]), {"tinder", "wechat"})
-        self.assertEqual(set(caps["contract_only_app_profiles"]), {"bumble", "tashuo"})
+        self.assertNotIn("contract_only_app_profiles", caps)
         for app_id in caps["supported_app_profiles"]:
             self.assertTrue((Path("app_profiles") / f"{app_id}.json").exists())
+        for app_id in ("bumble", "tashuo", "hinge"):
+            self.assertFalse((Path("app_profiles") / f"{app_id}.json").exists())
 
     def _run_cli(self, argv):
         output = StringIO()

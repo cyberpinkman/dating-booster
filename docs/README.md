@@ -13,6 +13,9 @@ planning, audit, and safe staging contracts.
 - `dating_boost/core/`: storage, policy, planning, diagnostics, production data,
   daemon/safety state, and native GUI harness adapters。本地存储、策略、规划、
   诊断、生产数据、daemon/safety 状态和原生 GUI harness。
+- `dating_boost/harness/`: shared native harness building blocks, including
+  window parsing, screen-state classification, and input backends。原生 harness
+  共享模块，包括窗口解析、屏幕状态识别和输入后端。
 - `dating_boost/host_loop.py`: supervised host-loop runner for app-specific work
   items。面向具体 App work item 的 host-loop supervisor。
 - `dating_boost/intelligence/`: reply generation backends and prompt wiring。
@@ -24,6 +27,13 @@ planning, audit, and safe staging contracts.
   与回复质量评估。
 - `app_profiles/`: app-specific product contracts。具体 App 契约，见
   `app_profiles/README.md`。
+- `schemas/`: formal JSON contracts such as `app_profile.schema.json`。正式
+  JSON contract。
+- `agent_adapters/`: shared and host-specific adapter docs for Codex, Claude
+  Code, and future hosts。面向 Codex、Claude Code 和后续 host 的 adapter 文档。
+- `docs/ARCHITECTURE.md`: expansion architecture for host agents, dating apps,
+  goals, workflows, and memory。面向更多 agent、更多 app、更多目标和更智能
+  workflow/memory 的扩展架构。
 - `skills/dating-booster-codex/`: installable Codex skill, scripts, examples,
   and operational references。Codex skill、脚本、示例和运行手册。
 - `scripts/`: local smoke and host-loop helper scripts。本地 smoke 与 host-loop
@@ -40,16 +50,29 @@ planning, audit, and safe staging contracts.
 | --- | --- | --- | --- |
 | Tinder | Host-loop, profile/chat navigation, observation, draft workflow, opt-in managed live send | iPhone Mirroring on macOS | Stage by default; managed send only with explicit authorization and verification |
 | WeChat / 微信 | App profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | Stage by default; managed send only with explicit authorization and verification |
-| Bumble | Contract-only profile | None | Not supported |
-| Ta Shuo / 她说 | Contract-only profile | None | Not supported |
 
-`supported_app_profiles` 表示 host agent 可以看到这些 profile；真正可运行的
-host-loop app 由 `host_loop_app_profiles` 和每个 profile 的
-`host_loop_supported` 决定。
+`supported_app_profiles` 只列 runtime-supported app。未支持 app 不创建 placeholder
+profile，也不进入 capabilities。
 
-`supported_app_profiles` means profiles are visible to host agents. Runnable
-host-loop apps are controlled by `host_loop_app_profiles` and each profile's
-`host_loop_supported` flag.
+`supported_app_profiles` only lists runtime-supported apps. Unsupported apps do
+not get placeholder profiles and do not appear in capabilities.
+
+## Expansion Architecture / 扩展架构
+
+Use `docs/ARCHITECTURE.md` as the source map for future expansion. It separates
+four axes that should not be mixed in one-off patches:
+
+- host agent adapters: Codex first, then Claude Code, Hermes, OpenClaw, and
+  MCP-compatible hosts.
+- app support profiles: Tinder and WeChat at runtime; Bumble, Ta Shuo/tashuo,
+  Hinge, and other mainstream apps stay as roadmap candidates until testable.
+- goal type registry: `meet_in_person` first, then additional goals with their
+  own milestones, policy constraints, and handoff rules.
+- workflow and memory evolution: smarter scenario workflows, provenance-backed
+  memory, feedback events, and eval-driven improvement.
+
+后续扩展应先查 `docs/ARCHITECTURE.md`。新增 agent、app、goal 或 memory/workflow
+能力时，先确认它属于哪条轴，再同步 core contract、capabilities、docs 和 tests。
 
 ## Runtime Surfaces / 运行面
 
@@ -68,11 +91,10 @@ host-loop apps are controlled by `host_loop_app_profiles` and each profile's
 ## App Expansion Path / App 扩展路径
 
 1. Add or update `app_profiles/<app_id>.json`。新增或更新 App profile。
-2. Decide the support level: contract-only, native observation, native
-   navigation, native draft staging, managed live send, or host-loop
-   integration。先定支持等级。
-3. Keep `host_loop_supported=false` until host-loop preflight and tests prove
-   the app can run。未验证前不要让 contract-only app 进入 host-loop。
+2. Add a runtime profile only after fixtures and preflight can prove the app is
+   supported。不为未支持 app 创建 placeholder profile。
+3. Keep the app out of capabilities until host-loop or harness tests prove it
+   can run。未验证前不要进入 capabilities。
 4. If native GUI support is needed, add the backend adapter in
    `dating_boost/core/gui_harness.py`。需要原生 GUI 时再实现 backend。
 5. Expose app-specific CLI commands only after the harness contract is

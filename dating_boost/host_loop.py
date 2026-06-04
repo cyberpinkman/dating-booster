@@ -26,20 +26,40 @@ REPORT_FINAL_STATUSES = {"wait", "blocked", "handoff", "scheduled_wait", "stoppe
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
 
-    supervisor = HostLoopSupervisor(args)
-    command = getattr(args, "command", "run")
-    if command == "doctor":
-        payload, exit_code = supervisor.doctor()
-    elif command == "init":
-        payload, exit_code = supervisor.init()
-    elif command == "status":
-        payload, exit_code = supervisor.status()
-    elif command == "confirm-staged":
-        payload, exit_code = supervisor.confirm_staged()
-    elif command == "resume":
-        payload, exit_code = supervisor.resume()
-    else:
-        payload, exit_code = supervisor.run()
+    try:
+        supervisor = HostLoopSupervisor(args)
+        command = getattr(args, "command", "run")
+        if command == "doctor":
+            payload, exit_code = supervisor.doctor()
+        elif command == "init":
+            payload, exit_code = supervisor.init()
+        elif command == "status":
+            payload, exit_code = supervisor.status()
+        elif command == "confirm-staged":
+            payload, exit_code = supervisor.confirm_staged()
+        elif command == "resume":
+            payload, exit_code = supervisor.resume()
+        else:
+            payload, exit_code = supervisor.run()
+    except HostLoopError as exc:
+        reason = str(exc)
+        data_dir = (getattr(args, "data_dir", None) or DEFAULT_DATA_DIR).resolve()
+        work_dir = (getattr(args, "work_dir", None) or data_dir / "host-loop").resolve()
+        payload = {
+            "schema_version": 1,
+            "status": "blocked",
+            "reason": reason,
+            "stop_reason": reason,
+            "send_mode": getattr(args, "send_mode", "stage"),
+            "app_id": getattr(args, "app_id", "tinder"),
+            "data_dir": str(data_dir),
+            "work_dir": str(work_dir),
+            "steps": [],
+            "staged_verifications": [],
+            "action_results_recorded": [],
+            "next_host_action": "choose_supported_host_loop_app",
+        }
+        exit_code = 2
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     else:
@@ -782,6 +802,7 @@ class HostLoopSupervisor:
         payload: dict[str, Any] = {
             "schema_version": 1,
             "status": status,
+            "reason": reason,
             "stop_reason": reason,
             "send_mode": self.args.send_mode,
             "app_id": self.args.app_id,

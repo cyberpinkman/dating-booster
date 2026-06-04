@@ -1,69 +1,51 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
-import re
-import shutil
-import subprocess
-import struct
 import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
-import zlib
+
+from dating_boost.harness.base import (
+    SubprocessRunner,
+    WindowInfo,
+    parse_window_info as _parse_window_info,
+    short as _short,
+    window_from_payload as _window_from_payload,
+)
+from dating_boost.harness.input_backends import (
+    click_iphone_mirroring_view_menu_item as _click_iphone_mirroring_view_menu_item_backend,
+    core_graphics_click as _core_graphics_click_backend,
+    core_graphics_drag as _core_graphics_drag_backend,
+    core_graphics_wheel as _core_graphics_wheel_backend,
+)
+from dating_boost.harness.screen_state import (
+    TINDER_FOREGROUND_STATES,
+    WECHAT_FOREGROUND_STATES,
+    classify_screen_image,
+    classify_screen_text,
+    classify_wechat_screen_text,
+    combine_screen_states as _combine_screen_states,
+    hash_text as _hash_text,
+    normalize_text as _normalize_text,
+    redacted_screen as _redacted_screen,
+    tinder_layout_hints as _tinder_layout_hints,
+    tinder_profile_danger_action_visible as _tinder_profile_danger_action_visible,
+    tinder_profile_expand_control_visible as _tinder_profile_expand_control_visible,
+    tinder_profile_field_coverage as _tinder_profile_field_coverage,
+    wechat_layout_hints as _wechat_layout_hints,
+)
 
 
-GUI_HARNESS_SCHEMA_VERSION = 1
+GUI_HARNESS_SCHEMA_VERSION = 2
 IPHONE_MIRRORING_HARNESS_BACKEND = "iphone_mirroring_macos"
 WECHAT_HARNESS_BACKEND = "macos_wechat_desktop"
 HARNESS_BACKEND = IPHONE_MIRRORING_HARNESS_BACKEND
 BLOCKED_GUI_ACTIONS = ["send", "like", "super_like", "unmatch", "report", "profile_edit"]
 WECHAT_BLOCKED_GUI_ACTIONS = ["send", "payments", "calls", "contact_exchange_without_user"]
-TINDER_FOREGROUND_STATES = {
-    "tinder_home",
-    "tinder_messages",
-    "tinder_conversation",
-    "tinder_self_profile",
-    "tinder_profile",
-    "tinder_unknown",
-}
-WECHAT_FOREGROUND_STATES = {"wechat_chat", "wechat_chat_list", "wechat_unknown"}
-
-
-@dataclass(frozen=True)
-class WindowInfo:
-    frontmost: bool
-    x: int
-    y: int
-    width: int
-    height: int
-    name: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "frontmost": self.frontmost,
-            "x": self.x,
-            "y": self.y,
-            "width": self.width,
-            "height": self.height,
-            "name": self.name,
-        }
-
-
-class SubprocessRunner:
-    def run(self, command: list[str], *, input: str | None = None) -> subprocess.CompletedProcess[str]:
-        if command[:2] == ["command", "-v"] and len(command) == 3:
-            path = shutil.which(command[2])
-            return subprocess.CompletedProcess(
-                command,
-                0 if path else 1,
-                stdout=f"{path}\n" if path else "",
-                stderr="",
-            )
-        return subprocess.run(command, input=input, capture_output=True, text=True, check=False)
 
 
 class NativeGuiHarness:
@@ -972,12 +954,7 @@ class NativeGuiHarness:
         return {"status": "ok", "point": {"x": x, "y": y}, "input_backend": "applescript_accessibility"}
 
     def _core_graphics_click(self, x: int, y: int) -> dict[str, Any]:
-        script_path = _core_graphics_click_script_path()
-        script_path.write_text(_CORE_GRAPHICS_CLICK_SWIFT, encoding="utf-8")
-        result = self.runner.run(["xcrun", "swift", str(script_path), str(x), str(y)])
-        if result.returncode != 0:
-            return {"status": "blocked", "reason": "core_graphics_click_failed", "stderr": _short(result.stderr)}
-        return {"status": "ok", "point": {"x": x, "y": y}, "input_backend": "core_graphics"}
+        return _core_graphics_click_backend(self.runner, x, y)
 
     def _swipe_ratio(self, window: WindowInfo, swipe: dict[str, Any]) -> dict[str, Any]:
         if not self._command_available("xcrun"):
@@ -988,28 +965,14 @@ class NativeGuiHarness:
         start_y = round(window.y + window.height * float(start["y"]))
         end_x = round(window.x + window.width * float(end["x"]))
         end_y = round(window.y + window.height * float(end["y"]))
-        script_path = _core_graphics_drag_script_path()
-        script_path.write_text(_CORE_GRAPHICS_DRAG_SWIFT, encoding="utf-8")
-        result = self.runner.run(
-            [
-                "xcrun",
-                "swift",
-                str(script_path),
-                str(start_x),
-                str(start_y),
-                str(end_x),
-                str(end_y),
-                str(int(swipe.get("duration_ms", 350))),
-            ]
+        return _core_graphics_drag_backend(
+            self.runner,
+            start_x=start_x,
+            start_y=start_y,
+            end_x=end_x,
+            end_y=end_y,
+            duration_seconds=float(swipe.get("duration_ms", 350)) / 1000.0,
         )
-        if result.returncode != 0:
-            return {"status": "blocked", "reason": "core_graphics_swipe_failed", "stderr": _short(result.stderr)}
-        return {
-            "status": "ok",
-            "from": {"x": start_x, "y": start_y},
-            "to": {"x": end_x, "y": end_y},
-            "input_backend": "core_graphics",
-        }
 
     def _wheel_ratio(self, window: WindowInfo, wheel: dict[str, Any]) -> dict[str, Any]:
         if not self._command_available("xcrun"):
@@ -1020,45 +983,22 @@ class NativeGuiHarness:
         delta_x = int(wheel.get("delta_x", 0))
         repeats = max(1, int(wheel.get("repeats", 1)))
         interval_us = max(1000, int(wheel.get("interval_us", 18000)))
-        script_path = _core_graphics_wheel_script_path()
-        script_path.write_text(_CORE_GRAPHICS_WHEEL_SWIFT, encoding="utf-8")
-        result = self.runner.run(
-            [
-                "xcrun",
-                "swift",
-                str(script_path),
-                str(x),
-                str(y),
-                str(delta_y),
-                str(delta_x),
-                str(repeats),
-                str(interval_us),
-            ]
+        return _core_graphics_wheel_backend(
+            self.runner,
+            x=x,
+            y=y,
+            delta_y=delta_y,
+            delta_x=delta_x,
+            repeats=repeats,
+            interval_us=interval_us,
         )
-        if result.returncode != 0:
-            return {"status": "blocked", "reason": "core_graphics_wheel_failed", "stderr": _short(result.stderr)}
-        return {
-            "status": "ok",
-            "point": {"x": x, "y": y},
-            "delta": {"x": delta_x, "y": delta_y},
-            "repeats": repeats,
-            "input_backend": "core_graphics_wheel",
-        }
 
     def _click_iphone_mirroring_view_menu_item(self, item_name: str) -> dict[str, Any]:
-        result = self.runner.run(
-            [
-                "osascript",
-                "-e",
-                (
-                    f'tell application "System Events" to tell process "{self.window_title}" '
-                    f'to click menu item "{item_name}" of menu "View" of menu bar 1'
-                ),
-            ]
+        return _click_iphone_mirroring_view_menu_item_backend(
+            self.runner,
+            window_title=self.window_title,
+            item_name=item_name,
         )
-        if result.returncode != 0:
-            return {"status": "blocked", "reason": "iphone_mirroring_view_menu_failed", "stderr": _short(result.stderr)}
-        return {"status": "ok", "menu_item": item_name, "input_backend": "applescript_menu"}
 
     def _execute_step(self, window: WindowInfo, step: dict[str, Any]) -> dict[str, Any]:
         if "tap_ratio" in step:
@@ -1258,231 +1198,6 @@ class NativeGuiHarness:
         }
 
 
-def classify_screen_text(text: str) -> str:
-    normalized = _normalize_text(text)
-    if not normalized:
-        return "unknown"
-    if "iphone mirroring is locked" in normalized or "enter password" in normalized or "touch id" in normalized:
-        return "iphone_mirroring_locked"
-    if "requesting to bypass" in normalized and "private window picker" in normalized:
-        return "screen_permission_prompt"
-    if any(marker in normalized for marker in ("edit profile", "编辑资料", "编辑个人资料", "edit info")):
-        return "tinder_self_profile"
-    if "个人资料" in normalized and any(marker in normalized for marker in ("完善个人资料", "添加一条", "设置")):
-        return "tinder_self_profile"
-    if _looks_like_tinder_chat_list_text(normalized):
-        return "tinder_messages"
-    if _looks_like_tinder_conversation_text(normalized):
-        return "tinder_conversation"
-    if _looks_like_tinder_profile_text(normalized):
-        return "tinder_profile"
-    if "等你回应" in normalized or ("配对" in normalized and any(marker in normalized for marker in ("消息", "聊天"))):
-        return "tinder_messages"
-    if all(marker in normalized for marker in ("滑动", "探索", "聊天", "个人资料")):
-        return "tinder_home"
-    if "tinder" in normalized and any(marker in normalized for marker in ("siri", "建议", "搜索", "search")):
-        return "ios_search"
-    if any(marker in normalized for marker in ("matches", "messages", "配对", "消息")) and "tinder" in normalized:
-        return "tinder_messages"
-    if "tinder" in normalized:
-        return "tinder_unknown"
-    if any(marker in normalized for marker in ("搜索", "search", "chrome", "phone", "电话", "微信")):
-        return "ios_home_screen"
-    return "unknown"
-
-
-def classify_wechat_screen_text(text: str) -> str:
-    normalized = _normalize_text(text)
-    if not normalized:
-        return "unknown"
-    if "requesting to bypass" in normalized and "private window picker" in normalized:
-        return "screen_permission_prompt"
-    wechat_marker = "wechat" in normalized or "微信" in normalized
-    chat_input_marker = any(marker in normalized for marker in ("发送", "send", "按住说话", "enter"))
-    chat_history_marker = any(marker in normalized for marker in ("昨天", "今天", "分钟前", ":", "am", "pm"))
-    chat_list_marker = any(marker in normalized for marker in ("通讯录", "contacts", "订阅号", "群聊", "chats"))
-    if wechat_marker and chat_list_marker:
-        return "wechat_chat_list"
-    if wechat_marker and chat_input_marker and chat_history_marker:
-        return "wechat_chat"
-    if chat_input_marker and chat_history_marker:
-        return "wechat_chat"
-    if wechat_marker:
-        return "wechat_unknown"
-    return "unknown"
-
-
-def classify_screen_image(path: Path) -> dict[str, str]:
-    try:
-        pixels = _read_png_pixels(path)
-    except (OSError, ValueError, zlib.error, struct.error):
-        return {"status": "failed", "state": "unknown"}
-    if _looks_like_tinder_self_profile_top(pixels):
-        return {"status": "ok", "state": "tinder_self_profile"}
-    return {"status": "ok", "state": "unknown"}
-
-
-def _combine_screen_states(text_state: str, visual_state: str) -> str:
-    if text_state in {"iphone_mirroring_locked", "screen_permission_prompt"}:
-        return text_state
-    if text_state not in {"unknown", "tinder_unknown"}:
-        return text_state
-    if visual_state == "tinder_self_profile":
-        return visual_state
-    return text_state
-
-
-def _looks_like_tinder_self_profile_top(pixels: dict[str, Any]) -> bool:
-    avatar = _region_stats(pixels, 0.04, 0.07, 0.22, 0.19)
-    edit_button = _region_stats(pixels, 0.24, 0.11, 0.62, 0.21)
-    settings = _region_stats(pixels, 0.82, 0.07, 0.97, 0.19)
-    bottom_profile = _region_stats(pixels, 0.76, 0.88, 0.98, 0.99)
-    top_structure = (
-        avatar["dark_ratio"] > 0.35
-        and avatar["color_ratio"] > 0.04
-        and edit_button["bright_ratio"] > 0.10
-        and settings["dark_ratio"] > 0.60
-        and settings["bright_ratio"] > 0.01
-    )
-    profile_tab_active = bottom_profile["mid_ratio"] > 0.15 and bottom_profile["bright_ratio"] > 0.005
-    return top_structure or profile_tab_active
-
-
-def _region_stats(pixels: dict[str, Any], x1: float, y1: float, x2: float, y2: float) -> dict[str, float]:
-    width = int(pixels["width"])
-    height = int(pixels["height"])
-    rows = pixels["rows"]
-    channels = int(pixels["channels"])
-    start_x = max(0, min(width - 1, int(x1 * width)))
-    end_x = max(start_x + 1, min(width, int(x2 * width)))
-    start_y = max(0, min(height - 1, int(y1 * height)))
-    end_y = max(start_y + 1, min(height, int(y2 * height)))
-    total = bright = dark = mid = color = 0
-    for row in rows[start_y:end_y]:
-        for x in range(start_x, end_x):
-            r, g, b = row[x * channels : x * channels + 3]
-            lum = (int(r) + int(g) + int(b)) / 3
-            total += 1
-            if lum > 210:
-                bright += 1
-            if lum < 45:
-                dark += 1
-            if 55 <= lum <= 150:
-                mid += 1
-            if max(r, g, b) - min(r, g, b) > 35 and lum > 45:
-                color += 1
-    return {
-        "bright_ratio": bright / total,
-        "dark_ratio": dark / total,
-        "mid_ratio": mid / total,
-        "color_ratio": color / total,
-    }
-
-
-def _read_png_pixels(path: Path) -> dict[str, Any]:
-    data = path.read_bytes()
-    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise ValueError("not a png")
-    pos = 8
-    width = height = channels = color_type = bit_depth = None
-    raw = b""
-    while pos < len(data):
-        length = struct.unpack(">I", data[pos : pos + 4])[0]
-        pos += 4
-        chunk_type = data[pos : pos + 4]
-        pos += 4
-        chunk = data[pos : pos + length]
-        pos += length + 4
-        if chunk_type == b"IHDR":
-            width, height, bit_depth, color_type, compression, filter_method, interlace = struct.unpack(
-                ">IIBBBBB",
-                chunk,
-            )
-            if bit_depth != 8 or compression != 0 or filter_method != 0 or interlace != 0:
-                raise ValueError("unsupported png format")
-            channels = {2: 3, 6: 4}.get(color_type)
-            if channels is None:
-                raise ValueError("unsupported png color type")
-        elif chunk_type == b"IDAT":
-            raw += chunk
-        elif chunk_type == b"IEND":
-            break
-    if width is None or height is None or channels is None:
-        raise ValueError("missing png header")
-    scanlines = zlib.decompress(raw)
-    rows = []
-    i = 0
-    previous = [0] * (width * channels)
-    for _ in range(height):
-        filter_type = scanlines[i]
-        i += 1
-        row = list(scanlines[i : i + width * channels])
-        i += width * channels
-        decoded = _decode_png_scanline(row, previous, channels, filter_type)
-        rows.append(decoded)
-        previous = decoded
-    return {"width": width, "height": height, "channels": channels, "rows": rows}
-
-
-def _decode_png_scanline(row: list[int], previous: list[int], channels: int, filter_type: int) -> list[int]:
-    decoded = [0] * len(row)
-    for index, value in enumerate(row):
-        left = decoded[index - channels] if index >= channels else 0
-        up = previous[index]
-        upper_left = previous[index - channels] if index >= channels else 0
-        if filter_type == 0:
-            predictor = 0
-        elif filter_type == 1:
-            predictor = left
-        elif filter_type == 2:
-            predictor = up
-        elif filter_type == 3:
-            predictor = (left + up) // 2
-        elif filter_type == 4:
-            predictor = _paeth(left, up, upper_left)
-        else:
-            raise ValueError("unsupported png filter")
-        decoded[index] = (value + predictor) & 0xFF
-    return decoded
-
-
-def _paeth(left: int, up: int, upper_left: int) -> int:
-    estimate = left + up - upper_left
-    distances = ((abs(estimate - left), left), (abs(estimate - up), up), (abs(estimate - upper_left), upper_left))
-    return min(distances, key=lambda item: item[0])[1]
-
-
-def _parse_window_info(stdout: str) -> WindowInfo | None:
-    match = re.search(
-        r"^\s*(true|false),\s*(-?\d+),\s*(-?\d+),\s*(\d+),\s*(\d+),\s*(.+?)\s*$",
-        stdout.strip(),
-        re.IGNORECASE,
-    )
-    if not match:
-        return None
-    return WindowInfo(
-        frontmost=match.group(1).lower() == "true",
-        x=int(match.group(2)),
-        y=int(match.group(3)),
-        width=int(match.group(4)),
-        height=int(match.group(5)),
-        name=match.group(6),
-    )
-
-
-def _redacted_screen(screen: dict[str, Any]) -> dict[str, Any]:
-    text = str(screen.get("text") or "")
-    result = {key: value for key, value in screen.items() if key != "text"}
-    if text:
-        result["text_fingerprint"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        result["text_character_count"] = len(text)
-    return result
-
-
-def _hash_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
 def _target_binding_required_markers(target_binding: dict[str, Any]) -> list[str]:
     markers: list[str] = []
     value = target_binding.get("required_visible_text")
@@ -1496,44 +1211,6 @@ def _target_binding_required_markers(target_binding: dict[str, Any]) -> list[str
         if marker not in unique:
             unique.append(marker)
     return unique
-
-
-def _looks_like_tinder_chat_list_text(normalized_text: str) -> bool:
-    has_chat_title = "聊天" in normalized_text or "messages" in normalized_text
-    has_chat_sections = any(marker in normalized_text for marker in ("新的配对", "new matches", "消息", "messages"))
-    return has_chat_title and has_chat_sections
-
-
-def _looks_like_tinder_profile_text(normalized_text: str) -> bool:
-    profile_sections = sum(
-        1
-        for marker in ("关于我", "关键信息", "兴趣", "我想要", "基本信息", "生活方式", "about me", "interests")
-        if marker in normalized_text
-    )
-    has_identity_header = bool(re.search(r"\b[a-z][a-z0-9_ .'-]{1,30}\s+\d{2}\b", normalized_text)) or any(
-        marker in normalized_text for marker in ("已认证", "verified")
-    )
-    return profile_sections >= 2 and not _tinder_message_input_marker_present(normalized_text) and (
-        has_identity_header or profile_sections >= 3
-    )
-
-
-def _looks_like_tinder_conversation_text(normalized_text: str) -> bool:
-    if _looks_like_tinder_chat_list_text(normalized_text):
-        return False
-    if _looks_like_tinder_profile_text(normalized_text):
-        return False
-    if not _tinder_message_input_marker_present(normalized_text):
-        return False
-    stable_thread_marker = any(marker in normalized_text for marker in ("gif", "send", "发送"))
-    visible_name_marker = bool(re.search(r"\b[a-z][a-z0-9_ .'-]{1,30}\b", normalized_text))
-    return stable_thread_marker or visible_name_marker
-
-
-def _tinder_message_input_marker_present(normalized_text: str) -> bool:
-    english_input = bool(re.search(r"\b(message|send)\b", normalized_text))
-    chinese_input = any(marker in normalized_text for marker in ("发送", "输入消息", "发消息", "说点什么", "键入信息"))
-    return english_input or chinese_input
 
 
 def _verify_staged_tinder_message(
@@ -1625,88 +1302,6 @@ def _expected_text_observation_stats(text: str, expected_text: str) -> dict[str,
         "text_character_count": len(text) if text else None,
         "expected_text_occurrences": normalized_text.count(normalized_expected) if normalized_expected else 0,
     }
-
-
-def _tinder_profile_field_coverage(text: str) -> dict[str, bool]:
-    normalized = _normalize_text(text)
-    return {
-        "about_me": any(marker in normalized for marker in ("关于我", "about me")),
-        "key_info": any(marker in normalized for marker in ("关键信息", "key info")),
-        "interests": any(marker in normalized for marker in ("兴趣", "interests")),
-        "looking_for": any(marker in normalized for marker in ("我想要", "looking for")),
-        "basic_info": any(marker in normalized for marker in ("基本信息", "basic info")),
-        "lifestyle": any(marker in normalized for marker in ("生活方式", "lifestyle")),
-    }
-
-
-def _tinder_profile_expand_control_visible(text: str) -> bool:
-    normalized = _normalize_text(text)
-    return any(marker in normalized for marker in ("查看所有", "查看更多", "show all", "show more"))
-
-
-def _tinder_profile_danger_action_visible(text: str) -> bool:
-    normalized = _normalize_text(text)
-    return any(marker in normalized for marker in ("取消配对", "举报", "屏蔽", "unmatch", "report", "block"))
-
-
-def _tinder_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
-    state = str(screen.get("state") or "unknown")
-    normalized = _normalize_text(str(screen.get("text") or ""))
-    page = {
-        "tinder_home": "home",
-        "tinder_messages": "chats",
-        "tinder_conversation": "conversation",
-        "tinder_self_profile": "self_profile",
-        "tinder_profile": "profile",
-        "tinder_unknown": "unknown_tinder",
-    }.get(state, "unknown")
-    return {
-        "page": page,
-        "bottom_active_tab": _bottom_active_tab_hint(state),
-        "self_profile_header_present": state == "tinder_self_profile"
-        or any(marker in normalized for marker in ("edit profile", "编辑资料", "编辑个人资料")),
-        "self_profile_edit_button_present": any(
-            marker in normalized for marker in ("edit profile", "编辑资料", "编辑个人资料")
-        ),
-        "settings_marker_present": any(marker in normalized for marker in ("settings", "设置")),
-        "new_matches_carousel_present": state == "tinder_messages"
-        and any(marker in normalized for marker in ("matches", "match", "配对", "新的配对")),
-        "conversation_list_present": state == "tinder_messages"
-        and any(marker in normalized for marker in ("messages", "message", "消息", "聊天")),
-        "reply_required_marker_present": any(marker in normalized for marker in ("等你回应", "your turn")),
-        "profile_expand_control_marker_present": any(
-            marker in normalized for marker in ("查看所有", "show all", "查看更多")
-        ),
-    }
-
-
-def _wechat_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
-    state = str(screen.get("state") or "unknown")
-    normalized = _normalize_text(str(screen.get("text") or ""))
-    page = {
-        "wechat_chat": "conversation",
-        "wechat_chat_list": "chat_list",
-        "wechat_unknown": "unknown_wechat",
-    }.get(state, "unknown")
-    return {
-        "page": page,
-        "conversation_window_present": state == "wechat_chat",
-        "chat_list_present": state == "wechat_chat_list"
-        or any(marker in normalized for marker in ("通讯录", "contacts", "订阅号", "群聊", "chats")),
-        "message_input_marker_present": any(marker in normalized for marker in ("发送", "send", "按住说话", "enter")),
-        "unread_marker_present": any(marker in normalized for marker in ("未读", "new message", "unread")),
-        "draft_staging_requires_user_verification": True,
-    }
-
-
-def _bottom_active_tab_hint(state: str) -> str:
-    if state == "tinder_self_profile":
-        return "profile"
-    if state == "tinder_messages":
-        return "chats"
-    if state == "tinder_home":
-        return "home"
-    return "unknown"
 
 
 def _tap_step(intent: str, *, x: float, y: float) -> dict[str, Any]:
@@ -1899,105 +1494,9 @@ def _launch_tinder_steps() -> list[dict[str, Any]]:
     ]
 
 
-def _window_from_payload(payload: dict[str, Any]) -> WindowInfo:
-    return WindowInfo(
-        frontmost=bool(payload.get("frontmost")),
-        x=int(payload["x"]),
-        y=int(payload["y"]),
-        width=int(payload["width"]),
-        height=int(payload["height"]),
-        name=str(payload["name"]),
-    )
-
-
 def _default_screenshot_path() -> Path:
     return Path(tempfile.gettempdir()) / f"dating-boost-iphone-mirroring-{uuid4().hex}.png"
 
 
-def _core_graphics_click_script_path() -> Path:
-    return Path(tempfile.gettempdir()) / "dating_boost_core_graphics_click.swift"
-
-
-def _core_graphics_drag_script_path() -> Path:
-    return Path(tempfile.gettempdir()) / "dating_boost_core_graphics_drag.swift"
-
-
-def _core_graphics_wheel_script_path() -> Path:
-    return Path(tempfile.gettempdir()) / "dating_boost_core_graphics_wheel.swift"
-
-
-def _normalize_text(text: str) -> str:
-    return " ".join(text.lower().split())
-
-
-def _short(text: str, limit: int = 300) -> str:
-    return text[:limit]
-
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-_CORE_GRAPHICS_CLICK_SWIFT = """\
-import CoreGraphics
-import Foundation
-
-let x = Double(CommandLine.arguments[1])!
-let y = Double(CommandLine.arguments[2])!
-let point = CGPoint(x: x, y: y)
-let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
-let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
-down?.post(tap: .cghidEventTap)
-usleep(120000)
-up?.post(tap: .cghidEventTap)
-"""
-
-
-_CORE_GRAPHICS_DRAG_SWIFT = """\
-import CoreGraphics
-import Foundation
-
-let startX = Double(CommandLine.arguments[1])!
-let startY = Double(CommandLine.arguments[2])!
-let endX = Double(CommandLine.arguments[3])!
-let endY = Double(CommandLine.arguments[4])!
-let durationMs = max(1, Int(CommandLine.arguments[5])!)
-let steps = 12
-let source = CGEventSource(stateID: .hidSystemState)
-let start = CGPoint(x: startX, y: startY)
-let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left)
-down?.post(tap: .cghidEventTap)
-for index in 1...steps {
-    let t = Double(index) / Double(steps)
-    let point = CGPoint(x: startX + (endX - startX) * t, y: startY + (endY - startY) * t)
-    let drag = CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged, mouseCursorPosition: point, mouseButton: .left)
-    drag?.post(tap: .cghidEventTap)
-    usleep(useconds_t(durationMs * 1000 / steps))
-}
-let end = CGPoint(x: endX, y: endY)
-let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left)
-up?.post(tap: .cghidEventTap)
-"""
-
-
-_CORE_GRAPHICS_WHEEL_SWIFT = """\
-import CoreGraphics
-import Foundation
-
-let x = Double(CommandLine.arguments[1])!
-let y = Double(CommandLine.arguments[2])!
-let deltaY = Int32(CommandLine.arguments[3])!
-let deltaX = Int32(CommandLine.arguments[4])!
-let repeats = max(1, Int(CommandLine.arguments[5])!)
-let intervalUs = useconds_t(max(1000, Int(CommandLine.arguments[6])!))
-let point = CGPoint(x: x, y: y)
-let source = CGEventSource(stateID: .hidSystemState)
-CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
-    .post(tap: .cghidEventTap)
-usleep(50000)
-for _ in 0..<repeats {
-    CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2, wheel1: deltaY, wheel2: deltaX, wheel3: 0)?
-        .post(tap: .cghidEventTap)
-    usleep(intervalUs)
-}
-"""

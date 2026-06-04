@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cyberpinkman.github.io/dating-booster/schemas/app_profile.schema.json",
+  "title": "Dating Booster App Profile",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "app_id",
+    "display_name",
+    "support_level",
+    "host_loop_supported",
+    "host_loop_send_modes",
+    "message_list_observation",
+    "thread_observation",
+    "stage_send_verification",
+    "native_gui_harness",
+    "post_send_verification",
+    "known_gui_pitfalls",
+    "unsupported_actions"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "app_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "display_name": {"type": "string", "minLength": 1},
+    "support_level": {
+      "type": "string",
+      "enum": [
+        "native_observation",
+        "native_navigation",
+        "native_draft_staging",
+        "managed_live_send"
+      ]
+    },
+    "host_loop_supported": {"type": "boolean"},
+    "host_loop_send_modes": {
+      "type": "array",
+      "items": {"type": "string", "enum": ["stage", "live"]},
+      "uniqueItems": true
+    },
+    "message_list_observation": {"$ref": "#/$defs/nonEmptyStringArray"},
+    "thread_observation": {"$ref": "#/$defs/nonEmptyStringArray"},
+    "stage_send_verification": {"$ref": "#/$defs/nonEmptyStringArray"},
+    "post_send_verification": {"$ref": "#/$defs/nonEmptyStringArray"},
+    "known_gui_pitfalls": {"$ref": "#/$defs/nonEmptyStringArray"},
+    "unsupported_actions": {"$ref": "#/$defs/nonEmptyStringArray"},
+    "native_gui_harness": {
+      "type": "object",
+      "required": ["backend", "supported_stage_actions", "supported_live_actions", "blocked_actions"],
+      "properties": {
+        "backend": {"type": "string", "minLength": 1},
+        "supported_stage_actions": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "supported_live_actions": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "blocked_actions": {"$ref": "#/$defs/nonEmptyStringArray"}
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyStringArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    }
+  }
+}

@@ -45,7 +45,7 @@
     "automation_lock": 1,
     "confirmation": 1,
     "production_smoke": 1,
-    "gui_harness": 1,
+    "gui_harness": 2,
     "encrypted_payload": 1,
     "keychain_binding": 1,
     "backup_recovery_key": 1,

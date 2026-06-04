@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from dating_boost.cli import main
 from dating_boost.core.gui_harness import NativeGuiHarness, classify_screen_text, classify_wechat_screen_text
+from dating_boost.harness.input_backends import core_graphics_drag
 
 
 class FakeRunner:
@@ -105,7 +106,7 @@ class GuiHarnessTests(unittest.TestCase):
         payload = json.loads(output.getvalue())
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(payload["schema_versions"]["gui_harness"], 1)
+        self.assertEqual(payload["schema_versions"]["gui_harness"], 2)
         self.assertIn("harness doctor", payload["supported_commands"])
         self.assertIn("harness screenshot", payload["supported_commands"])
         self.assertIn("harness tinder launch", payload["supported_commands"])
@@ -134,6 +135,47 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertFalse(payload["agent_native_capabilities"]["managed_gui_send_default"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_live_send_harness"])
         self.assertFalse(payload["agent_native_capabilities"]["live_gui_harness"])
+
+    def test_cli_generic_harness_blocks_unsupported_app_before_native_execution(self):
+        with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            exit_code, payload = _run_cli_json([
+                "harness",
+                "doctor",
+                "--app-id",
+                "bumble",
+                "--no-capture",
+                "--json",
+            ])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "unsupported_native_harness_for_app")
+        self.assertEqual(payload["app_id"], "bumble")
+        self.assertEqual(payload["supported_native_harness_apps"], ["tinder", "wechat"])
+        harness_class.assert_not_called()
+
+    def test_input_backend_v2_reports_explicit_contract_for_drag_failures(self):
+        class FailingRunner:
+            def run(self, command, *, input=None):
+                self.command = command
+                return _result(stderr="permission denied", returncode=1)
+
+        runner = FailingRunner()
+
+        payload = core_graphics_drag(
+            runner,
+            start_x=10,
+            start_y=20,
+            end_x=30,
+            end_y=40,
+            duration_seconds=0.35,
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "core_graphics_drag_failed")
+        self.assertEqual(payload["input_backend_contract_schema_version"], 2)
+        self.assertIn("permission denied", payload["stderr"])
+        self.assertEqual(runner.command[:2], ["xcrun", "swift"])
 
     def test_doctor_blocks_when_iphone_mirroring_is_locked(self):
         harness = NativeGuiHarness(

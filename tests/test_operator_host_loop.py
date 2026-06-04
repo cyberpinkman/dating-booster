@@ -57,7 +57,7 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(auth_template["app_id"], "wechat")
             self.assertTrue((work_dir / "current_work_item.json").exists())
 
-    def test_contract_only_app_blocks_host_loop_doctor(self):
+    def test_unsupported_app_blocks_host_loop_doctor(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             result = subprocess.run(
                 [
@@ -83,7 +83,7 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertEqual(payload["status"], "blocked")
             self.assertEqual(payload["next_host_action"], "choose_supported_host_loop_app")
-            self.assertEqual(payload["details"]["app_profile"]["support_level"], "contract_only")
+            self.assertEqual(payload["reason"], "unsupported app profile: bumble")
 
     def test_wechat_waiting_template_uses_wechat_desktop_evidence(self):
         with tempfile.TemporaryDirectory() as temp_dir:

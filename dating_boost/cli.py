@@ -51,6 +51,7 @@ from dating_boost.core.user_disclosure import UserDisclosureRepository, intervie
 
 
 MVP_TIMESTAMP = "2026-05-25T00:00:00Z"
+SUPPORTED_NATIVE_HARNESS_APPS = ("tinder", "wechat")
 
 
 def _now_iso() -> str:
@@ -494,6 +495,7 @@ def main(argv: list[str] | None = None) -> int:
     planner_update_parser.add_argument("--data-dir", required=True, type=Path)
     planner_update_parser.add_argument("--match-id", required=True)
     planner_update_parser.add_argument("--goal-id", required=True)
+    planner_update_parser.add_argument("--goal-type", default="meet_in_person")
     planner_update_parser.add_argument("--observation", required=True, type=Path)
     planner_update_parser.add_argument("--assessment", required=True, type=Path)
     planner_update_parser.add_argument("--json", action="store_true")
@@ -831,6 +833,10 @@ def _handle_diagnostics_bundle(args: argparse.Namespace) -> int:
 
 
 def _handle_harness_doctor(args: argparse.Namespace) -> int:
+    block_payload = _unsupported_native_harness_payload(args.app_id)
+    if block_payload is not None:
+        _print_json(block_payload)
+        return 2
     harness = NativeGuiHarness(app_id=args.app_id, window_title=_harness_window_title(args.app_id, args.window_title))
     if args.app_id == "wechat":
         payload = harness.doctor_wechat(capture=not args.no_capture, output=args.output)
@@ -841,6 +847,10 @@ def _handle_harness_doctor(args: argparse.Namespace) -> int:
 
 
 def _handle_harness_screenshot(args: argparse.Namespace) -> int:
+    block_payload = _unsupported_native_harness_payload(args.app_id)
+    if block_payload is not None:
+        _print_json(block_payload)
+        return 2
     payload = NativeGuiHarness(
         app_id=args.app_id,
         window_title=_harness_window_title(args.app_id, args.window_title),
@@ -848,6 +858,18 @@ def _handle_harness_screenshot(args: argparse.Namespace) -> int:
     payload.pop("text", None)
     _print_json(payload)
     return 0 if payload.get("status") == "ok" else 2
+
+
+def _unsupported_native_harness_payload(app_id: str) -> dict[str, object] | None:
+    if app_id in SUPPORTED_NATIVE_HARNESS_APPS:
+        return None
+    return {
+        "schema_version": 1,
+        "status": "blocked",
+        "reason": "unsupported_native_harness_for_app",
+        "app_id": app_id,
+        "supported_native_harness_apps": list(SUPPORTED_NATIVE_HARNESS_APPS),
+    }
 
 
 def _handle_harness_tinder_launch(args: argparse.Namespace) -> int:
@@ -1496,6 +1518,7 @@ def _handle_planner_update(args: argparse.Namespace) -> int:
             observation=observation,
             assessment=assessment,
             now=_now_iso(),
+            goal_type=args.goal_type,
         )
     except ValueError as exc:
         _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})
@@ -1554,7 +1577,12 @@ def _handle_action_record_result(args: argparse.Namespace) -> int:
 
 
 def _handle_automation_goal_set(args: argparse.Namespace) -> int:
-    _print_json(AutomationRepository(args.data_dir).save_goal(_read_json_object(args.input)))
+    try:
+        payload = AutomationRepository(args.data_dir).save_goal(_read_json_object(args.input))
+    except ValueError as exc:
+        _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})
+        return 2
+    _print_json(payload)
     return 0
 
 

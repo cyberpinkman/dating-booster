@@ -88,6 +88,55 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
             self.assertIn(phrase, install_text)
         self.assertIn("skills/dating-booster-codex/INSTALL.md", readme_text)
 
+    def test_architecture_docs_cover_future_expansion_axes(self):
+        architecture_text = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8").lower()
+        docs_readme = (ROOT / "docs" / "README.md").read_text(encoding="utf-8").lower()
+        root_readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
+
+        for phrase in (
+            "codex",
+            "claude code",
+            "hermes",
+            "openclaw",
+            "tinder",
+            "wechat",
+            "bumble",
+            "tashuo",
+            "hinge",
+            "meet_in_person",
+            "goal type registry",
+            "memory evolution",
+            "host agent adapter",
+            "app support profile",
+            "no duplicated domain logic",
+        ):
+            self.assertIn(phrase, architecture_text)
+        self.assertIn("docs/architecture.md", docs_readme)
+        self.assertIn("docs/architecture.md", root_readme)
+
+    def test_agent_adapter_docs_separate_shared_and_host_specific_contracts(self):
+        adapter_root = ROOT / "agent_adapters"
+        shared_text = (adapter_root / "shared" / "README.md").read_text(encoding="utf-8").lower()
+        codex_text = (adapter_root / "codex" / "README.md").read_text(encoding="utf-8").lower()
+        claude_text = (adapter_root / "claude-code" / "README.md").read_text(encoding="utf-8").lower()
+
+        for path in (
+            adapter_root / "README.md",
+            adapter_root / "shared" / "README.md",
+            adapter_root / "codex" / "README.md",
+            adapter_root / "claude-code" / "README.md",
+        ):
+            self.assertTrue(path.exists(), path)
+        self.assertIn("capabilities --json", shared_text)
+        self.assertIn("app profiles", shared_text)
+        self.assertIn("references/contracts.md", shared_text)
+        self.assertIn("references/workflows.md", shared_text)
+        self.assertNotIn("skills/dating-booster-codex/references", shared_text)
+        self.assertIn("not copy codex", (adapter_root / "README.md").read_text(encoding="utf-8").lower())
+        self.assertIn("skills/dating-booster-codex", codex_text)
+        self.assertIn("p1 planned adapter", claude_text)
+        self.assertIn("reuse", claude_text)
+
     def test_observation_authoring_guide_covers_screen_to_json_rules(self):
         guide_text = (
             ROOT

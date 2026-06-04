@@ -38,7 +38,8 @@ agent and uses iPhone Mirroring only for observe, paste, and verify.
 ## Tinder Stage Smoke
 
 Tinder remains the full host-loop GUI stage smoke target for this release.
-Bumble and Ta Shuo remain app-profile contracts with offline validation only.
+Bumble, Ta Shuo, Hinge, and other apps remain roadmap candidates until runtime
+profiles, fixtures, and harness or host-loop tests prove support.
 WeChat has a macOS desktop harness for launch, redacted observation, and draft
 staging, but no WeChat-specific profile navigation chain.
 

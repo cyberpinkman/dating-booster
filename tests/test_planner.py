@@ -49,6 +49,39 @@ class PlannerCoreTests(unittest.TestCase):
             self.assertEqual(events[0]["event_type"], "planner_update")
             self.assertEqual(events[0]["planner_revision"], 1)
 
+    def test_update_accepts_explicit_goal_type_from_registry(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+
+            payload = PlannerRepository(data_dir).update_plan(
+                match_id="match_xiaoqing",
+                goal_id="goal_rapport",
+                goal_type="build_rapport",
+                observation=_observation("obs_rapport_001"),
+                assessment=_planner_assessment(
+                    recommended_move="deepen_current",
+                    current_topic="weekend",
+                    topic_state="active",
+                ),
+                now=NOW,
+            )
+
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["goal_plan"]["goal_type"], "build_rapport")
+            self.assertEqual(payload["goal_plan"]["goal_id"], "goal_rapport")
+
+    def test_update_rejects_unknown_goal_type(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(ValueError, "unsupported goal_type"):
+                PlannerRepository(Path(temp_dir)).update_plan(
+                    match_id="match_xiaoqing",
+                    goal_id="goal_unknown",
+                    goal_type="unknown_goal",
+                    observation=_observation("obs_unknown_001"),
+                    assessment=_planner_assessment(),
+                    now=NOW,
+                )
+
     def test_update_increments_revision_and_topic_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = PlannerRepository(Path(temp_dir))
