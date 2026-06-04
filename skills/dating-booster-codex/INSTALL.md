@@ -6,13 +6,16 @@ while the host agent owns the LLM and any computer-use interaction.
 
 ## Install
 
-For GitHub-based test installs, use the stable Codex installer:
+For test installs, give the repository URL to Codex or another shell-capable
+agent and let it clone, inspect, and install from source:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cyberpinkman/dating-booster/main/scripts/install-codex.sh | bash
+git clone https://github.com/cyberpinkman/dating-booster.git
+cd dating-booster
+python3 -m pip install --user -e .
+python3 -m dating_boost.cli adapter codex install --scope user --json
+python3 -m dating_boost.cli adapter codex doctor --data-dir ~/.dating-boost --json
 ```
-
-Preferred GitHub install path is documented in `INSTALL_FROM_GITHUB.md`.
 
 For local development from the repository root:
 

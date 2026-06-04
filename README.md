@@ -121,17 +121,27 @@ write `~/.claude/skills/dating-booster/`. The Claude Code skill only explains
 how Claude Code should call Dating Booster; memory, policy, planner, harness,
 app profiles, and audit still come from the same CLI/core contracts.
 
-Testing users can install the CLI plus one complete host skill with a single
-host-specific command:
+For test users, send the repository URL to their host agent and let the agent
+clone, inspect, and install from source:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cyberpinkman/dating-booster/main/scripts/install-claude-code.sh | bash
-curl -fsSL https://raw.githubusercontent.com/cyberpinkman/dating-booster/main/scripts/install-codex.sh | bash
+git clone https://github.com/cyberpinkman/dating-booster.git
+cd dating-booster
+python3 -m pip install --user -e .
+python3 -m dating_boost.cli adapter claude-code install --scope user --json
+python3 -m dating_boost.cli adapter claude-code doctor --data-dir ~/.dating-boost --json
 ```
 
-测试用户可以用上面的 host-specific installer 从 GitHub 安装 CLI 并安装完整
-skill。Claude Code 和 Codex 是独立入口；后续新增 Hermes、OpenClaw 等 host 时，
-应新增对应 installer，而不是改已有 installer 的行为。
+Codex users should replace the last two commands with:
+
+```bash
+python3 -m dating_boost.cli adapter codex install --scope user --json
+python3 -m dating_boost.cli adapter codex doctor --data-dir ~/.dating-boost --json
+```
+
+测试用户入口是仓库链接。让 agent 自己 clone、阅读 README/skill、安装 CLI，并用
+对应 host 的 `adapter <host> install|doctor` 完成安装。后续新增 Hermes、OpenClaw
+等 host 时，新增对应 adapter，不修改 Claude Code 或 Codex 的既有安装语义。
 
 ## 本地数据和守护进程 / Local Data And Supervisor
 

@@ -11,15 +11,22 @@ The repository is open-sourced under the MIT License. See `LICENSE`.
 
 本仓库使用 MIT License 开源，见 `LICENSE`。
 
-Stable test-user installers are host-specific:
+For test users, send the repository URL to their host agent and let the agent
+clone, inspect, and install from source:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cyberpinkman/dating-booster/main/scripts/install-claude-code.sh | bash
-curl -fsSL https://raw.githubusercontent.com/cyberpinkman/dating-booster/main/scripts/install-codex.sh | bash
+git clone https://github.com/cyberpinkman/dating-booster.git
+cd dating-booster
+python3 -m pip install --user -e .
+python3 -m dating_boost.cli adapter claude-code install --scope user --json
 ```
 
-稳定测试安装入口按 host 拆分。新增 host 时新增自己的 installer，不修改已有
-Claude Code 或 Codex installer。
+Codex uses `python3 -m dating_boost.cli adapter codex install --scope user --json`
+instead of the Claude Code adapter command.
+
+稳定测试入口是仓库链接。Agent 应该自己 clone、读文档、安装 CLI，再调用对应
+host adapter。新增 host 时新增自己的 adapter，不修改已有 Claude Code 或 Codex
+安装语义。
 
 ## Top-Level Layout / 顶层结构
 

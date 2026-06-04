@@ -7,10 +7,15 @@ python3 -m pip install "dating-booster==1.0.0rc1"
 dating-boost release doctor --json
 ```
 
-For GitHub-based test installs, use the stable Claude Code installer:
+For test installs, give the repository URL to Claude Code or another
+shell-capable agent and let it clone, inspect, and install from source:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cyberpinkman/dating-booster/main/scripts/install-claude-code.sh | bash
+git clone https://github.com/cyberpinkman/dating-booster.git
+cd dating-booster
+python3 -m pip install --user -e .
+python3 -m dating_boost.cli adapter claude-code install --scope user --json
+python3 -m dating_boost.cli adapter claude-code doctor --data-dir ~/.dating-boost --json
 ```
 
 Install the Claude Code skill into the current project:

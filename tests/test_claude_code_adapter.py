@@ -247,22 +247,26 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         self.assertEqual(payload["target_host"], "codex")
         self.assertEqual(payload["skill_doctor"]["status"], "ok")
 
-    def test_stable_shell_installers_are_host_specific(self):
-        claude_installer = Path("scripts/install-claude-code.sh")
-        codex_installer = Path("scripts/install-codex.sh")
-        common = Path("scripts/lib/install-agent-common.sh")
-        claude_text = claude_installer.read_text(encoding="utf-8")
-        codex_text = codex_installer.read_text(encoding="utf-8")
-        common_text = common.read_text(encoding="utf-8")
+    def test_docs_describe_agent_clone_install_path(self):
+        docs = {
+            "root_readme": Path("README.md").read_text(encoding="utf-8"),
+            "docs_readme": Path("docs/README.md").read_text(encoding="utf-8"),
+            "claude_install": Path("agent_adapters/claude-code/INSTALL.md").read_text(encoding="utf-8"),
+            "codex_install": Path("skills/dating-booster-codex/INSTALL.md").read_text(encoding="utf-8"),
+        }
+        combined = "\n".join(docs.values())
 
-        self.assertIn("adapter claude-code install", claude_text)
-        self.assertIn("adapter claude-code doctor", claude_text)
-        self.assertNotIn("adapter codex", claude_text)
-        self.assertIn("adapter codex install", codex_text)
-        self.assertIn("adapter codex doctor", codex_text)
-        self.assertNotIn("adapter claude-code", codex_text)
-        self.assertIn("git+https://github.com/cyberpinkman/dating-booster.git@", common_text)
-        self.assertIn("DATING_BOOST_INSTALL_REF", common_text)
+        self.assertIn("git clone https://github.com/cyberpinkman/dating-booster.git", combined)
+        self.assertIn("python3 -m pip install --user -e .", combined)
+        self.assertIn("python3 -m dating_boost.cli adapter claude-code install --scope user --json", combined)
+        self.assertIn("python3 -m dating_boost.cli adapter codex install --scope user --json", combined)
+        self.assertIn("agent 自己 clone", combined)
+        self.assertNotIn("scripts/install-claude-code.sh", combined)
+        self.assertNotIn("scripts/install-codex.sh", combined)
+        self.assertNotIn("scripts/lib/install-agent-common.sh", combined)
+        self.assertNotIn("curl -fsSL", combined)
+        self.assertNotIn("DATING_BOOST_INSTALL_REF", combined)
+        self.assertFalse(Path("skills/dating-booster-codex/INSTALL_FROM_GITHUB.md").exists())
 
     def _run_cli(self, argv: list[str]) -> tuple[int, dict]:
         output = StringIO()
