@@ -26,9 +26,10 @@ ACTIVE_SLOT_STATUSES = {"soft_mentioned", "handoff_pending", "user_confirmed"}
 
 
 class AutomationRepository:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, nudge_delay_minutes: int = 30):
         self.root = root
         self._storage = JsonStorage(root)
+        self._nudge_delay_minutes = max(1, int(nudge_delay_minutes))
 
     def _now(self) -> str:
         return _now_iso()
@@ -587,7 +588,9 @@ class AutomationRepository:
                 elif state.get("state") == "nudge_scheduled" and state.get("latest_inbound_fingerprint") == latest_fingerprint:
                     state["state"] = "nudge_scheduled"
                 else:
-                    due_at = (_parse_iso_utc(now) + timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+                    due_at = (
+                        _parse_iso_utc(now) + timedelta(minutes=self._nudge_delay_minutes)
+                    ).isoformat().replace("+00:00", "Z")
                     state["state"] = "nudge_scheduled"
                     state["next_due_at"] = due_at
                     scheduled_actions.append(

@@ -162,6 +162,30 @@ dating-boost harness wechat send-message --text-file wechat-draft.txt --data-dir
 
 If page identity, target binding, staged text, or post-send evidence is missing, block or return `needs_verification`. Do not manually click Send around the gate.
 
+## Session-scoped Managed Runner
+
+Use this when the user explicitly starts a bounded managed window. It is not a
+global background agent. Tinder stops when iPhone Mirroring is unavailable;
+WeChat runs until user stop and pauses while unreadable. `run --wait` is local
+and tokenless while idle; when it returns `host_work_required`, process the
+included operator work item. When using the host-loop supervisor for that work,
+run `dating-boost-host-loop resume` with the same data/work dirs; do not start a
+fresh `dating-boost-host-loop run`, because a fresh run starts a new operator
+session. After resume or equivalent manual operator processing, return to
+`managed-session run --wait`.
+
+```bash
+dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --json
+dating-boost managed-session run --data-dir .local/dating-boost --wait --json
+dating-boost managed-session notify --data-dir .local/dating-boost --source manual --app-id tinder --json
+dating-boost managed-session status --data-dir .local/dating-boost --json
+dating-boost managed-session stop --data-dir .local/dating-boost --json
+```
+
+Only add `--send-mode live --managed-gui-send` when authorization permits live
+ordinary message sends; all target binding, staged text, and post-send gates
+still apply.
+
 ## Host Loop
 
 Use the host loop when Claude Code should act as the executor for queued work items:

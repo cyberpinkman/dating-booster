@@ -345,6 +345,28 @@ toward a goal such as meeting in person.
 13. Show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
 14. Resume later by reading `dating-boost operator report latest --data-dir .local/dating-boost` and continuing from local state.
 
+## Session-scoped Managed Runner
+
+Use this when the user wants a bounded managed window without keeping the host
+agent active between events. The local runner performs tokenless checks and
+returns only when host work is needed, paused, blocked, or stopped.
+
+```bash
+dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --json
+dating-boost managed-session run --data-dir .local/dating-boost --wait --json
+```
+
+If `run` returns `no_work`, do not continue screenshot analysis or drafting.
+If it returns `host_work_required`, execute the included operator work item
+using the normal `scan_message_list`, `open_thread`, or `send_message` path.
+When using the host-loop supervisor for that work, run
+`dating-boost-host-loop resume` with the same data/work dirs; do not start a
+fresh `dating-boost-host-loop run`, because a fresh run starts a new operator
+session. After resume or equivalent manual operator processing, call
+`managed-session run --wait` again. Use `managed-session notify` only as an
+event hint; it does not bypass fresh observation, planner, or send gates.
+Stop with `dating-boost managed-session stop --data-dir .local/dating-boost`.
+
 ## Tinder Host Loop Supervisor
 
 For real Tinder/iPhone Mirroring runs, prefer:

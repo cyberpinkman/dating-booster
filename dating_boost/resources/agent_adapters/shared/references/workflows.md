@@ -52,6 +52,19 @@ must treat it as a recoverable overlay. Run the app-specific
 `dismiss-feedback-survey` action through the ignore/no-rating path; the result
 must report `rating_submitted: false`.
 
+## Session-scoped Managed Runner
+
+Use `dating-boost managed-session` only after explicit user start. It is a
+session-local wake loop, not a global background agent. `run --wait` should
+return `no_work` while idle; hosts should avoid further token use until it
+returns `host_work_required`, then execute the included operator work item and
+use `dating-boost-host-loop resume` when delegating that work to the host-loop
+supervisor. Do not start a fresh `dating-boost-host-loop run` for managed work,
+because a fresh run starts a new operator session. After resume or equivalent
+manual operator processing, return to `managed-session run --wait`. Tinder
+sessions stop when iPhone Mirroring disappears; WeChat sessions pause while
+unreadable and continue until user stop.
+
 ## Conversation Targeting
 
 For existing Tinder conversations, prefer visible-name or target-binding

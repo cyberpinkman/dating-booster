@@ -14,10 +14,10 @@ STICKY_WORK_ITEM_TYPES = {"scan_message_list", "open_thread", "send_message"}
 
 
 class OperatorRepository:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, nudge_delay_minutes: int = 30):
         self.root = root
         self._storage = JsonStorage(root)
-        self._automation = AutomationRepository(root)
+        self._automation = AutomationRepository(root, nudge_delay_minutes=nudge_delay_minutes)
 
     def start_session(self, authorization: dict[str, Any]) -> dict[str, Any]:
         automation_session = self._automation.start_session(authorization)

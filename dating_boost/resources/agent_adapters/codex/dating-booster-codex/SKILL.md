@@ -331,6 +331,31 @@ debt, self-disclosure debt, reciprocity balance, low-investment streak, match
 curiosity about the user, and last user turn type. The naturalness checklist is
 internal QA; do not show it by default.
 
+## Session-scoped Managed Runner
+
+Use `managed-session` when the user explicitly asks for a bounded auto-managed
+window. It is not a global background agent. Tinder stops when iPhone Mirroring
+is unavailable; WeChat runs until the user stops it and pauses while unreadable.
+When `run --wait` returns `no_work`, do not keep analyzing screenshots or spend
+tokens. When it returns `host_work_required`, process the included operator work
+item. When using the host-loop supervisor for that work, run
+`dating-boost-host-loop resume` with the same data/work dirs; do not start a
+fresh `dating-boost-host-loop run`, because a fresh run starts a new operator
+session. After resume or equivalent manual operator processing, return to
+`managed-session run --wait`.
+
+```bash
+dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --json
+dating-boost managed-session run --data-dir .local/dating-boost --wait --json
+dating-boost managed-session notify --data-dir .local/dating-boost --source manual --app-id tinder --json
+dating-boost managed-session status --data-dir .local/dating-boost --json
+dating-boost managed-session stop --data-dir .local/dating-boost --json
+```
+
+For live sends, use `--send-mode live --managed-gui-send` only with explicit
+authorization. The returned work item still goes through the same target
+binding, staged text, and post-send verification gates as host-loop sends.
+
 ## Tinder Host Loop
 
 For real Tinder host-loop testing, prefer `dating-boost-host-loop` over

@@ -339,6 +339,27 @@ class SkillPackageTests(unittest.TestCase):
             self.assertNotIn("chat-read-match-profile --dry-run --carousel-swipes", text, name)
             self.assertNotIn("chat-read-match-profile --carousel-swipes", text, name)
 
+    def test_managed_session_docs_require_host_loop_resume_after_host_work(self):
+        docs = {
+            "readme": Path("README.md").read_text(encoding="utf-8").lower(),
+            "codex_skill": (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower(),
+            "codex_workflows": (SKILL_DIR / "references" / "workflows.md").read_text(encoding="utf-8").lower(),
+            "claude_skill": Path("agent_adapters/claude-code/skills/dating-booster/SKILL.md").read_text(
+                encoding="utf-8"
+            ).lower(),
+            "openclaw_skill": Path("agent_adapters/openclaw/skills/dating-booster/SKILL.md").read_text(
+                encoding="utf-8"
+            ).lower(),
+            "shared_workflows": Path("agent_adapters/shared/references/workflows.md").read_text(
+                encoding="utf-8"
+            ).lower(),
+        }
+
+        for name, text in docs.items():
+            self.assertIn("managed-session run --wait", text, name)
+            self.assertIn("dating-boost-host-loop resume", text, name)
+            self.assertIn("managed-session run --wait", text.split("dating-boost-host-loop resume", 1)[-1], name)
+
     def test_tinder_app_profile_exposes_split_new_match_harness_contract(self):
         profile = json.loads(Path("app_profiles/tinder.json").read_text(encoding="utf-8"))
         harness = profile["native_gui_harness"]

@@ -342,6 +342,36 @@ Host-executed action results are appended to:
 .local/dating-boost/audit/action_results.jsonl
 ```
 
+## Session-scoped Managed Runner / 会话期托管 Runner
+
+`managed-session` 只在用户显式启动后的当前托管窗口内运行。Tinder session
+绑定 iPhone Mirroring：镜像窗口不可用时立即停止。WeChat session 从用户启动
+持续到用户 `stop`；窗口不可读时暂停，不发送。session 外不监听、不扫描、不自动回复。
+
+`managed-session` runs only inside the user-authorized session window. Tinder
+sessions are bound to iPhone Mirroring and stop when the mirroring window is no
+longer available. WeChat sessions run until user `stop`; if the window is not
+readable, they pause and do not send. Outside a session, nothing is monitored,
+scanned, or auto-replied.
+
+```bash
+dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --json
+dating-boost managed-session run --data-dir .local/dating-boost --wait --json
+dating-boost managed-session notify --data-dir .local/dating-boost --source manual --app-id tinder --json
+dating-boost managed-session status --data-dir .local/dating-boost --json
+dating-boost managed-session stop --data-dir .local/dating-boost --json
+```
+
+The local runner performs tokenless checks for app availability, safety pause,
+authorization, quiet hours, unread cues, scan interval, and due nudges. It
+returns `no_work` while idle. When it returns `host_work_required`, the host
+agent should process the included `operator` work item. When using the host-loop
+supervisor for that work, run `dating-boost-host-loop resume` with the same
+data/work dirs; do not start a fresh `dating-boost-host-loop run`, because a
+fresh run starts a new operator session. After resume or equivalent manual
+operator processing, return to `managed-session run --wait`. Live sends still require
+`--send-mode live --managed-gui-send` plus the existing managed send gates.
+
 ## 用户自我模型和自主准备 / User Model And Autonomous Readiness
 
 完全托管或自主 runs 需要用户自我模型。自主 readiness 需要 dating profile 和

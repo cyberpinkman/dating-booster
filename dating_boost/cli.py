@@ -33,6 +33,7 @@ from dating_boost.core.live_send_contract import (
     live_send_authorization_block_reason,
     validate_live_send_contract,
 )
+from dating_boost.core.managed_session import ManagedSessionRepository
 from dating_boost.core.models import Divergence, MemoryItem, ReplyMode, UserProfile
 from dating_boost.core.observation_authoring import (
     normalize_observation,
@@ -729,6 +730,47 @@ def main(argv: list[str] | None = None) -> int:
     goal_set_parser.add_argument("--data-dir", required=True, type=Path)
     goal_set_parser.add_argument("--input", required=True, type=Path)
     goal_set_parser.set_defaults(handler=_handle_automation_goal_set)
+
+    managed_session_parser = subparsers.add_parser("managed-session", help="Session-scoped managed runner commands.")
+    managed_session_subparsers = managed_session_parser.add_subparsers(dest="managed_session_command", required=True)
+    managed_start_parser = managed_session_subparsers.add_parser("start")
+    managed_start_parser.add_argument("--app-id", required=True, choices=SUPPORTED_NATIVE_HARNESS_APPS)
+    managed_start_parser.add_argument("--data-dir", required=True, type=Path)
+    managed_start_parser.add_argument("--authorization", required=True, type=Path)
+    managed_start_parser.add_argument("--goal", required=True, type=Path)
+    managed_start_parser.add_argument("--availability", required=True, type=Path)
+    managed_start_parser.add_argument("--send-mode", choices=["stage", "live"], default="stage")
+    managed_start_parser.add_argument("--managed-gui-send", action="store_true")
+    managed_start_parser.add_argument("--scan-interval", type=int, default=120)
+    managed_start_parser.add_argument("--nudge-delay-minutes", type=int, default=30)
+    managed_start_parser.add_argument("--json", action="store_true")
+    managed_start_parser.set_defaults(handler=_handle_managed_session_start)
+    managed_tick_parser = managed_session_subparsers.add_parser("tick")
+    managed_tick_parser.add_argument("--data-dir", required=True, type=Path)
+    managed_tick_parser.add_argument("--json", action="store_true")
+    managed_tick_parser.set_defaults(handler=_handle_managed_session_tick)
+    managed_run_parser = managed_session_subparsers.add_parser("run")
+    managed_run_parser.add_argument("--data-dir", required=True, type=Path)
+    managed_run_parser.add_argument("--wait", action="store_true")
+    managed_run_parser.add_argument("--wait-timeout", type=float)
+    managed_run_parser.add_argument("--poll-interval", type=float, default=1.0)
+    managed_run_parser.add_argument("--json", action="store_true")
+    managed_run_parser.set_defaults(handler=_handle_managed_session_run)
+    managed_notify_parser = managed_session_subparsers.add_parser("notify")
+    managed_notify_parser.add_argument("--data-dir", required=True, type=Path)
+    managed_notify_parser.add_argument("--source", required=True, choices=["host_notification", "manual"])
+    managed_notify_parser.add_argument("--app-id", required=True, choices=SUPPORTED_NATIVE_HARNESS_APPS)
+    managed_notify_parser.add_argument("--json", action="store_true")
+    managed_notify_parser.set_defaults(handler=_handle_managed_session_notify)
+    managed_status_parser = managed_session_subparsers.add_parser("status")
+    managed_status_parser.add_argument("--data-dir", required=True, type=Path)
+    managed_status_parser.add_argument("--json", action="store_true")
+    managed_status_parser.set_defaults(handler=_handle_managed_session_status)
+    managed_stop_parser = managed_session_subparsers.add_parser("stop")
+    managed_stop_parser.add_argument("--data-dir", required=True, type=Path)
+    managed_stop_parser.add_argument("--reason", default="manual_stop")
+    managed_stop_parser.add_argument("--json", action="store_true")
+    managed_stop_parser.set_defaults(handler=_handle_managed_session_stop)
 
     operator_parser = subparsers.add_parser("operator", help="Goal-oriented managed operator session commands.")
     operator_subparsers = operator_parser.add_subparsers(dest="operator_command", required=True)
@@ -1997,6 +2039,67 @@ def _handle_automation_pause(args: argparse.Namespace) -> int:
 
 def _handle_automation_resume(args: argparse.Namespace) -> int:
     _print_json(AutomationRepository(args.data_dir).resume_session())
+    return 0
+
+
+def _handle_managed_session_start(args: argparse.Namespace) -> int:
+    try:
+        payload = ManagedSessionRepository(args.data_dir).start(
+            app_id=args.app_id,
+            authorization=_read_json_object(args.authorization),
+            goal=_read_json_object(args.goal),
+            availability=_read_json_object(args.availability),
+            send_mode=args.send_mode,
+            managed_gui_send=args.managed_gui_send,
+            scan_interval_seconds=args.scan_interval,
+            nudge_delay_minutes=args.nudge_delay_minutes,
+        )
+    except ValueError as exc:
+        payload = {"schema_version": 1, "status": "blocked", "reason": str(exc)}
+    _print_json(payload)
+    return 0 if payload.get("status") in {"active", "paused"} else 2
+
+
+def _handle_managed_session_tick(args: argparse.Namespace) -> int:
+    try:
+        payload = ManagedSessionRepository(args.data_dir).tick()
+    except ValueError as exc:
+        payload = {"schema_version": 1, "status": "blocked", "reason": str(exc)}
+    _print_json(payload)
+    return 0 if payload.get("status") in {"no_work", "host_work_required", "paused", "stopped"} else 2
+
+
+def _handle_managed_session_run(args: argparse.Namespace) -> int:
+    try:
+        payload = ManagedSessionRepository(args.data_dir).run(
+            wait=args.wait,
+            wait_timeout_seconds=args.wait_timeout,
+            poll_interval_seconds=args.poll_interval,
+        )
+    except ValueError as exc:
+        payload = {"schema_version": 1, "status": "blocked", "reason": str(exc)}
+    _print_json(payload)
+    return 0 if payload.get("status") in {"no_work", "host_work_required", "paused", "stopped"} else 2
+
+
+def _handle_managed_session_notify(args: argparse.Namespace) -> int:
+    try:
+        payload = ManagedSessionRepository(args.data_dir).notify(source=args.source, app_id=args.app_id)
+    except ValueError as exc:
+        payload = {"schema_version": 1, "status": "blocked", "reason": str(exc)}
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_managed_session_status(args: argparse.Namespace) -> int:
+    payload = ManagedSessionRepository(args.data_dir).status()
+    _print_json(payload)
+    return 0 if payload.get("status") != "not_found" else 2
+
+
+def _handle_managed_session_stop(args: argparse.Namespace) -> int:
+    payload = ManagedSessionRepository(args.data_dir).stop(reason=args.reason)
+    _print_json(payload)
     return 0
 
 
