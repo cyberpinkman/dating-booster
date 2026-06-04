@@ -10,6 +10,23 @@ dating-specific logic.
 2. Read `agent_native_capabilities.supported_app_profiles`.
 3. Treat absent app ids as unsupported, not partially supported.
 4. Use app profile files only for ids returned by capabilities.
+5. After the target app id is known, run `dating-boost support session start --data-dir <data-dir> --host <codex|claude-code|openclaw|hermes> --app-id <app-id> --json` and keep `session_id`.
+6. Before ending the workflow, run `dating-boost support session stop --data-dir <data-dir> --session-id <session_id> --json`.
+
+## Support Bundle
+
+For ordinary bug reports, export only a strict bundle:
+
+```bash
+dating-boost support bundle --data-dir <data-dir> --session-id <session_id> --output dating-boost-support.zip --redaction strict --json
+```
+
+Strict bundles contain command boundaries, schema versions, hashes, counts,
+topic labels, target ids, and action outcomes. They must not contain raw draft
+text, raw conversation text, raw profile text, screenshots, or clipboard
+contents. Sensitive evidence is encrypted locally and exported only with
+`--redaction full-with-consent --include-sensitive ... --confirm
+export-sensitive:<session_id>` after explicit user consent.
 
 ## Observation
 

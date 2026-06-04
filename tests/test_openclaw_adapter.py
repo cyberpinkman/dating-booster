@@ -59,6 +59,8 @@ class OpenClawAdapterTests(unittest.TestCase):
             "dating-boost capabilities --json --data-dir",
             "dating-boost data doctor",
             "dating-boost data migrate",
+            "dating-boost support session start",
+            "dating-boost support bundle",
             "user readiness",
             "visible dating app content",
             "target binding",

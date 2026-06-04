@@ -9,7 +9,9 @@ logic.
 1. Run capabilities.
 2. Confirm the requested app id is supported.
 3. Confirm host-loop or native harness support before touching app UI.
-4. Stop on unsupported app ids.
+4. Start a local support session for the host, app id, and exact data dir that
+   subsequent CLI, harness, or host-loop commands will use.
+5. Stop on unsupported app ids.
 
 ## Observe And Draft
 
@@ -19,6 +21,13 @@ logic.
 4. Generate draft.
 5. Run policy checks.
 6. Stage only when the host has exact target and text evidence.
+7. Keep `--data-dir` on commands so the active support session records redacted
+   command boundaries, topic provenance, and clipboard fingerprints.
+8. If a host-loop uses a separate data dir, start/stop/bundle support logging in
+   that host-loop data dir; the main workflow bundle will not contain those
+   timeline events.
+9. Do not run `data migrate` or `data delete` on the same data dir after support
+   session start and before support bundle export.
 
 ## Unopened Match
 

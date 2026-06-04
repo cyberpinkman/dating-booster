@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +86,21 @@ def _run_smoke(data_dir: Path) -> int:
         commands=commands,
     )
     compatibility = _check_compatibility(capabilities)
+    support_session = _run_cli(
+        "support",
+        "session",
+        "start",
+        "--data-dir",
+        str(data_dir),
+        "--host",
+        "codex",
+        "--app-id",
+        "tinder",
+        "--json",
+        command_key="support_session_start",
+        commands=commands,
+    )
+    support_session_id = str(support_session["session_id"])
     _run_cli(
         "init-profile",
         "--data-dir",
@@ -584,6 +600,21 @@ def _run_smoke(data_dir: Path) -> int:
     stage_data_dir = data_dir / "host-loop-stage"
     stage_work_dir = stage_data_dir / "host-work"
     shutil.rmtree(stage_data_dir, ignore_errors=True)
+    stage_support_session = _run_cli(
+        "support",
+        "session",
+        "start",
+        "--data-dir",
+        str(stage_data_dir),
+        "--host",
+        "codex",
+        "--app-id",
+        "tinder",
+        "--json",
+        command_key="host_loop_stage_support_session_start",
+        commands=commands,
+    )
+    stage_support_session_id = str(stage_support_session["session_id"])
     stage_result = _run_host_loop(
         "run",
         "--data-dir",
@@ -612,6 +643,54 @@ def _run_smoke(data_dir: Path) -> int:
     )
     if stage_result.get("status") != "staged_waiting_user_confirmation":
         raise RuntimeError(f"host-loop stage smoke did not stop at staged confirmation: {stage_result.get('status')}")
+    staged_artifacts = sorted(stage_work_dir.glob("staged_verification.*.json"))
+    if not staged_artifacts:
+        raise RuntimeError("host-loop stage smoke did not write staged verification artifact")
+    stage_support_stop = _run_cli(
+        "support",
+        "session",
+        "stop",
+        "--data-dir",
+        str(stage_data_dir),
+        "--session-id",
+        stage_support_session_id,
+        "--json",
+        command_key="host_loop_stage_support_session_stop",
+        commands=commands,
+    )
+    stage_support_bundle_path = data_dir / "host-loop-stage-support.zip"
+    stage_support_bundle = _run_cli(
+        "support",
+        "bundle",
+        "--data-dir",
+        str(stage_data_dir),
+        "--session-id",
+        stage_support_session_id,
+        "--output",
+        str(stage_support_bundle_path),
+        "--redaction",
+        "strict",
+        "--json",
+        command_key="host_loop_stage_support_bundle",
+        commands=commands,
+    )
+    stage_support_joined = _read_zip_bytes(stage_support_bundle_path)
+    for marker in (
+        b"dating-boost-host-loop",
+        b"host_loop_work_item",
+        b"host_loop_observation",
+        b"host_loop_staged_verification",
+        b"host_loop_command_result",
+        b'"--data-dir", "[redacted]"',
+        b'"--fixture-host", "[redacted]"',
+        b'"--work-dir", "[redacted]"',
+    ):
+        if marker not in stage_support_joined:
+            raise RuntimeError(f"host-loop support bundle missing marker: {marker.decode('utf-8')}")
+    staged_payload = _read_json(staged_artifacts[0])
+    staged_text = str(staged_payload.get("staged_text") or "")
+    if staged_text and staged_text.encode("utf-8") in stage_support_joined:
+        raise RuntimeError("host-loop support bundle leaked staged draft text")
     stage_migration = _run_cli(
         "data",
         "migrate",
@@ -643,9 +722,34 @@ def _run_smoke(data_dir: Path) -> int:
         command_key="host_loop_stage_replay",
         commands=commands,
     )
-    staged_artifacts = sorted(stage_work_dir.glob("staged_verification.*.json"))
-    if not staged_artifacts:
-        raise RuntimeError("host-loop stage smoke did not write staged verification artifact")
+    support_stop = _run_cli(
+        "support",
+        "session",
+        "stop",
+        "--data-dir",
+        str(data_dir),
+        "--session-id",
+        support_session_id,
+        "--json",
+        command_key="support_session_stop",
+        commands=commands,
+    )
+    support_bundle_path = data_dir / "support-smoke.zip"
+    support_bundle = _run_cli(
+        "support",
+        "bundle",
+        "--data-dir",
+        str(data_dir),
+        "--session-id",
+        support_session_id,
+        "--output",
+        str(support_bundle_path),
+        "--redaction",
+        "strict",
+        "--json",
+        command_key="support_bundle",
+        commands=commands,
+    )
 
     print(
         json.dumps(
@@ -662,6 +766,12 @@ def _run_smoke(data_dir: Path) -> int:
                 "data_doctor": data_doctor_final,
                 "tool_version": capabilities["tool_version"],
                 "compatibility": compatibility,
+                "support": {
+                    "session_id": support_session_id,
+                    "stop_status": support_stop.get("status"),
+                    "bundle": support_bundle.get("output"),
+                    "redaction": support_bundle.get("redaction"),
+                },
                 "commands": commands,
                 "host_loop_fixture_stage": {
                     "status": stage_result["status"],
@@ -671,6 +781,12 @@ def _run_smoke(data_dir: Path) -> int:
                     "current_work_item": str(stage_work_dir / "current_work_item.json"),
                     "staged_verification": str(staged_artifacts[0]),
                     "replay_status": stage_replay.get("status"),
+                    "support": {
+                        "session_id": stage_support_session_id,
+                        "stop_status": stage_support_stop.get("status"),
+                        "bundle": stage_support_bundle.get("output"),
+                        "redaction": stage_support_bundle.get("redaction"),
+                    },
                 },
                 "artifacts": {
                     "context": str(context_path),
@@ -696,6 +812,8 @@ def _run_smoke(data_dir: Path) -> int:
                     "host_loop_stage_export_document_count": stage_export["document_count"],
                     "host_loop_stage_migration_backup": stage_migration["backup_dir"],
                     "host_loop_stage_replay": stage_replay.get("timeline_path"),
+                    "host_loop_stage_support_bundle": str(stage_support_bundle_path),
+                    "support_bundle": str(support_bundle_path),
                 },
             },
             ensure_ascii=False,
@@ -762,6 +880,11 @@ def _run_text(*args: str, command_key: str, commands: dict[str, int]) -> str:
             f"dating-boost {' '.join(args)} failed with exit {result.returncode}: {result.stderr or result.stdout}"
         )
     return result.stdout
+
+
+def _read_zip_bytes(path: Path) -> bytes:
+    with zipfile.ZipFile(path) as archive:
+        return b"\n".join(archive.read(name) for name in sorted(archive.namelist()))
 
 
 def _check_compatibility(capabilities: dict[str, Any]) -> dict[str, Any]:

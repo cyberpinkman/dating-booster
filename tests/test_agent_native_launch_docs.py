@@ -37,12 +37,15 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
             self.assertEqual(payload["commands"]["data_migrate"], 0)
             self.assertEqual(payload["commands"]["data_export"], 0)
             self.assertEqual(payload["commands"]["host_loop_fixture_stage"], 0)
+            self.assertEqual(payload["commands"]["host_loop_stage_support_bundle"], 0)
             self.assertEqual(payload["commands"]["policy_check_draft"], 0)
             self.assertEqual(payload["host_loop_fixture_stage"]["status"], "staged_waiting_user_confirmation")
+            self.assertEqual(payload["host_loop_fixture_stage"]["support"]["stop_status"], "stopped")
             self.assertTrue((data_dir / "context.json").exists())
             self.assertTrue((data_dir / "host_draft.json").exists())
             self.assertTrue((data_dir / "action_result.json").exists())
             self.assertTrue(Path(payload["artifacts"]["data_export"]).exists())
+            self.assertTrue(Path(payload["artifacts"]["host_loop_stage_support_bundle"]).exists())
             self.assertTrue(Path(payload["host_loop_fixture_stage"]["staged_verification"]).exists())
             self.assertTrue((data_dir / "audit" / "action_results.jsonl").exists())
             self.assertTrue((data_dir / "matches" / payload["match_id"] / "feedback_events.jsonl").exists())
@@ -67,6 +70,7 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
             self.assertTrue(Path(payload["artifacts"]["context"]).exists())
             self.assertTrue(Path(payload["artifacts"]["action_audit"]).exists())
             self.assertTrue(Path(payload["artifacts"]["host_loop_stage_export"]).exists())
+            self.assertTrue(Path(payload["artifacts"]["host_loop_stage_support_bundle"]).exists())
         finally:
             shutil.rmtree(data_dir, ignore_errors=True)
 

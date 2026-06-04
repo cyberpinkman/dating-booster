@@ -17,14 +17,29 @@ policy, and audit tools. They do not replace the repository specs.
 9. Stop before viewing dating app content if compatibility fails.
 10. Warn, but do not automatically stop, if `source_spec_commit` differs while
    version, schema, and command checks pass.
-11. For real iPhone Mirroring work, run `dating-boost harness doctor --app-id tinder --json`.
-12. Use `dating-boost harness tinder launch --dry-run --json`,
+11. After the target app id is known, run `dating-boost support session start --data-dir .local/dating-boost --host codex --app-id <app-id> --json` and keep `session_id`. If host-loop runs with a different `--data-dir`, start a separate support session for that host-loop data dir before `dating-boost-host-loop run`.
+12. For real iPhone Mirroring work, run `dating-boost harness doctor --app-id tinder --json`.
+13. Use `dating-boost harness tinder launch --dry-run --json`,
     `dating-boost harness tinder open-profile --dry-run --json`, and the
     relevant `harness tinder action/workflow --dry-run --json` before executing
     Tinder navigation.
-13. For real macOS WeChat work, run `dating-boost harness doctor --app-id wechat --window-title WeChat --json`,
+14. For real macOS WeChat work, run `dating-boost harness doctor --app-id wechat --window-title WeChat --json`,
     `dating-boost harness wechat launch --dry-run --json`, and
     `dating-boost harness wechat observe --json` before staging any draft.
+15. Before ending, run `dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json`.
+
+For manual diagnostics, write a redacted payload JSON and optional sensitive
+payload JSON, then run `dating-boost support record-event --data-dir
+.local/dating-boost --session-id <session_id> --event-type <event_type>
+--payload payload.json --sensitive sensitive.json --sensitive-kind <kind>
+--json`.
+
+For bug reports, run `dating-boost support bundle --data-dir .local/dating-boost
+--session-id <session_id> --output dating-boost-support.zip --redaction strict
+--json` and share only the strict bundle by default.
+
+Do not run `dating-boost data migrate` or `dating-boost data delete` on the same
+data dir after support session start and before support bundle export.
 
 ## Native GUI Harness
 
@@ -335,9 +350,12 @@ toward a goal such as meeting in person.
 For real Tinder/iPhone Mirroring runs, prefer:
 
 ```bash
+dating-boost support session start --data-dir .local/dating-boost --host codex --app-id tinder --json
 dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json
 dating-boost-host-loop init --data-dir .local/dating-boost --work-dir .local/dating-boost-host-loop --app-id tinder --json
 dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json
+dating-boost support bundle --data-dir .local/dating-boost --session-id <session_id> --output dating-boost-support.zip --redaction strict --json
 ```
 
 Use `dating-boost-host-loop status` to inspect what the host must do next,

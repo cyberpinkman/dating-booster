@@ -355,6 +355,64 @@ class ProductionDataStore:
                 ),
             )
 
+    def get_document(self, relative_path: str) -> dict[str, Any] | None:
+        self.ensure_schema()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT path, payload_json FROM documents WHERE path = ?",
+                (relative_path,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = self._decode_document(row["path"], row["payload_json"])
+        return payload if isinstance(payload, dict) else {"payload": payload}
+
+    def list_documents(self, *, prefix: str) -> list[dict[str, Any]]:
+        self.ensure_schema()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT path, schema_version, payload_json, updated_at FROM documents WHERE path LIKE ? ORDER BY path",
+                (f"{prefix}%",),
+            ).fetchall()
+        documents: list[dict[str, Any]] = []
+        for row in rows:
+            payload = self._decode_document(row["path"], row["payload_json"])
+            documents.append(
+                {
+                    "path": row["path"],
+                    "schema_version": row["schema_version"],
+                    "updated_at": row["updated_at"],
+                    "payload": payload,
+                }
+            )
+        return documents
+
+    def list_audit_events(self, *, stream: str) -> list[dict[str, Any]]:
+        self.ensure_schema()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT stream, event_id, target_match_id, payload_json, created_at
+                FROM audit_events
+                WHERE stream = ?
+                ORDER BY created_at, event_id
+                """,
+                (stream,),
+            ).fetchall()
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            payload = self._decode_audit_event(row["stream"], row["event_id"], row["payload_json"])
+            events.append(
+                {
+                    "stream": row["stream"],
+                    "event_id": row["event_id"],
+                    "target_match_id": row["target_match_id"],
+                    "created_at": row["created_at"],
+                    "payload": payload,
+                }
+            )
+        return events
+
     def delete(self, *, scope: str, match_id: str | None, confirm: str) -> dict[str, Any]:
         required = delete_confirm_token(scope, match_id)
         if confirm != required:

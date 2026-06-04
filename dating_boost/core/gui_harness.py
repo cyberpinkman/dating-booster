@@ -45,6 +45,7 @@ from dating_boost.harness.screen_state import (
     tinder_profile_field_coverage as _tinder_profile_field_coverage,
     wechat_layout_hints as _wechat_layout_hints,
 )
+from dating_boost.core.support import classify_text_topics
 
 
 GUI_HARNESS_SCHEMA_VERSION = 2
@@ -294,6 +295,7 @@ class NativeGuiHarness:
             "planned_steps": planned_steps,
             "draft_fingerprint": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
             "draft_character_count": len(draft_text),
+            **_text_fingerprint_fields("draft_clipboard", draft_text),
             "blocked_actions": list(WECHAT_BLOCKED_GUI_ACTIONS),
             "requires_user_confirmation_before_send": True,
         }
@@ -317,6 +319,7 @@ class NativeGuiHarness:
         if previous_clipboard["status"] != "ok":
             payload.update({"status": "blocked", "reason": previous_clipboard["reason"]})
             return payload
+        payload.update(_text_fingerprint_fields("previous_clipboard", previous_clipboard.get("text", "")))
 
         copy_result = {"status": "not_run"}
         paste_result = {"status": "not_run"}
@@ -407,6 +410,7 @@ class NativeGuiHarness:
             "planned_steps": planned_steps,
             "draft_fingerprint": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
             "draft_character_count": len(draft_text),
+            **_text_fingerprint_fields("draft_clipboard", draft_text),
             "blocked_actions": ["payments", "calls", "contact_exchange_without_user"],
             "live_send": True,
             "requires_explicit_authorization": True,
@@ -435,6 +439,13 @@ class NativeGuiHarness:
         payload["stage_status"] = stage_payload.get("status")
         payload["staged_text_verification"] = stage_payload.get("staged_text_verification")
         payload["clipboard_restored"] = stage_payload.get("clipboard_restored")
+        for key in (
+            "previous_clipboard_fingerprint",
+            "previous_clipboard_character_count",
+            "previous_clipboard_topic_labels",
+        ):
+            if key in stage_payload:
+                payload[key] = stage_payload[key]
         if stage_payload.get("status") != "ok":
             payload.update({"status": "blocked", "reason": stage_payload.get("reason") or "stage_failed"})
             return payload
@@ -730,6 +741,7 @@ class NativeGuiHarness:
             "planned_steps": [input_step, paste_step, send_step],
             "draft_fingerprint": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
             "draft_character_count": len(draft_text),
+            **_text_fingerprint_fields("draft_clipboard", draft_text),
             "blocked_actions": ["like", "super_like", "unmatch", "report", "profile_edit"],
             "live_send": True,
             "requires_explicit_authorization": True,
@@ -837,6 +849,7 @@ class NativeGuiHarness:
             if previous_clipboard["status"] != "ok":
                 payload.update({"status": "blocked", "reason": previous_clipboard.get("reason")})
                 return payload
+            payload.update(_text_fingerprint_fields("previous_clipboard", previous_clipboard.get("text", "")))
             copy_result = self._copy_to_clipboard(draft_text)
             payload["draft_clipboard_copy"] = copy_result["status"] == "ok"
             if copy_result["status"] != "ok":
@@ -2297,6 +2310,14 @@ def _default_screenshot_path() -> Path:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _text_fingerprint_fields(prefix: str, text: str) -> dict[str, Any]:
+    return {
+        f"{prefix}_fingerprint": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        f"{prefix}_character_count": len(text),
+        f"{prefix}_topic_labels": classify_text_topics(text),
+    }
 
 
 def _looks_like_iphone_mirroring_window(window: WindowInfo) -> bool:
