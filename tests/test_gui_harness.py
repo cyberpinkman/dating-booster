@@ -26,6 +26,7 @@ class FakeRunner:
         paste_focus_override: str | None = None,
         return_key_clears_focus: bool = True,
         screenshot_fail_at: set[int] | None = None,
+        window_info_stdout: str | list[str] | None = None,
     ):
         self.ocr_texts = list(ocr_text) if isinstance(ocr_text, list) else [ocr_text]
         self.frontmost = frontmost
@@ -40,6 +41,12 @@ class FakeRunner:
         self.return_key_clears_focus = return_key_clears_focus
         self.screenshot_fail_at = screenshot_fail_at or set()
         self.screenshot_calls = 0
+        if isinstance(window_info_stdout, list):
+            self.window_info_outputs = list(window_info_stdout)
+        elif isinstance(window_info_stdout, str):
+            self.window_info_outputs = [window_info_stdout]
+        else:
+            self.window_info_outputs = []
 
     def run(self, command: list[str], *, input: str | None = None):
         self.commands.append(command)
@@ -49,6 +56,10 @@ class FakeRunner:
                 return _result(returncode=1)
             return _result(stdout=f"/usr/bin/{command[2]}\n")
         if command and command[0] == "osascript" and any("get {frontmost" in item for item in command):
+            if self.window_info_outputs:
+                if len(self.window_info_outputs) > 1:
+                    return _result(stdout=self.window_info_outputs.pop(0))
+                return _result(stdout=self.window_info_outputs[0])
             frontmost = "true" if self.frontmost else "false"
             return _result(stdout=f"{frontmost}, 100, 50, 350, 760, {self.window_name}\n")
         if command and command[0] == "osascript" and any("focused UI element" in item for item in command):
@@ -95,6 +106,16 @@ def _run_cli_json(argv: list[str]) -> tuple[int, dict[str, object]]:
     with redirect_stdout(output):
         exit_code = main(argv)
     return exit_code, json.loads(output.getvalue())
+
+
+def _ocr_tsv_for_line(text: str, *, top: int = 235, height: int = 28, left: int = 80, width: int = 60) -> str:
+    return "\n".join(
+        [
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+            f"5\t1\t1\t1\t1\t1\t{left}\t{top}\t{width}\t{height}\t93\t{text}",
+            "",
+        ]
+    )
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -263,6 +284,22 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["blocked_actions"], ["send", "like", "super_like", "unmatch", "report", "profile_edit"])
         self.assertFalse(any("click at" in " ".join(command) for command in runner.commands))
 
+    def test_window_info_skips_iphone_mirroring_floating_overlay(self):
+        runner = FakeRunner(
+            ocr_text="Tinder\n个人资料\n编辑个人资料\n",
+            window_info_stdout=[
+                "true, 1094, 776, 108, 28, \n",
+                "true, 1067, 57, 348, 766, iPhone Mirroring\n",
+            ],
+        )
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.doctor(capture=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["window"]["width"], 348)
+        self.assertEqual(payload["window"]["height"], 766)
+
     def test_tinder_launch_dry_run_forces_home_and_search_when_not_in_tinder(self):
         runner = FakeRunner(ocr_text="今天 周四 6月4日\n搜索\n电话\n微信\nChrome\n")
         harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
@@ -274,12 +311,12 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "dry_run")
         self.assertEqual(
             [step["intent"] for step in payload["planned_steps"]],
-            ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "press_return"],
+            ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "tap_tinder_search_result_icon"],
         )
-        self.assertFalse(any(step["intent"] == "tap_tinder_suggestion_icon" for step in payload["planned_steps"]))
+        self.assertEqual(payload["planned_steps"][-1]["tap_ratio"], {"x": 0.18, "y": 0.20})
         self.assertFalse(any("keystroke" in " ".join(command) for command in runner.commands))
 
-    def test_tinder_launch_executes_home_search_and_keyboard_without_siri_suggestion(self):
+    def test_tinder_launch_executes_home_search_and_taps_app_result(self):
         runner = FakeRunner(
             ocr_text=[
                 "今天 周四 6月4日\n搜索\n电话\n微信\nChrome\n",
@@ -293,10 +330,10 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(
             [step["intent"] for step in payload["executed_steps"]],
-            ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "press_return"],
+            ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "tap_tinder_search_result_icon"],
         )
         self.assertTrue(any('keystroke "Tinder"' in " ".join(command) for command in runner.commands))
-        self.assertFalse(any(step["intent"] == "tap_tinder_suggestion_icon" for step in payload["executed_steps"]))
+        self.assertEqual(payload["executed_steps"][-1]["tap_ratio"], {"x": 0.18, "y": 0.20})
 
     def test_open_profile_launch_if_needed_combines_launch_and_profile_navigation(self):
         runner = FakeRunner(ocr_text="周三\n03\n搜索\n电话\n微信\nChrome\n")
@@ -307,7 +344,13 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(
             [step["intent"] for step in payload["planned_steps"]],
-            ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "press_return", "tap_tinder_profile_tab"],
+            [
+                "open_iphone_home_screen",
+                "open_ios_spotlight",
+                "type_app_name",
+                "tap_tinder_search_result_icon",
+                "tap_tinder_profile_tab",
+            ],
         )
 
     def test_classifies_chinese_tinder_profile_screen(self):
@@ -319,6 +362,40 @@ class GuiHarnessTests(unittest.TestCase):
         state = classify_screen_text("@tinder\nSMI RR Gold\nHi Super Like\nBoost")
 
         self.assertEqual(state, "tinder_unknown")
+
+    def test_classifies_ios_spotlight_tinder_search_results_as_not_tinder_foreground(self):
+        state = classify_screen_text(
+            "20:25 Hoe 39\n"
+            "Tinder\n"
+            "3) Tinder A\n"
+            "xt App FRR O\n"
+            "tinder\n"
+            "JSON - 5KB\n"
+            "2026-06-01-tinder-host-loop\n"
+            "Markdown - 2 KB\n"
+            "iCloud\n"
+        )
+
+        self.assertEqual(state, "ios_search")
+
+    def test_classifies_tinder_subscription_paywall_as_recoverable_exception(self):
+        state = classify_screen_text(
+            "TINDER GOLD\n"
+            "See Who Likes You and match with them instantly with Tinder Gold™\n"
+            "Select a plan\n"
+            "Popular\n"
+            "1 Week\n"
+            "Unlimited Likes\n"
+            "Recurring billing. Cancel anytime.\n"
+            "Continue - $18.99 total\n"
+        )
+
+        self.assertEqual(state, "tinder_subscription_paywall")
+
+    def test_classifies_tinder_feedback_survey_as_recoverable_overlay(self):
+        state = classify_screen_text("cea nee 5\ntinder\nRAY Tinder 3h2 (0)?\nWWWWW\nAng\n")
+
+        self.assertEqual(state, "tinder_feedback_survey")
 
     def test_classifies_chinese_tinder_messages_without_tinder_word(self):
         state = classify_screen_text("新的配对\n消息\nAda\n等你回应\n")
@@ -332,7 +409,7 @@ class GuiHarnessTests(unittest.TestCase):
                 platform="darwin",
                 runner=FakeRunner(
                     ocr_text="今天 周四 6月4日\n搜索\n电话\n微信\nChrome\n",
-                    screenshot_bytes=_profile_tab_active_png(),
+                    screenshot_bytes=_tinder_bottom_nav_png("profile"),
                 ),
             )
 
@@ -341,10 +418,110 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["text_state"], "ios_home_screen")
         self.assertEqual(payload["state"], "ios_home_screen")
 
+    def test_visual_self_profile_does_not_override_non_tinder_app_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness = NativeGuiHarness(
+                app_id="tinder",
+                platform="darwin",
+                runner=FakeRunner(
+                    ocr_text="Mac #iaEER\nSynapseAI\nFOR A Hermes\n",
+                    screenshot_bytes=_tinder_bottom_nav_png("profile"),
+                ),
+            )
+
+            payload = harness.capture_window(output=Path(temp_dir) / "wechat-like.png")
+
+        self.assertEqual(payload["text_state"], "unknown")
+        self.assertEqual(payload["visual_state"], "tinder_self_profile")
+        self.assertEqual(payload["state"], "unknown")
+
+    def test_visual_self_profile_does_not_override_ios_spotlight_tinder_search_results(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness = NativeGuiHarness(
+                app_id="tinder",
+                platform="darwin",
+                runner=FakeRunner(
+                    ocr_text=(
+                        "20:25 Hoe 39\n"
+                        "Tinder\n"
+                        "3) Tinder A\n"
+                        "xt App FRR O\n"
+                        "tinder\n"
+                        "JSON - 5KB\n"
+                        "2026-06-01-tinder-host-loop\n"
+                        "Markdown - 2 KB\n"
+                        "iCloud\n"
+                    ),
+                    screenshot_bytes=_spotlight_search_bottom_png(),
+                ),
+            )
+
+            payload = harness.capture_window(output=Path(temp_dir) / "ios-spotlight.png")
+
+        self.assertEqual(payload["text_state"], "ios_search")
+        self.assertEqual(payload["visual_state"], "unknown")
+        self.assertEqual(payload["state"], "ios_search")
+
+    def test_visual_tinder_bottom_nav_identifies_stable_pages_without_content_ocr(self):
+        cases = [
+            ("home", "tinder_home"),
+            ("explore", "tinder_home"),
+            ("likes", "tinder_home"),
+            ("chats", "tinder_messages"),
+            ("profile", "tinder_self_profile"),
+        ]
+        for active_tab, expected_state in cases:
+            with self.subTest(active_tab=active_tab):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    harness = NativeGuiHarness(
+                        app_id="tinder",
+                        platform="darwin",
+                        runner=FakeRunner(
+                            ocr_text="20:29 RO 37\n",
+                            screenshot_bytes=_tinder_bottom_nav_png(active_tab),
+                        ),
+                    )
+
+                    payload = harness.capture_window(output=Path(temp_dir) / f"{active_tab}.png")
+
+                self.assertEqual(payload["text_state"], "unknown")
+                self.assertEqual(payload["visual_state"], expected_state)
+                self.assertEqual(payload["visual_active_tab"], active_tab)
+                self.assertEqual(payload["state"], expected_state)
+
+    def test_tinder_observe_preserves_visual_bottom_active_tab_for_home_surfaces(self):
+        runner = FakeRunner(ocr_text="20:29 RO 37\n", screenshot_bytes=_tinder_bottom_nav_png("likes"))
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.observe_tinder_screen()
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["screen_state"], "tinder_home")
+        self.assertEqual(payload["layout_hints"]["page"], "home")
+        self.assertEqual(payload["layout_hints"]["bottom_active_tab"], "likes")
+        self.assertEqual(payload["layout_hints"]["visual_bottom_active_tab"], "likes")
+
+    def test_spotlight_bottom_search_candidate_bar_is_not_tinder_bottom_nav(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness = NativeGuiHarness(
+                app_id="tinder",
+                platform="darwin",
+                runner=FakeRunner(
+                    ocr_text="Tinder\nJSON\nMarkdown\niCloud\n",
+                    screenshot_bytes=_spotlight_search_bottom_png(),
+                ),
+            )
+
+            payload = harness.capture_window(output=Path(temp_dir) / "spotlight.png")
+
+        self.assertEqual(payload["visual_state"], "unknown")
+        self.assertEqual(payload["state"], "ios_search")
+
     def test_classifies_stable_chinese_tinder_surfaces_without_noisy_markers(self):
         self.assertEqual(classify_screen_text("滑动\n探索\n赞\n聊天\n个人资料\n"), "tinder_home")
         self.assertEqual(classify_screen_text("聊天\n新的配对\n消息\nMooi\nIris\n"), "tinder_messages")
         self.assertEqual(classify_screen_text("Iris\n怕你认不出我\nIriss613\n键入信息\nGIF\n"), "tinder_conversation")
+        self.assertEqual(classify_screen_text("20:40 Ae 36\nIris @\nSis as x\nlriss613\nGIF\n"), "tinder_conversation")
         self.assertEqual(classify_screen_text("Mooi 36\n关于我\n关键信息\n兴趣\n"), "tinder_profile")
 
     def test_noisy_match_age_and_notification_prompt_do_not_identify_conversation_alone(self):
@@ -380,7 +557,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_visual_profile_tab_active_state_supports_self_profile_detection(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            screenshot = _profile_tab_active_png()
+            screenshot = _tinder_bottom_nav_png("profile")
             harness = NativeGuiHarness(
                 app_id="tinder",
                 platform="darwin",
@@ -519,6 +696,8 @@ class GuiHarnessTests(unittest.TestCase):
         action_names = [
             "open-chats",
             "matches-carousel-next",
+            "conversation-list-scroll-down",
+            "conversation-list-scroll-up",
             "open-new-match",
             "open-conversation",
             "open-thread-profile",
@@ -530,17 +709,71 @@ class GuiHarnessTests(unittest.TestCase):
             "close-full-profile",
             "close-preview",
             "return-to-chats",
+            "dismiss-feedback-survey",
         ]
         payloads = [harness.run_tinder_action(name, dry_run=True) for name in action_names]
 
         self.assertTrue(all(payload["status"] == "ok" for payload in payloads))
         self.assertTrue(all(payload["blocked_actions"] == ["send", "like", "super_like", "unmatch", "report", "profile_edit"] for payload in payloads))
         self.assertIn("wheel", payloads[1]["planned_steps"][0])
-        self.assertIn("wheel", payloads[8]["planned_steps"][0])
-        thread_profile_step = payloads[4]["planned_steps"][0]
+        self.assertIn("wheel", payloads[2]["planned_steps"][0])
+        self.assertIn("wheel", payloads[3]["planned_steps"][0])
+        self.assertIn("wheel", payloads[10]["planned_steps"][0])
+        thread_profile_step = payloads[6]["planned_steps"][0]
         self.assertEqual(thread_profile_step["tap_ratio"], {"x": 0.5, "y": 0.14})
-        return_to_chats_step = payloads[-1]["planned_steps"][0]
+        return_to_chats_step = payloads[-2]["planned_steps"][0]
         self.assertEqual(return_to_chats_step["intent"], "tap_thread_back_to_chats")
+        feedback_survey_step = payloads[-1]["planned_steps"][0]
+        self.assertEqual(feedback_survey_step["intent"], "tap_tinder_feedback_survey_ignore")
+
+    def test_tinder_open_conversation_can_target_visible_row_y_ratio_after_scroll(self):
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天"))
+
+        payload = harness.run_tinder_action("open-conversation", dry_run=True, y_ratio=0.71)
+
+        self.assertEqual(payload["status"], "ok")
+        step = payload["planned_steps"][0]
+        self.assertEqual(step["intent"], "tap_conversation_row")
+        self.assertEqual(step["tap_ratio"], {"x": 0.5, "y": 0.71})
+
+    def test_tinder_open_conversation_can_target_visible_name_without_raw_text_in_plan(self):
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天"))
+
+        payload = harness.run_tinder_action("open-conversation", dry_run=True, visible_name="Iris")
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(
+            [step["intent"] for step in payload["planned_steps"]],
+            ["locate_visible_conversation_name", "tap_visible_conversation_row"],
+        )
+        self.assertIn("target_marker_hash", payload["planned_steps"][0])
+        self.assertNotIn("Iris", json.dumps(payload, ensure_ascii=False))
+
+    def test_tinder_open_conversation_executes_visible_name_locator_and_verifies_target(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "聊天\n新的配对\n消息\n",
+                "聊天\n新的配对\n消息\nIris\nAda\n",
+                _ocr_tsv_for_line("Iris", top=235, height=28),
+                "Iris\nGIF\n",
+            ],
+            screenshot_bytes=_tinder_bottom_nav_png("chats"),
+        )
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.run_tinder_action(
+            "open-conversation",
+            dry_run=False,
+            visible_name="Iris",
+            target_binding={"required_visible_text": ["Iris"], "target_match_id": "match_iris"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["open_mode"], "visible_name")
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+        self.assertEqual(payload["executed_steps"][0]["intent"], "tap_visible_conversation_row")
+        self.assertAlmostEqual(payload["executed_steps"][0]["tap_ratio"]["y"], 0.6225)
+        self.assertNotIn("Iris", json.dumps(payload, ensure_ascii=False))
 
     def test_tinder_observe_distinguishes_chat_regions_and_redacts_raw_text(self):
         runner = FakeRunner(ocr_text="Tinder\n新的配对\n消息\nAda\n等你回应\n")
@@ -556,6 +789,26 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["layout_hints"]["reply_required_marker_present"])
         self.assertIn("text_fingerprint", payload["screen"])
         self.assertNotIn("等你回应", json.dumps(payload, ensure_ascii=False))
+
+    def test_tinder_observe_marks_subscription_paywall_for_agent_recovery(self):
+        runner = FakeRunner(
+            ocr_text=(
+                "TINDER GOLD\n"
+                "See Who Likes You and match with them instantly with Tinder Gold™\n"
+                "Select a plan\n"
+                "Continue - $18.99 total\n"
+            )
+        )
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.observe_tinder_screen()
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["screen_state"], "tinder_subscription_paywall")
+        self.assertEqual(payload["layout_hints"]["page"], "subscription_paywall")
+        self.assertTrue(payload["layout_hints"]["subscription_paywall_visible"])
+        self.assertEqual(payload["next_host_action"], "dismiss_subscription_paywall_and_renavigate")
+        self.assertNotIn("18.99", json.dumps(payload, ensure_ascii=False))
 
     def test_profile_read_workflow_reports_redacted_field_coverage_from_step_captures(self):
         runner = FakeRunner(
@@ -659,6 +912,77 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(any('keystroke "v"' in " ".join(command) for command in runner.commands))
         self.assertNotIn("今晚可以聊十分钟吗", json.dumps(payload, ensure_ascii=False))
 
+    def test_tinder_send_message_accepts_ocr_punctuation_noise_for_staged_text(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Iris\nlriss613\nGIF\n",
+                "Iris\nlriss613\nGIF\n",
+                "Iris\nlriss613\nGIF\n",
+                "Iris\nlriss613\nGIF Testing send path, please ignore] 1)\n",
+                "Iris\nlriss613\nTesting send path, please ignore] 1)\n",
+            ]
+        )
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "Testing send path, please ignore.",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Iris"], "target_match_id": "match_iris"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["staged_text_verification"]["status"], "ok")
+        self.assertEqual(payload["outbound_message_verification"]["status"], "ok")
+
+    def test_tinder_send_message_reuses_existing_staged_text_after_safe_block(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Iris\nlriss613\nGIF Testing send path, please ignore] 1)\n",
+                "Iris\nlriss613\nGIF Testing send path, please ignore] 1)\n",
+                "Iris\nlriss613\nGIF Testing send path, please ignore] 1)\n",
+                "Iris\nlriss613\nTesting send path, please ignore] 1)\n",
+            ],
+            screenshot_bytes=_tinder_conversation_send_button_png(),
+        )
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "Testing send path, please ignore.",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Iris"], "target_match_id": "match_iris"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["staged_text_verification"]["reused_existing_staged_text"])
+        self.assertEqual([step["intent"] for step in payload["executed_steps"]], ["tap_tinder_send_button"])
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+        self.assertFalse(any('keystroke "v"' in " ".join(command) for command in runner.commands))
+
+    def test_tinder_send_message_dismisses_feedback_survey_before_post_send_verification(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Iris\nlriss613\nGIF\n",
+                "Iris\nlriss613\nGIF\n",
+                "Iris\nlriss613\nGIF\n",
+                "Iris\nlriss613\nGIF Testing send path, please ignore] 1)\n",
+                "tinder\nRAY Tinder 3h2 (0)?\nWWWWW\nAng\n",
+                "Iris\nlriss613\nGIF Testing send path, please ignore] 1)\n",
+                "Iris\nlriss613\nTesting send path, please ignore] 1)\n",
+            ]
+        )
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "Testing send path, please ignore.",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Iris"], "target_match_id": "match_iris"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["feedback_survey_recovery"]["status"], "ok")
+        self.assertFalse(payload["feedback_survey_recovery"]["rating_submitted"])
+        self.assertEqual(payload["outbound_message_verification"]["status"], "ok")
+
     def test_tinder_send_message_blocks_when_target_marker_visible_but_screen_is_not_conversation(self):
         runner = FakeRunner(ocr_text="Iris\n查看Iris何时回复\n启用推送通知\n")
         harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
@@ -674,6 +998,60 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["target_binding_verification"]["matched_marker_hashes"], [
             "65003c7a186430e894caa11372a179dbdcac2cbf99724dacc1455efe1c2582a9"
         ])
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+
+    def test_tinder_send_message_auto_dismisses_subscription_paywall_renavigates_and_retries(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "TINDER GOLD\n"
+                "See Who Likes You and match with them instantly with Tinder Gold™\n"
+                "Select a plan\n"
+                "Continue - $18.99 total\n",
+                "Tinder\n聊天\n新的配对\n消息\nAda\n等你回应\n",
+                "Tinder\n聊天\n新的配对\n消息\nAda\n等你回应\n",
+                "Tinder\n聊天\n新的配对\n消息\nAda\n等你回应\n",
+                _ocr_tsv_for_line("Ada", top=235, height=28),
+                "Ada\nGIF\n",
+                "Ada\nGIF\n",
+                "Ada\nGIF\n",
+                "Ada\nGIF\n",
+                "Ada\nGIF\n今晚可以聊十分钟吗？\nSend\n",
+                "Ada\n今晚可以聊十分钟吗？\n",
+            ],
+            screenshot_bytes=_tinder_bottom_nav_png("chats"),
+        )
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["paywall_recovered_and_retried"])
+        self.assertEqual(payload["subscription_paywall_recovery"]["status"], "ok")
+        self.assertEqual(payload["post_paywall_navigation"]["status"], "ok")
+        self.assertEqual(payload["outbound_message_verification"]["status"], "ok")
+        self.assertTrue(any(command and command[0] == "pbcopy" for command in runner.commands))
+        self.assertTrue(any('keystroke "v"' in " ".join(command) for command in runner.commands))
+        self.assertNotIn("18.99", json.dumps(payload, ensure_ascii=False))
+        self.assertNotIn("今晚可以聊十分钟吗", json.dumps(payload, ensure_ascii=False))
+
+    def test_tinder_action_dismisses_subscription_paywall_without_purchase_path(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "TINDER GOLD\nSelect a plan\nContinue - $18.99 total\n",
+                "Tinder\n聊天\n新的配对\n消息\n",
+            ]
+        )
+        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.run_tinder_action("dismiss-subscription-paywall", dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["executed_steps"][0]["intent"], "tap_tinder_subscription_paywall_close")
+        self.assertEqual(payload["verification"]["state"], "tinder_messages")
         self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
 
     def test_tinder_send_message_blocks_when_iphone_mirroring_is_not_frontmost(self):
@@ -1729,7 +2107,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertFalse(any("click at" in " ".join(command) for command in runner.commands))
 
     def test_wheel_action_blocks_cleanly_when_xcrun_missing(self):
-        runner = FakeRunner(ocr_text="Tinder\n聊天", missing_commands={"xcrun"})
+        runner = FakeRunner(ocr_text="滑动\n探索\n赞\n聊天\n个人资料\n", missing_commands={"xcrun"})
         harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.run_tinder_action("profile-scroll-down", dry_run=False)
@@ -1767,6 +2145,40 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(workflow_exit, 0)
         self.assertEqual(workflow_payload["workflow"], "self-profile-read")
         self.assertIn("tap_profile_up_arrow", [step["intent"] for step in workflow_payload["planned_steps"]])
+
+    def test_cli_tinder_action_accepts_visible_name_and_target_binding_for_conversation_open(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            binding_path = Path(temp_dir) / "target-binding.json"
+            _write_json(
+                binding_path,
+                {"required_visible_text": ["Iris"], "target_match_id": "match_iris", "candidate_key": "tinder_iris"},
+            )
+            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+                harness_class.return_value.run_tinder_action.return_value = {
+                    "schema_version": 2,
+                    "status": "ok",
+                    "action": "open-conversation",
+                }
+                exit_code, payload = _run_cli_json([
+                    "harness",
+                    "tinder",
+                    "action",
+                    "open-conversation",
+                    "--visible-name",
+                    "Iris",
+                    "--target-binding",
+                    str(binding_path),
+                    "--json",
+                ])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "ok")
+        harness_class.return_value.run_tinder_action.assert_called_once()
+        self.assertEqual(harness_class.return_value.run_tinder_action.call_args.kwargs["visible_name"], "Iris")
+        self.assertEqual(
+            harness_class.return_value.run_tinder_action.call_args.kwargs["target_binding"]["target_match_id"],
+            "match_iris",
+        )
 
     def test_cli_exposes_new_match_workflows_with_match_index(self):
         open_exit, open_payload = _run_cli_json([
@@ -1850,6 +2262,83 @@ def _profile_tab_active_png() -> bytes:
     fill(0.03, 0.89, 0.97, 0.98, (18, 18, 18, 255))
     fill(0.78, 0.90, 0.96, 0.97, (82, 82, 82, 255))
     fill(0.86, 0.91, 0.90, 0.96, (246, 246, 246, 255))
+    raw_rows = [b"\x00" + b"".join(bytes(pixel) for pixel in row) for row in pixels]
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return b"".join(
+        [
+            b"\x89PNG\r\n\x1a\n",
+            _png_chunk(b"IHDR", ihdr),
+            _png_chunk(b"IDAT", zlib.compress(b"".join(raw_rows))),
+            _png_chunk(b"IEND", b""),
+        ]
+    )
+
+
+def _tinder_bottom_nav_png(active_tab: str) -> bytes:
+    width, height = 200, 400
+    pixels = [[(0, 0, 0, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.04, 0.895, 0.96, 0.985, (18, 18, 18, 255))
+    slots = [
+        ("home", 0.07, 0.25),
+        ("explore", 0.25, 0.41),
+        ("likes", 0.41, 0.57),
+        ("chats", 0.57, 0.74),
+        ("profile", 0.74, 0.93),
+    ]
+    for name, x1, x2 in slots:
+        center = (x1 + x2) / 2
+        if name == active_tab:
+            fill(x1 + 0.01, 0.905, x2 - 0.01, 0.972, (82, 82, 82, 255))
+        fill(center - 0.025, 0.925, center + 0.025, 0.940, (238, 238, 238, 255))
+        fill(center - 0.040, 0.952, center + 0.040, 0.965, (238, 238, 238, 255))
+        if name == "likes":
+            fill(center + 0.018, 0.920, center + 0.045, 0.940, (245, 210, 70, 255))
+
+    return _png_from_pixels(pixels, width, height)
+
+
+def _spotlight_search_bottom_png() -> bytes:
+    width, height = 200, 400
+    pixels = [[(0, 0, 0, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.06, 0.905, 0.94, 0.955, (34, 34, 34, 255))
+    fill(0.10, 0.922, 0.14, 0.937, (235, 235, 235, 255))
+    fill(0.18, 0.923, 0.37, 0.938, (235, 235, 235, 255))
+    fill(0.86, 0.918, 0.90, 0.942, (235, 235, 235, 255))
+    fill(0.12, 0.958, 0.32, 0.990, (35, 115, 245, 255))
+    fill(0.35, 0.958, 0.45, 0.990, (190, 190, 190, 255))
+    return _png_from_pixels(pixels, width, height)
+
+
+def _tinder_conversation_send_button_png() -> bytes:
+    width, height = 200, 400
+    pixels = [[(0, 0, 0, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.04, 0.90, 0.13, 0.98, (35, 35, 35, 255))
+    fill(0.15, 0.91, 0.86, 0.975, (25, 25, 25, 255))
+    fill(0.20, 0.93, 0.72, 0.95, (230, 230, 230, 255))
+    fill(0.875, 0.905, 0.955, 0.985, (12, 116, 235, 255))
+    fill(0.905, 0.925, 0.925, 0.965, (245, 245, 245, 255))
+    return _png_from_pixels(pixels, width, height)
+
+
+def _png_from_pixels(pixels: list[list[tuple[int, int, int, int]]], width: int, height: int) -> bytes:
     raw_rows = [b"\x00" + b"".join(bytes(pixel) for pixel in row) for row in pixels]
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
     return b"".join(

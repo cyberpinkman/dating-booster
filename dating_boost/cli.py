@@ -294,7 +294,10 @@ def main(argv: list[str] | None = None) -> int:
     harness_tinder_action_parser.add_argument("--output-dir", type=Path)
     harness_tinder_action_parser.add_argument("--row-index", type=int)
     harness_tinder_action_parser.add_argument("--match-index", type=int)
+    harness_tinder_action_parser.add_argument("--y-ratio", type=float)
     harness_tinder_action_parser.add_argument("--target", choices=["row", "avatar"], default="row")
+    harness_tinder_action_parser.add_argument("--visible-name")
+    harness_tinder_action_parser.add_argument("--target-binding", type=Path)
     harness_tinder_action_parser.add_argument("--json", action="store_true")
     harness_tinder_action_parser.set_defaults(handler=_handle_harness_tinder_action)
     harness_tinder_workflow_parser = harness_tinder_subparsers.add_parser("workflow")
@@ -1029,10 +1032,14 @@ def _handle_harness_tinder_observe(args: argparse.Namespace) -> int:
 
 
 def _handle_harness_tinder_action(args: argparse.Namespace) -> int:
+    target_binding = _read_json_object(args.target_binding) if args.target_binding is not None else None
     options = {
         "row_index": args.row_index,
         "match_index": args.match_index,
+        "y_ratio": args.y_ratio,
         "target": args.target,
+        "visible_name": args.visible_name,
+        "target_binding": target_binding,
     }
     payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).run_tinder_action(
         args.action,

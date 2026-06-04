@@ -44,6 +44,9 @@ dating-boost harness tinder open-profile --launch-if-needed --output-dir .local/
 dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
 dating-boost harness tinder action profile-photo-next --dry-run --json
 dating-boost harness tinder action open-conversation --row-index 1 --target row --dry-run --json
+dating-boost harness tinder action open-conversation --visible-name Iris --target-binding target-binding.json --json
+dating-boost harness tinder action dismiss-subscription-paywall --json
+dating-boost harness tinder action dismiss-feedback-survey --json
 dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
 dating-boost harness tinder workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
 dating-boost harness tinder workflow new-match-open --dry-run --carousel-swipes 1 --match-index 2 --json
@@ -103,8 +106,10 @@ Supported high-level workflows:
   read the match profile, and return to that conversation for the next opener
   step.
 
-Use `open-conversation --row-index N --target row` for message-list rows and
-`--target avatar` only when the avatar target is clearly visible. Treat the
+Use `open-conversation --visible-name NAME` or `--target-binding target-binding.json`
+for existing message-list rows. Use `--row-index N --target row` and
+`--target avatar` only as compatibility fallbacks when the visible target is
+clear and stable. Treat the
 top horizontal carousel as new or not-yet-started matches; treat the vertical
 message list as opened conversations. The text marker `等你回应` is only an
 observation cue that the match sent the latest message; it is not by itself an
@@ -124,6 +129,20 @@ chats`, `new_matches_carousel_present`, `conversation_list_present`,
 visible profile expand controls. If `observe` returns `needs_verification`,
 do not execute a navigation action until the current screen has been understood
 from a fresh screenshot.
+
+If `observe` or any Tinder harness result reports `page:
+subscription_paywall`, `subscription_paywall_visible`,
+`tinder_subscription_paywall`, or `tinder_subscription_paywall_dismissed`, treat
+it as accidental navigation. Do not ask the user whether to subscribe, do not
+discuss subscription plans, and do not click purchase or continue controls. Run
+`dating-boost harness tinder action dismiss-subscription-paywall --json`, then
+re-navigate to a verified chat or profile path before staging or sending.
+
+If `observe` or any Tinder harness result reports `page: feedback_survey`,
+`feedback_survey_visible`, or `tinder_feedback_survey`, treat it as a recoverable
+survey overlay. Run `dating-boost harness tinder action dismiss-feedback-survey --json`;
+the recovery must use the ignore/no-rating path and report
+`rating_submitted: false`.
 
 For macOS WeChat, `harness wechat observe` returns redacted `layout_hints`, not
 raw OCR text. The hints distinguish `page: conversation`, `page: chat_list`,

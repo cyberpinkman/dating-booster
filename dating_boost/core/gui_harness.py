@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import csv
 from datetime import datetime, timezone
 import hashlib
+import io
+import re
+import struct
 import sys
 import tempfile
 import time
+import zlib
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -30,6 +35,8 @@ from dating_boost.harness.screen_state import (
     classify_wechat_screen_text,
     combine_screen_states as _combine_screen_states,
     hash_text as _hash_text,
+    _read_png_pixels as _read_png_pixels_for_send_button,
+    _region_stats as _region_stats_for_send_button,
     normalize_text as _normalize_text,
     redacted_screen as _redacted_screen,
     tinder_layout_hints as _tinder_layout_hints,
@@ -46,6 +53,8 @@ WECHAT_HARNESS_BACKEND = "macos_wechat_desktop"
 HARNESS_BACKEND = IPHONE_MIRRORING_HARNESS_BACKEND
 BLOCKED_GUI_ACTIONS = ["send", "like", "super_like", "unmatch", "report", "profile_edit"]
 WECHAT_BLOCKED_GUI_ACTIONS = ["send", "payments", "calls", "contact_exchange_without_user"]
+TINDER_SUBSCRIPTION_PAYWALL_STATE = "tinder_subscription_paywall"
+TINDER_FEEDBACK_SURVEY_STATE = "tinder_feedback_survey"
 
 
 class NativeGuiHarness:
@@ -169,9 +178,10 @@ class NativeGuiHarness:
             visual = {"status": "not_applicable", "state": "unknown"}
             state = text_state
         else:
-            text_state = classify_screen_text(ocr.get("text", ""))
+            text = ocr.get("text", "")
+            text_state = classify_screen_text(text)
             visual = classify_screen_image(output)
-            state = _combine_screen_states(text_state, visual["state"])
+            state = _combine_screen_states(text_state, visual["state"], text)
         return {
             "schema_version": GUI_HARNESS_SCHEMA_VERSION,
             "status": "ok",
@@ -180,6 +190,7 @@ class NativeGuiHarness:
             "text_state": text_state,
             "visual_state": visual["state"],
             "visual_status": visual["status"],
+            "visual_active_tab": visual.get("active_tab", "unknown"),
             "ocr_status": ocr["status"],
             "ocr_error": ocr.get("error"),
             "text": ocr.get("text", ""),
@@ -500,6 +511,10 @@ class NativeGuiHarness:
             payload.update({"status": "blocked", "reason": screen.get("reason")})
         elif screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
             payload.update({"status": "blocked", "reason": screen.get("state")})
+        elif screen.get("state") == TINDER_SUBSCRIPTION_PAYWALL_STATE:
+            payload["next_host_action"] = "dismiss_subscription_paywall_and_renavigate"
+        elif screen.get("state") == TINDER_FEEDBACK_SURVEY_STATE:
+            payload["next_host_action"] = "dismiss_feedback_survey_and_reobserve"
         elif screen.get("state") not in TINDER_FOREGROUND_STATES:
             payload.update({"status": "needs_verification", "reason": "tinder_foreground_not_verified"})
         return payload
@@ -640,6 +655,17 @@ class NativeGuiHarness:
         }
         if dry_run:
             return payload
+        if action == "open-conversation":
+            visible_name = str(options.get("visible_name") or "").strip()
+            target_binding = options.get("target_binding")
+            if not visible_name and isinstance(target_binding, dict):
+                visible_name = _target_binding_primary_visible_name(target_binding) or ""
+            if visible_name:
+                return self._open_tinder_conversation_by_visible_name(
+                    visible_name=visible_name,
+                    target_binding=target_binding if isinstance(target_binding, dict) else None,
+                    output_dir=output_dir,
+                )
         return self._execute_planned_steps(payload, output_dir=output_dir)
 
     def run_tinder_workflow(
@@ -677,6 +703,7 @@ class NativeGuiHarness:
         dry_run: bool = False,
         output_dir: Path | None = None,
         target_binding: dict[str, Any] | None = None,
+        _paywall_retry_attempted: bool = False,
     ) -> dict[str, Any]:
         input_step = {
             "intent": "tap_tinder_message_input",
@@ -718,11 +745,39 @@ class NativeGuiHarness:
             payload.update({"status": "blocked", "reason": preflight.get("reason") or "tinder_preflight_not_verified"})
             return payload
         window = _window_from_payload(preflight.get("window") or {})
+        if preflight.get("screen", {}).get("state") == TINDER_SUBSCRIPTION_PAYWALL_STATE:
+            recovery = self._dismiss_tinder_subscription_paywall(
+                window,
+                output_dir=output_dir,
+                label="before_send_message",
+            )
+            return self._recover_tinder_subscription_paywall_for_send(
+                payload,
+                recovery,
+                draft_text=draft_text,
+                output_dir=output_dir,
+                target_binding=target_binding,
+                retry_attempted=_paywall_retry_attempted,
+            )
 
         if target_binding is not None:
             target_verification = self._verify_tinder_target_binding(target_binding, output_dir=output_dir)
             payload["target_binding_verification"] = target_verification
             if target_verification.get("status") != "ok":
+                if target_verification.get("reason") == "tinder_subscription_paywall_visible":
+                    recovery = self._dismiss_tinder_subscription_paywall(
+                        window,
+                        output_dir=output_dir,
+                        label="target_binding",
+                    )
+                    return self._recover_tinder_subscription_paywall_for_send(
+                        payload,
+                        recovery,
+                        draft_text=draft_text,
+                        output_dir=output_dir,
+                        target_binding=target_binding,
+                        retry_attempted=_paywall_retry_attempted,
+                    )
                 payload.update({
                     "status": "blocked",
                     "reason": target_verification.get("reason") or "target_binding_mismatch",
@@ -735,61 +790,97 @@ class NativeGuiHarness:
         if baseline_screen.get("status") != "ok":
             payload.update({"status": "blocked", "reason": baseline_screen.get("reason") or "pre_stage_screen_not_captured"})
             return payload
+        if baseline_screen.get("state") == TINDER_SUBSCRIPTION_PAYWALL_STATE:
+            recovery = self._dismiss_tinder_subscription_paywall(
+                window,
+                output_dir=output_dir,
+                label="before_stage_message",
+            )
+            return self._recover_tinder_subscription_paywall_for_send(
+                payload,
+                recovery,
+                draft_text=draft_text,
+                output_dir=output_dir,
+                target_binding=target_binding,
+                retry_attempted=_paywall_retry_attempted,
+            )
         if baseline_screen.get("state") != "tinder_conversation":
             payload.update({"status": "blocked", "reason": "tinder_conversation_not_verified"})
             return payload
 
-        previous_clipboard = self._read_clipboard()
-        payload["previous_clipboard_read"] = previous_clipboard["status"] == "ok"
-        if previous_clipboard["status"] != "ok":
-            payload.update({"status": "blocked", "reason": previous_clipboard.get("reason")})
-            return payload
-        copy_result = self._copy_to_clipboard(draft_text)
-        payload["draft_clipboard_copy"] = copy_result["status"] == "ok"
-        if copy_result["status"] != "ok":
-            payload.update({"status": "blocked", "reason": copy_result.get("reason")})
-            return payload
-
         executed_steps: list[dict[str, Any]] = []
         stage_ready = False
-        try:
-            input_result = self._click_ratio(window, input_step["tap_ratio"])
-            executed_steps.append({**input_step, "result": input_result})
-            if input_result["status"] != "ok":
-                payload.update({"status": "blocked", "reason": input_result.get("reason"), "executed_steps": executed_steps})
-                return payload
-            time.sleep(0.2)
-
-            paste_result = self._paste_clipboard_into_frontmost_app()
-            executed_steps.append({**paste_step, "result": paste_result})
-            if paste_result["status"] != "ok":
-                payload.update({"status": "blocked", "reason": paste_result.get("reason"), "executed_steps": executed_steps})
-                return payload
-            time.sleep(0.3)
-
-            staged_output = output_dir / "iphone_mirroring.tinder.after_stage_message.png" if output_dir is not None else None
-            staged_screen = self.capture_window(output=staged_output, window=window)
-            staged_verification = _verify_staged_tinder_message(
-                staged_screen,
-                draft_text,
-                baseline_screen=baseline_screen,
-            )
-            payload["staged_text_verification"] = staged_verification
-            payload["staged_text_verified"] = staged_verification.get("status") == "ok"
-            if staged_verification.get("status") != "ok":
+        staged_screen = baseline_screen
+        baseline_staged_verification = _verify_staged_tinder_message(baseline_screen, draft_text)
+        if baseline_staged_verification.get("status") == "ok":
+            if not _tinder_send_button_visual_visible(baseline_screen):
+                payload["staged_text_verification"] = baseline_staged_verification
+                payload["staged_text_verified"] = True
                 payload.update({
                     "status": "blocked",
-                    "reason": staged_verification.get("reason") or "staged_text_not_verified",
+                    "reason": "payload_already_visible_before_staging",
+                    "next_host_action": "verify_no_duplicate_send_request",
                     "executed_steps": executed_steps,
                 })
                 return payload
+            baseline_staged_verification["reused_existing_staged_text"] = True
+            payload["staged_text_verification"] = baseline_staged_verification
+            payload["staged_text_verified"] = True
+            payload["previous_clipboard_read"] = False
+            payload["draft_clipboard_copy"] = False
+            payload["clipboard_restored"] = True
+            payload["clipboard_restore_status"] = "not_needed"
             stage_ready = True
-        finally:
-            restore_result = self._copy_to_clipboard(previous_clipboard.get("text", ""))
-            payload["clipboard_restored"] = restore_result["status"] == "ok"
-            payload["clipboard_restore_status"] = restore_result["status"]
-            if restore_result["status"] != "ok":
-                payload["clipboard_restore_reason"] = restore_result.get("reason")
+        else:
+            previous_clipboard = self._read_clipboard()
+            payload["previous_clipboard_read"] = previous_clipboard["status"] == "ok"
+            if previous_clipboard["status"] != "ok":
+                payload.update({"status": "blocked", "reason": previous_clipboard.get("reason")})
+                return payload
+            copy_result = self._copy_to_clipboard(draft_text)
+            payload["draft_clipboard_copy"] = copy_result["status"] == "ok"
+            if copy_result["status"] != "ok":
+                payload.update({"status": "blocked", "reason": copy_result.get("reason")})
+                return payload
+
+            try:
+                input_result = self._click_ratio(window, input_step["tap_ratio"])
+                executed_steps.append({**input_step, "result": input_result})
+                if input_result["status"] != "ok":
+                    payload.update({"status": "blocked", "reason": input_result.get("reason"), "executed_steps": executed_steps})
+                    return payload
+                time.sleep(0.2)
+
+                paste_result = self._paste_clipboard_into_frontmost_app()
+                executed_steps.append({**paste_step, "result": paste_result})
+                if paste_result["status"] != "ok":
+                    payload.update({"status": "blocked", "reason": paste_result.get("reason"), "executed_steps": executed_steps})
+                    return payload
+                time.sleep(0.3)
+
+                staged_output = output_dir / "iphone_mirroring.tinder.after_stage_message.png" if output_dir is not None else None
+                staged_screen = self.capture_window(output=staged_output, window=window)
+                staged_verification = _verify_staged_tinder_message(
+                    staged_screen,
+                    draft_text,
+                    baseline_screen=baseline_screen,
+                )
+                payload["staged_text_verification"] = staged_verification
+                payload["staged_text_verified"] = staged_verification.get("status") == "ok"
+                if staged_verification.get("status") != "ok":
+                    payload.update({
+                        "status": "blocked",
+                        "reason": staged_verification.get("reason") or "staged_text_not_verified",
+                        "executed_steps": executed_steps,
+                    })
+                    return payload
+                stage_ready = True
+            finally:
+                restore_result = self._copy_to_clipboard(previous_clipboard.get("text", ""))
+                payload["clipboard_restored"] = restore_result["status"] == "ok"
+                payload["clipboard_restore_status"] = restore_result["status"]
+                if restore_result["status"] != "ok":
+                    payload["clipboard_restore_reason"] = restore_result.get("reason")
 
         if not stage_ready:
             return payload
@@ -812,6 +903,30 @@ class NativeGuiHarness:
         post_output = output_dir / "iphone_mirroring.tinder.after_send_message.png" if output_dir is not None else None
         post_screen = self.capture_window(output=post_output, window=window)
         payload["post_action_observation"] = _redacted_screen(post_screen)
+        if post_screen.get("state") == TINDER_FEEDBACK_SURVEY_STATE:
+            recovery = self._dismiss_tinder_feedback_survey(
+                window,
+                output_dir=output_dir,
+                label="after_send_message",
+            )
+            payload["feedback_survey_recovery"] = recovery
+            if recovery.get("status") == "ok":
+                post_recovery_output = (
+                    output_dir / "iphone_mirroring.tinder.after_send_message.after_feedback_survey.png"
+                    if output_dir is not None
+                    else None
+                )
+                post_screen = self.capture_window(output=post_recovery_output, window=window)
+                payload["post_action_observation_after_feedback_survey"] = _redacted_screen(post_screen)
+            else:
+                payload.update(
+                    {
+                        "status": "needs_verification",
+                        "reason": recovery.get("reason") or "feedback_survey_recovery_failed",
+                        "executed_steps": executed_steps,
+                    }
+                )
+                return payload
         post_id_source = f"{payload['draft_fingerprint']}:{post_screen.get('path') or _now_iso()}:{uuid4().hex}"
         post_observation_id = "gui_post_send_" + hashlib.sha256(post_id_source.encode("utf-8")).hexdigest()[:16]
         payload["post_action_observation_id"] = post_observation_id
@@ -847,6 +962,45 @@ class NativeGuiHarness:
             payload.update({"status": "blocked", "reason": doctor.get("reason")})
             return payload
         screen_state = doctor.get("screen", {}).get("state")
+        window = _window_from_payload(doctor.get("window") or {})
+        requires_paywall = any(step.get("requires_tinder_subscription_paywall") for step in payload["planned_steps"])
+        requires_feedback_survey = any(step.get("requires_tinder_feedback_survey") for step in payload["planned_steps"])
+        if requires_paywall:
+            if screen_state != TINDER_SUBSCRIPTION_PAYWALL_STATE:
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": "tinder_subscription_paywall_not_visible",
+                        "screen_state": screen_state,
+                    }
+                )
+                return payload
+        elif requires_feedback_survey:
+            if screen_state != TINDER_FEEDBACK_SURVEY_STATE:
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": "tinder_feedback_survey_not_visible",
+                        "screen_state": screen_state,
+                    }
+                )
+                return payload
+        elif screen_state == TINDER_SUBSCRIPTION_PAYWALL_STATE:
+            recovery = self._dismiss_tinder_subscription_paywall(
+                window,
+                output_dir=output_dir,
+                label="pre_action",
+            )
+            payload["subscription_paywall_recovery"] = recovery
+            if recovery.get("status") != "ok":
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": recovery.get("reason") or "tinder_subscription_paywall_recovery_failed",
+                    }
+                )
+                return payload
+            screen_state = recovery.get("verification", {}).get("state")
         if any(step.get("requires_verified_tinder_screen") for step in payload["planned_steps"]):
             if screen_state not in TINDER_FOREGROUND_STATES:
                 payload.update(
@@ -857,7 +1011,6 @@ class NativeGuiHarness:
                     }
                 )
                 return payload
-        window = _window_from_payload(doctor.get("window") or {})
         executed_steps: list[dict[str, Any]] = []
         profile_read_captures: list[dict[str, Any]] = []
         profile_read_texts: list[str] = []
@@ -909,8 +1062,362 @@ class NativeGuiHarness:
             payload["profile_read_captures"] = profile_read_captures
             payload["field_coverage"] = _tinder_profile_field_coverage("\n".join(profile_read_texts))
         after = output_dir / "iphone_mirroring.after_action.png" if output_dir is not None else None
-        payload["verification"] = _redacted_screen(self.capture_window(output=after, window=window))
+        verification_screen = self.capture_window(output=after, window=window)
+        payload["verification"] = _redacted_screen(verification_screen)
+        if verification_screen.get("state") == TINDER_SUBSCRIPTION_PAYWALL_STATE:
+            recovery = self._dismiss_tinder_subscription_paywall(
+                window,
+                output_dir=output_dir,
+                label="after_action",
+            )
+            _apply_tinder_paywall_recovery_result(payload, recovery)
         return payload
+
+    def _open_tinder_conversation_by_visible_name(
+        self,
+        *,
+        visible_name: str,
+        target_binding: dict[str, Any] | None = None,
+        output_dir: Path | None = None,
+        max_scrolls: int = 3,
+    ) -> dict[str, Any]:
+        marker = visible_name.strip()
+        if not marker:
+            return {
+                **self._base_payload("blocked"),
+                "action": "open-conversation",
+                "reason": "visible_conversation_marker_required",
+                "blocked_actions": list(BLOCKED_GUI_ACTIONS),
+            }
+        if output_dir is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        marker_hash = _hash_text(marker)
+        payload: dict[str, Any] = {
+            **self._base_payload("ok"),
+            "action": "open-conversation",
+            "mode": "execute",
+            "open_mode": "visible_name",
+            "target_marker_hash": marker_hash,
+            "target_binding": _redacted_target_binding(target_binding) if target_binding is not None else None,
+            "planned_steps": _tinder_action_steps("open-conversation", visible_name=marker),
+            "blocked_actions": list(BLOCKED_GUI_ACTIONS),
+        }
+        before = output_dir / "iphone_mirroring.tinder.open_conversation.before.png" if output_dir is not None else None
+        doctor = self.doctor(capture=True, output=before)
+        payload["preflight"] = doctor
+        if doctor["status"] == "blocked":
+            payload.update({"status": "blocked", "reason": doctor.get("reason")})
+            return payload
+        window = _window_from_payload(doctor.get("window") or {})
+        screen_state = doctor.get("screen", {}).get("state")
+        if screen_state == TINDER_SUBSCRIPTION_PAYWALL_STATE:
+            recovery = self._dismiss_tinder_subscription_paywall(
+                window,
+                output_dir=output_dir,
+                label="open_conversation",
+            )
+            payload["subscription_paywall_recovery"] = recovery
+            if recovery.get("status") != "ok":
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": recovery.get("reason") or "tinder_subscription_paywall_recovery_failed",
+                    }
+                )
+                return payload
+            screen_state = recovery.get("verification", {}).get("state")
+        if screen_state == TINDER_FEEDBACK_SURVEY_STATE:
+            recovery = self._dismiss_tinder_feedback_survey(
+                window,
+                output_dir=output_dir,
+                label="open_conversation",
+            )
+            payload["feedback_survey_recovery"] = recovery
+            if recovery.get("status") != "ok":
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": recovery.get("reason") or "tinder_feedback_survey_recovery_failed",
+                    }
+                )
+                return payload
+            screen_state = recovery.get("verification", {}).get("state")
+
+        executed_steps: list[dict[str, Any]] = []
+        if screen_state != "tinder_messages":
+            if screen_state not in TINDER_FOREGROUND_STATES:
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": "tinder_foreground_not_verified",
+                        "screen_state": screen_state,
+                    }
+                )
+                return payload
+            open_chats_step = _tinder_action_steps("open-chats")[0]
+            open_chats_result = self._execute_step(window, open_chats_step)
+            executed_steps.append({**open_chats_step, "result": open_chats_result})
+            if open_chats_result.get("status") != "ok":
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": open_chats_result.get("reason") or "open_chats_failed",
+                        "executed_steps": executed_steps,
+                    }
+                )
+                return payload
+            time.sleep(float(open_chats_step.get("wait_after_seconds", 0.2)))
+
+        search_attempts: list[dict[str, Any]] = []
+        for attempt in range(max_scrolls + 1):
+            search_output = (
+                output_dir / f"iphone_mirroring.tinder.conversation_search_{attempt + 1:02d}.png"
+                if output_dir is not None
+                else None
+            )
+            screen = self.capture_window(output=search_output, window=window)
+            locator = self._locate_visible_text_y_ratio(screen, marker)
+            search_attempts.append(
+                {
+                    "attempt": attempt + 1,
+                    "screen": _redacted_screen(screen),
+                    "locator": locator,
+                }
+            )
+            if screen.get("status") != "ok":
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": screen.get("reason") or "conversation_list_screen_capture_failed",
+                        "executed_steps": executed_steps,
+                        "search_attempts": search_attempts,
+                    }
+                )
+                return payload
+            if screen.get("state") == TINDER_SUBSCRIPTION_PAYWALL_STATE:
+                recovery = self._dismiss_tinder_subscription_paywall(
+                    window,
+                    output_dir=output_dir,
+                    label=f"open_conversation_search_{attempt + 1:02d}",
+                )
+                payload["subscription_paywall_recovery"] = recovery
+                if recovery.get("status") != "ok":
+                    payload.update(
+                        {
+                            "status": "blocked",
+                            "reason": recovery.get("reason") or "tinder_subscription_paywall_recovery_failed",
+                            "executed_steps": executed_steps,
+                            "search_attempts": search_attempts,
+                        }
+                    )
+                    return payload
+                continue
+            if screen.get("state") != "tinder_messages":
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": "tinder_messages_not_verified",
+                        "screen_state": screen.get("state"),
+                        "executed_steps": executed_steps,
+                        "search_attempts": search_attempts,
+                    }
+                )
+                return payload
+            if locator.get("status") == "ok":
+                y_ratio = float(locator["y_ratio"])
+                if not 0.36 <= y_ratio <= 0.88:
+                    payload.update(
+                        {
+                            "status": "blocked",
+                            "reason": "visible_conversation_marker_outside_message_list",
+                            "executed_steps": executed_steps,
+                            "search_attempts": search_attempts,
+                        }
+                    )
+                    return payload
+                tap_step = {
+                    **_tap_step("tap_visible_conversation_row", x=0.50, y=y_ratio),
+                    "target_marker_hash": marker_hash,
+                    "location_method": "ocr_tsv_visible_text",
+                }
+                tap_result = self._execute_step(window, tap_step)
+                executed_steps.append({**tap_step, "result": tap_result})
+                if tap_result.get("status") != "ok":
+                    payload.update(
+                        {
+                            "status": "blocked",
+                            "reason": tap_result.get("reason") or "tap_visible_conversation_row_failed",
+                            "executed_steps": executed_steps,
+                            "search_attempts": search_attempts,
+                        }
+                    )
+                    return payload
+                time.sleep(float(tap_step.get("wait_after_seconds", 0.2)))
+                verification_output = (
+                    output_dir / "iphone_mirroring.tinder.open_conversation.after_tap.png"
+                    if output_dir is not None
+                    else None
+                )
+                verification_screen = self.capture_window(output=verification_output, window=window)
+                payload["verification"] = _redacted_screen(verification_screen)
+                payload["executed_steps"] = executed_steps
+                payload["search_attempts"] = search_attempts
+                if verification_screen.get("status") != "ok":
+                    payload.update(
+                        {
+                            "status": "blocked",
+                            "reason": verification_screen.get("reason") or "open_conversation_verification_failed",
+                        }
+                    )
+                    return payload
+                if verification_screen.get("state") != "tinder_conversation":
+                    payload.update(
+                        {
+                            "status": "blocked",
+                            "reason": "target_conversation_not_verified",
+                            "screen_state": verification_screen.get("state"),
+                        }
+                    )
+                    return payload
+                target_result = _verify_target_binding_against_screen(
+                    target_binding,
+                    verification_screen,
+                    fallback_marker=marker,
+                    verification_method="tinder_open_conversation_visible_name",
+                )
+                payload["target_binding_verification"] = target_result
+                if target_result.get("status") != "ok":
+                    payload.update(
+                        {
+                            "status": "blocked",
+                            "reason": target_result.get("reason") or "target_binding_mismatch",
+                        }
+                    )
+                    return payload
+                return payload
+            if attempt >= max_scrolls:
+                break
+            scroll_step = _tinder_action_steps("conversation-list-scroll-down")[0]
+            scroll_result = self._execute_step(window, scroll_step)
+            executed_steps.append({**scroll_step, "result": scroll_result})
+            if scroll_result.get("status") != "ok":
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": scroll_result.get("reason") or "conversation_list_scroll_failed",
+                        "executed_steps": executed_steps,
+                        "search_attempts": search_attempts,
+                    }
+                )
+                return payload
+            time.sleep(float(scroll_step.get("wait_after_seconds", 0.2)))
+        payload.update(
+            {
+                "status": "blocked",
+                "reason": "visible_conversation_marker_not_found",
+                "next_host_action": "open_chats_and_search_visible_conversation",
+                "executed_steps": executed_steps,
+                "search_attempts": search_attempts,
+            }
+        )
+        return payload
+
+    def _locate_visible_text_y_ratio(self, screen: dict[str, Any], marker: str) -> dict[str, Any]:
+        marker_hash = _hash_text(marker)
+        path = screen.get("path")
+        if screen.get("status") != "ok":
+            return {"status": "blocked", "reason": screen.get("reason") or "screen_not_captured", "target_marker_hash": marker_hash}
+        if not isinstance(path, str) or not path:
+            return {"status": "blocked", "reason": "screen_path_required", "target_marker_hash": marker_hash}
+        tsv = self._ocr_tsv(Path(path))
+        if tsv.get("status") != "ok":
+            return {
+                "status": "blocked",
+                "reason": tsv.get("reason") or "visible_text_ocr_tsv_failed",
+                "target_marker_hash": marker_hash,
+            }
+        return _visible_text_location_from_tsv(str(tsv.get("text") or ""), marker, Path(path))
+
+    def _ocr_tsv(self, image_path: Path) -> dict[str, str]:
+        if not self._command_available("tesseract"):
+            return {"status": "unavailable", "text": "", "reason": "ocr_unavailable"}
+        result = self.runner.run(
+            [
+                "tesseract",
+                str(image_path),
+                "stdout",
+                "-l",
+                "eng+chi_sim",
+                "--psm",
+                "6",
+                "tsv",
+            ]
+        )
+        if result.returncode != 0:
+            fallback = self.runner.run(["tesseract", str(image_path), "stdout", "--psm", "6", "tsv"])
+            if fallback.returncode != 0:
+                return {"status": "failed", "text": "", "error": _short(fallback.stderr or result.stderr)}
+            return {"status": "ok", "text": fallback.stdout}
+        return {"status": "ok", "text": result.stdout}
+
+    def _recover_tinder_subscription_paywall_for_send(
+        self,
+        payload: dict[str, Any],
+        recovery: dict[str, Any],
+        *,
+        draft_text: str,
+        output_dir: Path | None,
+        target_binding: dict[str, Any] | None,
+        retry_attempted: bool,
+    ) -> dict[str, Any]:
+        payload["subscription_paywall_recovery"] = recovery
+        payload["next_host_action"] = "navigate_to_verified_tinder_conversation_and_retry_send"
+        if recovery.get("status") != "ok":
+            payload.update(
+                {
+                    "status": "blocked",
+                    "reason": recovery.get("reason") or "tinder_subscription_paywall_recovery_failed",
+                }
+            )
+            return payload
+        if retry_attempted:
+            payload.update(
+                {
+                    "status": "blocked",
+                    "reason": "tinder_subscription_paywall_retry_already_attempted",
+                }
+            )
+            return payload
+        marker = _target_binding_primary_visible_name(target_binding or {})
+        if not marker:
+            payload.update({"status": "blocked", "reason": "tinder_subscription_paywall_dismissed"})
+            return payload
+        navigation = self._open_tinder_conversation_by_visible_name(
+            visible_name=marker,
+            target_binding=target_binding,
+            output_dir=output_dir,
+        )
+        payload["post_paywall_navigation"] = navigation
+        if navigation.get("status") != "ok":
+            payload.update(
+                {
+                    "status": "blocked",
+                    "reason": "post_paywall_target_navigation_failed",
+                    "post_paywall_navigation_reason": navigation.get("reason"),
+                }
+            )
+            return payload
+        retry_payload = self.send_tinder_message(
+            draft_text,
+            dry_run=False,
+            output_dir=output_dir,
+            target_binding=target_binding,
+            _paywall_retry_attempted=True,
+        )
+        retry_payload["paywall_recovered_and_retried"] = True
+        retry_payload["subscription_paywall_recovery"] = recovery
+        retry_payload["post_paywall_navigation"] = navigation
+        return retry_payload
 
     def _activate_window(self) -> dict[str, Any]:
         result = self.runner.run(["osascript", "-e", f'tell application "{self.window_title}" to activate'])
@@ -927,14 +1434,18 @@ class NativeGuiHarness:
         }
 
     def _window_info(self) -> WindowInfo | None:
-        script = (
-            f'tell application "System Events" to tell process "{self.window_title}" '
-            "to get {frontmost, position of window 1, size of window 1, name of window 1}"
-        )
-        result = self.runner.run(["osascript", "-e", script])
-        if result.returncode != 0:
-            return None
-        return _parse_window_info(result.stdout)
+        for index in range(1, 5):
+            script = (
+                f'tell application "System Events" to tell process "{self.window_title}" '
+                f"to get {{frontmost, position of window {index}, size of window {index}, name of window {index}}}"
+            )
+            result = self.runner.run(["osascript", "-e", script])
+            if result.returncode != 0:
+                continue
+            window = _parse_window_info(result.stdout)
+            if window is not None and _looks_like_iphone_mirroring_window(window):
+                return window
+        return None
 
     def _click_ratio(self, window: WindowInfo, ratio: dict[str, float]) -> dict[str, Any]:
         x = round(window.x + window.width * float(ratio["x"]))
@@ -1028,6 +1539,88 @@ class NativeGuiHarness:
             return {"status": "ok"}
         return {"status": "blocked", "reason": "unknown_gui_step"}
 
+    def _dismiss_tinder_subscription_paywall(
+        self,
+        window: WindowInfo,
+        *,
+        output_dir: Path | None = None,
+        label: str,
+    ) -> dict[str, Any]:
+        step = _tinder_subscription_paywall_dismiss_step()
+        click_result = self._execute_step(window, step)
+        verification_screen: dict[str, Any] = {"status": "not_run", "state": "unknown"}
+        if click_result.get("status") == "ok":
+            time.sleep(0.4)
+            output = (
+                output_dir / f"iphone_mirroring.tinder.subscription_paywall.{label}.after_dismiss.png"
+                if output_dir is not None
+                else None
+            )
+            verification_screen = self.capture_window(output=output, window=window)
+        verification = _redacted_screen(verification_screen)
+        if click_result.get("status") != "ok":
+            status = "blocked"
+            reason = click_result.get("reason") or "tinder_subscription_paywall_dismiss_failed"
+        elif verification_screen.get("status") != "ok":
+            status = "needs_verification"
+            reason = verification_screen.get("reason") or "subscription_paywall_dismiss_verification_failed"
+        elif verification_screen.get("state") == TINDER_SUBSCRIPTION_PAYWALL_STATE:
+            status = "needs_verification"
+            reason = "subscription_paywall_still_visible"
+        else:
+            status = "ok"
+            reason = "subscription_paywall_dismissed"
+        return {
+            "schema_version": GUI_HARNESS_SCHEMA_VERSION,
+            "status": status,
+            "reason": reason,
+            "action": "dismiss_subscription_paywall",
+            "executed_step": {**step, "result": click_result},
+            "verification": verification,
+            "subscription_purchase_executed": False,
+        }
+
+    def _dismiss_tinder_feedback_survey(
+        self,
+        window: WindowInfo,
+        *,
+        output_dir: Path | None = None,
+        label: str,
+    ) -> dict[str, Any]:
+        step = _tinder_feedback_survey_dismiss_step()
+        click_result = self._execute_step(window, step)
+        verification_screen: dict[str, Any] = {"status": "not_run", "state": "unknown"}
+        if click_result.get("status") == "ok":
+            time.sleep(0.4)
+            output = (
+                output_dir / f"iphone_mirroring.tinder.feedback_survey.{label}.after_dismiss.png"
+                if output_dir is not None
+                else None
+            )
+            verification_screen = self.capture_window(output=output, window=window)
+        verification = _redacted_screen(verification_screen)
+        if click_result.get("status") != "ok":
+            status = "blocked"
+            reason = click_result.get("reason") or "tinder_feedback_survey_dismiss_failed"
+        elif verification_screen.get("status") != "ok":
+            status = "needs_verification"
+            reason = verification_screen.get("reason") or "feedback_survey_dismiss_verification_failed"
+        elif verification_screen.get("state") == TINDER_FEEDBACK_SURVEY_STATE:
+            status = "needs_verification"
+            reason = "feedback_survey_still_visible"
+        else:
+            status = "ok"
+            reason = "feedback_survey_dismissed"
+        return {
+            "schema_version": GUI_HARNESS_SCHEMA_VERSION,
+            "status": status,
+            "reason": reason,
+            "action": "dismiss_feedback_survey",
+            "executed_step": {**step, "result": click_result},
+            "verification": verification,
+            "rating_submitted": False,
+        }
+
     def _copy_to_clipboard(self, text: str) -> dict[str, Any]:
         if not self._command_available("pbcopy"):
             return {"status": "blocked", "reason": "missing_pbcopy"}
@@ -1090,6 +1683,8 @@ class NativeGuiHarness:
             return {**result, "status": "blocked", "reason": "target_binding_screen_capture_failed"}
         if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
             return {**result, "status": "blocked", "reason": screen.get("state")}
+        if screen.get("state") == TINDER_SUBSCRIPTION_PAYWALL_STATE:
+            return {**result, "status": "blocked", "reason": "tinder_subscription_paywall_visible"}
         if screen.get("state") != "tinder_conversation":
             return {**result, "status": "blocked", "reason": "target_binding_chat_not_verified"}
         if len(matched) != len(markers):
@@ -1214,6 +1809,108 @@ def _target_binding_required_markers(target_binding: dict[str, Any]) -> list[str
     return unique
 
 
+def _target_binding_primary_visible_name(target_binding: dict[str, Any]) -> str | None:
+    markers = _target_binding_required_markers(target_binding)
+    if markers:
+        return markers[0]
+    return None
+
+
+def _redacted_target_binding(target_binding: dict[str, Any] | None) -> dict[str, Any] | None:
+    if target_binding is None:
+        return None
+    return {
+        "target_match_id": target_binding.get("target_match_id"),
+        "candidate_key": target_binding.get("candidate_key"),
+        "required_marker_hashes": [_hash_text(marker) for marker in _target_binding_required_markers(target_binding)],
+    }
+
+
+def _verify_target_binding_against_screen(
+    target_binding: dict[str, Any] | None,
+    screen: dict[str, Any],
+    *,
+    fallback_marker: str,
+    verification_method: str,
+) -> dict[str, Any]:
+    markers = _target_binding_required_markers(target_binding or {})
+    if not markers and fallback_marker.strip():
+        markers = [fallback_marker.strip()]
+    observed_text = str(screen.get("text") or "")
+    matched = [marker for marker in markers if _visible_text_contains_marker(observed_text, marker)]
+    result = {
+        "verification_method": verification_method,
+        "target_match_id": target_binding.get("target_match_id") if isinstance(target_binding, dict) else None,
+        "candidate_key": target_binding.get("candidate_key") if isinstance(target_binding, dict) else None,
+        "required_marker_hashes": [_hash_text(marker) for marker in markers],
+        "matched_marker_hashes": [_hash_text(marker) for marker in matched],
+        "screen": _redacted_screen(screen),
+        "screen_state": screen.get("state", "unknown"),
+        "observed_text_hash": _hash_text(observed_text) if observed_text else None,
+    }
+    if screen.get("status") != "ok":
+        return {**result, "status": "blocked", "reason": screen.get("reason") or "target_binding_screen_capture_failed"}
+    if screen.get("state") != "tinder_conversation":
+        return {**result, "status": "blocked", "reason": "target_binding_chat_not_verified"}
+    if not markers:
+        return {**result, "status": "blocked", "reason": "target_binding_required"}
+    if len(matched) != len(markers):
+        return {**result, "status": "blocked", "reason": "target_binding_mismatch"}
+    return {**result, "status": "ok"}
+
+
+def _visible_text_location_from_tsv(tsv_text: str, marker: str, image_path: Path) -> dict[str, Any]:
+    marker_hash = _hash_text(marker)
+    try:
+        image_height = int(_read_png_pixels_for_send_button(image_path)["height"])
+    except (OSError, ValueError, zlib.error, struct.error):
+        image_height = 0
+    if image_height <= 0:
+        return {"status": "blocked", "reason": "locator_image_dimensions_unavailable", "target_marker_hash": marker_hash}
+    lines: dict[tuple[str, str, str], list[dict[str, str]]] = {}
+    reader = csv.DictReader(io.StringIO(tsv_text), delimiter="\t")
+    for row in reader:
+        text = str(row.get("text") or "").strip()
+        if not text:
+            continue
+        key = (
+            str(row.get("block_num") or ""),
+            str(row.get("par_num") or ""),
+            str(row.get("line_num") or ""),
+        )
+        lines.setdefault(key, []).append(row)
+    for rows in lines.values():
+        line_text = " ".join(str(row.get("text") or "").strip() for row in rows if str(row.get("text") or "").strip())
+        if not _visible_text_contains_marker(line_text, marker):
+            continue
+        bounds: list[tuple[int, int]] = []
+        for row in rows:
+            try:
+                top = int(float(str(row.get("top") or "0")))
+                height = int(float(str(row.get("height") or "0")))
+            except ValueError:
+                continue
+            bounds.append((top, top + height))
+        if not bounds:
+            continue
+        y_ratio = (min(top for top, _bottom in bounds) + max(bottom for _top, bottom in bounds)) / 2 / image_height
+        return {
+            "status": "ok",
+            "target_marker_hash": marker_hash,
+            "line_hash": _hash_text(line_text),
+            "line_character_count": len(line_text),
+            "y_ratio": round(y_ratio, 4),
+        }
+    return {"status": "not_found", "reason": "visible_text_marker_not_found", "target_marker_hash": marker_hash}
+
+
+def _visible_text_contains_marker(observed_text: str, marker: str) -> bool:
+    marker = marker.strip()
+    if not marker:
+        return False
+    return _normalize_text(marker) in _normalize_text(observed_text) or _message_text_comparable(marker) in _message_text_comparable(observed_text)
+
+
 def _verify_staged_tinder_message(
     screen: dict[str, Any],
     expected_text: str,
@@ -1221,10 +1918,7 @@ def _verify_staged_tinder_message(
     baseline_screen: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     observed_text = str(screen.get("text") or "")
-    text_matches = bool(
-        expected_text
-        and (expected_text in observed_text or _normalize_text(expected_text) in _normalize_text(observed_text))
-    )
+    text_matches = _message_text_matches(observed_text, expected_text)
     observed_stats = _expected_text_observation_stats(observed_text, expected_text)
     baseline_text = str(baseline_screen.get("text") or "") if isinstance(baseline_screen, dict) else ""
     baseline_stats = _expected_text_observation_stats(baseline_text, expected_text) if baseline_text else None
@@ -1279,10 +1973,7 @@ def _verify_tinder_outbound_message(
 
 def _verify_outbound_message(screen: dict[str, Any], expected_text: str) -> dict[str, Any]:
     observed_text = str(screen.get("text") or "")
-    text_matches = bool(
-        expected_text
-        and (expected_text in observed_text or _normalize_text(expected_text) in _normalize_text(observed_text))
-    )
+    text_matches = _message_text_matches(observed_text, expected_text)
     result = {
         "verification_method": "wechat_post_send_ocr_payload_text",
         "expected_payload_hash": _hash_text(expected_text),
@@ -1300,12 +1991,27 @@ def _verify_outbound_message(screen: dict[str, Any], expected_text: str) -> dict
 def _expected_text_observation_stats(text: str, expected_text: str) -> dict[str, Any]:
     normalized_text = _normalize_text(text)
     normalized_expected = _normalize_text(expected_text)
+    comparable_text = _message_text_comparable(text)
+    comparable_expected = _message_text_comparable(expected_text)
     return {
         "text_hash": _hash_text(text) if text else None,
         "normalized_text_hash": _hash_text(normalized_text) if normalized_text else None,
         "text_character_count": len(text) if text else None,
-        "expected_text_occurrences": normalized_text.count(normalized_expected) if normalized_expected else 0,
+        "expected_text_occurrences": comparable_text.count(comparable_expected) if comparable_expected else 0,
     }
+
+
+def _message_text_matches(observed_text: str, expected_text: str) -> bool:
+    if not expected_text:
+        return False
+    if expected_text in observed_text or _normalize_text(expected_text) in _normalize_text(observed_text):
+        return True
+    comparable_expected = _message_text_comparable(expected_text)
+    return bool(comparable_expected and comparable_expected in _message_text_comparable(observed_text))
+
+
+def _message_text_comparable(text: str) -> str:
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text.lower())
 
 
 def _tinder_send_marker_visible(text: str) -> bool:
@@ -1316,12 +2022,58 @@ def _tinder_send_marker_visible(text: str) -> bool:
     return False
 
 
+def _tinder_send_button_visual_visible(screen: dict[str, Any]) -> bool:
+    path = screen.get("path")
+    if not isinstance(path, str) or not path:
+        return False
+    try:
+        pixels = _read_png_pixels_for_send_button(Path(path))
+    except (OSError, ValueError, zlib.error, struct.error):
+        return False
+    stats = _region_stats_for_send_button(pixels, 0.87, 0.90, 0.96, 0.98)
+    return stats["color_ratio"] > 0.08 and stats["mid_ratio"] > 0.08
+
+
+def _apply_tinder_paywall_recovery_result(payload: dict[str, Any], recovery: dict[str, Any]) -> None:
+    payload["subscription_paywall_recovery"] = recovery
+    payload["next_host_action"] = "navigate_to_verified_tinder_conversation_and_retry_send"
+    if recovery.get("status") == "ok":
+        payload.update({"status": "blocked", "reason": "tinder_subscription_paywall_dismissed"})
+    else:
+        payload.update(
+            {
+                "status": "blocked",
+                "reason": recovery.get("reason") or "tinder_subscription_paywall_recovery_failed",
+            }
+        )
+
+
 def _tap_step(intent: str, *, x: float, y: float) -> dict[str, Any]:
     return {
         "intent": intent,
         "tap_ratio": {"x": x, "y": y},
         "requires_verified_tinder_screen": True,
         "risk": "navigation_only",
+    }
+
+
+def _tinder_subscription_paywall_dismiss_step() -> dict[str, Any]:
+    return {
+        "intent": "tap_tinder_subscription_paywall_close",
+        "tap_ratio": {"x": 0.09, "y": 0.14},
+        "requires_tinder_subscription_paywall": True,
+        "risk": "subscription_paywall_recovery",
+        "subscription_purchase_executed": False,
+    }
+
+
+def _tinder_feedback_survey_dismiss_step() -> dict[str, Any]:
+    return {
+        "intent": "tap_tinder_feedback_survey_ignore",
+        "tap_ratio": {"x": 0.50, "y": 0.64},
+        "requires_tinder_feedback_survey": True,
+        "risk": "feedback_survey_recovery",
+        "rating_submitted": False,
     }
 
 
@@ -1384,13 +2136,43 @@ def _tinder_action_steps(action: str, **options: Any) -> list[dict[str, Any]]:
     row_index = int(options.get("row_index") or options.get("conversation_row") or 1)
     match_index = int(options.get("match_index") or 1)
     row_y = min(0.86, 0.30 + (max(row_index, 1) - 1) * 0.12)
+    if options.get("y_ratio") is not None:
+        row_y = max(0.12, min(0.88, float(options["y_ratio"])))
     match_x = min(0.86, 0.42 + (max(match_index, 1) - 1) * 0.24)
     target = str(options.get("target") or "row")
     conversation_x = 0.14 if target == "avatar" else 0.50
+    visible_name = str(options.get("visible_name") or "").strip()
+    target_binding = options.get("target_binding")
+    if not visible_name and isinstance(target_binding, dict):
+        visible_name = _target_binding_primary_visible_name(target_binding) or ""
+    if action == "open-conversation" and visible_name:
+        marker_hash = _hash_text(visible_name)
+        return [
+            {
+                "intent": "locate_visible_conversation_name",
+                "target_marker_hash": marker_hash,
+                "requires_verified_tinder_screen": True,
+                "risk": "navigation_only",
+                "location_method": "ocr_tsv_visible_text",
+            },
+            {
+                "intent": "tap_visible_conversation_row",
+                "target_marker_hash": marker_hash,
+                "requires_verified_tinder_screen": True,
+                "risk": "navigation_only",
+                "location_method": "ocr_tsv_visible_text",
+            },
+        ]
     actions: dict[str, list[dict[str, Any]]] = {
         "open-chats": [_tap_step("tap_chats_tab", x=0.66, y=0.94)],
         "matches-carousel-next": [_wheel_step("wheel_new_matches_left", x=0.56, y=0.30, delta_x=-20, repeats=18)],
         "matches-carousel-previous": [_wheel_step("wheel_new_matches_right", x=0.56, y=0.30, delta_x=20, repeats=18)],
+        "conversation-list-scroll-down": [
+            _wheel_step("wheel_conversation_list_down", x=0.50, y=0.78, delta_y=-20, repeats=14)
+        ],
+        "conversation-list-scroll-up": [
+            _wheel_step("wheel_conversation_list_up", x=0.50, y=0.46, delta_y=20, repeats=14)
+        ],
         "open-new-match": [{**_tap_step("tap_new_match_card", x=match_x, y=0.30), "match_index": match_index}],
         "open-conversation": [
             {**_tap_step("tap_conversation_row", x=conversation_x, y=row_y), "row_index": row_index, "target": target}
@@ -1406,6 +2188,8 @@ def _tinder_action_steps(action: str, **options: Any) -> list[dict[str, Any]]:
         "close-full-profile": [_tap_step("tap_profile_down_arrow", x=0.90, y=0.08)],
         "close-preview": [_tap_step("tap_preview_done", x=0.90, y=0.08)],
         "return-to-chats": [_tap_step("tap_thread_back_to_chats", x=0.09, y=0.13)],
+        "dismiss-subscription-paywall": [_tinder_subscription_paywall_dismiss_step()],
+        "dismiss-feedback-survey": [_tinder_feedback_survey_dismiss_step()],
     }
     if action not in actions:
         raise KeyError(action)
@@ -1499,7 +2283,8 @@ def _launch_tinder_steps() -> list[dict[str, Any]]:
             "wait_after_seconds": 0.2,
         },
         {
-            "intent": "press_return",
+            "intent": "tap_tinder_search_result_icon",
+            "tap_ratio": {"x": 0.18, "y": 0.20},
             "risk": "navigation_only",
             "wait_after_seconds": 1.0,
         },
@@ -1512,3 +2297,7 @@ def _default_screenshot_path() -> Path:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _looks_like_iphone_mirroring_window(window: WindowInfo) -> bool:
+    return window.width >= 200 and window.height >= 400 and bool(window.name.strip())

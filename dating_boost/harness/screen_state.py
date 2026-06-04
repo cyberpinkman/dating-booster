@@ -14,7 +14,6 @@ TINDER_FOREGROUND_STATES = {
     "tinder_conversation",
     "tinder_self_profile",
     "tinder_profile",
-    "tinder_unknown",
 }
 WECHAT_FOREGROUND_STATES = {"wechat_chat", "wechat_chat_list", "wechat_unknown"}
 
@@ -31,6 +30,10 @@ def classify_screen_text(text: str) -> str:
         return "tinder_self_profile"
     if "个人资料" in normalized and any(marker in normalized for marker in ("完善个人资料", "添加一条", "设置")):
         return "tinder_self_profile"
+    if _looks_like_tinder_subscription_paywall_text(normalized):
+        return "tinder_subscription_paywall"
+    if _looks_like_tinder_feedback_survey_text(normalized):
+        return "tinder_feedback_survey"
     if _looks_like_tinder_chat_list_text(normalized):
         return "tinder_messages"
     if _looks_like_tinder_conversation_text(normalized):
@@ -41,7 +44,9 @@ def classify_screen_text(text: str) -> str:
         return "tinder_messages"
     if all(marker in normalized for marker in ("滑动", "探索", "聊天", "个人资料")):
         return "tinder_home"
-    if "tinder" in normalized and any(marker in normalized for marker in ("siri", "建议", "搜索", "search")):
+    if "tinder" in normalized and any(
+        marker in normalized for marker in ("siri", "建议", "搜索", "search", "json", "markdown", "icloud", "app")
+    ):
         return "ios_search"
     if any(marker in normalized for marker in ("matches", "messages", "配对", "消息")) and "tinder" in normalized:
         return "tinder_messages"
@@ -77,18 +82,29 @@ def classify_screen_image(path: Path) -> dict[str, str]:
     try:
         pixels = _read_png_pixels(path)
     except (OSError, ValueError, zlib.error, struct.error):
-        return {"status": "failed", "state": "unknown"}
+        return {"status": "failed", "state": "unknown", "active_tab": "unknown"}
+    bottom_nav = _tinder_bottom_nav_hint(pixels)
+    if bottom_nav["present"]:
+        active_tab = bottom_nav["active_tab"]
+        state = {
+            "home": "tinder_home",
+            "explore": "tinder_home",
+            "likes": "tinder_home",
+            "chats": "tinder_messages",
+            "profile": "tinder_self_profile",
+        }.get(active_tab, "tinder_unknown")
+        return {"status": "ok", "state": state, "active_tab": active_tab}
     if _looks_like_tinder_self_profile_top(pixels):
-        return {"status": "ok", "state": "tinder_self_profile"}
-    return {"status": "ok", "state": "unknown"}
+        return {"status": "ok", "state": "tinder_self_profile", "active_tab": "unknown"}
+    return {"status": "ok", "state": "unknown", "active_tab": "unknown"}
 
 
-def combine_screen_states(text_state: str, visual_state: str) -> str:
+def combine_screen_states(text_state: str, visual_state: str, text: str = "") -> str:
     if text_state in {"iphone_mirroring_locked", "screen_permission_prompt"}:
         return text_state
     if text_state not in {"unknown", "tinder_unknown"}:
         return text_state
-    if visual_state == "tinder_self_profile":
+    if visual_state in TINDER_FOREGROUND_STATES and _visual_tinder_foreground_override_allowed(text):
         return visual_state
     return text_state
 
@@ -134,6 +150,12 @@ def tinder_profile_danger_action_visible(text: str) -> bool:
 
 def tinder_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
     state = str(screen.get("state") or "unknown")
+    visual_active_tab = str(screen.get("visual_active_tab") or "unknown")
+    bottom_active_tab = (
+        visual_active_tab
+        if visual_active_tab in {"home", "explore", "likes", "chats", "profile"}
+        else _bottom_active_tab_hint(state)
+    )
     normalized = normalize_text(str(screen.get("text") or ""))
     page = {
         "tinder_home": "home",
@@ -142,10 +164,13 @@ def tinder_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
         "tinder_self_profile": "self_profile",
         "tinder_profile": "profile",
         "tinder_unknown": "unknown_tinder",
+        "tinder_subscription_paywall": "subscription_paywall",
+        "tinder_feedback_survey": "feedback_survey",
     }.get(state, "unknown")
     return {
         "page": page,
-        "bottom_active_tab": _bottom_active_tab_hint(state),
+        "bottom_active_tab": bottom_active_tab,
+        "visual_bottom_active_tab": visual_active_tab,
         "self_profile_header_present": state == "tinder_self_profile"
         or any(marker in normalized for marker in ("edit profile", "编辑资料", "编辑个人资料")),
         "self_profile_edit_button_present": any(
@@ -160,6 +185,10 @@ def tinder_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
         "profile_expand_control_marker_present": any(
             marker in normalized for marker in ("查看所有", "show all", "查看更多")
         ),
+        "subscription_paywall_visible": state == "tinder_subscription_paywall"
+        or _looks_like_tinder_subscription_paywall_text(normalized),
+        "feedback_survey_visible": state == "tinder_feedback_survey"
+        or _looks_like_tinder_feedback_survey_text(normalized),
     }
 
 
@@ -186,6 +215,78 @@ def _looks_like_tinder_chat_list_text(normalized_text: str) -> bool:
     has_chat_title = "聊天" in normalized_text or "messages" in normalized_text
     has_chat_sections = any(marker in normalized_text for marker in ("新的配对", "new matches", "消息", "messages"))
     return has_chat_title and has_chat_sections
+
+
+def _looks_like_tinder_subscription_paywall_text(normalized_text: str) -> bool:
+    product_marker = any(
+        marker in normalized_text
+        for marker in (
+            "tinder gold",
+            "tinder platinum",
+            "tinder plus",
+            "see who likes you",
+            "查看谁喜欢你",
+            "谁喜欢你",
+        )
+    )
+    plan_marker = any(
+        marker in normalized_text
+        for marker in (
+            "select a plan",
+            "选择套餐",
+            "选择计划",
+            "订阅",
+            "recurring billing",
+            "continue -",
+            "continue $",
+            "1 week",
+            "1 month",
+            "/wk",
+        )
+    )
+    purchase_marker = any(
+        marker in normalized_text
+        for marker in (
+            "continue -",
+            "recurring billing",
+            "cancel anytime",
+            "app store payment",
+            "auto-renew",
+            "自动续订",
+        )
+    )
+    return product_marker and (plan_marker or purchase_marker)
+
+
+def _looks_like_tinder_feedback_survey_text(normalized_text: str) -> bool:
+    if "tinder" not in normalized_text:
+        return False
+    return any(marker in normalized_text for marker in ("体验", "experience", "rate tinder", "忽略")) or bool(
+        re.search(r"\bw{4,}\b", normalized_text)
+    )
+
+
+def _visual_tinder_foreground_override_allowed(text: str) -> bool:
+    normalized = normalize_text(text)
+    negative = any(
+        marker in normalized
+        for marker in (
+            "微信",
+            "wechat",
+            "通讯录",
+            "发现",
+            "mac 微信",
+            "file transfer assistant",
+            "synapseai",
+            "app",
+            "json",
+            "markdown",
+            "icloud",
+            "搜索",
+            "search",
+        )
+    )
+    return not negative
 
 
 def _looks_like_tinder_profile_text(normalized_text: str) -> bool:
@@ -215,7 +316,7 @@ def _looks_like_tinder_conversation_text(normalized_text: str) -> bool:
 
 
 def _tinder_message_input_marker_present(normalized_text: str) -> bool:
-    english_input = bool(re.search(r"\b(message|send)\b", normalized_text))
+    english_input = bool(re.search(r"\b(message|send|gif)\b", normalized_text))
     chinese_input = any(marker in normalized_text for marker in ("发送", "输入消息", "发消息", "说点什么", "键入信息"))
     return english_input or chinese_input
 
@@ -234,16 +335,53 @@ def _looks_like_tinder_self_profile_top(pixels: dict[str, Any]) -> bool:
     avatar = _region_stats(pixels, 0.04, 0.07, 0.22, 0.19)
     edit_button = _region_stats(pixels, 0.24, 0.11, 0.62, 0.21)
     settings = _region_stats(pixels, 0.82, 0.07, 0.97, 0.19)
-    bottom_profile = _region_stats(pixels, 0.76, 0.88, 0.98, 0.99)
     top_structure = (
-        avatar["dark_ratio"] > 0.35
-        and avatar["color_ratio"] > 0.04
+        avatar["color_ratio"] > 0.04
         and edit_button["bright_ratio"] > 0.10
         and settings["dark_ratio"] > 0.60
         and settings["bright_ratio"] > 0.01
     )
-    profile_tab_active = bottom_profile["mid_ratio"] > 0.15 and bottom_profile["bright_ratio"] > 0.005
-    return top_structure or profile_tab_active
+    return top_structure
+
+
+def _tinder_bottom_nav_hint(pixels: dict[str, Any]) -> dict[str, Any]:
+    container = _region_stats(pixels, 0.05, 0.895, 0.95, 0.985)
+    if container["dark_ratio"] < 0.62:
+        return {"present": False, "active_tab": "unknown"}
+
+    slots = (
+        ("home", 0.07, 0.25),
+        ("explore", 0.25, 0.41),
+        ("likes", 0.41, 0.57),
+        ("chats", 0.57, 0.74),
+        ("profile", 0.74, 0.93),
+    )
+    slot_results: list[dict[str, Any]] = []
+    for name, x1, x2 in slots:
+        icon_label = _region_stats(pixels, x1, 0.925, x2, 0.960)
+        label = _region_stats(pixels, x1, 0.955, x2, 0.985)
+        slot_signal = (
+            icon_label["bright_ratio"]
+            + icon_label["mid_ratio"]
+            + icon_label["color_ratio"]
+            + min(label["mid_ratio"], 0.08)
+        )
+        active_signal = icon_label["bright_ratio"] + icon_label["mid_ratio"] + icon_label["color_ratio"]
+        slot_results.append(
+            {
+                "name": name,
+                "slot_signal": slot_signal,
+                "active": icon_label["dark_ratio"] < 0.55 and active_signal > 0.12,
+            }
+        )
+
+    if sum(1 for slot in slot_results if slot["slot_signal"] > 0.035) < 5:
+        return {"present": False, "active_tab": "unknown"}
+    active_slots = [slot for slot in slot_results if slot["active"]]
+    if not active_slots:
+        return {"present": False, "active_tab": "unknown"}
+    active = max(active_slots, key=lambda slot: slot["slot_signal"])
+    return {"present": True, "active_tab": active["name"]}
 
 
 def _region_stats(pixels: dict[str, Any], x1: float, y1: float, x2: float, y2: float) -> dict[str, float]:

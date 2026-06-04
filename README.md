@@ -233,6 +233,9 @@ dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2
 dating-boost harness tinder workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
 dating-boost harness tinder workflow new-match-open --dry-run --carousel-swipes 1 --match-index 2 --json
 dating-boost harness tinder workflow new-match-read-profile --dry-run --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --json
+dating-boost harness tinder action open-conversation --visible-name Iris --target-binding target-binding.json --json
+dating-boost harness tinder action dismiss-subscription-paywall --json
+dating-boost harness tinder action dismiss-feedback-survey --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
 ```
 
@@ -258,7 +261,15 @@ profile opening, and preview/full-profile exits. `chat-read-match-profile`
 is for existing message rows only; `new-match-open` opens one unopened match and
 leaves the agent in that conversation for an opener; `new-match-read-profile`
 reads an unopened match profile and returns to the current conversation. It does
-not click Send by default. Fully managed sending is available only through
+not click Send by default. Prefer `open-conversation --visible-name ...` or
+`--target-binding target-binding.json` for existing conversations; raw row
+coordinates are a compatibility fallback. If a Tinder subscription, Gold, Likes You, or
+plan-selection paywall appears, the harness treats it as accidental navigation:
+it dismisses the paywall and requires re-navigation to a verified conversation;
+subscription purchase or plan selection is never an agent action. If Tinder
+shows a feedback survey after send/navigation, `dismiss-feedback-survey` closes
+it through the ignore path and reports `rating_submitted: false`. Fully managed
+sending is available only through
 `harness tinder send-message` with explicit authorization, `live_send: true`,
 an active safety switch, a policy-checked action request, target-chat binding
 verification, staged-text OCR verification, and outbound-bubble post-action

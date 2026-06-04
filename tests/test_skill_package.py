@@ -131,6 +131,9 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("low_investment_repair", skill_text)
         self.assertIn("harness wechat stage-draft --text-file", skill_text)
         self.assertIn("harness wechat send-message --text-file", skill_text)
+        self.assertIn("dismiss-subscription-paywall", skill_text)
+        self.assertIn("subscription purchase", skill_text)
+        self.assertIn("plan selection is never an agent action", skill_text)
         self.assertNotIn("harness wechat stage-draft --text ", skill_text)
 
     def test_skill_reference_files_describe_reusable_workflows_and_contracts(self):
@@ -202,6 +205,8 @@ class SkillPackageTests(unittest.TestCase):
             "harness tinder open-profile",
             "harness tinder observe",
             "harness tinder action",
+            "harness tinder action dismiss-subscription-paywall",
+            "harness tinder action dismiss-feedback-survey",
             "harness tinder workflow",
             "harness tinder send-message",
             "harness wechat launch",
@@ -222,6 +227,11 @@ class SkillPackageTests(unittest.TestCase):
             "--text-file",
             "shell history",
             "result_status",
+            "subscription_paywall",
+            "do not ask the user whether to subscribe",
+            "feedback_survey",
+            "rating_submitted",
+            "target-binding",
         ):
             self.assertIn(phrase, workflows_text)
 

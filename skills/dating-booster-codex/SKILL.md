@@ -170,6 +170,9 @@ dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2
 dating-boost harness tinder workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
 dating-boost harness tinder workflow new-match-open --dry-run --carousel-swipes 1 --match-index 2 --json
 dating-boost harness tinder workflow new-match-read-profile --dry-run --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --json
+dating-boost harness tinder action open-conversation --visible-name Iris --target-binding target-binding.json --json
+dating-boost harness tinder action dismiss-subscription-paywall --json
+dating-boost harness tinder action dismiss-feedback-survey --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
 ```
 
@@ -199,6 +202,18 @@ allowed, an unpaused safety switch, a policy-checked/hash-bound action request,
 target-chat binding, staged-text OCR verification, outbound-bubble verification,
 and a `post_action_observation_id`. It must not like, super-like, unmatch,
 report, or edit profile data.
+
+If observe, navigation, or send returns `tinder_subscription_paywall`,
+`subscription_paywall_visible`, or `tinder_subscription_paywall_dismissed`, do
+not ask the user to confirm a subscription and do not discuss plans. Immediately
+run `dating-boost harness tinder action dismiss-subscription-paywall --json`,
+then re-navigate to the verified chats/conversation path. Subscription purchase
+or plan selection is never an agent action.
+
+If observe, navigation, or post-send verification returns `tinder_feedback_survey`
+or `feedback_survey_visible`, run
+`dating-boost harness tinder action dismiss-feedback-survey --json`. This must
+use the ignore/no-rating path; `rating_submitted` must remain false.
 
 ## macOS WeChat Input
 
