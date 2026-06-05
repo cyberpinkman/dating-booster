@@ -9,6 +9,28 @@ from typing import Any
 from dating_boost.core.production_store import ProductionDataStore
 
 
+BUMBLE_GENERIC_TARGET_BINDING_MARKERS = {
+    "aa",
+    "gif",
+    "hi",
+    "hello",
+    "hey",
+    "opening move",
+    "send",
+    "your turn",
+    "reply time",
+    "发送",
+    "回复",
+    "回复时间",
+    "小时后失效",
+    "轮到您了",
+    "该您给对方回复了",
+    "聊天",
+    "配对列表",
+    "聊天（最近）",
+}
+
+
 def validate_live_send_contract(
     authorization: dict[str, Any],
     action_request: dict[str, Any],
@@ -100,7 +122,7 @@ def live_send_action_request_block_reason(
     if allowed_reason is not None:
         return allowed_reason
 
-    binding_reason = _target_binding_block_reason(action_request, target_match_id)
+    binding_reason = _target_binding_block_reason(action_request, target_match_id, app_id=app_id)
     if binding_reason is not None:
         return binding_reason
 
@@ -137,7 +159,7 @@ def _authorization_target_block_reason(authorization: dict[str, Any], target_mat
     return None
 
 
-def _target_binding_block_reason(action_request: dict[str, Any], target_match_id: str) -> str | None:
+def _target_binding_block_reason(action_request: dict[str, Any], target_match_id: str, *, app_id: str) -> str | None:
     target_binding = action_request.get("target_binding")
     if not isinstance(target_binding, dict):
         return "action_request_target_binding_required"
@@ -160,7 +182,34 @@ def _target_binding_block_reason(action_request: dict[str, Any], target_match_id
     request_candidate = _stripped_or_none(action_request.get("candidate_key"))
     if binding_candidate is not None and request_candidate is not None and binding_candidate != request_candidate:
         return "action_request_target_binding_mismatch"
+    if app_id == "bumble" and not bumble_target_binding_specific_marker_present(target_binding):
+        return "action_request_target_binding_not_target_specific"
     return None
+
+
+def bumble_target_binding_specific_marker_present(target_binding: dict[str, Any]) -> bool:
+    markers: list[str] = []
+    required_visible_text = target_binding.get("required_visible_text")
+    if isinstance(required_visible_text, list):
+        markers.extend(str(item).strip() for item in required_visible_text if str(item).strip())
+    visible_name = _stripped_or_none(target_binding.get("visible_name"))
+    if visible_name is not None:
+        markers.append(visible_name)
+    return any(_bumble_marker_is_target_specific(marker) for marker in markers)
+
+
+def _bumble_marker_is_target_specific(marker: str) -> bool:
+    normalized = _normalize_bumble_marker(marker)
+    if not normalized:
+        return False
+    if normalized in BUMBLE_GENERIC_TARGET_BINDING_MARKERS:
+        return False
+    return len(normalized) >= 2
+
+
+def _normalize_bumble_marker(marker: str) -> str:
+    stripped = marker.strip().lower().strip(" .,:;!?()[]{}<>，。！？（）【】")
+    return " ".join(stripped.split())
 
 
 def _confirmation_or_audit_binding_block_reason(

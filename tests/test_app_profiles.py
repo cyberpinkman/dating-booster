@@ -71,6 +71,49 @@ class AppProfileContractTests(unittest.TestCase):
                     if exposes_live_send:
                         self.assertEqual(profile["support_level"], "managed_live_send")
 
+    def test_bumble_opening_move_policy_is_role_sensitive_and_managed_send_safe(self):
+        profile = json.loads((PROFILE_DIR / "bumble.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(profile["support_level"], "managed_live_send")
+        self.assertTrue(profile["host_loop_supported"])
+        self.assertEqual(profile["host_loop_send_modes"], ["stage", "live"])
+        self.assertIn("send_message", profile["native_gui_harness"]["supported_live_actions"])
+        self.assertTrue(profile["native_gui_harness"]["live_send"]["requires_exact_staged_text_verification"])
+        self.assertTrue(profile["native_gui_harness"]["live_send"]["requires_outbound_bubble_verification"])
+
+        policy = profile["opening_move_policy"]
+
+        self.assertEqual(policy["scope"], "bumble_opening_move")
+        self.assertEqual(policy["female_user"]["agent_decision_authority"], "none")
+        self.assertEqual(
+            set(policy["female_user"]["user_decision_required"]),
+            {"enable_opening_move", "skip_opening_move", "accept_male_reply", "reject_male_reply"},
+        )
+        self.assertIn("ask_user_to_decide", policy["female_user"]["agent_allowed_actions"])
+        self.assertIn("enable_opening_move", policy["female_user"]["agent_disallowed_actions"])
+        self.assertIn("reject_male_reply", policy["female_user"]["agent_disallowed_actions"])
+
+        self.assertTrue(policy["male_user"]["agent_may_draft_reply"])
+        self.assertTrue(policy["male_user"]["requires_user_confirmation_before_send"])
+        self.assertTrue(policy["male_user"]["current_harness_stage_supported"])
+        self.assertTrue(policy["male_user"]["current_harness_send_supported"])
+        self.assertFalse(policy["male_user"]["autonomous_opening_move_send_supported"])
+        self.assertIn("draft_opening_move_reply", policy["male_user"]["agent_allowed_actions"])
+        self.assertIn(
+            "send_opening_move_reply_without_user_confirmation",
+            policy["male_user"]["agent_disallowed_actions"],
+        )
+
+        blocked = set(profile["native_gui_harness"]["blocked_actions"])
+        self.assertTrue(
+            {
+                "opening_move_enable",
+                "opening_move_skip",
+                "opening_move_decide_reply_satisfaction",
+                "opening_move_send",
+            }.issubset(blocked)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

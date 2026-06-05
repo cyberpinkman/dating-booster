@@ -45,10 +45,18 @@ data dir after support session start and before support bundle export.
 
 The native harness is stage/navigation-first. It may diagnose iPhone Mirroring,
 capture a screenshot/OCR artifact, navigate Tinder and Bumble through bounded
-profile/chat reading chains, and execute `send_message` only through the gated
-`harness tinder send-message` path. Bumble is navigation-only: it must not stage
-drafts, send, like, pass, SuperSwipe, unmatch, report, edit profile data, or
-purchase Premium.
+profile/chat reading chains, and execute `send_message` only through gated
+app-specific `harness <app> send-message` paths. Bumble ordinary chat managed
+send is supported with the same authorization, target-specific binding,
+staged-text OCR, and post-send evidence gates. Visual send-button or
+yellow-bubble evidence alone is not exact-text verification. Bumble must not
+like, pass, SuperSwipe, unmatch, report, edit profile data, or purchase Premium.
+
+Bumble Opening Move is role-sensitive. On a female user's account, observe or
+summarize the prompt/reply and ask the user whether to enable Opening Move,
+skip it, accept the male reply, or reject it. On a male user's account, drafting
+an Opening Move reply is allowed for user review, but autonomous Opening Move
+send remains unsupported.
 
 ```bash
 dating-boost harness doctor --app-id tinder --json
@@ -76,6 +84,7 @@ dating-boost harness bumble action open-chats --dry-run --json
 dating-boost harness bumble workflow browse-profile-read --dry-run --profile-scroll-steps 2 --json
 dating-boost harness bumble workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
 dating-boost harness bumble workflow opening-move-open --dry-run --match-index 2 --json
+dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --json
 dating-boost harness doctor --app-id wechat --window-title WeChat --json
 dating-boost harness screenshot --app-id wechat --window-title WeChat --output wechat.png --json
 dating-boost harness wechat launch --dry-run --json

@@ -152,7 +152,8 @@ def classify_bumble_screen_image(path: Path) -> dict[str, Any]:
         pixels = _read_png_pixels(path)
     except (OSError, ValueError, zlib.error, struct.error):
         return {"status": "failed", "state": "unknown", "active_tab": "unknown", "bottom_nav_present": False}
-    bottom_nav_present = _looks_like_bumble_top_level_bottom_nav_visual(pixels)
+    bottom_nav = _bumble_bottom_nav_hint(pixels)
+    bottom_nav_present = bool(bottom_nav["present"])
     if _looks_like_bumble_browse_visual(pixels):
         return {
             "status": "ok",
@@ -160,7 +161,26 @@ def classify_bumble_screen_image(path: Path) -> dict[str, Any]:
             "active_tab": "browse_users",
             "bottom_nav_present": bottom_nav_present,
         }
-    return {"status": "ok", "state": "unknown", "active_tab": "unknown", "bottom_nav_present": bottom_nav_present}
+    if _looks_like_bumble_conversation_visual(pixels):
+        return {
+            "status": "ok",
+            "state": "bumble_conversation",
+            "active_tab": "unknown",
+            "bottom_nav_present": bottom_nav_present,
+        }
+    if _looks_like_bumble_chat_list_visual(pixels, bottom_nav=bottom_nav):
+        return {
+            "status": "ok",
+            "state": "bumble_chat_list",
+            "active_tab": "chats",
+            "bottom_nav_present": bottom_nav_present,
+        }
+    return {
+        "status": "ok",
+        "state": "unknown",
+        "active_tab": str(bottom_nav["active_tab"]),
+        "bottom_nav_present": bottom_nav_present,
+    }
 
 
 def combine_screen_states(text_state: str, visual_state: str, text: str = "") -> str:
@@ -193,6 +213,18 @@ def combine_bumble_screen_states(
         visual_state in BUMBLE_FOREGROUND_STATES
         and visual_bottom_nav_present
         and ("bumble" in normalized or _bumble_top_level_nav_text_present(normalized))
+    ):
+        return visual_state
+    if (
+        visual_state == "bumble_chat_list"
+        and visual_bottom_nav_present
+        and any(marker in normalized for marker in ("opening moves", "配对列表", "聊天（最近）", "轮到您了"))
+    ):
+        return visual_state
+    if (
+        visual_state == "bumble_conversation"
+        and not visual_bottom_nav_present
+        and any(marker in normalized for marker in ("opening move", "已发送", "回复时间", "hi", "aa", "gif"))
     ):
         return visual_state
     return text_state
@@ -345,8 +377,10 @@ def bumble_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
             marker in normalized for marker in ("premium", "查看喜欢您的人", "付费方案", "vip")
         ),
         "danger_menu_may_be_visible": any(marker in normalized for marker in ("解除匹配", "举报", "unmatch", "report")),
-        "draft_staging_supported": False,
-        "live_send_supported": False,
+        "draft_staging_supported": state == "bumble_conversation",
+        "live_send_supported": state == "bumble_conversation",
+        "live_send_requires_harness_send_message": True,
+        "visual_only_exact_verification_allowed": False,
     }
 
 
@@ -556,7 +590,9 @@ def _looks_like_bumble_browse_text(normalized_text: str) -> bool:
 
 
 def _bumble_message_input_marker_present(normalized_text: str) -> bool:
-    return any(marker in normalized_text for marker in ("gif", "aa", "发送", "发消息", "回复"))
+    english_input = bool(re.search(r"\b(gif|aa)\b", normalized_text))
+    chinese_input = any(marker in normalized_text for marker in ("发送", "发消息", "回复"))
+    return english_input or chinese_input
 
 
 def _bumble_bottom_active_tab_hint(state: str) -> str:
@@ -609,22 +645,71 @@ def _looks_like_bumble_browse_visual(pixels: dict[str, Any]) -> bool:
 
 
 def _looks_like_bumble_top_level_bottom_nav_visual(pixels: dict[str, Any]) -> bool:
+    return bool(_bumble_bottom_nav_hint(pixels)["present"])
+
+
+def _bumble_bottom_nav_hint(pixels: dict[str, Any]) -> dict[str, Any]:
     container = _region_stats(pixels, 0.04, 0.88, 0.96, 0.98)
     if container["bright_ratio"] < 0.70:
-        return False
+        return {"present": False, "active_tab": "unknown"}
     slots = (
-        (0.04, 0.18),
-        (0.18, 0.34),
-        (0.34, 0.58),
-        (0.58, 0.78),
-        (0.78, 0.96),
+        ("profile", 0.04, 0.18),
+        ("discover", 0.18, 0.34),
+        ("browse_users", 0.34, 0.58),
+        ("liked_you", 0.58, 0.78),
+        ("chats", 0.78, 0.96),
     )
-    visible_slots = 0
-    for x1, x2 in slots:
+    slot_results: list[dict[str, Any]] = []
+    for name, x1, x2 in slots:
         icon_label = _region_stats(pixels, x1, 0.895, x2, 0.975)
-        if icon_label["dark_ratio"] + icon_label["mid_ratio"] + icon_label["color_ratio"] > 0.025:
-            visible_slots += 1
-    return visible_slots >= 5
+        slot_signal = icon_label["dark_ratio"] + icon_label["mid_ratio"] + icon_label["color_ratio"]
+        slot_results.append(
+            {
+                "name": name,
+                "slot_signal": slot_signal,
+                "active_signal": icon_label["dark_ratio"],
+            }
+        )
+    present = sum(1 for slot in slot_results if slot["slot_signal"] > 0.018) >= 5
+    if not present:
+        return {"present": False, "active_tab": "unknown"}
+    active_slots = [slot for slot in slot_results if slot["active_signal"] > 0.040]
+    if not active_slots:
+        return {"present": True, "active_tab": "unknown"}
+    active = max(active_slots, key=lambda slot: slot["active_signal"])
+    return {"present": True, "active_tab": str(active["name"])}
+
+
+def _looks_like_bumble_chat_list_visual(pixels: dict[str, Any], *, bottom_nav: dict[str, Any]) -> bool:
+    if not bottom_nav.get("present") or bottom_nav.get("active_tab") != "chats":
+        return False
+    header = _region_stats(pixels, 0.04, 0.10, 0.28, 0.16)
+    match_carousel = _region_stats(pixels, 0.04, 0.19, 0.72, 0.33)
+    opening_card = _region_stats(pixels, 0.04, 0.35, 0.96, 0.47)
+    conversation_row = _region_stats(pixels, 0.04, 0.48, 0.96, 0.62)
+    list_structure = (
+        match_carousel["color_ratio"] > 0.025
+        or opening_card["bright_ratio"] > 0.88
+        and opening_card["dark_ratio"] + opening_card["mid_ratio"] > 0.010
+        or conversation_row["color_ratio"] + conversation_row["mid_ratio"] > 0.040
+    )
+    return header["dark_ratio"] > 0.035 and header["bright_ratio"] > 0.70 and list_structure
+
+
+def _looks_like_bumble_conversation_visual(pixels: dict[str, Any]) -> bool:
+    if _bumble_bottom_nav_hint(pixels)["present"]:
+        return False
+    avatar = _region_stats(pixels, 0.14, 0.09, 0.24, 0.16)
+    title = _region_stats(pixels, 0.25, 0.10, 0.45, 0.15)
+    actions = _region_stats(pixels, 0.64, 0.09, 0.96, 0.16)
+    input_bar = _region_stats(pixels, 0.10, 0.89, 0.88, 0.965)
+    header_present = (
+        avatar["color_ratio"] > 0.08
+        and title["dark_ratio"] + title["mid_ratio"] > 0.025
+        and actions["dark_ratio"] + actions["mid_ratio"] > 0.025
+    )
+    input_present = input_bar["bright_ratio"] > 0.88 and input_bar["mid_ratio"] + input_bar["color_ratio"] > 0.003
+    return header_present and input_present
 
 
 def _tinder_bottom_nav_hint(pixels: dict[str, Any]) -> dict[str, Any]:

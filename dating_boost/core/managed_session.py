@@ -19,7 +19,7 @@ MANAGED_SESSION_SCHEMA_VERSION = 1
 MANAGED_WAKE_EVENT_SCHEMA_VERSION = 1
 MANAGED_SESSION_PATH = Path("managed_session") / "session.json"
 MANAGED_WAKE_EVENTS_PATH = Path("managed_session") / "wake_events.jsonl"
-SUPPORTED_MANAGED_APPS = {"tinder", "wechat"}
+SUPPORTED_MANAGED_APPS = {"tinder", "wechat", "bumble"}
 DEFAULT_SCAN_INTERVAL_SECONDS = 120
 DEFAULT_NUDGE_DELAY_MINUTES = 30
 
@@ -329,6 +329,9 @@ class ManagedSessionRepository:
             harness = self._harness_factory(app_id)
             if app_id == "wechat":
                 observed = harness.observe_wechat_screen()
+                return _safe_app_check(observed, app_id=app_id)
+            if app_id == "bumble":
+                observed = harness.observe_bumble_screen()
                 return _safe_app_check(observed, app_id=app_id)
             observed = harness.observe_tinder_screen()
             return _safe_app_check(observed, app_id=app_id)

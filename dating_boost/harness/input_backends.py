@@ -110,6 +110,20 @@ def core_graphics_wheel(
     }
 
 
+def core_graphics_command_v(runner: Any) -> dict[str, Any]:
+    script_path = _core_graphics_command_v_script_path()
+    script_path.write_text(CORE_GRAPHICS_COMMAND_V_SWIFT, encoding="utf-8")
+    result = runner.run(["xcrun", "swift", str(script_path)])
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "core_graphics_command_v_failed",
+            "stderr": short(result.stderr),
+            **_backend_contract(),
+        }
+    return {"status": "ok", "input_backend": "core_graphics_keyboard", **_backend_contract()}
+
+
 def click_iphone_mirroring_view_menu_item(runner: Any, *, window_title: str, item_name: str) -> dict[str, Any]:
     result = runner.run(
         [
@@ -141,6 +155,10 @@ def _core_graphics_drag_script_path() -> Path:
 
 def _core_graphics_wheel_script_path() -> Path:
     return Path(tempfile.gettempdir()) / "dating_boost_core_graphics_wheel.swift"
+
+
+def _core_graphics_command_v_script_path() -> Path:
+    return Path(tempfile.gettempdir()) / "dating_boost_core_graphics_command_v.swift"
 
 
 CORE_GRAPHICS_CLICK_SWIFT = """\
@@ -206,4 +224,22 @@ for _ in 0..<repeats {
         .post(tap: .cghidEventTap)
     usleep(intervalUs)
 }
+"""
+
+
+CORE_GRAPHICS_COMMAND_V_SWIFT = """\
+import CoreGraphics
+import Foundation
+
+let source = CGEventSource(stateID: .hidSystemState)
+let keyCodeV = CGKeyCode(9)
+let flags = CGEventFlags.maskCommand
+
+let down = CGEvent(keyboardEventSource: source, virtualKey: keyCodeV, keyDown: true)
+down?.flags = flags
+down?.post(tap: .cghidEventTap)
+usleep(80000)
+let up = CGEvent(keyboardEventSource: source, virtualKey: keyCodeV, keyDown: false)
+up?.flags = flags
+up?.post(tap: .cghidEventTap)
 """

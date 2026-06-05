@@ -16,11 +16,13 @@ FIXTURE_DIR = Path("tests/fixtures/automation")
 
 
 class FakeHarness:
-    def __init__(self, *, tinder_payload=None, wechat_payload=None):
+    def __init__(self, *, tinder_payload=None, wechat_payload=None, bumble_payload=None):
         self.tinder_payload = tinder_payload or _app_payload("tinder")
         self.wechat_payload = wechat_payload or _app_payload("wechat")
+        self.bumble_payload = bumble_payload or _app_payload("bumble")
         self.tinder_observe_count = 0
         self.wechat_observe_count = 0
+        self.bumble_observe_count = 0
 
     def observe_tinder_screen(self):
         self.tinder_observe_count += 1
@@ -29,6 +31,10 @@ class FakeHarness:
     def observe_wechat_screen(self):
         self.wechat_observe_count += 1
         return dict(self.wechat_payload)
+
+    def observe_bumble_screen(self):
+        self.bumble_observe_count += 1
+        return dict(self.bumble_payload)
 
 
 class ManagedSessionTests(unittest.TestCase):
@@ -54,6 +60,7 @@ class ManagedSessionTests(unittest.TestCase):
         self.assertIn("managed-session stop", payload["supported_commands"])
         self.assertTrue(payload["agent_native_capabilities"]["managed_session"])
         self.assertEqual(payload["agent_native_capabilities"]["managed_session_default_scan_interval_seconds"], 120)
+        self.assertIn("bumble", payload["agent_native_capabilities"]["managed_session_app_profiles"])
 
     def test_start_blocks_live_mode_without_managed_gui_authorization(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -109,6 +116,25 @@ class ManagedSessionTests(unittest.TestCase):
         self.assertEqual(payload["status"], "paused")
         self.assertEqual(payload["reason"], "wechat_window_not_found")
         self.assertNotIn("work_item", payload)
+
+    def test_bumble_can_start_managed_session(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            harness = FakeHarness(bumble_payload=_app_payload("bumble"))
+            repo = ManagedSessionRepository(data_dir, harness_factory=lambda _app_id: harness)
+            payload = repo.start(
+                app_id="bumble",
+                authorization=_auth("bumble"),
+                goal=_json(FIXTURE_DIR / "goal_meet.json"),
+                availability=_json(FIXTURE_DIR / "availability_weekend.json"),
+                send_mode="stage",
+                managed_gui_send=False,
+            )
+
+        self.assertEqual(payload["status"], "active")
+        self.assertEqual(payload["app_id"], "bumble")
+        self.assertEqual(harness.bumble_observe_count, 1)
 
     def test_notify_wake_returns_existing_operator_scan_work(self):
         with tempfile.TemporaryDirectory() as temp_dir:

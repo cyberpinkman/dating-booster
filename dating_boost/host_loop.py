@@ -692,7 +692,7 @@ class HostLoopSupervisor:
         return None
 
     def _handle_managed_gui_send(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
-        if self.args.app_id not in {"tinder", "wechat"}:
+        if self.args.app_id not in {"tinder", "wechat", "bumble"}:
             return self._finish("blocked", f"managed_gui_send_not_supported_for_app:{self.args.app_id}", current=work_item)
         if SafetyRepository(self.data_dir).is_paused():
             return self._finish("blocked", "safety_paused", current=work_item)

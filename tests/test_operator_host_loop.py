@@ -33,6 +33,8 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertTrue(payload["agent_native_capabilities"]["host_loop_supervisor"])
             self.assertTrue(payload["agent_native_capabilities"]["tinder_host_loop"])
+            self.assertTrue(payload["agent_native_capabilities"]["bumble_host_loop"])
+            self.assertIn("bumble", payload["agent_native_capabilities"]["host_loop_app_profiles"])
             self.assertEqual(payload["agent_native_capabilities"]["host_loop_command"], "dating-boost-host-loop")
             self.assertFalse(payload["agent_native_capabilities"]["live_gui_harness"])
 
@@ -65,7 +67,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                     "scripts/operator_host_loop.py",
                     "doctor",
                     "--app-id",
-                    "bumble",
+                    "hinge",
                     "--data-dir",
                     str(Path(temp_dir) / "data"),
                     "--work-dir",
@@ -83,9 +85,7 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertEqual(payload["status"], "blocked")
             self.assertEqual(payload["next_host_action"], "choose_supported_host_loop_app")
-            self.assertIn("host_loop_supported_app", payload["missing"])
-            self.assertEqual(payload["details"]["app_profile"]["app_id"], "bumble")
-            self.assertFalse(payload["details"]["app_profile"]["host_loop_supported"])
+            self.assertEqual(payload["reason"], "unsupported app profile: hinge")
 
     def test_wechat_waiting_template_uses_wechat_desktop_evidence(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -871,6 +871,93 @@ class OperatorHostLoopTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(recorded_result["result_status"], "succeeded")
         self.assertEqual(recorded_result["post_action_observation_id"], "gui_post_send_tinder_1234")
+        self.assertTrue(recorded_result["evidence"]["managed_gui_send"])
+        self.assertTrue(recorded_result["evidence"]["outbound_message_verified"])
+
+    def test_managed_bumble_live_send_runs_bumble_harness_and_records_result(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            work_dir = root / "work"
+            auth_path = root / "bumble_auth.json"
+            payload_text = "今晚可以聊十分钟吗？"
+            payload_hash = hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
+            self._write_json(auth_path, {
+                "schema_version": 1,
+                "authorization_id": "auth_bumble_live",
+                "scope": "send_chat_messages",
+                "app_id": "bumble",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "allowed_actions": ["send_message"],
+                "autonomous_send": True,
+                "live_send": True,
+                "requires_post_action_verification": True,
+                "revoked_at": None,
+            })
+            supervisor = HostLoopSupervisor(
+                argparse.Namespace(
+                    data_dir=data_dir,
+                    authorization=auth_path,
+                    goal=None,
+                    availability=None,
+                    app_id="bumble",
+                    send_mode="live",
+                    managed_gui_send=True,
+                    work_dir=work_dir,
+                    max_steps=1,
+                    once=False,
+                    json=True,
+                    fixture_host=None,
+                    wait_timeout=None,
+                    poll_interval=1.0,
+                    adapter_package=None,
+                    skill_package=None,
+                )
+            )
+            work_dir.mkdir(parents=True, exist_ok=True)
+            work_item = _wechat_managed_work_item(payload_text, payload_hash)
+            work_item["match_id"] = "match_bumble"
+            work_item["candidate_key"] = "bumble_ada"
+            work_item["autonomous_audit_binding"] = _audit_binding(
+                authorization_id="auth_bumble_live",
+                target_match_id="match_bumble",
+                payload_hash=payload_hash,
+            )
+            work_item["target_binding"] = {"required_visible_text": ["Ada"], "target_match_id": "match_bumble"}
+            recorded_result: dict[str, object] = {}
+
+            def fake_run_cli_json(*args: str, allow_error: bool = False) -> dict[str, object]:
+                if args[:3] == ("harness", "bumble", "send-message"):
+                    self.assertIn("--action-request", args)
+                    action_path = Path(args[args.index("--action-request") + 1])
+                    action_request = json.loads(action_path.read_text(encoding="utf-8"))
+                    self.assertEqual(action_request["app_id"], "bumble")
+                    self.assertEqual(action_request["target_binding"]["required_visible_text"], ["Ada"])
+                    return {
+                        "schema_version": 1,
+                        "status": "ok",
+                        "app_id": "bumble",
+                        "action": "send_message",
+                        "post_action_observation_id": "gui_post_send_bumble_1234",
+                        "evidence": {
+                            "staged_text_verified": True,
+                            "input_cleared_after_send": True,
+                            "post_action_screen_captured": True,
+                            "outbound_message_verified": True,
+                        },
+                    }
+                if args[:2] == ("operator", "record-action-result"):
+                    result_path = Path(args[args.index("--input") + 1])
+                    recorded_result.update(json.loads(result_path.read_text(encoding="utf-8")))
+                    return {"schema_version": 1, "status": "ok", "recorded": True}
+                raise AssertionError(args)
+
+            with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                result = supervisor._handle_managed_gui_send(work_item)
+
+        self.assertIsNone(result)
+        self.assertEqual(recorded_result["result_status"], "succeeded")
+        self.assertEqual(recorded_result["post_action_observation_id"], "gui_post_send_bumble_1234")
         self.assertTrue(recorded_result["evidence"]["managed_gui_send"])
         self.assertTrue(recorded_result["evidence"]["outbound_message_verified"])
 

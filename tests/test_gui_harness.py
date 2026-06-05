@@ -16,7 +16,7 @@ from dating_boost.core.gui_harness import (
     classify_screen_text,
     classify_wechat_screen_text,
 )
-from dating_boost.harness.input_backends import core_graphics_drag
+from dating_boost.harness.input_backends import core_graphics_command_v, core_graphics_drag
 
 
 class FakeRunner:
@@ -25,7 +25,7 @@ class FakeRunner:
         *,
         ocr_text: str | list[str],
         frontmost: bool = True,
-        screenshot_bytes: bytes | None = None,
+        screenshot_bytes: bytes | list[bytes] | None = None,
         missing_commands: set[str] | None = None,
         window_name: str = "iPhone Mirroring",
         paste_focus_override: str | None = None,
@@ -35,7 +35,12 @@ class FakeRunner:
     ):
         self.ocr_texts = list(ocr_text) if isinstance(ocr_text, list) else [ocr_text]
         self.frontmost = frontmost
-        self.screenshot_bytes = screenshot_bytes
+        if isinstance(screenshot_bytes, list):
+            self.screenshot_bytes = None
+            self.screenshot_byte_outputs = list(screenshot_bytes)
+        else:
+            self.screenshot_bytes = screenshot_bytes
+            self.screenshot_byte_outputs = []
         self.missing_commands = missing_commands or set()
         self.window_name = window_name
         self.commands: list[list[str]] = []
@@ -84,7 +89,14 @@ class FakeRunner:
                 return _result(stderr="screen permission denied", returncode=1)
             output = Path(command[-1])
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(self.screenshot_bytes or b"fake png")
+            if self.screenshot_byte_outputs:
+                if len(self.screenshot_byte_outputs) > 1:
+                    screenshot_bytes = self.screenshot_byte_outputs.pop(0)
+                else:
+                    screenshot_bytes = self.screenshot_byte_outputs[0]
+            else:
+                screenshot_bytes = self.screenshot_bytes or b"fake png"
+            output.write_bytes(screenshot_bytes)
             return _result(stdout="")
         if command and command[0] == "tesseract":
             if len(self.ocr_texts) > 1:
@@ -184,7 +196,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertIn("harness bumble observe", payload["supported_commands"])
         self.assertIn("harness bumble action", payload["supported_commands"])
         self.assertIn("harness bumble workflow", payload["supported_commands"])
-        self.assertNotIn("harness bumble send-message", payload["supported_commands"])
+        self.assertIn("harness bumble send-message", payload["supported_commands"])
         self.assertIn("harness wechat launch", payload["supported_commands"])
         self.assertIn("harness wechat observe", payload["supported_commands"])
         self.assertIn("harness wechat stage-draft", payload["supported_commands"])
@@ -197,13 +209,18 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["agent_native_capabilities"]["tinder_chat_navigation_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["tinder_live_send_harness"])
         self.assertIn("bumble", payload["agent_native_capabilities"]["supported_app_profiles"])
-        self.assertNotIn("bumble", payload["agent_native_capabilities"]["host_loop_app_profiles"])
+        self.assertIn("bumble", payload["agent_native_capabilities"]["host_loop_app_profiles"])
         self.assertTrue(payload["agent_native_capabilities"]["bumble_gui_launch"])
         self.assertTrue(payload["agent_native_capabilities"]["bumble_gui_navigation"])
         self.assertTrue(payload["agent_native_capabilities"]["bumble_profile_read_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["bumble_chat_navigation_harness"])
-        self.assertFalse(payload["agent_native_capabilities"]["bumble_live_send_harness"])
-        self.assertFalse(payload["agent_native_capabilities"]["bumble_host_loop"])
+        self.assertTrue(payload["agent_native_capabilities"]["bumble_opening_move_role_policy"])
+        self.assertTrue(payload["agent_native_capabilities"]["bumble_opening_move_male_draft"])
+        self.assertTrue(payload["agent_native_capabilities"]["bumble_opening_move_stage_harness"])
+        self.assertTrue(payload["agent_native_capabilities"]["bumble_opening_move_send_harness"])
+        self.assertFalse(payload["agent_native_capabilities"]["bumble_opening_move_autonomous_send"])
+        self.assertTrue(payload["agent_native_capabilities"]["bumble_live_send_harness"])
+        self.assertTrue(payload["agent_native_capabilities"]["bumble_host_loop"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_host_loop"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_macos_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_gui_launch"])
@@ -271,7 +288,11 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         type_step = next(step for step in payload["executed_steps"] if step["intent"] == "type_app_name_verified")
         self.assertTrue(type_step["result"]["retried_after_input_source_switch"])
-        self.assertTrue(any("key code 49" in " ".join(command) for command in runner.commands))
+        self.assertTrue(any("key code 49" in " ".join(command) and "control down" in " ".join(command) for command in runner.commands))
+        self.assertGreaterEqual(
+            sum(1 for command in runner.commands if "key code 49" in " ".join(command) and "control down" not in " ".join(command)),
+            2,
+        )
 
     def test_bumble_launch_does_not_switch_input_source_when_first_search_has_app_result(self):
         runner = FakeRunner(
@@ -288,7 +309,9 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         type_step = next(step for step in payload["executed_steps"] if step["intent"] == "type_app_name_verified")
         self.assertFalse(type_step["result"]["retried_after_input_source_switch"])
-        self.assertFalse(any("key code 49" in " ".join(command) for command in runner.commands))
+        self.assertTrue(type_step["result"]["ime_commit_after_typing"])
+        self.assertTrue(any("key code 49" in " ".join(command) and "control down" not in " ".join(command) for command in runner.commands))
+        self.assertFalse(any("key code 49" in " ".join(command) and "control down" in " ".join(command) for command in runner.commands))
 
     def test_bumble_action_and_workflow_dry_runs_are_navigation_only(self):
         harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=FakeRunner(ocr_text="Bumble\n聊天\n"))
@@ -303,6 +326,156 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(workflow["status"], "ok")
         self.assertIn("capture_profile_read_step", [step["intent"] for step in workflow["planned_steps"]])
         self.assertTrue(all(step.get("risk") == "navigation_only" for step in workflow["planned_steps"]))
+
+    def test_bumble_payloads_include_opening_move_role_policy(self):
+        runner = FakeRunner(ocr_text="Bumble\n照片通过验证\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n")
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        observe = harness.observe_bumble_screen()
+        action = harness.run_bumble_action("open-match", match_index=2, dry_run=True)
+        workflow = harness.run_bumble_workflow("opening-move-open", match_index=2, dry_run=True)
+
+        for payload in (observe, action, workflow):
+            with self.subTest(target=payload.get("target") or payload.get("action") or payload.get("workflow")):
+                policy = payload["opening_move_policy"]
+                self.assertEqual(policy["scope"], "bumble_opening_move")
+                self.assertEqual(policy["female_user"]["agent_decision_authority"], "none")
+                self.assertIn("ask_user_to_decide", policy["female_user"]["agent_allowed_actions"])
+                self.assertTrue(policy["male_user"]["agent_may_draft_reply"])
+                self.assertTrue(policy["male_user"]["requires_user_confirmation_before_send"])
+                self.assertTrue(policy["male_user"]["current_harness_send_supported"])
+                self.assertFalse(policy["male_user"]["autonomous_opening_move_send_supported"])
+                self.assertIn("opening_move_enable", payload["blocked_actions"])
+                self.assertIn("opening_move_decide_reply_satisfaction", payload["blocked_actions"])
+                self.assertIn("opening_move_send", payload["blocked_actions"])
+
+    def test_bumble_send_message_verifies_target_staged_text_and_outbound_bubble(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Ada\nHi!\nAa\nGIF\n",
+                "Ada\nHi!\nAa\nGIF\n",
+                "Ada\nHi!\nAa\nGIF\n",
+                "Ada\nHi!\n今晚可以聊十分钟吗？\n发送\n",
+                "Ada\nHi!\n今晚可以聊十分钟吗？\nAa\nGIF\n",
+            ],
+        )
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.send_bumble_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_bumble"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "send_message")
+        self.assertTrue(payload["staged_text_verified"])
+        self.assertTrue(payload["evidence"]["staged_text_verified"])
+        self.assertTrue(payload["evidence"]["input_cleared_after_send"])
+        self.assertTrue(payload["evidence"]["post_action_screen_captured"])
+        self.assertTrue(payload["evidence"]["outbound_message_verified"])
+        self.assertTrue(payload["post_action_observation_id"].startswith("gui_post_send_"))
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+        self.assertTrue(any(command[:2] == ["xcrun", "swift"] for command in runner.commands))
+        self.assertFalse(any('keystroke "v"' in " ".join(command) for command in runner.commands))
+
+    def test_bumble_send_message_commits_direct_type_ime_candidate_when_needed(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Ada\nOpening Move\nAa\nGIF\n",
+                "Ada\nOpening Move\nAa\nGIF\n",
+                "Ada\nOpening Move\nAa\nGIF\n",
+                "Ada\nOpening Move\nAa\nGIF\n",
+                "Ada\nOpening Move\nAa\nGIF\n",
+                "Ada\nOpening Move\nhi\n发送\n",
+                "Ada\nOpening Move\nhi\nAa\nGIF\n",
+            ],
+        )
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.send_bumble_message(
+            "hi",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_bumble"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(
+            [step["intent"] for step in payload["executed_steps"]],
+            [
+                "tap_bumble_message_input",
+                "paste_clipboard_into_bumble_message_input",
+                "type_bumble_message_input_if_paste_did_not_stage",
+                "commit_bumble_message_input_ime_candidate_if_needed",
+                "tap_bumble_send_button",
+            ],
+        )
+        self.assertTrue(any('keystroke "hi"' in " ".join(command) for command in runner.commands))
+        self.assertTrue(any("key code 49" in " ".join(command) and "control down" not in " ".join(command) for command in runner.commands))
+        self.assertTrue(payload["staged_text_verified"])
+
+    def test_bumble_send_message_blocks_direct_type_when_exact_text_not_ocr_verified(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Ada\nOpening Move\nAa\nGIF\n",
+                "Ada\nOpening Move\nAa\nGIF\n",
+                "Ada\nOpening Move\nAa\nGIF\n",
+                "Ada\nOpening Move\nAa\nGIF\n",
+                "Ada\nOpening Move\nAah\nAa\nGIF\n",
+                "Ada\nOpening Move\nAah\nAa\nGIF\n",
+            ],
+            screenshot_bytes=[
+                _bumble_conversation_png(outgoing_bubble=False),
+                _bumble_conversation_png(outgoing_bubble=False),
+                _bumble_conversation_png(outgoing_bubble=False),
+                _bumble_conversation_png(outgoing_bubble=False),
+                _bumble_conversation_png(active_send_button=True, outgoing_bubble=False),
+                _bumble_conversation_png(outgoing_bubble=True),
+            ],
+        )
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.send_bumble_message(
+            "hi",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_bumble"},
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "staged_text_not_verified")
+        self.assertFalse(payload["staged_text_verification"]["exact_text_ocr_verified"])
+        self.assertFalse(any(step["intent"] == "tap_bumble_send_button" for step in payload.get("executed_steps", [])))
+
+    def test_bumble_send_message_blocks_generic_target_binding_markers_before_staging(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Ada\nOpening Move\nAa\nGIF\n",
+                "Ada\nOpening Move\nAa\nGIF\n",
+                "Ada\nOpening Move\nAa\nGIF\n",
+                "Ada\nOpening Move\nhi\n发送\n",
+                "Ada\nOpening Move\nhi\nAa\nGIF\n",
+            ],
+        )
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.send_bumble_message(
+            "hi",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Opening Move", "Aa"], "target_match_id": "match_bumble"},
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "target_binding_not_target_specific")
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+
+    def test_bumble_send_message_blocks_on_opening_move_page_without_user_confirmation_path(self):
+        runner = FakeRunner(ocr_text="旺仔的Opening Move\n旺仔预设了Opening Move。发送消息回复。\n回复\n")
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.send_bumble_message("That is a good question.", dry_run=False)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "bumble_opening_move_requires_user_confirmation")
 
     def test_bumble_bottom_tab_action_requires_complete_top_level_nav(self):
         runner = FakeRunner(
@@ -407,6 +580,22 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["reason"], "core_graphics_drag_failed")
         self.assertEqual(payload["input_backend_contract_schema_version"], 2)
         self.assertIn("permission denied", payload["stderr"])
+        self.assertEqual(runner.command[:2], ["xcrun", "swift"])
+
+    def test_core_graphics_command_v_reports_explicit_contract_for_failures(self):
+        class FailingRunner:
+            def run(self, command, *, input=None):
+                self.command = command
+                return _result(stderr="keyboard denied", returncode=1)
+
+        runner = FailingRunner()
+
+        payload = core_graphics_command_v(runner)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "core_graphics_command_v_failed")
+        self.assertEqual(payload["input_backend_contract_schema_version"], 2)
+        self.assertIn("keyboard denied", payload["stderr"])
         self.assertEqual(runner.command[:2], ["xcrun", "swift"])
 
     def test_doctor_blocks_when_iphone_mirroring_is_locked(self):
@@ -707,6 +896,96 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["visual_state"], "bumble_browse")
         self.assertTrue(payload["visual_bottom_nav_present"])
         self.assertEqual(payload["state"], "unknown")
+
+    def test_visual_bumble_chat_list_uses_active_chat_tab_and_list_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness = NativeGuiHarness(
+                app_id="bumble",
+                platform="darwin",
+                runner=FakeRunner(
+                    ocr_text=(
+                        "18:28 8\nWIR Q\nBEIT FUR (2)\nIDX (Hi)\n{R&I Opening Moves\n"
+                        "MAY R— MBS ITZ? >\nJessie\nHi!\nWIS EQ AT BAR\nPAR RM RAP Aah WR\n"
+                    ),
+                    screenshot_bytes=_bumble_chat_list_png(),
+                ),
+            )
+
+            payload = harness.capture_window(output=Path(temp_dir) / "bumble-chat-list.png")
+
+        self.assertEqual(payload["text_state"], "unknown")
+        self.assertEqual(payload["visual_state"], "bumble_chat_list")
+        self.assertEqual(payload["visual_active_tab"], "chats")
+        self.assertTrue(payload["visual_bottom_nav_present"])
+        self.assertEqual(payload["state"], "bumble_chat_list")
+
+    def test_visual_bumble_chat_list_does_not_override_without_list_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness = NativeGuiHarness(
+                app_id="bumble",
+                platform="darwin",
+                runner=FakeRunner(
+                    ocr_text="18:28\nWIR Q\nJessie\nHi!\n",
+                    screenshot_bytes=_bumble_chat_list_png(),
+                ),
+            )
+
+            payload = harness.capture_window(output=Path(temp_dir) / "bumble-chat-list-no-marker.png")
+
+        self.assertEqual(payload["text_state"], "unknown")
+        self.assertEqual(payload["visual_state"], "bumble_chat_list")
+        self.assertTrue(payload["visual_bottom_nav_present"])
+        self.assertEqual(payload["state"], "unknown")
+
+    def test_visual_bumble_conversation_uses_header_input_and_thread_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness = NativeGuiHarness(
+                app_id="bumble",
+                platform="darwin",
+                runner=FakeRunner(
+                    ocr_text="18:41\n{®RIOpening Move\nIHS R-PHASE ITA?\nREX\nHi!\n",
+                    screenshot_bytes=_bumble_conversation_png(),
+                ),
+            )
+
+            payload = harness.capture_window(output=Path(temp_dir) / "bumble-conversation.png")
+
+        self.assertEqual(payload["text_state"], "unknown")
+        self.assertEqual(payload["visual_state"], "bumble_conversation")
+        self.assertFalse(payload["visual_bottom_nav_present"])
+        self.assertEqual(payload["state"], "bumble_conversation")
+
+    def test_visual_bumble_conversation_does_not_override_without_thread_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness = NativeGuiHarness(
+                app_id="bumble",
+                platform="darwin",
+                runner=FakeRunner(
+                    ocr_text="18:41\n",
+                    screenshot_bytes=_bumble_conversation_png(),
+                ),
+            )
+
+            payload = harness.capture_window(output=Path(temp_dir) / "bumble-conversation-no-marker.png")
+
+        self.assertEqual(payload["text_state"], "unknown")
+        self.assertEqual(payload["visual_state"], "bumble_conversation")
+        self.assertEqual(payload["state"], "unknown")
+
+    def test_bumble_observe_conversation_reports_managed_live_send_support(self):
+        runner = FakeRunner(
+            ocr_text="Ada\nOpening Move\nAa\nGIF\n",
+            screenshot_bytes=_bumble_conversation_png(),
+        )
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.observe_bumble_screen()
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["screen_state"], "bumble_conversation")
+        self.assertTrue(payload["layout_hints"]["live_send_supported"])
+        self.assertTrue(payload["layout_hints"]["draft_staging_supported"])
+        self.assertFalse(payload["layout_hints"]["visual_only_exact_verification_allowed"])
 
     def test_bumble_top_level_page_uses_bottom_nav_and_header_title(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2251,6 +2530,7 @@ class GuiHarnessTests(unittest.TestCase):
         for app_id, match_id, candidate_key, marker, command, method_name in (
             ("tinder", "match_ada", "tinder_ada", "Ada", ["harness", "tinder", "send-message"], "send_tinder_message"),
             ("wechat", "match_wechat", "wechat_ada", "Ada", ["harness", "wechat", "send-message"], "send_wechat_message"),
+            ("bumble", "match_bumble", "bumble_ada", "Ada", ["harness", "bumble", "send-message"], "send_bumble_message"),
         ):
             with self.subTest(app_id=app_id):
                 with tempfile.TemporaryDirectory() as temp_dir:
@@ -2310,6 +2590,66 @@ class GuiHarnessTests(unittest.TestCase):
                 self.assertEqual(exit_code, 0)
                 self.assertEqual(payload["status"], "ok")
                 getattr(harness_class.return_value, method_name).assert_called_once()
+
+    def test_cli_bumble_real_send_blocks_generic_target_binding_before_native_execution(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            draft_text = "hi"
+            payload_hash = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
+            draft_path = root / "bumble-draft.txt"
+            auth_path = root / "auth.json"
+            action_path = root / "action_request.json"
+            draft_path.write_text(draft_text, encoding="utf-8")
+            _write_json(auth_path, _live_send_auth("bumble", authorization_id="auth_bumble_live"))
+            _write_json(action_path, {
+                "schema_version": 1,
+                "action_request_id": "act_bumble_send",
+                "action": "send_message",
+                "app_id": "bumble",
+                "match_id": "match_bumble",
+                "candidate_key": "bumble_ada",
+                "payload_hash": payload_hash,
+                "precondition_hash": "pre_hash",
+                "autonomous_audit_binding": _autonomous_audit_binding(
+                    authorization_id="auth_bumble_live",
+                    target_match_id="match_bumble",
+                    payload_hash=payload_hash,
+                ),
+                "requires_post_action_verification": True,
+                "policy": {"allowed": True},
+                "target_binding": {
+                    "required_visible_text": ["Opening Move", "Aa"],
+                    "target_match_id": "match_bumble",
+                    "candidate_key": "bumble_ada",
+                },
+            })
+
+            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+                harness_class.return_value.send_bumble_message.return_value = {
+                    "schema_version": 1,
+                    "status": "ok",
+                    "app_id": "bumble",
+                    "action": "send_message",
+                }
+                exit_code, payload = _run_cli_json([
+                    "harness",
+                    "bumble",
+                    "send-message",
+                    "--text-file",
+                    str(draft_path),
+                    "--data-dir",
+                    str(data_dir),
+                    "--authorization",
+                    str(auth_path),
+                    "--action-request",
+                    str(action_path),
+                    "--json",
+                ])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["reason"], "action_request_target_binding_not_target_specific")
+        harness_class.assert_not_called()
 
     def test_cli_wechat_doctor_and_screenshot_default_to_wechat_window_title(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2575,6 +2915,57 @@ def _bumble_browse_png() -> bytes:
     for center in (0.11, 0.26, 0.50, 0.68, 0.88):
         fill(center - 0.020, 0.905, center + 0.020, 0.930, (80, 80, 80, 255))
         fill(center - 0.040, 0.948, center + 0.040, 0.965, (45, 45, 45, 255))
+    return _png_from_pixels(pixels, width, height)
+
+
+def _bumble_chat_list_png() -> bytes:
+    width, height = 200, 400
+    pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.05, 0.105, 0.16, 0.135, (18, 18, 18, 255))
+    fill(0.04, 0.20, 0.18, 0.30, (150, 105, 80, 255))
+    fill(0.23, 0.20, 0.37, 0.30, (75, 130, 180, 255))
+    fill(0.43, 0.20, 0.57, 0.30, (120, 120, 120, 255))
+    fill(0.05, 0.36, 0.95, 0.45, (245, 245, 245, 255))
+    fill(0.08, 0.38, 0.52, 0.43, (230, 230, 230, 255))
+    fill(0.06, 0.50, 0.18, 0.59, (105, 160, 115, 255))
+    fill(0.28, 0.50, 0.45, 0.52, (28, 28, 28, 255))
+    fill(0.28, 0.535, 0.36, 0.55, (80, 80, 80, 255))
+    fill(0.06, 0.89, 0.94, 0.98, (255, 255, 255, 255))
+    for center in (0.11, 0.26, 0.50, 0.68):
+        fill(center - 0.020, 0.905, center + 0.020, 0.930, (105, 105, 105, 255))
+        fill(center - 0.040, 0.948, center + 0.040, 0.965, (90, 90, 90, 255))
+    fill(0.86, 0.902, 0.92, 0.935, (18, 18, 18, 255))
+    fill(0.84, 0.948, 0.92, 0.965, (18, 18, 18, 255))
+    return _png_from_pixels(pixels, width, height)
+
+
+def _bumble_conversation_png(*, active_send_button: bool = False, outgoing_bubble: bool = True) -> bytes:
+    width, height = 200, 400
+    pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.15, 0.095, 0.23, 0.155, (105, 160, 115, 255))
+    fill(0.27, 0.112, 0.40, 0.137, (25, 25, 25, 255))
+    fill(0.66, 0.105, 0.72, 0.145, (35, 35, 35, 255))
+    fill(0.79, 0.105, 0.86, 0.145, (35, 35, 35, 255))
+    fill(0.92, 0.105, 0.96, 0.145, (35, 35, 35, 255))
+    fill(0.40, 0.18, 0.96, 0.27, (245, 245, 245, 255))
+    fill(0.05, 0.27, 0.18, 0.32, (245, 245, 245, 255))
+    if outgoing_bubble:
+        fill(0.80, 0.34, 0.96, 0.40, (248, 211, 59, 255))
+    fill(0.12, 0.90, 0.88, 0.955, (248, 248, 248, 255))
+    fill(0.16, 0.92, 0.21, 0.94, (95, 95, 95, 255))
+    fill(0.93 if active_send_button else 0.91, 0.90, 0.98, 0.955, (248, 211, 59, 255) if active_send_button else (225, 225, 225, 255))
     return _png_from_pixels(pixels, width, height)
 
 

@@ -55,7 +55,7 @@ verification, and post-action verification.
 | --- | --- | --- | --- |
 | Tinder | host loop, profile/chat navigation, observation, draft workflow, opt-in managed live send | iPhone Mirroring on macOS | stage by default; `send-message` can click Send only after explicit live-send authorization and verification |
 | WeChat / 微信 | app profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | stage by default; `send-message` can press Enter only after explicit live-send authorization and verification |
-| Bumble | app profile, iPhone Mirroring launch/observation, profile/chat navigation, Opening Move observation | iPhone Mirroring on macOS | navigation only; no draft staging, send-message, or host-loop support |
+| Bumble | host loop, iPhone Mirroring launch/observation, profile/chat navigation, Opening Move observation, opt-in managed live send | iPhone Mirroring on macOS | stage by default; ordinary chat `send-message` can click Send only after explicit live-send authorization and verification |
 
 未支持 app 不进入 `app_profiles/` 或 `supported_app_profiles`。Hinge、她说
 以及其他主流 dating app 先作为 roadmap candidate 记录在
@@ -295,14 +295,27 @@ dating-boost harness bumble action open-chats --dry-run --json
 dating-boost harness bumble workflow browse-profile-read --dry-run --profile-scroll-steps 2 --json
 dating-boost harness bumble workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
 dating-boost harness bumble workflow opening-move-open --dry-run --match-index 2 --json
+dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --json
 ```
 
-Bumble support is navigation-only. It can launch the app, classify Bumble pages,
-open bottom tabs, read visible profile cards with vertical scroll, open visible
-chat rows, open match-circle Opening Move prompts, and open an empty Opening
-Move reply composer. It must not stage drafts, click Send, like, pass,
-SuperSwipe, unmatch, report, edit profile, or purchase Premium. Horizontal
-swipes on browse cards are treated as high risk because they can like or pass.
+Bumble can launch the app, classify Bumble pages, open bottom tabs, read
+visible profile cards with vertical scroll, open visible chat rows, open
+match-circle Opening Move prompts, open an empty Opening Move reply composer,
+and run opt-in managed sends for verified ordinary chat conversations. It must
+not like, pass, SuperSwipe, unmatch, report, edit profile, or purchase Premium.
+Horizontal swipes on browse cards are treated as high risk because they can
+like or pass.
+
+Opening Move handling is role-sensitive. For female users, the agent must not
+decide whether to enable/skip Opening Move or whether a male reply is good
+enough; it can observe or summarize and then ask the user to decide. For male
+users, the agent may draft an Opening Move reply for user review; Opening Move
+send still requires explicit user confirmation and is not eligible for
+autonomous Opening Move send. Ordinary Bumble chat managed send requires
+`harness bumble send-message` with explicit authorization, `live_send: true`,
+policy-checked action request, target-specific binding, staged-text OCR
+verification, and fresh post-send outbound-bubble evidence. Visual send-button
+or yellow-bubble evidence alone does not satisfy exact-text verification.
 
 ### macOS WeChat / 微信桌面端
 
@@ -340,6 +353,7 @@ block paste/send.
 dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json
 dating-boost-host-loop init --data-dir .local/dating-boost --work-dir .local/dating-boost-host-loop --app-id tinder --json
 dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json
+dating-boost-host-loop run --data-dir .local/dating-boost --authorization bumble-auth.json --goal goal.json --availability availability.json --app-id bumble --send-mode live --managed-gui-send --work-dir .local/dating-boost-host-loop --json
 dating-boost-host-loop run --data-dir .local/dating-boost --authorization wechat-auth.json --goal goal.json --availability availability.json --app-id wechat --send-mode live --managed-gui-send --work-dir .local/dating-boost-host-loop --json
 ```
 

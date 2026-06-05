@@ -1,12 +1,15 @@
-# Tinder Host Loop
+# App Host Loop
 
-Use this workflow when the user wants Codex to run a real Tinder host loop with
-iPhone Mirroring. `dating-boost-host-loop` drives the operator state machine.
+Use this workflow when the user wants Codex to run a real Tinder or Bumble host
+loop with iPhone Mirroring. `dating-boost-host-loop` drives the operator state
+machine.
+The Tinder host loop remains the baseline reference path; Bumble uses the same
+supervisor contract for ordinary chat sends.
 `dating-boost harness ...` provides the native stage/navigation harness for
-iPhone Mirroring diagnostics, screenshots/OCR, safe Tinder profile-tab
-navigation, profile reading, chat/profile opening chains, and gated managed
-send. Codex still performs semantic screen understanding and must verify staged
-text and outbound post-action evidence before any managed send is recorded.
+iPhone Mirroring diagnostics, screenshots/OCR, safe app navigation, profile
+reading, chat/profile opening chains, and gated managed send. Codex still
+performs semantic screen understanding and must verify staged text and outbound
+post-action evidence before any managed send is recorded.
 
 ## Start
 
@@ -23,6 +26,9 @@ dating-boost harness tinder workflow chat-read-match-profile --dry-run --convers
 dating-boost harness tinder workflow new-match-open --dry-run --carousel-swipes 1 --match-index 2 --json
 dating-boost harness tinder workflow new-match-read-profile --dry-run --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
+dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --json
 dating-boost-host-loop doctor \
   --data-dir .local/dating-boost \
   --app-id tinder \
@@ -39,8 +45,12 @@ run `harness tinder action return-to-chats` before selecting the next unopened
 match. A real send is allowed only via `harness tinder send-message` or
 `--managed-gui-send` with explicit live-send authorization, a policy-checked
 action request, target-chat binding, staged text verification, outbound-bubble
-verification, and an unpaused safety switch. The harness never authorizes like,
-super-like, unmatch, report, or profile edit actions.
+verification, and an unpaused safety switch. Bumble managed send additionally
+requires target-specific binding and exact OCR payload verification; visual-only
+button or bubble evidence is not enough. Bumble managed send applies to ordinary
+chat sends; autonomous Opening Move send is not supported. The harness never
+authorizes like, super-like, SuperSwipe, pass, unmatch, report, premium
+purchase, or profile edit actions.
 
 If configuration files are missing, generate templates:
 

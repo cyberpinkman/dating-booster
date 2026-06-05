@@ -37,11 +37,11 @@ agent and uses iPhone Mirroring only for observe, paste, and verify.
 
 ## Tinder Stage Smoke
 
-Tinder remains the full host-loop GUI stage smoke target for this release.
-Bumble has navigation-only iPhone Mirroring support for observation/profile/chat
-reading, but no stage/live send or host-loop smoke. Ta Shuo, Hinge, and other
-apps remain roadmap candidates until runtime profiles, fixtures, and harness or
-host-loop tests prove support.
+Tinder, WeChat, and Bumble have host-loop GUI smoke coverage for their supported
+send surfaces. Bumble supports managed ordinary chat send, but Opening Move
+autonomous send remains unsupported. Ta Shuo, Hinge, and other apps remain
+roadmap candidates until runtime profiles, fixtures, and harness or host-loop
+tests prove support.
 WeChat has a macOS desktop harness for launch, redacted observation, and draft
 staging, but no WeChat-specific profile navigation chain.
 

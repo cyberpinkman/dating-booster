@@ -68,7 +68,7 @@ from dating_boost.core.user_disclosure import UserDisclosureRepository, intervie
 
 MVP_TIMESTAMP = "2026-05-25T00:00:00Z"
 SUPPORTED_NATIVE_HARNESS_APPS = ("tinder", "wechat", "bumble")
-SUPPORTED_MANAGED_SESSION_APPS = ("tinder", "wechat")
+SUPPORTED_MANAGED_SESSION_APPS = ("tinder", "wechat", "bumble")
 
 
 def _now_iso() -> str:
@@ -406,6 +406,16 @@ def main(argv: list[str] | None = None) -> int:
     harness_bumble_workflow_parser.add_argument("--scroll-steps", type=int)
     harness_bumble_workflow_parser.add_argument("--json", action="store_true")
     harness_bumble_workflow_parser.set_defaults(handler=_handle_harness_bumble_workflow)
+    harness_bumble_send_parser = harness_bumble_subparsers.add_parser("send-message")
+    harness_bumble_send_parser.add_argument("--window-title", default="iPhone Mirroring")
+    harness_bumble_send_parser.add_argument("--text-file", required=True, type=Path)
+    harness_bumble_send_parser.add_argument("--data-dir", type=Path)
+    harness_bumble_send_parser.add_argument("--authorization", type=Path)
+    harness_bumble_send_parser.add_argument("--action-request", type=Path)
+    harness_bumble_send_parser.add_argument("--dry-run", action="store_true")
+    harness_bumble_send_parser.add_argument("--output-dir", type=Path)
+    harness_bumble_send_parser.add_argument("--json", action="store_true")
+    harness_bumble_send_parser.set_defaults(handler=_handle_harness_bumble_send_message)
     harness_wechat_parser = harness_subparsers.add_parser("wechat")
     harness_wechat_subparsers = harness_wechat_parser.add_subparsers(dest="harness_wechat_command", required=True)
     harness_wechat_launch_parser = harness_wechat_subparsers.add_parser("launch")
@@ -1322,6 +1332,41 @@ def _handle_harness_bumble_workflow(args: argparse.Namespace) -> int:
     _record_support_harness_result(args.data_dir, app_id="bumble", action=f"workflow_{args.workflow}", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_bumble_send_message(args: argparse.Namespace) -> int:
+    draft_text = args.text_file.read_text(encoding="utf-8")
+    action_request: dict[str, Any] | None = None
+    if not args.dry_run:
+        block_payload = _live_send_cli_block_payload(args, app_id="bumble", draft_text=draft_text)
+        if block_payload is not None:
+            _record_support_harness_action(
+                args.data_dir,
+                app_id="bumble",
+                action="send_message",
+                draft_text=draft_text,
+                harness_payload=block_payload,
+                action_request=None,
+            )
+            _print_json(block_payload)
+            return 2
+        action_request = _read_json_object(args.action_request)
+    payload = NativeGuiHarness(app_id="bumble", window_title=args.window_title).send_bumble_message(
+        draft_text,
+        dry_run=args.dry_run,
+        output_dir=args.output_dir,
+        target_binding=action_request.get("target_binding") if isinstance(action_request, dict) else None,
+    )
+    _record_support_harness_action(
+        args.data_dir,
+        app_id="bumble",
+        action="send_message",
+        draft_text=draft_text,
+        harness_payload=payload,
+        action_request=action_request,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
 
 
 def _handle_harness_tinder_send_message(args: argparse.Namespace) -> int:

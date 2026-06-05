@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import csv
 from datetime import datetime, timezone
 import hashlib
@@ -24,6 +25,7 @@ from dating_boost.harness.base import (
 from dating_boost.harness.input_backends import (
     click_iphone_mirroring_view_menu_item as _click_iphone_mirroring_view_menu_item_backend,
     core_graphics_click as _core_graphics_click_backend,
+    core_graphics_command_v as _core_graphics_command_v_backend,
     core_graphics_drag as _core_graphics_drag_backend,
     core_graphics_wheel as _core_graphics_wheel_backend,
 )
@@ -51,6 +53,7 @@ from dating_boost.harness.screen_state import (
     tinder_profile_field_coverage as _tinder_profile_field_coverage,
     wechat_layout_hints as _wechat_layout_hints,
 )
+from dating_boost.core.live_send_contract import bumble_target_binding_specific_marker_present
 from dating_boost.core.support import classify_text_topics
 
 
@@ -69,9 +72,68 @@ BUMBLE_BLOCKED_GUI_ACTIONS = [
     "report",
     "profile_edit",
     "premium_purchase",
+    "opening_move_enable",
+    "opening_move_skip",
+    "opening_move_decide_reply_satisfaction",
+    "opening_move_send",
 ]
+BUMBLE_SEND_BLOCKED_GUI_ACTIONS = [
+    "like",
+    "superswipe",
+    "pass",
+    "unmatch",
+    "report",
+    "profile_edit",
+    "premium_purchase",
+    "opening_move_enable",
+    "opening_move_skip",
+    "opening_move_decide_reply_satisfaction",
+    "opening_move_autonomous_send",
+]
+BUMBLE_OPENING_MOVE_POLICY: dict[str, Any] = {
+    "scope": "bumble_opening_move",
+    "female_user": {
+        "agent_decision_authority": "none",
+        "user_decision_required": [
+            "enable_opening_move",
+            "skip_opening_move",
+            "accept_male_reply",
+            "reject_male_reply",
+        ],
+        "agent_allowed_actions": [
+            "observe_opening_move_prompt",
+            "summarize_visible_reply",
+            "ask_user_to_decide",
+        ],
+        "agent_disallowed_actions": [
+            "enable_opening_move",
+            "skip_opening_move",
+            "accept_male_reply",
+            "reject_male_reply",
+        ],
+    },
+    "male_user": {
+        "agent_may_draft_reply": True,
+        "requires_user_confirmation_before_send": True,
+        "current_harness_stage_supported": True,
+        "current_harness_send_supported": True,
+        "autonomous_opening_move_send_supported": False,
+        "agent_allowed_actions": ["draft_opening_move_reply"],
+        "agent_disallowed_actions": [
+            "send_opening_move_reply_without_user_confirmation",
+            "autonomous_opening_move_send",
+        ],
+    },
+}
 TINDER_SUBSCRIPTION_PAYWALL_STATE = "tinder_subscription_paywall"
 TINDER_FEEDBACK_SURVEY_STATE = "tinder_feedback_survey"
+
+
+def _bumble_guardrails_payload() -> dict[str, Any]:
+    return {
+        "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+        "opening_move_policy": copy.deepcopy(BUMBLE_OPENING_MOVE_POLICY),
+    }
 
 
 class NativeGuiHarness:
@@ -561,7 +623,7 @@ class NativeGuiHarness:
         payload = {
             **self._base_payload("ok"),
             "target": "bumble_screen",
-            "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+            **_bumble_guardrails_payload(),
         }
         if output_dir is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -635,7 +697,7 @@ class NativeGuiHarness:
             "target": "bumble_app",
             "mode": "dry_run" if dry_run else "execute",
             "planned_steps": planned_steps,
-            "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+            **_bumble_guardrails_payload(),
         }
         doctor_output = None
         if output_dir is not None:
@@ -819,14 +881,14 @@ class NativeGuiHarness:
                 **self._base_payload("blocked"),
                 "action": action,
                 "reason": "unknown_bumble_harness_action",
-                "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+                **_bumble_guardrails_payload(),
             }
         payload = {
             **self._base_payload("ok"),
             "action": action,
             "mode": "dry_run" if dry_run else "execute",
             "planned_steps": planned_steps,
-            "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+            **_bumble_guardrails_payload(),
         }
         if dry_run:
             return payload
@@ -847,18 +909,272 @@ class NativeGuiHarness:
                 **self._base_payload("blocked"),
                 "workflow": workflow,
                 "reason": "unknown_bumble_harness_workflow",
-                "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+                **_bumble_guardrails_payload(),
             }
         payload = {
             **self._base_payload("ok"),
             "workflow": workflow,
             "mode": "dry_run" if dry_run else "execute",
             "planned_steps": planned_steps,
-            "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+            **_bumble_guardrails_payload(),
         }
         if dry_run:
             return payload
         return self._execute_planned_steps(payload, output_dir=output_dir)
+
+    def send_bumble_message(
+        self,
+        draft_text: str,
+        *,
+        dry_run: bool = False,
+        output_dir: Path | None = None,
+        target_binding: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        input_step = {
+            "intent": "tap_bumble_message_input",
+            "tap_ratio": {"x": 0.45, "y": 0.92},
+            "risk": "live_send_precondition",
+            "requires_verified_bumble_thread": True,
+        }
+        paste_step = {
+            "intent": "paste_clipboard_into_bumble_message_input",
+            "risk": "live_send_precondition",
+            "requires_exact_text_match": True,
+        }
+        type_fallback_step = {
+            "intent": "type_bumble_message_input_if_paste_did_not_stage",
+            "risk": "live_send_precondition",
+            "fallback_only": True,
+            "requires_ascii_draft": True,
+            "requires_exact_text_verification_after_direct_type": True,
+        }
+        ime_commit_step = {
+            "intent": "commit_bumble_message_input_ime_candidate_if_needed",
+            "risk": "live_send_precondition",
+            "fallback_only": True,
+            "requires_failed_direct_type_verification": True,
+            "requires_exact_text_verification_after_commit": True,
+        }
+        send_step = {
+            "intent": "tap_bumble_send_button",
+            "tap_ratio": {"x": 0.94, "y": 0.92},
+            "risk": "live_send",
+            "requires_explicit_authorization": True,
+            "visual_only_exact_verification_allowed": False,
+        }
+        payload = {
+            **self._base_payload("ok"),
+            "action": "send_message",
+            "target": "bumble_message_input",
+            "mode": "dry_run" if dry_run else "execute",
+            "planned_steps": [input_step, paste_step, type_fallback_step, ime_commit_step, send_step],
+            "draft_fingerprint": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
+            "draft_character_count": len(draft_text),
+            **_text_fingerprint_fields("draft_clipboard", draft_text),
+            "blocked_actions": list(BUMBLE_SEND_BLOCKED_GUI_ACTIONS),
+            "opening_move_policy": copy.deepcopy(BUMBLE_OPENING_MOVE_POLICY),
+            "live_send": True,
+            "requires_explicit_authorization": True,
+        }
+        if dry_run:
+            return payload
+        if output_dir is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        preflight_output = output_dir / "iphone_mirroring.bumble.before_send_message.png" if output_dir is not None else None
+        preflight = self.doctor(capture=True, output=preflight_output)
+        payload["preflight"] = preflight
+        if preflight.get("status") != "ok":
+            payload.update({"status": "blocked", "reason": preflight.get("reason") or "bumble_preflight_not_verified"})
+            return payload
+        window = _window_from_payload(preflight.get("window") or {})
+        preflight_screen = preflight.get("screen") if isinstance(preflight.get("screen"), dict) else {}
+        if preflight_screen.get("state") == "bumble_opening_move":
+            payload.update({
+                "status": "blocked",
+                "reason": "bumble_opening_move_requires_user_confirmation",
+                "next_host_action": "ask_user_to_confirm_opening_move_reply",
+            })
+            return payload
+        if preflight_screen.get("state") != "bumble_conversation":
+            payload.update({"status": "blocked", "reason": "bumble_conversation_not_verified"})
+            return payload
+
+        if target_binding is not None:
+            target_verification = self._verify_bumble_target_binding(target_binding, output_dir=output_dir)
+            payload["target_binding_verification"] = target_verification
+            if target_verification.get("status") != "ok":
+                payload.update({
+                    "status": "blocked",
+                    "reason": target_verification.get("reason") or "target_binding_mismatch",
+                })
+                return payload
+
+        baseline_output = output_dir / "iphone_mirroring.bumble.before_stage_message.png" if output_dir is not None else None
+        baseline_screen = self.capture_window(output=baseline_output, window=window)
+        payload["pre_stage_observation"] = _redacted_screen(baseline_screen)
+        if baseline_screen.get("status") != "ok":
+            payload.update({"status": "blocked", "reason": baseline_screen.get("reason") or "pre_stage_screen_not_captured"})
+            return payload
+        if baseline_screen.get("state") == "bumble_opening_move":
+            payload.update({
+                "status": "blocked",
+                "reason": "bumble_opening_move_requires_user_confirmation",
+                "next_host_action": "ask_user_to_confirm_opening_move_reply",
+            })
+            return payload
+        if baseline_screen.get("state") != "bumble_conversation":
+            payload.update({"status": "blocked", "reason": "bumble_conversation_not_verified"})
+            return payload
+
+        previous_clipboard = self._read_clipboard()
+        payload["previous_clipboard_read"] = previous_clipboard["status"] == "ok"
+        if previous_clipboard["status"] != "ok":
+            payload.update({"status": "blocked", "reason": previous_clipboard.get("reason")})
+            return payload
+        payload.update(_text_fingerprint_fields("previous_clipboard", previous_clipboard.get("text", "")))
+        copy_result = self._copy_to_clipboard(draft_text)
+        payload["draft_clipboard_copy"] = copy_result["status"] == "ok"
+        if copy_result["status"] != "ok":
+            payload.update({"status": "blocked", "reason": copy_result.get("reason")})
+            return payload
+
+        executed_steps: list[dict[str, Any]] = []
+        staged_screen = baseline_screen
+        try:
+            input_result = self._click_ratio(window, input_step["tap_ratio"])
+            executed_steps.append({**input_step, "result": input_result})
+            if input_result["status"] != "ok":
+                payload.update({"status": "blocked", "reason": input_result.get("reason"), "executed_steps": executed_steps})
+                return payload
+            time.sleep(0.45)
+
+            paste_result = self._paste_clipboard_into_frontmost_app(prefer_core_graphics_keyboard=True)
+            executed_steps.append({**paste_step, "result": paste_result})
+            if paste_result["status"] != "ok":
+                payload.update({"status": "blocked", "reason": paste_result.get("reason"), "executed_steps": executed_steps})
+                return payload
+            time.sleep(0.3)
+
+            staged_output = output_dir / "iphone_mirroring.bumble.after_stage_message.png" if output_dir is not None else None
+            staged_screen = self.capture_window(output=staged_output, window=window)
+            staged_verification = _verify_staged_bumble_message(
+                staged_screen,
+                draft_text,
+                baseline_screen=baseline_screen,
+            )
+            if (
+                staged_verification.get("status") != "ok"
+                and _bumble_direct_type_fallback_allowed(draft_text)
+                and not _bumble_active_send_button_visual_visible(staged_screen)
+            ):
+                type_result = self._type_text_into_frontmost_app(draft_text)
+                executed_steps.append({**type_fallback_step, "result": type_result})
+                if type_result["status"] != "ok":
+                    payload.update({
+                        "status": "blocked",
+                        "reason": type_result.get("reason") or "direct_text_entry_failed",
+                        "executed_steps": executed_steps,
+                    })
+                    return payload
+                time.sleep(0.3)
+                staged_output = output_dir / "iphone_mirroring.bumble.after_type_message.png" if output_dir is not None else None
+                staged_screen = self.capture_window(output=staged_output, window=window)
+                staged_verification = _verify_staged_bumble_message(
+                    staged_screen,
+                    draft_text,
+                    baseline_screen=baseline_screen,
+                    trusted_direct_input=True,
+                )
+                if (
+                    staged_verification.get("status") != "ok"
+                    and not _bumble_active_send_button_visual_visible(staged_screen)
+                ):
+                    ime_commit_result = self._press_space_key()
+                    executed_steps.append({**ime_commit_step, "result": ime_commit_result})
+                    if ime_commit_result["status"] != "ok":
+                        payload.update({
+                            "status": "blocked",
+                            "reason": ime_commit_result.get("reason") or "ime_commit_space_failed",
+                            "executed_steps": executed_steps,
+                        })
+                        return payload
+                    time.sleep(0.3)
+                    staged_output = output_dir / "iphone_mirroring.bumble.after_ime_commit_message.png" if output_dir is not None else None
+                    staged_screen = self.capture_window(output=staged_output, window=window)
+                    staged_verification = _verify_staged_bumble_message(
+                        staged_screen,
+                        draft_text,
+                        baseline_screen=baseline_screen,
+                        trusted_direct_input=True,
+                    )
+                payload["staging_input_backend"] = type_result.get("input_backend")
+            payload["staged_text_verification"] = staged_verification
+            payload["staged_text_verified"] = staged_verification.get("status") == "ok"
+            if staged_verification.get("status") != "ok":
+                payload.update({
+                    "status": "blocked",
+                    "reason": staged_verification.get("reason") or "staged_text_not_verified",
+                    "executed_steps": executed_steps,
+                })
+                return payload
+        finally:
+            restore_result = self._copy_to_clipboard(previous_clipboard.get("text", ""))
+            payload["clipboard_restored"] = restore_result["status"] == "ok"
+            payload["clipboard_restore_status"] = restore_result["status"]
+            if restore_result["status"] != "ok":
+                payload["clipboard_restore_reason"] = restore_result.get("reason")
+
+        if payload["clipboard_restored"] is not True:
+            payload.update({
+                "status": "blocked",
+                "reason": "clipboard_restore_failed",
+                "executed_steps": executed_steps,
+            })
+            return payload
+
+        send_result = self._click_ratio(window, send_step["tap_ratio"])
+        executed_steps.append({**send_step, "result": send_result})
+        payload["executed_steps"] = executed_steps
+        if send_result["status"] != "ok":
+            payload.update({"status": "blocked", "reason": send_result.get("reason")})
+            return payload
+
+        time.sleep(0.5)
+        post_output = output_dir / "iphone_mirroring.bumble.after_send_message.png" if output_dir is not None else None
+        post_screen = self.capture_window(output=post_output, window=window)
+        payload["post_action_observation"] = _redacted_screen(post_screen)
+        post_id_source = f"{payload['draft_fingerprint']}:{post_screen.get('path') or _now_iso()}:{uuid4().hex}"
+        post_observation_id = "gui_post_send_" + hashlib.sha256(post_id_source.encode("utf-8")).hexdigest()[:16]
+        payload["post_action_observation_id"] = post_observation_id
+        post_screen_captured = post_screen.get("status") == "ok"
+        outbound_verification = _verify_bumble_outbound_message(
+            post_screen,
+            draft_text,
+            staged_screen=staged_screen,
+            trusted_direct_input=payload.get("staging_input_backend") == "applescript_direct_keystroke",
+        )
+        payload["outbound_message_verification"] = outbound_verification
+        outbound_verified = outbound_verification.get("status") == "ok"
+        input_cleared = bool(outbound_verification.get("input_cleared_after_send"))
+        payload["evidence"] = {
+            "staged_text_verified": bool(payload.get("staged_text_verified")),
+            "staged_exact_text_ocr_verified": bool(staged_verification.get("exact_text_ocr_verified")),
+            "send_input_backend": send_result.get("input_backend"),
+            "input_cleared_after_send": input_cleared,
+            "post_action_screen_captured": post_screen_captured,
+            "outbound_message_verified": outbound_verified,
+            "outbound_exact_text_ocr_verified": bool(outbound_verification.get("exact_text_ocr_verified")),
+            "visual_only_exact_verification_allowed": False,
+            "post_action_observation_id": post_observation_id,
+        }
+        if not post_screen_captured:
+            payload.update({"status": "needs_verification", "reason": "post_action_screen_not_captured"})
+        elif not input_cleared:
+            payload.update({"status": "needs_verification", "reason": "post_send_input_not_verified_clear"})
+        elif not outbound_verified:
+            payload.update({"status": "needs_verification", "reason": "outbound_message_not_verified"})
+        return payload
 
     def send_tinder_message(
         self,
@@ -1809,10 +2125,7 @@ class NativeGuiHarness:
             return self._type_app_name_with_search_verification(window, app_name)
         if step["intent"] == "type_app_name":
             app_name = str(step.get("text") or "Tinder")
-            result = self.runner.run(["osascript", "-e", f'tell application "System Events" to keystroke "{app_name}"'])
-            if result.returncode != 0:
-                return {"status": "blocked", "reason": "text_entry_failed", "stderr": _short(result.stderr)}
-            return {"status": "ok"}
+            return self._type_text_with_ime_commit(app_name, failure_reason="text_entry_failed")
         if step["intent"] == "press_return":
             result = self.runner.run(["osascript", "-e", 'tell application "System Events" to key code 36'])
             if result.returncode != 0:
@@ -1821,9 +2134,9 @@ class NativeGuiHarness:
         return {"status": "blocked", "reason": "unknown_gui_step"}
 
     def _type_app_name_with_search_verification(self, window: WindowInfo, app_name: str) -> dict[str, Any]:
-        first_type = self.runner.run(["osascript", "-e", f'tell application "System Events" to keystroke "{app_name}"'])
-        if first_type.returncode != 0:
-            return {"status": "blocked", "reason": "text_entry_failed", "stderr": _short(first_type.stderr)}
+        first_type = self._type_text_with_ime_commit(app_name, failure_reason="text_entry_failed")
+        if first_type["status"] != "ok":
+            return first_type
         time.sleep(0.2)
         first_screen = self.capture_window(window=window)
         first_verified = _app_search_result_visible(first_screen, app_name)
@@ -1832,6 +2145,8 @@ class NativeGuiHarness:
                 "status": "ok",
                 "search_result_verified": True,
                 "retried_after_input_source_switch": False,
+                "ime_commit_after_typing": True,
+                "text_entry": first_type,
                 "verification": _redacted_screen(first_screen),
             }
 
@@ -1840,6 +2155,7 @@ class NativeGuiHarness:
             return {
                 **switch,
                 "first_verification": _redacted_screen(first_screen),
+                "text_entry": first_type,
                 "search_result_verified": False,
             }
         home = self._click_iphone_mirroring_view_menu_item("Home Screen")
@@ -1854,16 +2170,16 @@ class NativeGuiHarness:
                     **fallback,
                     "fallback_from": "spotlight_menu_after_input_source_switch",
                     "first_verification": _redacted_screen(first_screen),
+                    "text_entry": first_type,
                     "input_source_switch": switch,
                 }
         time.sleep(0.3)
-        second_type = self.runner.run(["osascript", "-e", f'tell application "System Events" to keystroke "{app_name}"'])
-        if second_type.returncode != 0:
+        second_type_payload = self._type_text_with_ime_commit(app_name, failure_reason="text_entry_retry_failed")
+        if second_type_payload["status"] != "ok":
             return {
-                "status": "blocked",
-                "reason": "text_entry_retry_failed",
-                "stderr": _short(second_type.stderr),
+                **second_type_payload,
                 "first_verification": _redacted_screen(first_screen),
+                "first_text_entry": first_type,
                 "input_source_switch": switch,
             }
         time.sleep(0.2)
@@ -1874,15 +2190,39 @@ class NativeGuiHarness:
                 "reason": "app_search_result_not_verified",
                 "first_verification": _redacted_screen(first_screen),
                 "retry_verification": _redacted_screen(second_screen),
+                "first_text_entry": first_type,
+                "retry_text_entry": second_type_payload,
                 "input_source_switch": switch,
             }
         return {
             "status": "ok",
             "search_result_verified": True,
             "retried_after_input_source_switch": True,
+            "ime_commit_after_typing": True,
             "first_verification": _redacted_screen(first_screen),
             "retry_verification": _redacted_screen(second_screen),
+            "first_text_entry": first_type,
+            "retry_text_entry": second_type_payload,
             "input_source_switch": switch,
+        }
+
+    def _type_text_with_ime_commit(self, text: str, *, failure_reason: str) -> dict[str, Any]:
+        type_result = self.runner.run(
+            ["osascript", "-e", f'tell application "System Events" to keystroke {_applescript_string_literal(text)}']
+        )
+        if type_result.returncode != 0:
+            return {"status": "blocked", "reason": failure_reason, "stderr": _short(type_result.stderr)}
+        commit_result = self.runner.run(["osascript", "-e", 'tell application "System Events" to key code 49'])
+        if commit_result.returncode != 0:
+            return {
+                "status": "blocked",
+                "reason": "ime_commit_space_failed",
+                "stderr": _short(commit_result.stderr),
+            }
+        return {
+            "status": "ok",
+            "input_backend": "applescript_accessibility",
+            "ime_commit_key": "space",
         }
 
     def _dismiss_tinder_subscription_paywall(
@@ -1983,7 +2323,12 @@ class NativeGuiHarness:
             return {"status": "blocked", "reason": "clipboard_read_failed", "stderr": _short(result.stderr)}
         return {"status": "ok", "text": result.stdout}
 
-    def _paste_clipboard_into_frontmost_app(self) -> dict[str, Any]:
+    def _paste_clipboard_into_frontmost_app(self, *, prefer_core_graphics_keyboard: bool = False) -> dict[str, Any]:
+        core_graphics_result: dict[str, Any] | None = None
+        if prefer_core_graphics_keyboard:
+            core_graphics_result = _core_graphics_command_v_backend(self.runner)
+            if core_graphics_result["status"] == "ok":
+                return core_graphics_result
         result = self.runner.run(
             [
                 "osascript",
@@ -1992,8 +2337,31 @@ class NativeGuiHarness:
             ]
         )
         if result.returncode != 0:
-            return {"status": "blocked", "reason": "clipboard_paste_failed", "stderr": _short(result.stderr)}
-        return {"status": "ok", "input_backend": "applescript_accessibility"}
+            return {
+                "status": "blocked",
+                "reason": "clipboard_paste_failed",
+                "stderr": _short(result.stderr),
+                "primary_attempt": core_graphics_result,
+            }
+        return {
+            "status": "ok",
+            "input_backend": "applescript_accessibility",
+            "fallback_from": core_graphics_result.get("reason") if core_graphics_result else None,
+        }
+
+    def _type_text_into_frontmost_app(self, text: str) -> dict[str, Any]:
+        if not _bumble_direct_type_fallback_allowed(text):
+            return {"status": "blocked", "reason": "direct_text_entry_unsupported_characters"}
+        result = self.runner.run(
+            [
+                "osascript",
+                "-e",
+                f'tell application "System Events" to keystroke {_applescript_string_literal(text)}',
+            ]
+        )
+        if result.returncode != 0:
+            return {"status": "blocked", "reason": "direct_text_entry_failed", "stderr": _short(result.stderr)}
+        return {"status": "ok", "input_backend": "applescript_direct_keystroke"}
 
     def _verify_tinder_target_binding(
         self,
@@ -2032,6 +2400,51 @@ class NativeGuiHarness:
         if screen.get("state") == TINDER_SUBSCRIPTION_PAYWALL_STATE:
             return {**result, "status": "blocked", "reason": "tinder_subscription_paywall_visible"}
         if screen.get("state") != "tinder_conversation":
+            return {**result, "status": "blocked", "reason": "target_binding_chat_not_verified"}
+        if len(matched) != len(markers):
+            return {**result, "status": "blocked", "reason": "target_binding_mismatch"}
+        return {**result, "status": "ok"}
+
+    def _verify_bumble_target_binding(
+        self,
+        target_binding: dict[str, Any],
+        *,
+        output_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        markers = _target_binding_required_markers(target_binding)
+        base = {
+            "verification_method": "bumble_screen_ocr_required_visible_text",
+            "target_match_id": target_binding.get("target_match_id"),
+            "candidate_key": target_binding.get("candidate_key"),
+            "required_marker_hashes": [_hash_text(marker) for marker in markers],
+            "requires_target_specific_marker": True,
+        }
+        if not markers:
+            return {**base, "status": "blocked", "reason": "target_binding_required"}
+        if not bumble_target_binding_specific_marker_present(target_binding):
+            return {**base, "status": "blocked", "reason": "target_binding_not_target_specific"}
+        window = self._window_info()
+        if window is None:
+            return {**base, "status": "blocked", "reason": "iphone_mirroring_window_not_found"}
+        output = output_dir / "iphone_mirroring.bumble.target_binding.png" if output_dir is not None else None
+        screen = self.capture_window(output=output, window=window)
+        observed_text = str(screen.get("text") or "")
+        normalized = _normalize_text(observed_text)
+        matched = [marker for marker in markers if _normalize_text(marker) in normalized]
+        result = {
+            **base,
+            "screen": _redacted_screen(screen),
+            "screen_state": screen.get("state", "unknown"),
+            "observed_text_hash": _hash_text(observed_text) if observed_text else None,
+            "matched_marker_hashes": [_hash_text(marker) for marker in matched],
+        }
+        if screen.get("status") != "ok":
+            return {**result, "status": "blocked", "reason": "target_binding_screen_capture_failed"}
+        if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
+            return {**result, "status": "blocked", "reason": screen.get("state")}
+        if screen.get("state") == "bumble_opening_move":
+            return {**result, "status": "blocked", "reason": "bumble_opening_move_requires_user_confirmation"}
+        if screen.get("state") != "bumble_conversation":
             return {**result, "status": "blocked", "reason": "target_binding_chat_not_verified"}
         if len(matched) != len(markers):
             return {**result, "status": "blocked", "reason": "target_binding_mismatch"}
@@ -2095,6 +2508,12 @@ class NativeGuiHarness:
         if result.returncode != 0:
             return {"status": "blocked", "reason": "return_key_failed", "stderr": _short(result.stderr)}
         return {"status": "ok", "input_backend": "applescript_accessibility"}
+
+    def _press_space_key(self) -> dict[str, Any]:
+        result = self.runner.run(["osascript", "-e", 'tell application "System Events" to key code 49'])
+        if result.returncode != 0:
+            return {"status": "blocked", "reason": "ime_commit_space_failed", "stderr": _short(result.stderr)}
+        return {"status": "ok", "input_backend": "applescript_accessibility", "ime_commit_key": "space"}
 
     def _ocr(self, image_path: Path) -> dict[str, str]:
         if not self._command_available("tesseract"):
@@ -2317,6 +2736,87 @@ def _verify_tinder_outbound_message(
     return {**result, **extra, "status": "ok"}
 
 
+def _verify_staged_bumble_message(
+    screen: dict[str, Any],
+    expected_text: str,
+    *,
+    baseline_screen: dict[str, Any] | None = None,
+    trusted_direct_input: bool = False,
+) -> dict[str, Any]:
+    observed_text = str(screen.get("text") or "")
+    observed_stats = _expected_text_observation_stats(observed_text, expected_text)
+    baseline_text = str(baseline_screen.get("text") or "") if isinstance(baseline_screen, dict) else ""
+    baseline_stats = _expected_text_observation_stats(baseline_text, expected_text) if baseline_text else None
+    active_send_button_visible = _bumble_active_send_button_visual_visible(screen)
+    result = {
+        "verification_method": "bumble_staged_message_ocr_payload_text",
+        "expected_payload_hash": _hash_text(expected_text),
+        "expected_character_count": len(expected_text),
+        "observed_text_hash": observed_stats["text_hash"],
+        "observed_character_count": observed_stats["text_character_count"],
+        "observed_expected_text_occurrences": observed_stats["expected_text_occurrences"],
+        "baseline_expected_text_occurrences": baseline_stats["expected_text_occurrences"] if baseline_stats else None,
+        "baseline_text_hash": baseline_stats["text_hash"] if baseline_stats else None,
+        "active_send_button_visual_visible": active_send_button_visible,
+        "exact_text_ocr_verified": _message_text_matches(observed_text, expected_text),
+        "visual_only_exact_verification_allowed": False,
+        "screen": _redacted_screen(screen),
+    }
+    if screen.get("status") != "ok":
+        return {**result, "status": "blocked", "reason": screen.get("reason") or "stage_screen_not_captured"}
+    if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
+        return {**result, "status": "blocked", "reason": screen.get("state")}
+    if screen.get("state") == "bumble_opening_move":
+        return {**result, "status": "blocked", "reason": "bumble_opening_move_requires_user_confirmation"}
+    baseline_state = baseline_screen.get("state") if isinstance(baseline_screen, dict) else None
+    if screen.get("state") != "bumble_conversation" and baseline_state != "bumble_conversation":
+        return {**result, "status": "blocked", "reason": "bumble_conversation_not_verified"}
+    if not _message_text_matches(observed_text, expected_text):
+        return {**result, "status": "needs_verification", "reason": "staged_text_not_verified"}
+    if baseline_stats and observed_stats["expected_text_occurrences"] <= baseline_stats["expected_text_occurrences"]:
+        return {**result, "status": "needs_verification", "reason": "staged_text_not_newly_visible"}
+    if not _bumble_send_marker_visible(observed_text) and not active_send_button_visible:
+        return {**result, "status": "needs_verification", "reason": "bumble_send_button_not_verified_after_staging"}
+    return {**result, "status": "ok"}
+
+
+def _verify_bumble_outbound_message(
+    screen: dict[str, Any],
+    expected_text: str,
+    *,
+    staged_screen: dict[str, Any] | None = None,
+    trusted_direct_input: bool = False,
+) -> dict[str, Any]:
+    result = _verify_outbound_message(screen, expected_text)
+    observed_text = str(screen.get("text") or "")
+    staged_text = str(staged_screen.get("text") or "") if isinstance(staged_screen, dict) else ""
+    observed_stats = _expected_text_observation_stats(observed_text, expected_text)
+    staged_stats = _expected_text_observation_stats(staged_text, expected_text) if staged_text else None
+    outgoing_bubble_visible = _bumble_outgoing_bubble_visual_visible(screen)
+    staged_outgoing_bubble_visible = (
+        _bumble_outgoing_bubble_visual_visible(staged_screen) if isinstance(staged_screen, dict) else False
+    )
+    extra = {
+        "verification_method": "bumble_post_send_ocr_payload_text_delta",
+        "observed_expected_text_occurrences": observed_stats["expected_text_occurrences"],
+        "staged_expected_text_occurrences": staged_stats["expected_text_occurrences"] if staged_stats else None,
+        "staged_text_hash": staged_stats["text_hash"] if staged_stats else None,
+        "input_cleared_after_send": not _bumble_send_marker_visible(observed_text)
+        and not _bumble_active_send_button_visual_visible(screen),
+        "outgoing_bubble_visual_visible": outgoing_bubble_visible,
+        "staged_outgoing_bubble_visual_visible": staged_outgoing_bubble_visible,
+        "exact_text_ocr_verified": result.get("status") == "ok",
+        "visual_only_exact_verification_allowed": False,
+    }
+    if result.get("status") != "ok":
+        return {**result, **extra}
+    if screen.get("state") != "bumble_conversation":
+        return {**result, **extra, "status": "needs_verification", "reason": "bumble_conversation_not_verified"}
+    if extra["input_cleared_after_send"] is not True:
+        return {**result, **extra, "status": "needs_verification", "reason": "outbound_message_not_verified"}
+    return {**result, **extra, "status": "ok"}
+
+
 def _verify_outbound_message(screen: dict[str, Any], expected_text: str) -> dict[str, Any]:
     observed_text = str(screen.get("text") or "")
     text_matches = _message_text_matches(observed_text, expected_text)
@@ -2366,6 +2866,49 @@ def _tinder_send_marker_visible(text: str) -> bool:
         if stripped in {"send", "发送"}:
             return True
     return False
+
+
+def _bumble_send_marker_visible(text: str) -> bool:
+    for line in text.splitlines():
+        stripped = line.strip().lower()
+        if stripped in {"send", "发送"}:
+            return True
+    return False
+
+
+def _bumble_active_send_button_visual_visible(screen: dict[str, Any]) -> bool:
+    stats = _screen_region_stats(screen, 0.88, 0.89, 0.98, 0.96)
+    if stats is None:
+        return False
+    return stats["color_ratio"] > 0.08 and stats["bright_ratio"] > 0.45
+
+
+def _bumble_outgoing_bubble_visual_visible(screen: dict[str, Any] | None) -> bool:
+    if not isinstance(screen, dict):
+        return False
+    stats = _screen_region_stats(screen, 0.78, 0.26, 0.98, 0.62)
+    if stats is None:
+        return False
+    return stats["color_ratio"] > 0.035 and stats["bright_ratio"] > 0.70
+
+
+def _screen_region_stats(screen: dict[str, Any], x1: float, y1: float, x2: float, y2: float) -> dict[str, float] | None:
+    path = screen.get("path")
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        pixels = _read_png_pixels_for_send_button(Path(path))
+    except (OSError, ValueError, zlib.error, struct.error):
+        return None
+    return _region_stats_for_send_button(pixels, x1, y1, x2, y2)
+
+
+def _bumble_direct_type_fallback_allowed(text: str) -> bool:
+    return bool(text) and "\n" not in text and all(32 <= ord(char) <= 126 for char in text)
+
+
+def _applescript_string_literal(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _tinder_send_button_visual_visible(screen: dict[str, Any]) -> bool:

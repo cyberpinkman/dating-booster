@@ -173,6 +173,7 @@
     "harness bumble observe",
     "harness bumble action",
     "harness bumble workflow",
+    "harness bumble send-message",
     "harness wechat launch",
     "harness wechat observe",
     "harness wechat stage-draft",

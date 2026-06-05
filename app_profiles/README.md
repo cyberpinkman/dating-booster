@@ -15,7 +15,8 @@ every `app_profiles/*.json` file against the same required contract shape.
 - `wechat.json`: macOS WeChat desktop observation, draft-staging, and
   explicitly authorized managed live-send contract.
 - `bumble.json`: Bumble iPhone Mirroring launch, observation, profile/chat
-  navigation, and Opening Move observation without draft staging or live send.
+  navigation, role-sensitive Opening Move observation/drafting policy, and
+  explicitly authorized managed ordinary-chat live-send contract.
 
 ## Required Fields
 
@@ -63,8 +64,10 @@ Every native harness block should define:
 - Managed live send: app can execute a tightly gated `send_message` only when
   the profile exposes `live_send`, the CLI receives explicit authorization,
   safety is active, a policy-checked action request is bound to the target chat,
-  staged text is exactly verified, and the outbound bubble is verified from
-  fresh post-action evidence.
+  the target binding includes app-specific identity evidence, staged text is
+  exactly verified, and the outbound bubble is verified from fresh post-action
+  evidence. Visual-only button or bubble evidence is never exact-text
+  verification.
 
 ## Adding A New Dating App
 
@@ -98,7 +101,9 @@ requires it.
 - Managed live send defaults to off and is represented as a conditional
   exception, not by removing `send` from default blocked actions.
 - Latest inbound messages are clearly separated from old visible context.
-- Draft staging requires exact staged-text verification.
+- Draft staging requires exact staged-text verification. For Bumble, paste is
+  primary and direct typing is only a fallback; OCR must still verify the exact
+  payload text before Send.
 - Raw OCR text is not exposed in normal JSON output when it could contain
   private chat history.
 - Unsupported actions include app-specific high-risk operations such as likes,
