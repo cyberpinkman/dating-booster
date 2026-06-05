@@ -10,7 +10,7 @@
   ],
   "message_list_observation": [
     "Observe only visible rows in the 消息 page and the visible 待回答 cards.",
-    "Use candidate_key = visible_name + row_index_or_gate_index + latest_preview_hash.",
+    "Use candidate_key = visible_name when OCR-readable, otherwise row_index_or_gate_index + latest_preview_hash/status cue + row or avatar visual evidence.",
     "Record whether the item is an ordinary conversation, pending question-gate item, or premium/liked-you gate.",
     "Do not open discovery, like, pass, or 飞行 start-chat controls while scanning messages."
   ],
@@ -108,7 +108,7 @@
         "x": 0.18,
         "y": 0.2
       },
-      "input_source_retry": "Type tashu first because iOS Siri suggestions surface 她说 for tashu but not reliably for tashuo; verify the app result by screenshot/OCR before tapping."
+      "input_source_retry": "Type tashu without a trailing space because iOS Siri suggestions surface 她说 for tashu but not reliably for tashuo; verify the app result by screenshot/OCR before tapping."
     },
     "bottom_navigation": {
       "recommend_tab_tap_ratio": {
@@ -220,14 +220,17 @@
     "If exact text or input-cleared evidence is not verifiable, record unknown or block managed send."
   ],
   "known_gui_pitfalls": [
-    "TaShuo full query tashuo may not surface the app in iOS search; use tashu and verify the 她说 app result.",
+    "TaShuo full query tashuo may not surface the app in iOS search; use tashu, do not press a trailing space in Spotlight, and verify the 她说 app result before tapping.",
     "Home Screen or App Library page changes must use trackpad-style wheel/scroll gestures, not click-drag, because click-drag can enter edit mode.",
     "The 推荐 card like/pass/special buttons are high-risk dating actions and are not navigation.",
     "飞行 shows a map prompt to tap screen and start chat; do not tap the map/start-chat surface during autonomous observation.",
     "待回答/question-gate pages are not ordinary chat threads until the user-owned gate decision permits conversation.",
     "Question-gate replies require user confirmation and are not eligible for autonomous question-gate send.",
     "macOS pbcopy alone may not update iPhone Universal Clipboard; do not treat clipboard state as TaShuo staging evidence.",
-    "TaShuo live send requires a target-specific marker such as the visible match name; generic UI text like 点击此处输入文字, 发送, 待回答, or 全部消息 is not enough.",
+    "If Cmd+V or paste produces a literal shortcut key such as v, an IME candidate, or any wrong text, cancel/refocus/backspace-clean it, verify the input is empty or safe, and block instead of continuing.",
+    "TaShuo live send requires either a target-specific text marker such as the visible match name or allowed structural row-to-thread evidence; generic UI text like 点击此处输入文字, 发送, 待回答, or 全部消息 is not enough.",
+    "Emoji or otherwise non-OCR nicknames are valid targets in any message-list row; bind the intended row with chat_list_row_to_thread evidence instead of switching to an OCR-friendly conversation.",
+    "Ordinary conversation classification can use the persistent bottom input toolbar and four tool buttons as page-structure evidence; exact payload verification still requires OCR/text evidence, while target binding may use allowed row-to-thread structure.",
     "Visual send-button or bubble evidence can support diagnosis but cannot replace exact OCR verification of the payload text.",
     "Non-ABC input sources can leave app names in the iOS Spotlight candidate bar; verify the app result after typing before tapping."
   ],
@@ -393,7 +396,7 @@
           "x": 0.18,
           "y": 0.2
         },
-        "input_source_retry": "Type tashu first and verify 她说/TaShuo result before tapping."
+        "input_source_retry": "Type tashu without a trailing space and verify 她说/TaShuo result before tapping."
       }
     },
     "blocked_actions": [
@@ -415,6 +418,9 @@
   "target_binding": {
     "requires_target_binding": true,
     "requires_target_specific_marker": true,
+    "allowed_structural_binding_types": [
+      "chat_list_row_to_thread"
+    ],
     "generic_marker_blacklist": [
       "hi",
       "hello",

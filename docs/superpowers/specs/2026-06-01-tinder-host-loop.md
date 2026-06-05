@@ -54,6 +54,8 @@ Processed host inputs are moved into `consumed/`.
 - Re-locate the current input box before every click.
 - Use paste for Chinese text; do not depend on direct Chinese typing.
 - Verify staged text exactly equals `payload_text`.
+- If paste produces a literal shortcut key, IME candidate, or any wrong text,
+  clear the input and block instead of continuing on top of dirty input.
 - If input position drifts, leave and reopen the thread instead of repeatedly
   clicking stale coordinates.
 - Record `succeeded` only after a fresh post-action observation confirms a sent

@@ -55,6 +55,7 @@ from dating_boost.harness.screen_state import (
 )
 from dating_boost.core.live_send_contract import (
     bumble_target_binding_specific_marker_present,
+    target_binding_structural_evidence_present,
 )
 from dating_boost.core.support import classify_text_topics
 
@@ -290,7 +291,7 @@ class NativeGuiHarness:
         *,
         expected_app_labels: list[str] | None = None,
     ) -> dict[str, Any]:
-        first_type = self._type_text_with_ime_commit(app_name, failure_reason="text_entry_failed")
+        first_type = self._type_text_without_ime_commit(app_name, failure_reason="text_entry_failed")
         if first_type["status"] != "ok":
             return first_type
         time.sleep(0.2)
@@ -301,7 +302,7 @@ class NativeGuiHarness:
                 "status": "ok",
                 "search_result_verified": True,
                 "retried_after_input_source_switch": False,
-                "ime_commit_after_typing": True,
+                "ime_commit_after_typing": False,
                 "expected_app_labels": list(expected_app_labels or [app_name]),
                 "text_entry": first_type,
                 "verification": _redacted_screen(first_screen),
@@ -331,7 +332,7 @@ class NativeGuiHarness:
                     "input_source_switch": switch,
                 }
         time.sleep(0.3)
-        second_type_payload = self._type_text_with_ime_commit(app_name, failure_reason="text_entry_retry_failed")
+        second_type_payload = self._type_text_without_ime_commit(app_name, failure_reason="text_entry_retry_failed")
         if second_type_payload["status"] != "ok":
             return {
                 **second_type_payload,
@@ -355,7 +356,7 @@ class NativeGuiHarness:
             "status": "ok",
             "search_result_verified": True,
             "retried_after_input_source_switch": True,
-            "ime_commit_after_typing": True,
+            "ime_commit_after_typing": False,
             "expected_app_labels": list(expected_app_labels or [app_name]),
             "first_verification": _redacted_screen(first_screen),
             "retry_verification": _redacted_screen(second_screen),
@@ -363,6 +364,14 @@ class NativeGuiHarness:
             "retry_text_entry": second_type_payload,
             "input_source_switch": switch,
         }
+
+    def _type_text_without_ime_commit(self, text: str, *, failure_reason: str) -> dict[str, Any]:
+        type_result = self.runner.run(
+            ["osascript", "-e", f'tell application "System Events" to keystroke {_applescript_string_literal(text)}']
+        )
+        if type_result.returncode != 0:
+            return {"status": "blocked", "reason": failure_reason, "stderr": _short(type_result.stderr)}
+        return {"status": "ok", "input_backend": "applescript_direct_keystroke", "ime_commit_key": None}
 
     def _type_text_with_ime_commit(self, text: str, *, failure_reason: str) -> dict[str, Any]:
         type_result = self.runner.run(
@@ -448,6 +457,20 @@ class NativeGuiHarness:
         if result.returncode != 0:
             return {"status": "blocked", "reason": "ime_commit_space_failed", "stderr": _short(result.stderr)}
         return {"status": "ok", "input_backend": "applescript_accessibility", "ime_commit_key": "space"}
+
+    def _press_escape_key(self) -> dict[str, Any]:
+        result = self.runner.run(["osascript", "-e", 'tell application "System Events" to key code 53'])
+        if result.returncode != 0:
+            return {"status": "blocked", "reason": "escape_key_failed", "stderr": _short(result.stderr)}
+        return {"status": "ok", "input_backend": "applescript_accessibility", "key": "escape"}
+
+    def _press_backspace_key(self) -> dict[str, Any]:
+        result = self.runner.run(
+            ["osascript", "-e", 'tell application "System Events" to keystroke (ASCII character 8)']
+        )
+        if result.returncode != 0:
+            return {"status": "blocked", "reason": "backspace_key_failed", "stderr": _short(result.stderr)}
+        return {"status": "ok", "input_backend": "applescript_accessibility", "key": "backspace"}
 
     def _ocr(self, image_path: Path) -> dict[str, str]:
         if not self._command_available("tesseract"):

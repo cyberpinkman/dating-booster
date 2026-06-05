@@ -366,7 +366,9 @@ entry as unreliable until verified. For Chinese or long messages, prefer:
 1. Use foreground app copy when possible: put the exact payload text in a
    normal Mac app, select it, and copy it with a real `Cmd+C`. Do not assume
    `pbcopy` alone will trigger Universal Clipboard.
-2. Focus the iOS input box.
+2. Focus the current iOS input box from a fresh observation. Use harness/window
+   coordinates, not coordinates estimated from the rendered screenshot in chat;
+   re-focus before every keyboard command.
 3. Try `Cmd+V` as a staging shortcut only after the input box is focused and
    positioned normally. If it stages the exact text, continue to verification.
 4. If `Cmd+V` does not stage text, long-press or two-finger/right-click the iOS
@@ -382,10 +384,27 @@ bubble verification from a fresh observation. If the sent text differs from the
 requested payload, record `result_status` as `failed` or `unknown`, not
 `succeeded`.
 
+If paste produces a literal shortcut key such as `v`, an IME candidate, or any
+other wrong text, cancel the candidate if present, re-focus the exact input box,
+Backspace the wrong text, verify the input is empty or safe, and block the
+action. Do not continue by direct-typing on top of an occupied input.
+
 If the iPhone Mirroring input box shows position drift after full-screen input,
 keyboard layout changes, or viewport changes, do not keep probing coordinates.
 Back out and reopen the chat thread so the input box returns to its normal
 location, then restart staging from a fresh observation.
+
+For iOS Spotlight app launch under Chinese input methods, type the app search
+term without a trailing space, verify the app result by screenshot/OCR, and tap
+only after verification. A trailing space can commit Pinyin candidates such as
+`tashu` -> `他书`.
+
+Target binding is not interchangeable with target selection. If the requested
+target has an emoji or otherwise non-OCR nickname, keep the same target and
+collect app-specific structural evidence, such as message-list row index/bounds
+plus the `open-conversation` transition into an ordinary thread. Blocking is
+only a fail-safe when same-target evidence cannot be collected or verified
+before any send attempt; never choose another OCR-friendly conversation.
 
 ## Goal-Oriented Operator Session
 

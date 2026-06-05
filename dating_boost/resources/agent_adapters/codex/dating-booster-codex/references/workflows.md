@@ -155,7 +155,7 @@ Supported high-level workflows:
   read the match profile, and return to that conversation for the next opener
   step.
 
-Use `open-conversation --options-json <path>` for existing message-list rows. Keep target-binding evidence inside that options file.  The options JSON may contain `visible_name`, `row_index`, `target`, and `target_binding`; use avatar targeting only as a compatibility fallback when the visible target is clear and stable. Treat the
+Use `open-conversation --options-json <path>` for existing message-list rows. Keep target-binding evidence inside that options file.  The options JSON may contain `visible_name` when OCR-readable, `row_index`, `target`, and `target_binding`; for emoji or non-OCR nicknames, carry `chat_list_row_to_thread` evidence for the intended row. Use avatar targeting only as a compatibility fallback when the visible target is clear and stable. Treat the
 top horizontal carousel as new or not-yet-started matches; treat the vertical
 message list as opened conversations. The text marker `等你回应` is only an
 observation cue that the match sent the latest message; it is not by itself an
@@ -320,7 +320,9 @@ Preferred execution path:
    `action_request.payload_text` in a normal Mac app, select it, and copy it
    with a real `Cmd+C`. Do not assume `pbcopy` alone will trigger Universal
    Clipboard.
-2. Focus the iOS chat input box.
+2. Focus the current iOS chat input box from a fresh observation. Use the
+   harness/window coordinate system, not coordinates estimated from a rendered
+   screenshot in chat. Re-focus before every keyboard command.
 3. Try `Cmd+V` as a staging shortcut only after the input box is focused and
    positioned normally. If it stages the exact text, continue to verification.
 4. If `Cmd+V` does not stage text, long-press or two-finger/right-click the iOS
@@ -341,11 +343,28 @@ mismatch is clear, or `result_status: "unknown"` when verification is
 inconclusive. Do not send a second recovery message until the current mismatch
 is recorded and a fresh thread observation produces a new action request.
 
+If paste produces a literal shortcut key such as `v`, an IME candidate, or any
+other wrong text, cancel the candidate if present, re-focus the exact input box,
+Backspace the wrong text, verify the input is empty or safe, and block the
+action. Do not continue with direct typing on top of an occupied input.
+
 If the input box has position drift after full-screen input, a keyboard mode
 change, or a viewport shift, do not keep probing stale coordinates. Back out
 and reopen the chat thread, verify the input box is back in its normal location,
 then repeat foreground app copy, long-press, Paste, and staged-text
 verification.
+
+For iOS Spotlight app launch under Chinese input methods, type the app search
+term without a trailing space, verify the app result by screenshot/OCR, and tap
+only after verification. A trailing space can commit a Pinyin candidate such as
+`tashu` -> `他书` and hide the intended app.
+
+Target binding is not interchangeable with target selection. If the requested
+target has an emoji or otherwise non-OCR nickname, keep the same target and
+collect app-specific structural evidence, such as message-list row index/bounds
+plus the `open-conversation` transition into an ordinary thread. Blocking is
+only a fail-safe when same-target evidence cannot be collected or verified
+before any send attempt; never choose another OCR-friendly conversation.
 
 ## Feedback
 

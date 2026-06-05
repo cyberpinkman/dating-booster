@@ -10,7 +10,7 @@
   ],
   "message_list_observation": [
     "Observe only visible rows.",
-    "Use candidate_key = visible_name + row_index + latest_preview_hash.",
+    "Use candidate_key = visible_name when OCR-readable, otherwise row_index + latest_preview_hash/timestamp cue + row or avatar visual evidence.",
     "Do not draft until the thread has been opened."
   ],
   "thread_observation": [
@@ -218,7 +218,8 @@
   "known_gui_pitfalls": [
     "Input box position can change after full-screen input closes.",
     "Re-locate the current input box before every click.",
-    "Do not reuse stale coordinates."
+    "Do not reuse stale coordinates.",
+    "Emoji or otherwise non-OCR nicknames are valid targets in any message-list row; bind the intended row with chat_list_row_to_thread evidence instead of switching to an OCR-friendly conversation."
   ],
   "unsupported_actions": [
     "like",
@@ -453,6 +454,9 @@
   "target_binding": {
     "requires_target_binding": true,
     "requires_target_specific_marker": false,
+    "allowed_structural_binding_types": [
+      "chat_list_row_to_thread"
+    ],
     "generic_marker_blacklist": [],
     "visual_only_exact_verification_allowed": false
   },

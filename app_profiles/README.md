@@ -42,7 +42,9 @@ every `app_profiles/*.json` file against the same required contract shape.
   live actions as consumed by the registry.
 - `selectors`: app-owned coordinates/selectors and blocked native actions.
 - `target_binding`: generic target-binding requirements, target-specific marker
-  policy, generic-marker blacklist, and visual-only verification boundary.
+  policy, allowed structural binding types such as row-to-thread evidence for
+  non-OCR nicknames, generic-marker blacklist, and visual-only verification
+  boundary.
 - `live_send_requirements`: exact evidence required before/after live send.
 - `managed_session`: profile-owned precheck failure status and recovery action.
 - `special_policies`: app-specific social rules such as Bumble Opening Move or
@@ -83,10 +85,10 @@ Every native harness block should define:
 - Managed live send: app can execute a tightly gated `send_message` only when
   the profile exposes `live_send`, the CLI receives explicit authorization,
   safety is active, a policy-checked action request is bound to the target chat,
-  the target binding includes app-specific identity evidence, staged text is
-  exactly verified, and the outbound bubble is verified from fresh post-action
-  evidence. Visual-only button or bubble evidence is never exact-text
-  verification.
+  the target binding includes app-specific identity evidence from text markers
+  or allowed structural evidence, staged text is exactly verified, and the
+  outbound bubble is verified from fresh post-action evidence. Visual-only
+  button or bubble evidence is never exact-text verification.
 
 ## Adding A New Dating App
 

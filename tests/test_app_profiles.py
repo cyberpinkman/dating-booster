@@ -151,6 +151,7 @@ class AppProfileContractTests(unittest.TestCase):
         self.assertEqual(profile["native_gui_harness"]["launch_navigation"]["bundle_id"], "com.intelcupid.tashuo")
         self.assertTrue(profile["native_gui_harness"]["live_send"]["requires_exact_staged_text_verification"])
         self.assertTrue(profile["native_gui_harness"]["live_send"]["requires_outbound_bubble_verification"])
+        self.assertIn("chat_list_row_to_thread", profile["target_binding"]["allowed_structural_binding_types"])
 
         policy = profile["question_gate_policy"]
 
@@ -184,6 +185,12 @@ class AppProfileContractTests(unittest.TestCase):
                 "question_gate_send",
             }.issubset(blocked)
         )
+
+    def test_iphone_dating_apps_allow_row_to_thread_binding_for_non_ocr_nicknames(self):
+        for app_id in ("tinder", "bumble", "tashuo"):
+            with self.subTest(app_id=app_id):
+                profile = json.loads((PROFILE_DIR / f"{app_id}.json").read_text(encoding="utf-8"))
+                self.assertIn("chat_list_row_to_thread", profile["target_binding"]["allowed_structural_binding_types"])
 
     def test_live_send_required_evidence_names_match_harness_payload_keys(self):
         known_evidence_keys = {

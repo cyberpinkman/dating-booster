@@ -2071,6 +2071,18 @@ class AppSpecificNativeGuiSessionMixin:
         *,
         output_dir: Path | None = None,
     ) -> dict[str, Any]:
+        if target_binding.get("binding_type") == "chat_list_row_to_thread":
+            return self._verify_chat_list_row_target_binding(
+                app_id="tinder",
+                target_binding=target_binding,
+                output_dir=output_dir,
+                source_states={"tinder_messages"},
+                conversation_state="tinder_conversation",
+                blocked_state_reasons={TINDER_SUBSCRIPTION_PAYWALL_STATE: "tinder_subscription_paywall_visible"},
+                output_name="iphone_mirroring.tinder.target_binding.png",
+                verification_method="tinder_chat_list_row_to_thread_structural_binding",
+            )
+
         markers = _target_binding_required_markers(target_binding)
         base = {
             "verification_method": "tinder_screen_ocr_required_visible_text",
@@ -2114,6 +2126,18 @@ class AppSpecificNativeGuiSessionMixin:
         *,
         output_dir: Path | None = None,
     ) -> dict[str, Any]:
+        if target_binding.get("binding_type") == "chat_list_row_to_thread":
+            return self._verify_chat_list_row_target_binding(
+                app_id="bumble",
+                target_binding=target_binding,
+                output_dir=output_dir,
+                source_states={"bumble_chat_list"},
+                conversation_state="bumble_conversation",
+                blocked_state_reasons={"bumble_opening_move": "bumble_opening_move_requires_user_confirmation"},
+                output_name="iphone_mirroring.bumble.target_binding.png",
+                verification_method="bumble_chat_list_row_to_thread_structural_binding",
+            )
+
         markers = _target_binding_required_markers(target_binding)
         base = {
             "verification_method": "bumble_screen_ocr_required_visible_text",
@@ -2151,6 +2175,74 @@ class AppSpecificNativeGuiSessionMixin:
             return {**result, "status": "blocked", "reason": "target_binding_chat_not_verified"}
         if len(matched) != len(markers):
             return {**result, "status": "blocked", "reason": "target_binding_mismatch"}
+        return {**result, "status": "ok"}
+
+
+    def _verify_chat_list_row_target_binding(
+        self,
+        *,
+        app_id: str,
+        target_binding: dict[str, Any],
+        output_dir: Path | None,
+        source_states: set[str],
+        conversation_state: str,
+        blocked_state_reasons: dict[str, str],
+        output_name: str,
+        verification_method: str,
+    ) -> dict[str, Any]:
+        selection_evidence = (
+            target_binding.get("selection_evidence")
+            if isinstance(target_binding.get("selection_evidence"), dict)
+            else {}
+        )
+        row_index = selection_evidence.get("row_index")
+        base = {
+            "verification_method": verification_method,
+            "binding_type": target_binding.get("binding_type"),
+            "target_match_id": target_binding.get("target_match_id"),
+            "candidate_key": target_binding.get("candidate_key"),
+            "row_index": row_index,
+            "source_state": selection_evidence.get("source_state"),
+            "opened_state": selection_evidence.get("opened_state"),
+            "target_scope": selection_evidence.get("target_scope"),
+            "open_action": selection_evidence.get("open_action"),
+            "requires_target_specific_marker": True,
+            "requires_header_marker": False,
+            "emoji_nickname_supported": True,
+            "visual_only_exact_verification_allowed": False,
+        }
+        if not target_binding_structural_evidence_present(app_id, target_binding):
+            return {**base, "status": "blocked", "reason": "target_binding_structural_evidence_required"}
+        if selection_evidence.get("source_state") not in source_states:
+            return {**base, "status": "blocked", "reason": "target_binding_source_state_mismatch"}
+        if selection_evidence.get("opened_state") != conversation_state:
+            return {**base, "status": "blocked", "reason": "target_binding_opened_state_mismatch"}
+        if selection_evidence.get("open_action") != "open-conversation":
+            return {**base, "status": "blocked", "reason": "target_binding_open_action_mismatch"}
+        target_scope = selection_evidence.get("target_scope")
+        if target_scope not in {None, "ordinary_conversation", "existing_conversation"}:
+            return {**base, "status": "blocked", "reason": "target_binding_scope_not_ordinary_conversation"}
+        window = self._window_info()
+        if window is None:
+            return {**base, "status": "blocked", "reason": "iphone_mirroring_window_not_found"}
+        output = output_dir / output_name if output_dir is not None else None
+        screen = self.capture_window(output=output, window=window)
+        observed_text = str(screen.get("text") or "")
+        result = {
+            **base,
+            "screen": _redacted_screen(screen),
+            "screen_state": screen.get("state", "unknown"),
+            "observed_text_hash": _hash_text(observed_text) if observed_text else None,
+        }
+        if screen.get("status") != "ok":
+            return {**result, "status": "blocked", "reason": "target_binding_screen_capture_failed"}
+        if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
+            return {**result, "status": "blocked", "reason": screen.get("state")}
+        blocked_reason = blocked_state_reasons.get(str(screen.get("state") or ""))
+        if blocked_reason:
+            return {**result, "status": "blocked", "reason": blocked_reason}
+        if screen.get("state") != conversation_state:
+            return {**result, "status": "blocked", "reason": "target_binding_chat_not_verified"}
         return {**result, "status": "ok"}
 
 

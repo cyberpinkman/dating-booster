@@ -60,17 +60,21 @@ def classify_tashuo_screen_image(path: Path) -> dict[str, Any]:
         return {"status": "failed", "state": "unknown", "active_tab": "unknown", "bottom_nav_present": False}
     bottom_nav = _tashuo_bottom_nav_hint(pixels)
     bottom_nav_present = bool(bottom_nav["present"])
+    conversation_toolbar = _tashuo_conversation_toolbar_hint(pixels)
     state = {
         "recommend": "tashuo_recommend",
         "flight": "tashuo_flight",
         "messages": "tashuo_chat_list",
         "mine": "tashuo_self_profile",
     }.get(str(bottom_nav["active_tab"]), "unknown")
+    if state == "unknown" and not bottom_nav_present and conversation_toolbar["present"]:
+        state = "tashuo_conversation"
     return {
         "status": "ok",
         "state": state,
         "active_tab": str(bottom_nav["active_tab"]),
         "bottom_nav_present": bottom_nav_present,
+        "conversation_toolbar_present": conversation_toolbar["present"],
     }
 
 
@@ -96,6 +100,8 @@ def combine_tashuo_screen_states(
         and _tashuo_top_level_nav_text_present(normalized)
     ):
         return visual_state
+    if visual_state == "tashuo_conversation" and text_state in {"unknown", "tashuo_unknown"}:
+        return "tashuo_conversation"
     return text_state
 
 
@@ -211,7 +217,9 @@ def _looks_like_tashuo_conversation_text(normalized_text: str) -> bool:
     input_marker = _tashuo_message_input_marker_present(normalized_text)
     thread_marker = any(marker in normalized_text for marker in ("永久聊天", "可以聊天啦", "点击此处输入文字", "发送"))
     visible_name_marker = bool(re.search(r"\b[a-z][a-z0-9_ .'-]{1,30}\b", normalized_text))
-    return input_marker and (thread_marker or visible_name_marker)
+    if input_marker and (thread_marker or visible_name_marker):
+        return True
+    return False
 
 
 def _looks_like_tashuo_profile_text(normalized_text: str) -> bool:
@@ -273,3 +281,54 @@ def _tashuo_bottom_nav_hint(pixels: dict[str, Any]) -> dict[str, Any]:
         return {"present": True, "active_tab": "unknown"}
     active = max(active_slots, key=lambda slot: slot["active_signal"])
     return {"present": True, "active_tab": str(active["name"])}
+
+
+def _tashuo_conversation_toolbar_hint(pixels: dict[str, Any]) -> dict[str, Any]:
+    input_pill_signal = _region_nonwhite_ratio(pixels, 0.06, 0.845, 0.94, 0.902, threshold=245)
+    slots = (
+        ("voice", 0.08, 0.20),
+        ("image", 0.32, 0.44),
+        ("emoji", 0.56, 0.68),
+        ("extras", 0.80, 0.92),
+    )
+    slot_results = [
+        {
+            "name": name,
+            "signal": _region_nonwhite_ratio(pixels, x1, 0.912, x2, 0.955, threshold=235),
+        }
+        for name, x1, x2 in slots
+    ]
+    visible_slots = sum(1 for slot in slot_results if slot["signal"] > 0.10)
+    return {
+        "present": input_pill_signal > 0.55 and visible_slots >= 4,
+        "input_pill_signal": input_pill_signal,
+        "visible_toolbar_slots": visible_slots,
+    }
+
+
+def _region_nonwhite_ratio(
+    pixels: dict[str, Any],
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    *,
+    threshold: int,
+) -> float:
+    width = int(pixels["width"])
+    height = int(pixels["height"])
+    rows = pixels["rows"]
+    channels = int(pixels["channels"])
+    start_x = max(0, min(width - 1, int(x1 * width)))
+    end_x = max(start_x + 1, min(width, int(x2 * width)))
+    start_y = max(0, min(height - 1, int(y1 * height)))
+    end_y = max(start_y + 1, min(height, int(y2 * height)))
+    total = nonwhite = 0
+    for row in rows[start_y:end_y]:
+        for x in range(start_x, end_x):
+            r, g, b = row[x * channels : x * channels + 3]
+            lum = (int(r) + int(g) + int(b)) / 3
+            total += 1
+            if lum < threshold:
+                nonwhite += 1
+    return nonwhite / total if total else 0.0

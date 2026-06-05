@@ -14,7 +14,10 @@ from dating_boost.apps.tashuo.screen_state import (
     tashuo_top_level_bottom_nav_present,
 )
 from dating_boost.apps import native_gui_session as platform
-from dating_boost.core.live_send_contract import target_binding_specific_marker_present
+from dating_boost.core.live_send_contract import (
+    target_binding_specific_marker_present,
+    target_binding_structural_evidence_present,
+)
 
 
 TASHUO_BLOCKED_GUI_ACTIONS = [
@@ -427,6 +430,14 @@ def send_tashuo_message(
         payload["staged_text_verification"] = staged_verification
         payload["staged_text_verified"] = staged_verification.get("status") == "ok"
         if staged_verification.get("status") != "ok":
+            cleanup_result = _cleanup_failed_tashuo_stage(
+                session,
+                window,
+                input_step,
+                expected_text=draft_text,
+                output_dir=output_dir,
+            )
+            payload["failed_stage_cleanup"] = cleanup_result
             payload.update({
                 "status": "blocked",
                 "reason": staged_verification.get("reason") or "staged_text_not_verified",
@@ -498,6 +509,9 @@ def _verify_tashuo_target_binding(
     *,
     output_dir: Path | None = None,
 ) -> dict[str, Any]:
+    if target_binding.get("binding_type") == "chat_list_row_to_thread":
+        return _verify_tashuo_chat_list_row_target_binding(session, target_binding, output_dir=output_dir)
+
     markers = platform._target_binding_required_markers(target_binding)
     base = {
         "verification_method": "tashuo_screen_ocr_required_visible_text",
@@ -543,6 +557,65 @@ def _verify_tashuo_target_binding(
         return {**result, "status": "blocked", "reason": "target_binding_mismatch"}
     if not header_matched:
         return {**result, "status": "blocked", "reason": "target_binding_header_mismatch"}
+    return {**result, "status": "ok"}
+
+
+def _verify_tashuo_chat_list_row_target_binding(
+    session: Any,
+    target_binding: dict[str, Any],
+    *,
+    output_dir: Path | None = None,
+) -> dict[str, Any]:
+    selection_evidence = (
+        target_binding.get("selection_evidence") if isinstance(target_binding.get("selection_evidence"), dict) else {}
+    )
+    row_index = selection_evidence.get("row_index")
+    base = {
+        "verification_method": "tashuo_chat_list_row_to_thread_structural_binding",
+        "binding_type": target_binding.get("binding_type"),
+        "target_match_id": target_binding.get("target_match_id"),
+        "candidate_key": target_binding.get("candidate_key"),
+        "row_index": row_index,
+        "source_state": selection_evidence.get("source_state"),
+        "opened_state": selection_evidence.get("opened_state"),
+        "target_scope": selection_evidence.get("target_scope"),
+        "open_action": selection_evidence.get("open_action"),
+        "requires_target_specific_marker": True,
+        "requires_header_marker": False,
+        "emoji_nickname_supported": True,
+        "visual_only_exact_verification_allowed": False,
+    }
+    if not target_binding_structural_evidence_present("tashuo", target_binding):
+        return {**base, "status": "blocked", "reason": "target_binding_structural_evidence_required"}
+    if selection_evidence.get("source_state") != "tashuo_chat_list":
+        return {**base, "status": "blocked", "reason": "target_binding_source_state_mismatch"}
+    if selection_evidence.get("opened_state") != "tashuo_conversation":
+        return {**base, "status": "blocked", "reason": "target_binding_opened_state_mismatch"}
+    if selection_evidence.get("open_action") != "open-conversation":
+        return {**base, "status": "blocked", "reason": "target_binding_open_action_mismatch"}
+    target_scope = selection_evidence.get("target_scope")
+    if target_scope not in {None, "ordinary_conversation", "existing_conversation"}:
+        return {**base, "status": "blocked", "reason": "target_binding_scope_not_ordinary_conversation"}
+    window = session._window_info()
+    if window is None:
+        return {**base, "status": "blocked", "reason": "iphone_mirroring_window_not_found"}
+    output = output_dir / "iphone_mirroring.tashuo.target_binding.png" if output_dir is not None else None
+    screen = session.capture_window(output=output, window=window)
+    observed_text = str(screen.get("text") or "")
+    result = {
+        **base,
+        "screen": platform._redacted_screen(screen),
+        "screen_state": screen.get("state", "unknown"),
+        "observed_text_hash": platform._hash_text(observed_text) if observed_text else None,
+    }
+    if screen.get("status") != "ok":
+        return {**result, "status": "blocked", "reason": "target_binding_screen_capture_failed"}
+    if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
+        return {**result, "status": "blocked", "reason": screen.get("state")}
+    if screen.get("state") == "tashuo_question_gate":
+        return {**result, "status": "blocked", "reason": "tashuo_question_gate_requires_user_confirmation"}
+    if screen.get("state") != "tashuo_conversation":
+        return {**result, "status": "blocked", "reason": "target_binding_chat_not_verified"}
     return {**result, "status": "ok"}
 
 
@@ -645,6 +718,60 @@ def _tashuo_send_marker_visible(text: str) -> bool:
         if stripped in {"send", "发送"}:
             return True
     return False
+
+
+def _cleanup_failed_tashuo_stage(
+    session: Any,
+    window: Any,
+    input_step: dict[str, Any],
+    *,
+    expected_text: str,
+    output_dir: Path | None = None,
+) -> dict[str, Any]:
+    attempts: list[dict[str, Any]] = []
+    click_result = session._click_ratio(window, input_step["tap_ratio"])
+    attempts.append({"intent": "refocus_tashuo_message_input_for_failed_stage_cleanup", "result": click_result})
+    if click_result.get("status") != "ok":
+        return {
+            "status": "blocked",
+            "reason": click_result.get("reason") or "failed_stage_cleanup_refocus_failed",
+            "attempts": attempts,
+        }
+
+    escape_result = session._press_escape_key()
+    attempts.append({"intent": "cancel_tashuo_input_candidate_for_failed_stage_cleanup", "result": escape_result})
+    backspace_count = min(40, max(4, len(expected_text) + 4))
+    for index in range(backspace_count):
+        backspace_result = session._press_backspace_key()
+        attempts.append({
+            "intent": "backspace_tashuo_failed_stage_text",
+            "index": index,
+            "result": backspace_result,
+        })
+        if backspace_result.get("status") != "ok":
+            return {
+                "status": "blocked",
+                "reason": backspace_result.get("reason") or "failed_stage_cleanup_backspace_failed",
+                "attempts": attempts,
+            }
+    time.sleep(0.2)
+    output = output_dir / "iphone_mirroring.tashuo.after_failed_stage_cleanup.png" if output_dir is not None else None
+    screen = session.capture_window(output=output, window=window)
+    observed_text = str(screen.get("text") or "")
+    expected_still_visible = platform._message_text_matches(observed_text, expected_text)
+    active_send_button_visible = _tashuo_active_send_button_visual_visible(screen)
+    result = {
+        "attempts": attempts,
+        "screen": platform._redacted_screen(screen),
+        "expected_payload_hash": platform._hash_text(expected_text),
+        "expected_text_still_visible": expected_still_visible,
+        "active_send_button_visual_visible": active_send_button_visible,
+    }
+    if screen.get("status") != "ok":
+        return {**result, "status": "needs_verification", "reason": "failed_stage_cleanup_screen_not_captured"}
+    if expected_still_visible or active_send_button_visible:
+        return {**result, "status": "needs_verification", "reason": "failed_stage_cleanup_not_verified"}
+    return {**result, "status": "ok"}
 
 
 def _tashuo_active_send_button_visual_visible(screen: dict[str, Any]) -> bool:

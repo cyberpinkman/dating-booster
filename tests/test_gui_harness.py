@@ -351,10 +351,10 @@ class GuiHarnessTests(unittest.TestCase):
         type_step = next(step for step in payload["executed_steps"] if step["intent"] == "type_app_name_verified")
         self.assertTrue(type_step["result"]["retried_after_input_source_switch"])
         self.assertTrue(any("key code 49" in " ".join(command) and "control down" in " ".join(command) for command in runner.commands))
-        self.assertGreaterEqual(
-            sum(1 for command in runner.commands if "key code 49" in " ".join(command) and "control down" not in " ".join(command)),
-            2,
+        self.assertFalse(
+            any("key code 49" in " ".join(command) and "control down" not in " ".join(command) for command in runner.commands)
         )
+        self.assertFalse(type_step["result"]["ime_commit_after_typing"])
 
     def test_bumble_launch_does_not_switch_input_source_when_first_search_has_app_result(self):
         runner = FakeRunner(
@@ -371,8 +371,8 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         type_step = next(step for step in payload["executed_steps"] if step["intent"] == "type_app_name_verified")
         self.assertFalse(type_step["result"]["retried_after_input_source_switch"])
-        self.assertTrue(type_step["result"]["ime_commit_after_typing"])
-        self.assertTrue(any("key code 49" in " ".join(command) and "control down" not in " ".join(command) for command in runner.commands))
+        self.assertFalse(type_step["result"]["ime_commit_after_typing"])
+        self.assertFalse(any("key code 49" in " ".join(command) and "control down" not in " ".join(command) for command in runner.commands))
         self.assertFalse(any("key code 49" in " ".join(command) and "control down" in " ".join(command) for command in runner.commands))
 
     def test_bumble_action_and_workflow_dry_runs_are_navigation_only(self):
@@ -440,6 +440,43 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["target_binding_verification"]["status"], "ok")
         self.assertTrue(any(command[:2] == ["xcrun", "swift"] for command in runner.commands))
         self.assertFalse(any('keystroke "v"' in " ".join(command) for command in runner.commands))
+
+    def test_bumble_send_message_accepts_chat_list_row_structural_binding_for_emoji_nickname(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Hi!\nAa\nGIF\n",
+                "Hi!\nAa\nGIF\n",
+                "Hi!\nAa\nGIF\n",
+                "Hi!\nhi\n发送\n",
+                "Hi!\nhi\nAa\nGIF\n",
+            ],
+        )
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.send_bumble_message(
+            "hi",
+            dry_run=False,
+            target_binding={
+                "binding_type": "chat_list_row_to_thread",
+                "target_match_id": "match_bumble_row_5",
+                "candidate_key": "bumble_chat_row_5_emoji",
+                "selection_evidence": {
+                    "source_state": "bumble_chat_list",
+                    "opened_state": "bumble_conversation",
+                    "row_index": 5,
+                    "target_scope": "ordinary_conversation",
+                    "open_action": "open-conversation",
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+        self.assertEqual(
+            payload["target_binding_verification"]["verification_method"],
+            "bumble_chat_list_row_to_thread_structural_binding",
+        )
+        self.assertTrue(payload["target_binding_verification"]["emoji_nickname_supported"])
 
     def test_bumble_send_message_commits_direct_type_ime_candidate_when_needed(self):
         runner = FakeRunner(
@@ -807,7 +844,9 @@ class GuiHarnessTests(unittest.TestCase):
         type_step = next(step for step in payload["executed_steps"] if step["intent"] == "type_app_name_verified")
         self.assertFalse(type_step["result"]["retried_after_input_source_switch"])
         self.assertTrue(type_step["result"]["search_result_verified"])
+        self.assertFalse(type_step["result"]["ime_commit_after_typing"])
         self.assertTrue(any('keystroke "tashu"' in " ".join(command) for command in runner.commands))
+        self.assertFalse(any("key code 49" in " ".join(command) for command in runner.commands))
 
     def test_tashuo_action_and_workflow_dry_runs_are_navigation_only(self):
         runner = FakeRunner(ocr_text="消息\n待回答 (0)\n全部消息\n推荐\n飞行\n消息\n我的\n")
@@ -917,6 +956,88 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["evidence"]["outbound_message_verified"])
         self.assertEqual(payload["target_binding_verification"]["status"], "ok")
 
+    def test_tashuo_send_message_accepts_chat_list_row_structural_binding_for_emoji_nickname(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "点击此处输入文字\n",
+                "点击此处输入文字\n",
+                "点击此处输入文字\n",
+                "你好\n发送\n",
+                "你好\n点击此处输入文字\n",
+            ],
+            screenshot_bytes=[
+                _tashuo_conversation_toolbar_png(),
+                _tashuo_conversation_toolbar_png(),
+                _tashuo_conversation_toolbar_png(),
+                _tashuo_conversation_toolbar_png(active_send_button=True),
+                _tashuo_conversation_toolbar_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        payload = harness.send_message(
+            "你好",
+            dry_run=False,
+            target_binding={
+                "binding_type": "chat_list_row_to_thread",
+                "target_match_id": "match_tashuo_row_5",
+                "candidate_key": "tashuo_chat_row_5_emoji",
+                "selection_evidence": {
+                    "source_state": "tashuo_chat_list",
+                    "opened_state": "tashuo_conversation",
+                    "row_index": 5,
+                    "target_scope": "ordinary_conversation",
+                    "open_action": "open-conversation",
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+        self.assertEqual(
+            payload["target_binding_verification"]["verification_method"],
+            "tashuo_chat_list_row_to_thread_structural_binding",
+        )
+        self.assertTrue(payload["target_binding_verification"]["emoji_nickname_supported"])
+        self.assertFalse(payload["target_binding_verification"]["requires_header_marker"])
+        self.assertTrue(payload["staged_text_verified"])
+
+    def test_tashuo_send_message_blocks_structural_binding_for_non_conversation_target(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "点击此处输入文字\n",
+                "点击此处输入文字\n",
+                "点击此处输入文字\n",
+            ],
+            screenshot_bytes=[
+                _tashuo_conversation_toolbar_png(),
+                _tashuo_conversation_toolbar_png(),
+                _tashuo_conversation_toolbar_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        payload = harness.send_message(
+            "你好",
+            dry_run=False,
+            target_binding={
+                "binding_type": "chat_list_row_to_thread",
+                "target_match_id": "match_tashuo_row_5",
+                "candidate_key": "tashuo_chat_row_5_emoji",
+                "selection_evidence": {
+                    "source_state": "tashuo_chat_list",
+                    "opened_state": "tashuo_question_gate",
+                    "row_index": 5,
+                    "target_scope": "question_gate",
+                    "open_action": "open-conversation",
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "target_binding_opened_state_mismatch")
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+
     def test_tashuo_send_message_blocks_when_target_marker_is_not_in_thread_header(self):
         runner = FakeRunner(
             ocr_text=[
@@ -962,6 +1083,41 @@ class GuiHarnessTests(unittest.TestCase):
         intents = [step["intent"] for step in payload["executed_steps"]]
         self.assertIn("type_tashuo_message_input_if_paste_did_not_stage", intents)
         self.assertIn("commit_tashuo_message_input_ime_candidate_if_needed", intents)
+
+    def test_tashuo_send_message_cleans_failed_paste_without_sending(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\nv\n发送\n",
+                "Yasmine\n不理解\n点击此处输入文字\n",
+            ],
+            screenshot_bytes=[
+                _tashuo_conversation_toolbar_png(),
+                _tashuo_conversation_toolbar_png(),
+                _tashuo_conversation_toolbar_png(),
+                _tashuo_conversation_toolbar_png(active_send_button=True),
+                _tashuo_conversation_toolbar_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        payload = harness.send_message(
+            "你好",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Yasmine"], "target_match_id": "match_tashuo"},
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "staged_text_not_verified")
+        self.assertEqual(payload["failed_stage_cleanup"]["status"], "ok")
+        intents = [step["intent"] for step in payload["executed_steps"]]
+        self.assertNotIn("type_tashuo_message_input_if_paste_did_not_stage", intents)
+        self.assertNotIn("tap_tashuo_send_button", intents)
+        joined_commands = [" ".join(command) for command in runner.commands]
+        self.assertTrue(any("key code 53" in command for command in joined_commands))
+        self.assertTrue(any("ASCII character 8" in command for command in joined_commands))
 
     def test_classifies_tashuo_screens_and_question_gate(self):
         self.assertEqual(
@@ -1258,6 +1414,41 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["text_state"], "unknown")
         self.assertEqual(payload["visual_state"], "bumble_conversation")
         self.assertEqual(payload["state"], "unknown")
+
+    def test_visual_tashuo_conversation_uses_persistent_input_toolbar(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness = create_adapter(
+                app_id="tashuo",
+                platform="darwin",
+                runner=FakeRunner(
+                    ocr_text="EB vasmine eee\nget $2!)\nRRM RaRRS\nARTA Zhe\n",
+                    screenshot_bytes=_tashuo_conversation_toolbar_png(),
+                ),
+            )
+
+            payload = harness.capture_window(output=Path(temp_dir) / "tashuo-conversation.png")
+
+        self.assertEqual(payload["text_state"], "unknown")
+        self.assertEqual(payload["visual_state"], "tashuo_conversation")
+        self.assertFalse(payload["visual_bottom_nav_present"])
+        self.assertEqual(payload["state"], "tashuo_conversation")
+
+    def test_visual_tashuo_conversation_toolbar_does_not_override_question_gate_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness = create_adapter(
+                app_id="tashuo",
+                platform="darwin",
+                runner=FakeRunner(
+                    ocr_text="Yasmine\n她向你提了一个问题\n回答后即可开启聊天\n",
+                    screenshot_bytes=_tashuo_conversation_toolbar_png(),
+                ),
+            )
+
+            payload = harness.capture_window(output=Path(temp_dir) / "tashuo-question-gate.png")
+
+        self.assertEqual(payload["text_state"], "tashuo_question_gate")
+        self.assertEqual(payload["visual_state"], "tashuo_conversation")
+        self.assertEqual(payload["state"], "tashuo_question_gate")
 
     def test_bumble_observe_conversation_reports_managed_live_send_support(self):
         runner = FakeRunner(
@@ -1720,6 +1911,43 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["draft_clipboard_fingerprint"], payload["draft_fingerprint"])
         self.assertNotIn("今晚可以聊十分钟吗", json.dumps(payload, ensure_ascii=False))
         self.assertNotIn("previous clipboard", json.dumps(payload, ensure_ascii=False))
+
+    def test_tinder_send_message_accepts_chat_list_row_structural_binding_for_emoji_nickname(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Tinder\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\n昨天 21:14\n在吗\nhi\nSend\n",
+                "Tinder\n昨天 21:14\n在吗\nhi\n",
+            ]
+        )
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "hi",
+            dry_run=False,
+            target_binding={
+                "binding_type": "chat_list_row_to_thread",
+                "target_match_id": "match_tinder_row_5",
+                "candidate_key": "tinder_chat_row_5_emoji",
+                "selection_evidence": {
+                    "source_state": "tinder_messages",
+                    "opened_state": "tinder_conversation",
+                    "row_index": 5,
+                    "target_scope": "ordinary_conversation",
+                    "open_action": "open-conversation",
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+        self.assertEqual(
+            payload["target_binding_verification"]["verification_method"],
+            "tinder_chat_list_row_to_thread_structural_binding",
+        )
+        self.assertTrue(payload["target_binding_verification"]["emoji_nickname_supported"])
 
     def test_tinder_send_message_accepts_ocr_punctuation_noise_for_staged_text(self):
         runner = FakeRunner(
@@ -2878,6 +3106,143 @@ class GuiHarnessTests(unittest.TestCase):
                 self.assertEqual(payload["status"], "ok")
                 getattr(harness_class.return_value, method_name).assert_called_once()
 
+    def test_cli_real_send_accepts_chat_list_row_structural_binding_for_iphone_dating_apps(self):
+        cases = (
+            ("tinder", "tinder_messages", "tinder_conversation", "send_tinder_message"),
+            ("bumble", "bumble_chat_list", "bumble_conversation", "send_bumble_message"),
+            ("tashuo", "tashuo_chat_list", "tashuo_conversation", "send_tashuo_message"),
+        )
+        for app_id, source_state, opened_state, method_name in cases:
+            with self.subTest(app_id=app_id):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    root = Path(temp_dir)
+                    data_dir = root / "data"
+                    draft_text = "你好"
+                    payload_hash = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
+                    match_id = f"match_{app_id}_row_5"
+                    candidate_key = f"{app_id}_chat_row_5_emoji"
+                    auth_id = f"auth_{app_id}_live"
+                    draft_path = root / f"{app_id}-draft.txt"
+                    auth_path = root / "auth.json"
+                    action_path = root / "action_request.json"
+                    draft_path.write_text(draft_text, encoding="utf-8")
+                    _write_json(auth_path, _live_send_auth(app_id, authorization_id=auth_id, allowed_match_ids=[match_id]))
+                    _write_json(action_path, {
+                        "schema_version": 1,
+                        "action_request_id": f"act_{app_id}_send",
+                        "action": "send_message",
+                        "app_id": app_id,
+                        "match_id": match_id,
+                        "candidate_key": candidate_key,
+                        "payload_hash": payload_hash,
+                        "precondition_hash": "pre_hash",
+                        "autonomous_audit_binding": _autonomous_audit_binding(
+                            authorization_id=auth_id,
+                            target_match_id=match_id,
+                            payload_hash=payload_hash,
+                        ),
+                        "requires_post_action_verification": True,
+                        "policy": {"allowed": True},
+                        "target_binding": {
+                            "binding_type": "chat_list_row_to_thread",
+                            "target_match_id": match_id,
+                            "candidate_key": candidate_key,
+                            "selection_evidence": {
+                                "source_state": source_state,
+                                "opened_state": opened_state,
+                                "row_index": 5,
+                                "target_scope": "ordinary_conversation",
+                                "open_action": "open-conversation",
+                            },
+                        },
+                    })
+
+                    with _patch_cli_adapter() as harness_class:
+                        getattr(harness_class.return_value, method_name).return_value = {
+                            "schema_version": 1,
+                            "status": "ok",
+                            "app_id": app_id,
+                            "action": "send_message",
+                        }
+                        exit_code, payload = _run_cli_json([
+                            "harness",
+                            app_id,
+                            "send-message",
+                            "--text-file",
+                            str(draft_path),
+                            "--data-dir",
+                            str(data_dir),
+                            "--authorization",
+                            str(auth_path),
+                            "--action-request",
+                            str(action_path),
+                            "--json",
+                        ])
+
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(payload["status"], "ok")
+                getattr(harness_class.return_value, method_name).assert_called_once()
+
+    def test_cli_tashuo_real_send_blocks_structural_binding_without_row_index(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            draft_text = "你好"
+            payload_hash = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
+            draft_path = root / "tashuo-draft.txt"
+            auth_path = root / "auth.json"
+            action_path = root / "action_request.json"
+            draft_path.write_text(draft_text, encoding="utf-8")
+            _write_json(auth_path, _live_send_auth("tashuo", authorization_id="auth_tashuo_live"))
+            _write_json(action_path, {
+                "schema_version": 1,
+                "action_request_id": "act_tashuo_send",
+                "action": "send_message",
+                "app_id": "tashuo",
+                "match_id": "match_tashuo_row_5",
+                "candidate_key": "tashuo_chat_row_5_emoji",
+                "payload_hash": payload_hash,
+                "precondition_hash": "pre_hash",
+                "autonomous_audit_binding": _autonomous_audit_binding(
+                    authorization_id="auth_tashuo_live",
+                    target_match_id="match_tashuo_row_5",
+                    payload_hash=payload_hash,
+                ),
+                "requires_post_action_verification": True,
+                "policy": {"allowed": True},
+                "target_binding": {
+                    "binding_type": "chat_list_row_to_thread",
+                    "target_match_id": "match_tashuo_row_5",
+                    "candidate_key": "tashuo_chat_row_5_emoji",
+                    "selection_evidence": {
+                        "source_state": "tashuo_chat_list",
+                        "opened_state": "tashuo_conversation",
+                        "target_scope": "ordinary_conversation",
+                        "open_action": "open-conversation",
+                    },
+                },
+            })
+
+            with _patch_cli_adapter() as harness_class:
+                exit_code, payload = _run_cli_json([
+                    "harness",
+                    "tashuo",
+                    "send-message",
+                    "--text-file",
+                    str(draft_path),
+                    "--data-dir",
+                    str(data_dir),
+                    "--authorization",
+                    str(auth_path),
+                    "--action-request",
+                    str(action_path),
+                    "--json",
+                ])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["reason"], "action_request_target_binding_required")
+        harness_class.assert_not_called()
+
     def test_cli_bumble_real_send_blocks_generic_target_binding_before_native_execution(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -3263,6 +3628,23 @@ def _bumble_conversation_png(*, active_send_button: bool = False, outgoing_bubbl
     fill(0.12, 0.90, 0.88, 0.955, (248, 248, 248, 255))
     fill(0.16, 0.92, 0.21, 0.94, (95, 95, 95, 255))
     fill(0.93 if active_send_button else 0.91, 0.90, 0.98, 0.955, (248, 211, 59, 255) if active_send_button else (225, 225, 225, 255))
+    return _png_from_pixels(pixels, width, height)
+
+
+def _tashuo_conversation_toolbar_png(*, active_send_button: bool = False) -> bytes:
+    width, height = 200, 400
+    pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.06, 0.845, 0.94, 0.902, (240, 240, 246, 255))
+    if active_send_button:
+        fill(0.84, 0.850, 0.92, 0.895, (110, 82, 245, 255))
+    for center in (0.14, 0.38, 0.62, 0.86):
+        fill(center - 0.035, 0.920, center + 0.035, 0.945, (222, 222, 230, 255))
     return _png_from_pixels(pixels, width, height)
 
 

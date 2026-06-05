@@ -141,14 +141,6 @@ def _target_binding_block_reason(action_request: dict[str, Any], target_match_id
     target_binding = action_request.get("target_binding")
     if not isinstance(target_binding, dict):
         return "action_request_target_binding_required"
-    required_visible_text = target_binding.get("required_visible_text")
-    visible_name = target_binding.get("visible_name")
-    has_required_marker = (
-        isinstance(required_visible_text, list)
-        and any(isinstance(item, str) and item.strip() for item in required_visible_text)
-    ) or _non_empty(visible_name)
-    if not has_required_marker:
-        return "action_request_target_binding_required"
 
     binding_target = _stripped_or_none(target_binding.get("target_match_id"))
     if binding_target is None:
@@ -164,9 +156,16 @@ def _target_binding_block_reason(action_request: dict[str, Any], target_match_id
         policy = _target_binding_policy(app_id)
     except Exception:
         return "target_binding_policy_unavailable"
-    if policy.get("requires_target_specific_marker") is True and not _target_binding_specific_marker_present(
+    has_text_marker = _target_binding_text_marker_present(target_binding)
+    has_allowed_structural_evidence = _target_binding_allowed_structural_evidence_present(target_binding, policy)
+    if not has_text_marker and not has_allowed_structural_evidence:
+        return "action_request_target_binding_required"
+    has_specific_text_marker = _target_binding_specific_marker_present(
         target_binding,
         generic_marker_blacklist=policy.get("generic_marker_blacklist"),
+    )
+    if policy.get("requires_target_specific_marker") is True and not (
+        has_specific_text_marker or has_allowed_structural_evidence
     ):
         return "action_request_target_binding_not_target_specific"
     return None
@@ -187,6 +186,23 @@ def target_binding_specific_marker_present(app_id: str, target_binding: dict[str
     )
 
 
+def target_binding_structural_evidence_present(app_id: str, target_binding: dict[str, Any]) -> bool:
+    try:
+        policy = _target_binding_policy(app_id)
+    except Exception:
+        return False
+    return _target_binding_allowed_structural_evidence_present(target_binding, policy)
+
+
+def _target_binding_text_marker_present(target_binding: dict[str, Any]) -> bool:
+    required_visible_text = target_binding.get("required_visible_text")
+    visible_name = target_binding.get("visible_name")
+    return (
+        isinstance(required_visible_text, list)
+        and any(isinstance(item, str) and item.strip() for item in required_visible_text)
+    ) or _non_empty(visible_name)
+
+
 def _target_binding_specific_marker_present(
     target_binding: dict[str, Any],
     *,
@@ -204,6 +220,24 @@ def _target_binding_specific_marker_present(
     return any(_target_binding_marker_is_specific(marker, generic_markers=generic_markers) for marker in markers)
 
 
+def _target_binding_allowed_structural_evidence_present(
+    target_binding: dict[str, Any],
+    policy: dict[str, Any],
+) -> bool:
+    binding_type = _stripped_or_none(target_binding.get("binding_type"))
+    allowed_items = policy.get("allowed_structural_binding_types")
+    allowed_types = {str(item) for item in allowed_items} if isinstance(allowed_items, list) else set()
+    if binding_type is None or binding_type not in allowed_types:
+        return False
+    selection_evidence = target_binding.get("selection_evidence")
+    if not isinstance(selection_evidence, dict):
+        return False
+    if not _positive_int(selection_evidence.get("row_index")):
+        return False
+    required_strings = ("source_state", "opened_state", "open_action")
+    return all(_non_empty(selection_evidence.get(key)) for key in required_strings)
+
+
 def _target_binding_marker_is_specific(marker: str, *, generic_markers: set[str]) -> bool:
     normalized = _normalize_target_binding_marker(marker)
     if not normalized:
@@ -216,6 +250,10 @@ def _target_binding_marker_is_specific(marker: str, *, generic_markers: set[str]
 def _normalize_target_binding_marker(marker: str) -> str:
     stripped = marker.strip().lower().strip(" .,:;!?()[]{}<>，。！？（）【】")
     return " ".join(stripped.split())
+
+
+def _positive_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _target_binding_policy(app_id: str) -> dict[str, Any]:

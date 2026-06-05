@@ -10,7 +10,7 @@
   ],
   "message_list_observation": [
     "Observe only visible chat rows and top match circles.",
-    "Use candidate_key = visible_name + row_index_or_match_index + latest_preview_hash.",
+    "Use candidate_key = visible_name when OCR-readable, otherwise row_index_or_match_index + latest_preview_hash/deadline cue + row or avatar visual evidence.",
     "Record visible reply-deadline markers such as 轮到您了, 回复时间, or 小时后失效 before opening a thread.",
     "Opening Move match circles may require opening a prompt page before a normal composer exists."
   ],
@@ -227,7 +227,8 @@
     "Opening Move pages are not normal chat threads until the reply composer is opened.",
     "Opening Move replies require user confirmation and are not eligible for autonomous Opening Move send.",
     "macOS pbcopy alone may not update iPhone Universal Clipboard; do not treat clipboard state as Bumble staging evidence.",
-    "Bumble live send requires a target-specific marker such as the visible match name; generic UI text like Opening Move, Aa, GIF, or Send is not enough.",
+    "Bumble live send requires either a target-specific text marker such as the visible match name or allowed structural row-to-thread evidence; generic UI text like Opening Move, Aa, GIF, or Send is not enough.",
+    "Emoji or otherwise non-OCR nicknames are valid targets in any message-list row; bind the intended row with chat_list_row_to_thread evidence instead of switching to an OCR-friendly conversation.",
     "Visual send-button or yellow-bubble evidence can support diagnosis but cannot replace exact OCR verification of the payload text.",
     "Non-ABC input sources can leave app names in the iOS Spotlight candidate bar; verify the app result after typing before tapping.",
     "Premium gates such as liked-you reveal and plan selection are not agent actions."
@@ -419,6 +420,9 @@
   "target_binding": {
     "requires_target_binding": true,
     "requires_target_specific_marker": true,
+    "allowed_structural_binding_types": [
+      "chat_list_row_to_thread"
+    ],
     "generic_marker_blacklist": [
       "aa",
       "gif",

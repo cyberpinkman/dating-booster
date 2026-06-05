@@ -138,6 +138,11 @@
           "items": {"type": "string", "minLength": 1},
           "uniqueItems": true
         },
+        "allowed_structural_binding_types": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
         "visual_only_exact_verification_allowed": {"type": "boolean"}
       }
     },
