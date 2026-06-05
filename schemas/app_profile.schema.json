@@ -15,12 +15,19 @@
     "thread_observation",
     "stage_send_verification",
     "native_gui_harness",
+    "adapter",
+    "capabilities",
+    "selectors",
+    "target_binding",
+    "live_send_requirements",
+    "managed_session",
+    "special_policies",
     "post_send_verification",
     "known_gui_pitfalls",
     "unsupported_actions"
   ],
   "properties": {
-    "schema_version": {"type": "integer", "const": 1},
+    "schema_version": {"type": "integer", "const": 2},
     "app_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
     "display_name": {"type": "string", "minLength": 1},
     "support_level": {
@@ -44,6 +51,131 @@
     "post_send_verification": {"$ref": "#/$defs/nonEmptyStringArray"},
     "known_gui_pitfalls": {"$ref": "#/$defs/nonEmptyStringArray"},
     "unsupported_actions": {"$ref": "#/$defs/nonEmptyStringArray"},
+    "adapter": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["backend", "module", "class_name", "default_window_title"],
+      "properties": {
+        "backend": {"type": "string", "minLength": 1},
+        "module": {"type": "string", "minLength": 1},
+        "class_name": {"type": "string", "minLength": 1},
+        "default_window_title": {"type": "string", "minLength": 1}
+      }
+    },
+    "cli_aliases": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["operation"],
+        "properties": {
+          "operation": {"type": "string", "minLength": 1},
+          "include_dry_run": {"type": "boolean"},
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["name", "dest", "action"],
+              "properties": {
+                "name": {"type": "string", "pattern": "^--[a-z0-9][a-z0-9-]*$"},
+                "dest": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+                "action": {"type": "string", "enum": ["store_true"]}
+              }
+            }
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["host_loop_supported", "send_modes", "stage_actions", "live_actions", "actions", "workflows"],
+      "properties": {
+        "host_loop_supported": {"type": "boolean"},
+        "send_modes": {
+          "type": "array",
+          "items": {"type": "string", "enum": ["stage", "live"]},
+          "uniqueItems": true
+        },
+        "stage_actions": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "live_actions": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "actions": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "workflows": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      }
+    },
+    "selectors": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["coordinates", "blocked_actions"],
+      "properties": {
+        "coordinates": {"type": "object"},
+        "blocked_actions": {"$ref": "#/$defs/nonEmptyStringArray"}
+      }
+    },
+    "target_binding": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "requires_target_binding",
+        "requires_target_specific_marker",
+        "generic_marker_blacklist",
+        "visual_only_exact_verification_allowed"
+      ],
+      "properties": {
+        "requires_target_binding": {"type": "boolean"},
+        "requires_target_specific_marker": {"type": "boolean"},
+        "generic_marker_blacklist": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "visual_only_exact_verification_allowed": {"type": "boolean"}
+      }
+    },
+    "live_send_requirements": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "authorization_fields",
+        "required_evidence",
+        "exact_text_verification",
+        "post_action_verification",
+        "outbound_bubble_verification",
+        "visual_only_exact_verification_allowed"
+      ],
+      "properties": {
+        "authorization_fields": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "required_evidence": {"$ref": "#/$defs/nonEmptyStringArray"},
+        "exact_text_verification": {"type": "boolean"},
+        "post_action_verification": {"type": "boolean"},
+        "outbound_bubble_verification": {"type": "boolean"},
+        "visual_only_exact_verification_allowed": {"type": "boolean"}
+      }
+    },
+    "managed_session": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "precheck_failure_status",
+        "precheck_failure_reason",
+        "precheck_failure_next_host_action"
+      ],
+      "properties": {
+        "precheck_failure_status": {"type": "string", "enum": ["paused", "stopped"]},
+        "precheck_failure_reason": {"type": "string", "minLength": 1},
+        "precheck_failure_next_host_action": {"type": "string", "minLength": 1}
+      }
+    },
+    "special_policies": {"type": "object"},
     "native_gui_harness": {
       "type": "object",
       "required": ["backend", "supported_stage_actions", "supported_live_actions", "blocked_actions"],

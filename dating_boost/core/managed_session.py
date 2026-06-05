@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from dating_boost.apps.registry import create_adapter, managed_session_policy, supported_app_ids
 from dating_boost.core.automation import AutomationRepository
-from dating_boost.core.gui_harness import NativeGuiHarness
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.storage import JsonStorage
@@ -19,21 +19,21 @@ MANAGED_SESSION_SCHEMA_VERSION = 1
 MANAGED_WAKE_EVENT_SCHEMA_VERSION = 1
 MANAGED_SESSION_PATH = Path("managed_session") / "session.json"
 MANAGED_WAKE_EVENTS_PATH = Path("managed_session") / "wake_events.jsonl"
-SUPPORTED_MANAGED_APPS = {"tinder", "wechat", "bumble"}
+SUPPORTED_MANAGED_APPS = set(supported_app_ids())
 DEFAULT_SCAN_INTERVAL_SECONDS = 120
 DEFAULT_NUDGE_DELAY_MINUTES = 30
 
 
-HarnessFactory = Callable[[str], NativeGuiHarness]
+AdapterFactory = Callable[[str], Any]
 
 
 class ManagedSessionRepository:
-    def __init__(self, root: Path, *, harness_factory: HarnessFactory | None = None):
+    def __init__(self, root: Path, *, harness_factory: AdapterFactory | None = None):
         self.root = root
         self._storage = JsonStorage(root)
         self._automation = AutomationRepository(root)
         self._operator = OperatorRepository(root)
-        self._harness_factory = harness_factory or (lambda app_id: NativeGuiHarness(app_id=app_id))
+        self._harness_factory = harness_factory or (lambda app_id: create_adapter(app_id))
 
     def start(
         self,
@@ -73,15 +73,12 @@ class ManagedSessionRepository:
         stop_reason = None
         stopped_at = None
         next_host_action = "run_managed_session_wait_loop"
-        if app_id == "tinder" and app_check["status"] != "ok":
-            initial_status = "stopped"
-            stop_reason = str(app_check.get("reason") or "iphone_mirroring_unavailable")
-            stopped_at = now
-            next_host_action = "enable_iphone_mirroring_and_restart_managed_session"
-        elif app_id == "wechat" and app_check["status"] != "ok":
-            initial_status = "paused"
-            stop_reason = str(app_check.get("reason") or "app_unavailable")
-            next_host_action = "restore_wechat_or_stop_managed_session"
+        if app_check["status"] != "ok":
+            policy = _managed_session_policy(app_id)
+            initial_status = str(policy.get("precheck_failure_status") or "stopped")
+            stop_reason = str(app_check.get("reason") or policy.get("precheck_failure_reason") or "app_unavailable")
+            stopped_at = now if initial_status == "stopped" else None
+            next_host_action = str(policy.get("precheck_failure_next_host_action") or "restore_app_or_stop_managed_session")
         session = {
             "schema_version": MANAGED_SESSION_SCHEMA_VERSION,
             "session_id": operator_start["session_id"],
@@ -188,29 +185,21 @@ class ManagedSessionRepository:
 
         app_check = self._app_precheck(app_id)
         session["last_app_precheck"] = app_check
-        if app_id == "tinder" and app_check["status"] != "ok":
-            session["status"] = "stopped"
-            session["stopped_at"] = now
-            session["stop_reason"] = app_check.get("reason") or "iphone_mirroring_unavailable"
+        if app_check["status"] != "ok":
+            policy = _managed_session_policy(app_id)
+            failure_status = str(policy.get("precheck_failure_status") or "stopped")
+            session["status"] = failure_status
+            session["stop_reason"] = app_check.get("reason") or policy.get("precheck_failure_reason") or "app_unavailable"
+            if failure_status == "stopped":
+                session["stopped_at"] = now
             self._write_session(session)
             return _payload(
-                "stopped",
+                failure_status,
                 reason=str(session["stop_reason"]),
                 app_id=app_id,
                 session=session,
                 app_precheck=app_check,
-                next_host_action="enable_iphone_mirroring_and_restart_managed_session",
-            )
-        if app_id == "wechat" and app_check["status"] != "ok":
-            session["status"] = "paused"
-            self._write_session(session)
-            return _payload(
-                "paused",
-                reason=app_check.get("reason") or "app_unavailable",
-                app_id=app_id,
-                session=session,
-                app_precheck=app_check,
-                next_host_action="restore_wechat_or_stop_managed_session",
+                next_host_action=str(policy.get("precheck_failure_next_host_action") or "restore_app_or_stop_managed_session"),
             )
         if session.get("status") == "paused" and app_check["status"] == "ok":
             session["status"] = "active"
@@ -326,14 +315,8 @@ class ManagedSessionRepository:
 
     def _app_precheck(self, app_id: str) -> dict[str, Any]:
         try:
-            harness = self._harness_factory(app_id)
-            if app_id == "wechat":
-                observed = harness.observe_wechat_screen()
-                return _safe_app_check(observed, app_id=app_id)
-            if app_id == "bumble":
-                observed = harness.observe_bumble_screen()
-                return _safe_app_check(observed, app_id=app_id)
-            observed = harness.observe_tinder_screen()
+            adapter = self._harness_factory(app_id)
+            observed = adapter.observe()
             return _safe_app_check(observed, app_id=app_id)
         except Exception as exc:
             return {
@@ -361,9 +344,16 @@ def _safe_app_check(payload: dict[str, Any], *, app_id: str) -> dict[str, Any]:
     }
     if _unread_marker_present(layout):
         result["unread_possible"] = True
-    if app_id == "tinder" and layout.get("reply_required_marker_present"):
+    if layout.get("reply_required_marker_present") or layout.get("reply_deadline_marker_present"):
         result["unread_possible"] = True
     return result
+
+
+def _managed_session_policy(app_id: str) -> dict[str, Any]:
+    try:
+        return managed_session_policy(app_id)
+    except KeyError:
+        return {}
 
 
 def _wake_reasons(

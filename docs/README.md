@@ -106,8 +106,12 @@ four axes that should not be mixed in one-off patches:
 - Host loop: `dating-boost-host-loop` supervises work directories,
   authorization, recovery, and staged/live send mode checks。监督 work dir、授权、
   恢复和 send mode 检查。
-- GUI harness: `dating_boost/core/gui_harness.py` is the only place for native
-  app-window automation details。原生窗口自动化细节只应在这里。
+- GUI platform harness: `dating_boost/core/gui_harness.py` owns native
+  app-window mechanics such as screenshots, OCR, gestures, clipboard, paste,
+  and IME commit。平台自动化能力只应在这里。
+- App adapters: `dating_boost/apps/<app_id>/adapter.py` owns app page semantics,
+  actions, workflows, target binding, send verification, and special policies。
+  App 语义和流程归 adapter/profile。
 - Capabilities: `dating_boost/core/capabilities.py` is the machine-readable
   startup contract for agents and skill installers。agent/skill 的机器可读启动契约。
 - Host adapters: `skills/dating-booster-codex/SKILL.md` and
@@ -117,17 +121,18 @@ four axes that should not be mixed in one-off patches:
 
 ## App Expansion Path / App 扩展路径
 
-1. Add or update `app_profiles/<app_id>.json`。新增或更新 App profile。
+1. Add or update schema-v2 `app_profiles/<app_id>.json`。新增或更新 v2 App
+   profile。
 2. Add a runtime profile only after fixtures and preflight can prove the app is
    supported。不为未支持 app 创建 placeholder profile。
-3. Keep the app out of capabilities until host-loop or harness tests prove it
-   can run。未验证前不要进入 capabilities。
-4. If native GUI support is needed, add the backend adapter in
-   `dating_boost/core/gui_harness.py`。需要原生 GUI 时再实现 backend。
-5. Expose app-specific CLI commands only after the harness contract is
-   testable。只有 contract 可测试后才暴露 CLI。
-6. Add capability flags, deterministic fixtures, and focused tests。补
-   capabilities、fixtures 和 focused tests。
+3. Add `dating_boost/apps/<app_id>/adapter.py` and register it in
+   `dating_boost/apps/registry.py`。新增 app adapter 并注册。
+4. Let capabilities, CLI harness commands, managed session, and host loop derive
+   support from registry/profile。全局能力面从 registry/profile 派生。
+5. Use `harness <app_id> action|workflow --options-json <path>` for
+   app-specific parameters。新增 app 不再给 argparse 加专属参数。
+6. Add deterministic fixtures and focused tests for classifier, actions,
+   workflows, target binding, and send evidence。补 fixtures 和 focused tests。
 7. Update `README.md`, `app_profiles/README.md`, and Codex skill references。
    同步顶层 README、profile 文档和 Codex skill。
 8. Run targeted unit tests plus `dating-boost capabilities --json` before

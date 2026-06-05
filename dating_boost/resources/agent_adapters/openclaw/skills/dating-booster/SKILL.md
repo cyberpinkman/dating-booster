@@ -142,11 +142,11 @@ dating-boost harness doctor --app-id tinder --json
 dating-boost harness tinder launch --dry-run --json
 dating-boost harness tinder open-profile --dry-run --json
 dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
-dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
-dating-boost harness tinder workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
-dating-boost harness tinder workflow new-match-open --dry-run --carousel-swipes 1 --match-index 2 --json
-dating-boost harness tinder workflow new-match-read-profile --dry-run --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --json
-dating-boost harness tinder action open-conversation --visible-name Iris --target-binding target-binding.json --json
+dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --json
+dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-open-options.json --json
+dating-boost harness tinder workflow new-match-read-profile --dry-run --options-json tinder-new-match-profile-options.json --json
+dating-boost harness tinder action open-conversation --options-json tinder-open-iris-options.json --json
 dating-boost harness tinder action dismiss-subscription-paywall --json
 dating-boost harness tinder action dismiss-feedback-survey --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
@@ -156,9 +156,8 @@ Use `new-match-open` for an unopened match when the agent should enter one
 conversation, write an opener from visible profile context, and then return to
 chats for the next candidate. Use `chat-read-match-profile` for existing
 conversation rows.
-For existing conversations, prefer `open-conversation --visible-name ...` or
-`--target-binding target-binding.json`; row coordinates are compatibility
-fallbacks only.
+For existing conversations, prefer `open-conversation --options-json <path>` with `visible_name` or `target_binding`; row coordinates are compatibility
+fallbacks only. Keep target-binding evidence inside the options JSON.
 
 If `harness tinder observe` or any send/navigation result reports
 `tinder_subscription_paywall`, `subscription_paywall_visible`, or

@@ -607,9 +607,11 @@ class OperatorHostLoopTests(unittest.TestCase):
                         "post_action_observation_id": "gui_post_send_1234",
                         "evidence": {
                             "staged_text_verified": True,
+                            "staged_exact_text_ocr_verified": True,
                             "input_cleared_after_send": True,
                             "post_action_screen_captured": True,
                             "outbound_message_verified": True,
+                            "outbound_exact_text_ocr_verified": True,
                         },
                     }
                 if args[:2] == ("operator", "record-action-result"):
@@ -705,9 +707,11 @@ class OperatorHostLoopTests(unittest.TestCase):
                         "post_action_observation_id": "gui_post_send_1234",
                         "evidence": {
                             "staged_text_verified": True,
+                            "staged_exact_text_ocr_verified": True,
                             "input_cleared_after_send": True,
                             "post_action_screen_captured": True,
                             "outbound_message_verified": True,
+                            "outbound_exact_text_ocr_verified": True,
                         },
                     }
                 if args[:2] == ("operator", "record-action-result"):
@@ -854,9 +858,11 @@ class OperatorHostLoopTests(unittest.TestCase):
                         "post_action_observation_id": "gui_post_send_tinder_1234",
                         "evidence": {
                             "staged_text_verified": True,
+                            "staged_exact_text_ocr_verified": True,
                             "input_cleared_after_send": True,
                             "post_action_screen_captured": True,
                             "outbound_message_verified": True,
+                            "outbound_exact_text_ocr_verified": True,
                         },
                     }
                 if args[:2] == ("operator", "record-action-result"):
@@ -941,9 +947,11 @@ class OperatorHostLoopTests(unittest.TestCase):
                         "post_action_observation_id": "gui_post_send_bumble_1234",
                         "evidence": {
                             "staged_text_verified": True,
+                            "staged_exact_text_ocr_verified": True,
                             "input_cleared_after_send": True,
                             "post_action_screen_captured": True,
                             "outbound_message_verified": True,
+                            "outbound_exact_text_ocr_verified": True,
                         },
                     }
                 if args[:2] == ("operator", "record-action-result"):

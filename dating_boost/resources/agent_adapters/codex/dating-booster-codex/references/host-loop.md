@@ -21,13 +21,13 @@ dating-boost harness tinder launch --dry-run --json
 dating-boost harness tinder open-profile --dry-run --json
 dating-boost harness tinder open-profile --launch-if-needed --json
 dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
-dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
-dating-boost harness tinder workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
-dating-boost harness tinder workflow new-match-open --dry-run --carousel-swipes 1 --match-index 2 --json
-dating-boost harness tinder workflow new-match-read-profile --dry-run --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --json
+dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --json
+dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-open-options.json --json
+dating-boost harness tinder workflow new-match-read-profile --dry-run --options-json tinder-new-match-profile-options.json --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
 dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
-dating-boost harness bumble workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --json
 dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --json
 dating-boost-host-loop doctor \
   --data-dir .local/dating-boost \

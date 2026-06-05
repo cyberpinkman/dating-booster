@@ -1,10 +1,13 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "app_id": "bumble",
   "display_name": "Bumble",
   "support_level": "managed_live_send",
   "host_loop_supported": true,
-  "host_loop_send_modes": ["stage", "live"],
+  "host_loop_send_modes": [
+    "stage",
+    "live"
+  ],
   "message_list_observation": [
     "Observe only visible chat rows and top match circles.",
     "Use candidate_key = visible_name + row_index_or_match_index + latest_preview_hash.",
@@ -45,7 +48,9 @@
       "current_harness_stage_supported": true,
       "current_harness_send_supported": true,
       "autonomous_opening_move_send_supported": false,
-      "agent_allowed_actions": ["draft_opening_move_reply"],
+      "agent_allowed_actions": [
+        "draft_opening_move_reply"
+      ],
       "agent_disallowed_actions": [
         "send_opening_move_reply_without_user_confirmation",
         "autonomous_opening_move_send"
@@ -82,36 +87,94 @@
       "close_profile",
       "return_to_chats"
     ],
-    "supported_live_actions": ["send_message"],
+    "supported_live_actions": [
+      "send_message"
+    ],
     "launch_navigation": {
       "intent": "ios_home_search_launch",
       "requires_verified_screen_state": "not_required",
-      "steps": ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name_verified", "tap_search_result_icon"],
+      "steps": [
+        "open_iphone_home_screen",
+        "open_ios_spotlight",
+        "type_app_name_verified",
+        "tap_search_result_icon"
+      ],
       "app_name": "Bumble",
-      "search_result_icon_tap_ratio": {"x": 0.18, "y": 0.20},
+      "search_result_icon_tap_ratio": {
+        "x": 0.18,
+        "y": 0.2
+      },
       "input_source_retry": "Type the app name first, verify the English app search result by screenshot/OCR, then switch input source and retry only if the app result is not visible."
     },
     "bottom_navigation": {
-      "profile_tab_tap_ratio": {"x": 0.11, "y": 0.93},
-      "discover_tab_tap_ratio": {"x": 0.31, "y": 0.93},
-      "browse_tab_tap_ratio": {"x": 0.50, "y": 0.93},
-      "liked_you_tab_tap_ratio": {"x": 0.70, "y": 0.93},
-      "chats_tab_tap_ratio": {"x": 0.89, "y": 0.93}
+      "profile_tab_tap_ratio": {
+        "x": 0.11,
+        "y": 0.93
+      },
+      "discover_tab_tap_ratio": {
+        "x": 0.31,
+        "y": 0.93
+      },
+      "browse_tab_tap_ratio": {
+        "x": 0.5,
+        "y": 0.93
+      },
+      "liked_you_tab_tap_ratio": {
+        "x": 0.7,
+        "y": 0.93
+      },
+      "chats_tab_tap_ratio": {
+        "x": 0.89,
+        "y": 0.93
+      }
     },
     "profile_navigation": {
-      "read_down_wheel": {"x": 0.50, "y": 0.78, "delta_y": -18, "repeats": 18},
-      "read_up_wheel": {"x": 0.50, "y": 0.46, "delta_y": 18, "repeats": 18},
-      "thread_profile_name_tap_ratio": {"x": 0.32, "y": 0.13},
-      "close_profile_tap_ratio": {"x": 0.09, "y": 0.13}
+      "read_down_wheel": {
+        "x": 0.5,
+        "y": 0.78,
+        "delta_y": -18,
+        "repeats": 18
+      },
+      "read_up_wheel": {
+        "x": 0.5,
+        "y": 0.46,
+        "delta_y": 18,
+        "repeats": 18
+      },
+      "thread_profile_name_tap_ratio": {
+        "x": 0.32,
+        "y": 0.13
+      },
+      "close_profile_tap_ratio": {
+        "x": 0.09,
+        "y": 0.13
+      }
     },
     "chat_navigation": {
-      "conversation_row_base_tap_ratio": {"x": 0.43, "y": 0.53},
+      "conversation_row_base_tap_ratio": {
+        "x": 0.43,
+        "y": 0.53
+      },
       "conversation_row_y_step": 0.12,
-      "match_circle_base_tap_ratio": {"x": 0.34, "y": 0.245},
+      "match_circle_base_tap_ratio": {
+        "x": 0.34,
+        "y": 0.245
+      },
       "match_circle_x_step": 0.21,
-      "thread_back_to_chats_tap_ratio": {"x": 0.09, "y": 0.13},
-      "opening_move_reply_tap_ratio": {"x": 0.24, "y": 0.735},
-      "reply_required_markers": ["轮到您了", "回复时间", "小时后失效", "Opening Move"]
+      "thread_back_to_chats_tap_ratio": {
+        "x": 0.09,
+        "y": 0.13
+      },
+      "opening_move_reply_tap_ratio": {
+        "x": 0.24,
+        "y": 0.735
+      },
+      "reply_required_markers": [
+        "轮到您了",
+        "回复时间",
+        "小时后失效",
+        "Opening Move"
+      ]
     },
     "high_level_workflows": [
       "browse-profile-read",
@@ -122,7 +185,12 @@
     "live_send": {
       "intent": "tap_send_after_exact_staged_text_verification",
       "default_enabled": false,
-      "requires_authorization_fields": ["autonomous_send", "live_send", "allowed_actions", "requires_post_action_verification"],
+      "requires_authorization_fields": [
+        "autonomous_send",
+        "live_send",
+        "allowed_actions",
+        "requires_post_action_verification"
+      ],
       "requires_safety_active": true,
       "requires_policy_checked_action_request": true,
       "requires_target_binding_verification": true,
@@ -179,5 +247,262 @@
     "contact_exchange",
     "call",
     "video_call"
-  ]
+  ],
+  "adapter": {
+    "backend": "iphone_mirroring_macos",
+    "module": "dating_boost.apps.bumble.adapter",
+    "class_name": "BumbleAdapter",
+    "default_window_title": "iPhone Mirroring"
+  },
+  "capabilities": {
+    "host_loop_supported": true,
+    "send_modes": [
+      "stage",
+      "live"
+    ],
+    "stage_actions": [
+      "doctor",
+      "screenshot",
+      "launch_app",
+      "observe_screen",
+      "open_profile_tab",
+      "open_discover",
+      "open_browse",
+      "open_liked_you",
+      "open_chats",
+      "conversation_list_scroll_down",
+      "conversation_list_scroll_up",
+      "open_conversation",
+      "open_match",
+      "open_thread_profile",
+      "open_opening_move_reply",
+      "profile_scroll_down",
+      "profile_scroll_up",
+      "close_profile",
+      "return_to_chats"
+    ],
+    "live_actions": [
+      "send_message"
+    ],
+    "actions": [
+      "doctor",
+      "screenshot",
+      "launch_app",
+      "observe_screen",
+      "open_profile_tab",
+      "open_discover",
+      "open_browse",
+      "open_liked_you",
+      "open_chats",
+      "conversation_list_scroll_down",
+      "conversation_list_scroll_up",
+      "open_conversation",
+      "open_match",
+      "open_thread_profile",
+      "open_opening_move_reply",
+      "profile_scroll_down",
+      "profile_scroll_up",
+      "close_profile",
+      "return_to_chats"
+    ],
+    "workflows": [
+      "browse-profile-read",
+      "chat-read-match-profile",
+      "opening-move-open",
+      "opening-move-reply-composer"
+    ]
+  },
+  "selectors": {
+    "coordinates": {
+      "chat_navigation": {
+        "conversation_row_base_tap_ratio": {
+          "x": 0.43,
+          "y": 0.53
+        },
+        "conversation_row_y_step": 0.12,
+        "match_circle_base_tap_ratio": {
+          "x": 0.34,
+          "y": 0.245
+        },
+        "match_circle_x_step": 0.21,
+        "thread_back_to_chats_tap_ratio": {
+          "x": 0.09,
+          "y": 0.13
+        },
+        "opening_move_reply_tap_ratio": {
+          "x": 0.24,
+          "y": 0.735
+        },
+        "reply_required_markers": [
+          "轮到您了",
+          "回复时间",
+          "小时后失效",
+          "Opening Move"
+        ]
+      },
+      "bottom_navigation": {
+        "profile_tab_tap_ratio": {
+          "x": 0.11,
+          "y": 0.93
+        },
+        "discover_tab_tap_ratio": {
+          "x": 0.31,
+          "y": 0.93
+        },
+        "browse_tab_tap_ratio": {
+          "x": 0.5,
+          "y": 0.93
+        },
+        "liked_you_tab_tap_ratio": {
+          "x": 0.7,
+          "y": 0.93
+        },
+        "chats_tab_tap_ratio": {
+          "x": 0.89,
+          "y": 0.93
+        }
+      },
+      "profile_navigation": {
+        "read_down_wheel": {
+          "x": 0.5,
+          "y": 0.78,
+          "delta_y": -18,
+          "repeats": 18
+        },
+        "read_up_wheel": {
+          "x": 0.5,
+          "y": 0.46,
+          "delta_y": 18,
+          "repeats": 18
+        },
+        "thread_profile_name_tap_ratio": {
+          "x": 0.32,
+          "y": 0.13
+        },
+        "close_profile_tap_ratio": {
+          "x": 0.09,
+          "y": 0.13
+        }
+      },
+      "launch_navigation": {
+        "intent": "ios_home_search_launch",
+        "requires_verified_screen_state": "not_required",
+        "steps": [
+          "open_iphone_home_screen",
+          "open_ios_spotlight",
+          "type_app_name_verified",
+          "tap_search_result_icon"
+        ],
+        "app_name": "Bumble",
+        "search_result_icon_tap_ratio": {
+          "x": 0.18,
+          "y": 0.2
+        },
+        "input_source_retry": "Type the app name first, verify the English app search result by screenshot/OCR, then switch input source and retry only if the app result is not visible."
+      }
+    },
+    "blocked_actions": [
+      "send",
+      "like",
+      "superswipe",
+      "pass",
+      "unmatch",
+      "report",
+      "profile_edit",
+      "premium_purchase",
+      "opening_move_enable",
+      "opening_move_skip",
+      "opening_move_decide_reply_satisfaction",
+      "opening_move_send"
+    ]
+  },
+  "target_binding": {
+    "requires_target_binding": true,
+    "requires_target_specific_marker": true,
+    "generic_marker_blacklist": [
+      "aa",
+      "gif",
+      "hi",
+      "hello",
+      "hey",
+      "opening move",
+      "send",
+      "your turn",
+      "reply time",
+      "发送",
+      "回复",
+      "回复时间",
+      "小时后失效",
+      "轮到您了",
+      "该您给对方回复了",
+      "聊天",
+      "配对列表",
+      "聊天（最近）"
+    ],
+    "visual_only_exact_verification_allowed": false
+  },
+  "live_send_requirements": {
+    "authorization_fields": [
+      "autonomous_send",
+      "live_send",
+      "allowed_actions",
+      "requires_post_action_verification"
+    ],
+    "required_evidence": [
+      "staged_text_verified",
+      "staged_exact_text_ocr_verified",
+      "input_cleared_after_send",
+      "post_action_screen_captured",
+      "outbound_message_verified",
+      "outbound_exact_text_ocr_verified"
+    ],
+    "exact_text_verification": true,
+    "post_action_verification": true,
+    "outbound_bubble_verification": true,
+    "visual_only_exact_verification_allowed": false
+  },
+  "managed_session": {
+    "precheck_failure_status": "stopped",
+    "precheck_failure_reason": "iphone_mirroring_unavailable",
+    "precheck_failure_next_host_action": "enable_iphone_mirroring_and_restart_managed_session"
+  },
+  "special_policies": {
+    "opening_move": {
+      "scope": "bumble_opening_move",
+      "female_user": {
+        "agent_decision_authority": "none",
+        "user_decision_required": [
+          "enable_opening_move",
+          "skip_opening_move",
+          "accept_male_reply",
+          "reject_male_reply"
+        ],
+        "agent_allowed_actions": [
+          "observe_opening_move_prompt",
+          "summarize_visible_reply",
+          "ask_user_to_decide"
+        ],
+        "agent_disallowed_actions": [
+          "enable_opening_move",
+          "skip_opening_move",
+          "accept_male_reply",
+          "reject_male_reply"
+        ]
+      },
+      "male_user": {
+        "agent_may_draft_reply": true,
+        "requires_user_confirmation_before_send": true,
+        "current_harness_stage_supported": true,
+        "current_harness_send_supported": true,
+        "autonomous_opening_move_send_supported": false,
+        "agent_allowed_actions": [
+          "draft_opening_move_reply"
+        ],
+        "agent_disallowed_actions": [
+          "send_opening_move_reply_without_user_confirmation",
+          "autonomous_opening_move_send"
+        ]
+      }
+    }
+  }
 }

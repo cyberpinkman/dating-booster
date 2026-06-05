@@ -5,13 +5,22 @@ import sys
 import tempfile
 import unittest
 import zipfile
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
 from dating_boost.core.production_store import ProductionDataStore
+
+
+@contextmanager
+def _patch_cli_adapter():
+    with patch("dating_boost.cli.create_adapter") as adapter_factory:
+        adapter = adapter_factory.return_value
+        adapter.stage_draft.side_effect = adapter.stage_wechat_draft
+        adapter.observe.side_effect = adapter.observe_tinder_screen
+        yield adapter_factory
 
 
 class SupportLogTests(unittest.TestCase):
@@ -461,7 +470,7 @@ class SupportLogTests(unittest.TestCase):
             ])
             session_id = start_payload["session_id"]
 
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 harness_class.return_value.stage_wechat_draft.return_value = {
                     "schema_version": 2,
                     "status": "ok",
@@ -551,7 +560,7 @@ class SupportLogTests(unittest.TestCase):
             ])
             session_id = start_payload["session_id"]
 
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 harness_class.return_value.observe_tinder_screen.return_value = {
                     "schema_version": 2,
                     "status": "ok",

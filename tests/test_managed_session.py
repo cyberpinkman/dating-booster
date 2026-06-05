@@ -16,13 +16,25 @@ FIXTURE_DIR = Path("tests/fixtures/automation")
 
 
 class FakeHarness:
-    def __init__(self, *, tinder_payload=None, wechat_payload=None, bumble_payload=None):
+    def __init__(self, *, app_id="tinder", tinder_payload=None, wechat_payload=None, bumble_payload=None):
+        self.app_id = app_id
         self.tinder_payload = tinder_payload or _app_payload("tinder")
         self.wechat_payload = wechat_payload or _app_payload("wechat")
         self.bumble_payload = bumble_payload or _app_payload("bumble")
         self.tinder_observe_count = 0
         self.wechat_observe_count = 0
         self.bumble_observe_count = 0
+
+    def for_app(self, app_id):
+        self.app_id = app_id
+        return self
+
+    def observe(self):
+        if self.app_id == "wechat":
+            return self.observe_wechat_screen()
+        if self.app_id == "bumble":
+            return self.observe_bumble_screen()
+        return self.observe_tinder_screen()
 
     def observe_tinder_screen(self):
         self.tinder_observe_count += 1
@@ -77,7 +89,8 @@ class ManagedSessionTests(unittest.TestCase):
             self._init_profile(data_dir)
             repo = ManagedSessionRepository(
                 data_dir,
-                harness_factory=lambda _app_id: FakeHarness(
+                harness_factory=lambda app_id: FakeHarness(
+                    app_id=app_id,
                     tinder_payload=_app_payload("tinder", status="blocked", reason="iphone_mirroring_window_not_found")
                 ),
             )
@@ -100,7 +113,8 @@ class ManagedSessionTests(unittest.TestCase):
             self._init_profile(data_dir)
             repo = ManagedSessionRepository(
                 data_dir,
-                harness_factory=lambda _app_id: FakeHarness(
+                harness_factory=lambda app_id: FakeHarness(
+                    app_id=app_id,
                     wechat_payload=_app_payload("wechat", status="blocked", reason="wechat_window_not_found")
                 ),
             )
@@ -122,7 +136,7 @@ class ManagedSessionTests(unittest.TestCase):
             data_dir = Path(temp_dir) / "data"
             self._init_profile(data_dir)
             harness = FakeHarness(bumble_payload=_app_payload("bumble"))
-            repo = ManagedSessionRepository(data_dir, harness_factory=lambda _app_id: harness)
+            repo = ManagedSessionRepository(data_dir, harness_factory=lambda app_id: harness.for_app(app_id))
             payload = repo.start(
                 app_id="bumble",
                 authorization=_auth("bumble"),
@@ -265,8 +279,10 @@ class ManagedSessionTests(unittest.TestCase):
             self._init_profile(data_dir)
             auth_path = Path(temp_dir) / "auth.json"
             _write_json(auth_path, _auth("tinder"))
-            with patch("dating_boost.core.managed_session.NativeGuiHarness") as harness_class:
-                harness_class.return_value.observe_tinder_screen.return_value = _app_payload("tinder")
+            with patch(
+                "dating_boost.core.managed_session.create_adapter",
+                side_effect=lambda app_id: FakeHarness(app_id=app_id, tinder_payload=_app_payload("tinder")),
+            ):
                 start_exit, start_payload = self._run_cli([
                     "managed-session",
                     "start",
@@ -302,7 +318,10 @@ class ManagedSessionTests(unittest.TestCase):
         scan_interval_seconds=120,
         harness=None,
     ):
-        repo = ManagedSessionRepository(data_dir, harness_factory=lambda _app_id: harness or FakeHarness())
+        repo = ManagedSessionRepository(
+            data_dir,
+            harness_factory=lambda app_id: (harness or FakeHarness(app_id=app_id)).for_app(app_id),
+        )
         payload = repo.start(
             app_id=str((auth or _auth("tinder")).get("app_id") or "tinder"),
             authorization=auth or _auth("tinder"),
@@ -317,7 +336,7 @@ class ManagedSessionTests(unittest.TestCase):
         return repo
 
     def _start_repo(self, data_dir, *, send_mode="stage", managed_gui_send=False):
-        repo = ManagedSessionRepository(data_dir, harness_factory=lambda _app_id: FakeHarness())
+        repo = ManagedSessionRepository(data_dir, harness_factory=lambda app_id: FakeHarness(app_id=app_id))
         return repo.start(
             app_id="tinder",
             authorization=_auth("tinder"),

@@ -4,14 +4,14 @@ import struct
 import tempfile
 import unittest
 import zlib
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from dating_boost.apps.registry import create_adapter
 from dating_boost.cli import main
 from dating_boost.core.gui_harness import (
-    NativeGuiHarness,
     classify_bumble_screen_text,
     classify_screen_text,
     classify_wechat_screen_text,
@@ -125,6 +125,48 @@ def _run_cli_json(argv: list[str]) -> tuple[int, dict[str, object]]:
     return exit_code, json.loads(output.getvalue())
 
 
+@contextmanager
+def _patch_cli_adapter():
+    with patch("dating_boost.cli.create_adapter") as adapter_factory:
+        adapter = adapter_factory.return_value
+        adapter.session = adapter
+
+        def current_app_id() -> str:
+            call_args = adapter_factory.call_args
+            if call_args is None:
+                return "tinder"
+            if call_args.args:
+                return str(call_args.args[0])
+            return str(call_args.kwargs.get("app_id") or "tinder")
+
+        adapter.launch.side_effect = lambda *args, **kwargs: getattr(adapter, f"launch_{current_app_id()}")(
+            *args,
+            **kwargs,
+        )
+        adapter.observe.side_effect = lambda *args, **kwargs: getattr(adapter, f"observe_{current_app_id()}_screen")(
+            *args,
+            **kwargs,
+        )
+        adapter.run_action.side_effect = lambda *args, **kwargs: getattr(adapter, f"run_{current_app_id()}_action")(
+            *args,
+            **kwargs,
+        )
+        adapter.run_workflow.side_effect = lambda *args, **kwargs: getattr(adapter, f"run_{current_app_id()}_workflow")(
+            *args,
+            **kwargs,
+        )
+        adapter.stage_draft.side_effect = lambda *args, **kwargs: getattr(adapter, f"stage_{current_app_id()}_draft")(
+            *args,
+            **kwargs,
+        )
+        adapter.send_message.side_effect = lambda *args, **kwargs: getattr(adapter, f"send_{current_app_id()}_message")(
+            *args,
+            **kwargs,
+        )
+        adapter.open_profile.side_effect = lambda *args, **kwargs: adapter.open_tinder_profile(*args, **kwargs)
+        yield adapter_factory
+
+
 def _ocr_tsv_for_line(text: str, *, top: int = 235, height: int = 28, left: int = 80, width: int = 60) -> str:
     return "\n".join(
         [
@@ -232,7 +274,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertFalse(payload["agent_native_capabilities"]["live_gui_harness"])
 
     def test_cli_generic_harness_blocks_unknown_app_before_native_execution(self):
-        with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+        with _patch_cli_adapter() as harness_class:
             exit_code, payload = _run_cli_json([
                 "harness",
                 "doctor",
@@ -251,7 +293,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_bumble_launch_dry_run_uses_home_search_without_send_support(self):
         runner = FakeRunner(ocr_text="今天 周五\n搜索\n电话\n微信\nChrome\n")
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.launch_bumble(dry_run=True)
 
@@ -281,7 +323,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
             ],
         )
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.launch_bumble(dry_run=False)
 
@@ -302,7 +344,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
             ],
         )
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.launch_bumble(dry_run=False)
 
@@ -314,7 +356,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertFalse(any("key code 49" in " ".join(command) and "control down" in " ".join(command) for command in runner.commands))
 
     def test_bumble_action_and_workflow_dry_runs_are_navigation_only(self):
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=FakeRunner(ocr_text="Bumble\n聊天\n"))
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=FakeRunner(ocr_text="Bumble\n聊天\n"))
 
         action = harness.run_bumble_action("open-match", match_index=2, dry_run=True)
         workflow = harness.run_bumble_workflow("chat-read-match-profile", conversation_row=1, dry_run=True)
@@ -329,7 +371,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_bumble_payloads_include_opening_move_role_policy(self):
         runner = FakeRunner(ocr_text="Bumble\n照片通过验证\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n")
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         observe = harness.observe_bumble_screen()
         action = harness.run_bumble_action("open-match", match_index=2, dry_run=True)
@@ -359,7 +401,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Ada\nHi!\n今晚可以聊十分钟吗？\nAa\nGIF\n",
             ],
         )
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.send_bumble_message(
             "今晚可以聊十分钟吗？",
@@ -391,7 +433,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Ada\nOpening Move\nhi\nAa\nGIF\n",
             ],
         )
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.send_bumble_message(
             "hi",
@@ -433,7 +475,7 @@ class GuiHarnessTests(unittest.TestCase):
                 _bumble_conversation_png(outgoing_bubble=True),
             ],
         )
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.send_bumble_message(
             "hi",
@@ -456,7 +498,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Ada\nOpening Move\nhi\nAa\nGIF\n",
             ],
         )
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.send_bumble_message(
             "hi",
@@ -470,7 +512,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_bumble_send_message_blocks_on_opening_move_page_without_user_confirmation_path(self):
         runner = FakeRunner(ocr_text="旺仔的Opening Move\n旺仔预设了Opening Move。发送消息回复。\n回复\n")
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.send_bumble_message("That is a good question.", dry_run=False)
 
@@ -482,7 +524,7 @@ class GuiHarnessTests(unittest.TestCase):
             ocr_text="Bumble\nPremium\n查看喜欢您的人\n",
             missing_commands={"xcrun"},
         )
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.run_bumble_action("open-chats", dry_run=False)
 
@@ -499,7 +541,7 @@ class GuiHarnessTests(unittest.TestCase):
             ],
             missing_commands={"xcrun"},
         )
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.run_bumble_action("open-chats", dry_run=False)
 
@@ -514,7 +556,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
             ],
         )
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.run_bumble_workflow("chat-read-match-profile", dry_run=False)
 
@@ -533,7 +575,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Jessie\nHi!\n您有8个小时的回复时间\nAa\nGIF\n",
             ],
         )
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.run_bumble_workflow("opening-move-reply-composer", dry_run=False)
 
@@ -599,7 +641,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(runner.command[:2], ["xcrun", "swift"])
 
     def test_doctor_blocks_when_iphone_mirroring_is_locked(self):
-        harness = NativeGuiHarness(
+        harness = create_adapter(
             app_id="tinder",
             platform="darwin",
             runner=FakeRunner(
@@ -618,7 +660,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertNotIn("Touch ID", json.dumps(payload, ensure_ascii=False))
 
     def test_doctor_blocks_when_iphone_mirroring_is_not_frontmost(self):
-        harness = NativeGuiHarness(
+        harness = create_adapter(
             app_id="tinder",
             platform="darwin",
             runner=FakeRunner(ocr_text="Tinder\nMessages\n", frontmost=False),
@@ -633,7 +675,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_tinder_open_profile_dry_run_uses_safe_navigation_only(self):
         runner = FakeRunner(ocr_text="Tinder\nMatches\nMessages\n")
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.open_tinder_profile(dry_run=True)
 
@@ -653,7 +695,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "true, 1067, 57, 348, 766, iPhone Mirroring\n",
             ],
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.doctor(capture=False)
 
@@ -663,7 +705,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_tinder_launch_dry_run_forces_home_and_search_when_not_in_tinder(self):
         runner = FakeRunner(ocr_text="今天 周四 6月4日\n搜索\n电话\n微信\nChrome\n")
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.launch_tinder(dry_run=True)
 
@@ -689,7 +731,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Tinder\n滑动\n探索\n赞\n聊天\n个人资料",
             ]
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.launch_tinder(dry_run=False)
 
@@ -708,7 +750,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_open_profile_launch_if_needed_combines_launch_and_profile_navigation(self):
         runner = FakeRunner(ocr_text="周三\n03\n搜索\n电话\n微信\nChrome\n")
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.open_tinder_profile(dry_run=True, launch_if_needed=True)
 
@@ -775,7 +817,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_visual_self_profile_does_not_override_ios_home_text(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="tinder",
                 platform="darwin",
                 runner=FakeRunner(
@@ -791,7 +833,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_visual_self_profile_does_not_override_non_tinder_app_text(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="tinder",
                 platform="darwin",
                 runner=FakeRunner(
@@ -808,7 +850,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_visual_self_profile_does_not_override_ios_spotlight_tinder_search_results(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="tinder",
                 platform="darwin",
                 runner=FakeRunner(
@@ -844,7 +886,7 @@ class GuiHarnessTests(unittest.TestCase):
         for active_tab, expected_state in cases:
             with self.subTest(active_tab=active_tab):
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    harness = NativeGuiHarness(
+                    harness = create_adapter(
                         app_id="tinder",
                         platform="darwin",
                         runner=FakeRunner(
@@ -862,7 +904,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_visual_bumble_browse_uses_bottom_nav_and_header_title(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="bumble",
                 platform="darwin",
                 runner=FakeRunner(
@@ -881,7 +923,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_visual_bumble_browse_does_not_override_without_header_text(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="bumble",
                 platform="darwin",
                 runner=FakeRunner(
@@ -899,7 +941,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_visual_bumble_chat_list_uses_active_chat_tab_and_list_marker(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="bumble",
                 platform="darwin",
                 runner=FakeRunner(
@@ -921,7 +963,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_visual_bumble_chat_list_does_not_override_without_list_marker(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="bumble",
                 platform="darwin",
                 runner=FakeRunner(
@@ -939,7 +981,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_visual_bumble_conversation_uses_header_input_and_thread_marker(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="bumble",
                 platform="darwin",
                 runner=FakeRunner(
@@ -957,7 +999,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_visual_bumble_conversation_does_not_override_without_thread_marker(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="bumble",
                 platform="darwin",
                 runner=FakeRunner(
@@ -977,7 +1019,7 @@ class GuiHarnessTests(unittest.TestCase):
             ocr_text="Ada\nOpening Move\nAa\nGIF\n",
             screenshot_bytes=_bumble_conversation_png(),
         )
-        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
         payload = harness.observe_bumble_screen()
 
@@ -989,7 +1031,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_bumble_top_level_page_uses_bottom_nav_and_header_title(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="bumble",
                 platform="darwin",
                 runner=FakeRunner(
@@ -1006,7 +1048,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_tinder_observe_preserves_visual_bottom_active_tab_for_home_surfaces(self):
         runner = FakeRunner(ocr_text="20:29 RO 37\n", screenshot_bytes=_tinder_bottom_nav_png("likes"))
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.observe_tinder_screen()
 
@@ -1018,7 +1060,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_spotlight_bottom_search_candidate_bar_is_not_tinder_bottom_nav(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="tinder",
                 platform="darwin",
                 runner=FakeRunner(
@@ -1056,7 +1098,7 @@ class GuiHarnessTests(unittest.TestCase):
     def test_visual_top_structure_identifies_tinder_self_profile_without_subscription_heuristic(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             screenshot = _profile_top_structure_png()
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="tinder",
                 platform="darwin",
                 runner=FakeRunner(
@@ -1073,7 +1115,7 @@ class GuiHarnessTests(unittest.TestCase):
     def test_visual_profile_tab_active_state_supports_self_profile_detection(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             screenshot = _tinder_bottom_nav_png("profile")
-            harness = NativeGuiHarness(
+            harness = create_adapter(
                 app_id="tinder",
                 platform="darwin",
                 runner=FakeRunner(
@@ -1088,7 +1130,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["visual_state"], "tinder_self_profile")
 
     def test_self_profile_read_workflow_covers_preview_photos_full_read_expand_and_exit(self):
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="编辑个人资料\n个人资料"))
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="编辑个人资料\n个人资料"))
 
         payload = harness.run_tinder_workflow("self-profile-read", dry_run=True, photo_steps=2, scroll_steps=2)
 
@@ -1116,7 +1158,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(all(step["risk"] == "navigation_only" for step in payload["planned_steps"]))
 
     def test_chat_read_match_profile_workflow_reads_existing_conversation_without_new_match_flow(self):
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天\n等你回应"))
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天\n等你回应"))
 
         payload = harness.run_tinder_workflow(
             "chat-read-match-profile",
@@ -1151,7 +1193,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(conversation_step["row_index"], 2)
 
     def test_new_match_open_workflow_opens_unstarted_match_and_stays_in_conversation(self):
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天\n新的配对"))
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天\n新的配对"))
 
         payload = harness.run_tinder_workflow("new-match-open", dry_run=True, carousel_swipes=1, match_index=2)
 
@@ -1171,7 +1213,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertNotIn("tap_thread_back_to_chats", [step["intent"] for step in payload["planned_steps"]])
 
     def test_new_match_read_profile_workflow_reads_profile_without_existing_conversation_row(self):
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天\n新的配对"))
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天\n新的配对"))
 
         payload = harness.run_tinder_workflow(
             "new-match-read-profile",
@@ -1206,7 +1248,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertNotIn("tap_preview_done", [step["intent"] for step in payload["planned_steps"]])
 
     def test_tinder_atomic_actions_expose_safe_tap_and_swipe_contracts(self):
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天"))
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天"))
 
         action_names = [
             "open-chats",
@@ -1242,7 +1284,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(feedback_survey_step["intent"], "tap_tinder_feedback_survey_ignore")
 
     def test_tinder_open_conversation_can_target_visible_row_y_ratio_after_scroll(self):
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天"))
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天"))
 
         payload = harness.run_tinder_action("open-conversation", dry_run=True, y_ratio=0.71)
 
@@ -1252,7 +1294,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(step["tap_ratio"], {"x": 0.5, "y": 0.71})
 
     def test_tinder_open_conversation_can_target_visible_name_without_raw_text_in_plan(self):
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天"))
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天"))
 
         payload = harness.run_tinder_action("open-conversation", dry_run=True, visible_name="Iris")
 
@@ -1274,7 +1316,7 @@ class GuiHarnessTests(unittest.TestCase):
             ],
             screenshot_bytes=_tinder_bottom_nav_png("chats"),
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.run_tinder_action(
             "open-conversation",
@@ -1292,7 +1334,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_tinder_observe_distinguishes_chat_regions_and_redacts_raw_text(self):
         runner = FakeRunner(ocr_text="Tinder\n新的配对\n消息\nAda\n等你回应\n")
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.observe_tinder_screen()
 
@@ -1314,7 +1356,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Continue - $18.99 total\n"
             )
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.observe_tinder_screen()
 
@@ -1333,7 +1375,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "编辑个人资料\n个人资料\n",
             ]
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             payload = harness.run_tinder_workflow(
@@ -1360,7 +1402,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertNotIn("关于我", json.dumps(payload, ensure_ascii=False))
 
     def test_profile_read_workflow_captures_full_profile_before_first_wheel(self):
-        payload = NativeGuiHarness(
+        payload = create_adapter(
             app_id="tinder",
             platform="darwin",
             runner=FakeRunner(ocr_text="编辑个人资料\n个人资料"),
@@ -1381,7 +1423,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "编辑个人资料\n个人资料\n",
             ]
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             payload = harness.run_tinder_workflow(
@@ -1408,7 +1450,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Tinder\nAda\n昨天 21:14\n在吗\n今晚可以聊十分钟吗？\n",
             ]
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.send_tinder_message(
             "今晚可以聊十分钟吗？",
@@ -1444,7 +1486,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Iris\nlriss613\nTesting send path, please ignore] 1)\n",
             ]
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.send_tinder_message(
             "Testing send path, please ignore.",
@@ -1466,7 +1508,7 @@ class GuiHarnessTests(unittest.TestCase):
             ],
             screenshot_bytes=_tinder_conversation_send_button_png(),
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.send_tinder_message(
             "Testing send path, please ignore.",
@@ -1492,7 +1534,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Iris\nlriss613\nTesting send path, please ignore] 1)\n",
             ]
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.send_tinder_message(
             "Testing send path, please ignore.",
@@ -1507,7 +1549,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_tinder_send_message_blocks_when_target_marker_visible_but_screen_is_not_conversation(self):
         runner = FakeRunner(ocr_text="Iris\n查看Iris何时回复\n启用推送通知\n")
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.send_tinder_message(
             "Hi Iris",
@@ -1542,7 +1584,7 @@ class GuiHarnessTests(unittest.TestCase):
             ],
             screenshot_bytes=_tinder_bottom_nav_png("chats"),
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.send_tinder_message(
             "今晚可以聊十分钟吗？",
@@ -1567,7 +1609,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Tinder\n聊天\n新的配对\n消息\n",
             ]
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.run_tinder_action("dismiss-subscription-paywall", dry_run=False)
 
@@ -1581,7 +1623,7 @@ class GuiHarnessTests(unittest.TestCase):
             ocr_text="Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
             frontmost=False,
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.send_tinder_message(
             "今晚可以聊十分钟吗？",
@@ -1596,7 +1638,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_tinder_send_message_blocks_when_target_is_only_visible_in_chat_list(self):
         runner = FakeRunner(ocr_text="Tinder\n新的配对\n消息\nAda\n等你回应\n")
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.send_tinder_message(
             "今晚可以聊十分钟吗？",
@@ -1618,7 +1660,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Tinder\nAda\n昨天 21:14\n在吗\n今晚可以聊十分钟吗？\nSend\n",
             ]
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.send_tinder_message(
             "今晚可以聊十分钟吗？",
@@ -1640,7 +1682,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Tinder\nAda\n刚刚\n在吗\n今晚可以聊十分钟吗？\nSend\n",
             ]
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.send_tinder_message(
             "今晚可以聊十分钟吗？",
@@ -1663,7 +1705,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Tinder\nAda\n刚刚\n在吗\nsend me your plan\n",
             ]
         )
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.send_tinder_message(
             "send me your plan",
@@ -1677,7 +1719,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_tinder_send_message_blocks_when_target_binding_mismatches_before_staging(self):
         runner = FakeRunner(ocr_text="Tinder\nZara\n昨天 21:14\n在吗\nMessage\nSend\n")
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.send_tinder_message(
             "今晚可以聊十分钟吗？",
@@ -1690,7 +1732,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
 
     def test_cli_exposes_tinder_observe_with_redacted_payload(self):
-        with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+        with _patch_cli_adapter() as harness_class:
             harness_class.return_value.observe_tinder_screen.return_value = {
                 "schema_version": 1,
                 "status": "ok",
@@ -1711,7 +1753,7 @@ class GuiHarnessTests(unittest.TestCase):
             ocr_text="微信\nAda\n昨天 21:14\n今晚有空吗\n发送\n",
             window_name="WeChat",
         )
-        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+        harness = create_adapter(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
 
         payload = harness.observe_wechat_screen()
 
@@ -1726,7 +1768,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_wechat_stage_draft_dry_run_redacts_text_and_never_sends(self):
         runner = FakeRunner(ocr_text="微信\nAda\n发送\n", window_name="WeChat")
-        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+        harness = create_adapter(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
 
         payload = harness.stage_wechat_draft("今晚可以聊十分钟吗？", dry_run=True)
 
@@ -1746,7 +1788,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_wechat_stage_draft_blocks_until_chat_input_is_verified(self):
         runner = FakeRunner(ocr_text="微信\n通讯录\n群聊\n", window_name="WeChat")
-        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+        harness = create_adapter(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
 
         payload = harness.stage_wechat_draft("今晚可以聊十分钟吗？", dry_run=False)
 
@@ -1763,7 +1805,7 @@ class GuiHarnessTests(unittest.TestCase):
             ],
             window_name="WeChat",
         )
-        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+        harness = create_adapter(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
 
         payload = harness.stage_wechat_draft("今晚可以聊十分钟吗？", dry_run=False)
 
@@ -1790,7 +1832,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_wechat_send_message_dry_run_is_explicit_live_send_plan(self):
         runner = FakeRunner(ocr_text="微信\nAda\n发送\n", window_name="WeChat")
-        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+        harness = create_adapter(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
 
         payload = harness.send_wechat_message("今晚可以聊十分钟吗？", dry_run=True)
 
@@ -1819,7 +1861,7 @@ class GuiHarnessTests(unittest.TestCase):
             ],
             window_name="WeChat",
         )
-        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+        harness = create_adapter(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
 
         payload = harness.send_wechat_message(
             "今晚可以聊十分钟吗？",
@@ -1850,7 +1892,7 @@ class GuiHarnessTests(unittest.TestCase):
             ocr_text="微信\nZara\n昨天 21:14\n在吗\n发送\n",
             window_name="WeChat",
         )
-        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+        harness = create_adapter(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
 
         payload = harness.send_wechat_message(
             "今晚可以聊十分钟吗？",
@@ -1873,7 +1915,7 @@ class GuiHarnessTests(unittest.TestCase):
             ],
             window_name="WeChat",
         )
-        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+        harness = create_adapter(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
 
         payload = harness.send_wechat_message(
             "今晚可以聊十分钟吗？",
@@ -1894,7 +1936,7 @@ class GuiHarnessTests(unittest.TestCase):
             window_name="WeChat",
             paste_focus_override="错误草稿",
         )
-        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+        harness = create_adapter(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
 
         payload = harness.send_wechat_message("今晚可以聊十分钟吗？", dry_run=False)
 
@@ -1911,7 +1953,7 @@ class GuiHarnessTests(unittest.TestCase):
             window_name="WeChat",
             screenshot_fail_at={3},
         )
-        harness = NativeGuiHarness(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
+        harness = create_adapter(app_id="wechat", platform="darwin", runner=runner, window_title="WeChat")
 
         payload = harness.send_wechat_message("今晚可以聊十分钟吗？", dry_run=False)
 
@@ -1923,7 +1965,7 @@ class GuiHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             draft_path = Path(temp_dir) / "wechat-draft.txt"
             draft_path.write_text("今晚可以聊十分钟吗？", encoding="utf-8")
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 harness_class.return_value.observe_wechat_screen.return_value = {
                     "schema_version": 1,
                     "status": "ok",
@@ -1991,7 +2033,7 @@ class GuiHarnessTests(unittest.TestCase):
             draft_path = root / "wechat-draft.txt"
             data_dir = root / "data"
             draft_path.write_text("今晚可以聊十分钟吗？", encoding="utf-8")
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 missing_data_exit, missing_data_payload = _run_cli_json([
                     "harness",
                     "wechat",
@@ -2046,7 +2088,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "requires_post_action_verification": True,
                 "revoked_at": None,
             }), encoding="utf-8")
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 missing_data_exit, missing_data_payload = _run_cli_json([
                     "harness",
                     "wechat",
@@ -2143,7 +2185,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "policy": {"allowed": True},
                 "target_binding": {"required_visible_text": ["Ada"]},
             }), encoding="utf-8")
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 exit_code, payload = _run_cli_json([
                     "harness",
                     "wechat",
@@ -2195,7 +2237,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "policy": {"allowed": True},
                 "target_binding": {"required_visible_text": ["Ada"]},
             }), encoding="utf-8")
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 exit_code, payload = _run_cli_json([
                     "harness",
                     "tinder",
@@ -2259,7 +2301,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "policy": {"allowed": True},
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
             }), encoding="utf-8")
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 exit_code, payload = _run_cli_json([
                     "harness",
                     "tinder",
@@ -2313,7 +2355,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "policy": {"allowed": True},
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
             }), encoding="utf-8")
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 exit_code, payload = _run_cli_json([
                     "harness",
                     "tinder",
@@ -2377,7 +2419,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "policy": {"allowed": True},
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_bea"},
             }), encoding="utf-8")
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 exit_code, payload = _run_cli_json([
                     "harness",
                     "tinder",
@@ -2420,7 +2462,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
             })
 
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 exit_code, payload = _run_cli_json([
                     "harness",
                     "tinder",
@@ -2497,7 +2539,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
             })
 
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 harness_class.return_value.send_tinder_message.return_value = {
                     "schema_version": 1,
                     "status": "ok",
@@ -2567,7 +2609,7 @@ class GuiHarnessTests(unittest.TestCase):
                         },
                     })
 
-                    with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+                    with _patch_cli_adapter() as harness_class:
                         getattr(harness_class.return_value, method_name).return_value = {
                             "schema_version": 1,
                             "status": "ok",
@@ -2625,7 +2667,7 @@ class GuiHarnessTests(unittest.TestCase):
                 },
             })
 
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 harness_class.return_value.send_bumble_message.return_value = {
                     "schema_version": 1,
                     "status": "ok",
@@ -2654,8 +2696,8 @@ class GuiHarnessTests(unittest.TestCase):
     def test_cli_wechat_doctor_and_screenshot_default_to_wechat_window_title(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "wechat.png"
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
-                harness_class.return_value.doctor_wechat.return_value = {
+            with _patch_cli_adapter() as harness_class:
+                harness_class.return_value.doctor.return_value = {
                     "schema_version": 1,
                     "status": "ok",
                     "app_id": "wechat",
@@ -2691,7 +2733,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_tinder_action_execution_blocks_when_tinder_foreground_not_verified(self):
         runner = FakeRunner(ocr_text="周三\n03\n搜索\n电话\n微信\nChrome\n")
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.run_tinder_action("profile-photo-next", dry_run=False)
 
@@ -2703,7 +2745,7 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_wheel_action_blocks_cleanly_when_xcrun_missing(self):
         runner = FakeRunner(ocr_text="滑动\n探索\n赞\n聊天\n个人资料\n", missing_commands={"xcrun"})
-        harness = NativeGuiHarness(app_id="tinder", platform="darwin", runner=runner)
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
         payload = harness.run_tinder_action("profile-scroll-down", dry_run=False)
 
@@ -2713,26 +2755,27 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertFalse(any(command and command[0] == "xcrun" for command in runner.commands))
 
     def test_cli_exposes_tinder_action_and_workflow_dry_runs(self):
-        action_exit, action_payload = _run_cli_json([
-            "harness",
-            "tinder",
-            "action",
-            "profile-photo-next",
-            "--dry-run",
-            "--json",
-        ])
-        workflow_exit, workflow_payload = _run_cli_json([
-            "harness",
-            "tinder",
-            "workflow",
-            "self-profile-read",
-            "--dry-run",
-            "--photo-steps",
-            "1",
-            "--scroll-steps",
-            "1",
-            "--json",
-        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            options_path = Path(temp_dir) / "workflow-options.json"
+            _write_json(options_path, {"photo_steps": 1, "scroll_steps": 1})
+            action_exit, action_payload = _run_cli_json([
+                "harness",
+                "tinder",
+                "action",
+                "profile-photo-next",
+                "--dry-run",
+                "--json",
+            ])
+            workflow_exit, workflow_payload = _run_cli_json([
+                "harness",
+                "tinder",
+                "workflow",
+                "self-profile-read",
+                "--dry-run",
+                "--options-json",
+                str(options_path),
+                "--json",
+            ])
 
         self.assertEqual(action_exit, 0)
         self.assertEqual(action_payload["action"], "profile-photo-next")
@@ -2748,21 +2791,31 @@ class GuiHarnessTests(unittest.TestCase):
                 binding_path,
                 {"required_visible_text": ["Iris"], "target_match_id": "match_iris", "candidate_key": "tinder_iris"},
             )
-            with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
+            with _patch_cli_adapter() as harness_class:
                 harness_class.return_value.run_tinder_action.return_value = {
                     "schema_version": 2,
                     "status": "ok",
                     "action": "open-conversation",
                 }
+                options_path = Path(temp_dir) / "options.json"
+                _write_json(
+                    options_path,
+                    {
+                        "visible_name": "Iris",
+                        "target_binding": {
+                            "required_visible_text": ["Iris"],
+                            "target_match_id": "match_iris",
+                            "candidate_key": "tinder_iris",
+                        },
+                    },
+                )
                 exit_code, payload = _run_cli_json([
                     "harness",
                     "tinder",
                     "action",
                     "open-conversation",
-                    "--visible-name",
-                    "Iris",
-                    "--target-binding",
-                    str(binding_path),
+                    "--options-json",
+                    str(options_path),
                     "--json",
                 ])
 
@@ -2776,32 +2829,31 @@ class GuiHarnessTests(unittest.TestCase):
         )
 
     def test_cli_exposes_new_match_workflows_with_match_index(self):
-        open_exit, open_payload = _run_cli_json([
-            "harness",
-            "tinder",
-            "workflow",
-            "new-match-open",
-            "--dry-run",
-            "--carousel-swipes",
-            "1",
-            "--match-index",
-            "2",
-            "--json",
-        ])
-        read_exit, read_payload = _run_cli_json([
-            "harness",
-            "tinder",
-            "workflow",
-            "new-match-read-profile",
-            "--dry-run",
-            "--carousel-swipes",
-            "1",
-            "--match-index",
-            "2",
-            "--profile-scroll-steps",
-            "1",
-            "--json",
-        ])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            open_options_path = Path(temp_dir) / "open-options.json"
+            read_options_path = Path(temp_dir) / "read-options.json"
+            _write_json(open_options_path, {"carousel_swipes": 1, "match_index": 2})
+            _write_json(read_options_path, {"carousel_swipes": 1, "match_index": 2, "profile_scroll_steps": 1})
+            open_exit, open_payload = _run_cli_json([
+                "harness",
+                "tinder",
+                "workflow",
+                "new-match-open",
+                "--dry-run",
+                "--options-json",
+                str(open_options_path),
+                "--json",
+            ])
+            read_exit, read_payload = _run_cli_json([
+                "harness",
+                "tinder",
+                "workflow",
+                "new-match-read-profile",
+                "--dry-run",
+                "--options-json",
+                str(read_options_path),
+                "--json",
+            ])
 
         self.assertEqual(open_exit, 0)
         self.assertEqual(open_payload["workflow"], "new-match-open")

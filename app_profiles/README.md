@@ -32,6 +32,17 @@ every `app_profiles/*.json` file against the same required contract shape.
 - `message_list_observation`: rules for visible conversation-list scanning.
 - `thread_observation`: rules for thread-level observation and turn boundaries.
 - `stage_send_verification`: rules for staged draft verification.
+- `adapter`: runtime adapter backend/module/class/default-window-title.
+- `cli_aliases`: optional compatibility CLI commands generated from profile
+  metadata, such as Tinder's `open-profile` alias for `open_profile`.
+- `capabilities`: supported actions, workflows, send modes, stage actions, and
+  live actions as consumed by the registry.
+- `selectors`: app-owned coordinates/selectors and blocked native actions.
+- `target_binding`: generic target-binding requirements, target-specific marker
+  policy, generic-marker blacklist, and visual-only verification boundary.
+- `live_send_requirements`: exact evidence required before/after live send.
+- `managed_session`: profile-owned precheck failure status and recovery action.
+- `special_policies`: app-specific social rules such as Bumble Opening Move.
 - `post_send_verification`: rules for recording a send result.
 - `known_gui_pitfalls`: app-specific failure modes that should stop or slow a
   host run.
@@ -39,15 +50,19 @@ every `app_profiles/*.json` file against the same required contract shape.
 
 ## Native Harness Field
 
-`native_gui_harness` is required for runtime app profiles. Unsupported apps do
-not get placeholder profiles. Current backends:
+`native_gui_harness` remains the legacy coordinate/source declaration for
+runtime app profiles; v2 profiles also expose normalized `adapter`,
+`capabilities`, `selectors`, `target_binding`, and `live_send_requirements`
+blocks for registry consumers. Unsupported apps do not get placeholder
+profiles. Current backends:
 
-- `iphone_mirroring_macos`: macOS iPhone Mirroring harness used by Tinder.
+- `iphone_mirroring_macos`: macOS iPhone Mirroring harness used by Tinder and
+  Bumble.
 - `macos_wechat_desktop`: desktop WeChat window harness used by WeChat.
 
 Every native harness block should define:
 
-- `backend`: adapter id implemented in `dating_boost/core/gui_harness.py`.
+- `backend`: platform backend consumed by the app adapter.
 - `supported_stage_actions`: exact action names exposed by the harness.
 - `supported_live_actions`: exact high-risk live actions exposed only through
   explicit authorization gates.
@@ -76,21 +91,26 @@ axis of the architecture; do not mix a new app contract with host-agent adapter,
 goal-type, or memory-evolution changes unless the same product increment truly
 requires it.
 
-1. Create `app_profiles/<app_id>.json` with the required fields above.
+1. Create `app_profiles/<app_id>.json` with schema v2 fields above.
 2. Do not create a placeholder profile for an unsupported app. Keep roadmap
    candidates in `docs/ARCHITECTURE.md` until the runtime path is testable.
-3. Add `app_id` to `supported_app_profiles` only when the profile is backed by
-   fixtures and tests. Add it to `host_loop_app_profiles` only after
-   `host_loop_supported` is true and preflight/tests prove it can run.
-4. Add fixtures that represent message-list and thread observations.
-5. If native GUI support is needed, implement the adapter in
-   `dating_boost/core/gui_harness.py` and expose app-specific CLI commands in
-   `dating_boost/cli.py`.
-6. Add capability flags and supported commands in
-   `dating_boost/core/capabilities.py`.
+3. Add `dating_boost/apps/<app_id>/adapter.py` implementing the standard
+   adapter methods: `doctor`, `launch`, `observe`, `run_action`, `run_workflow`,
+   `stage_draft`, `send_message`, `target_binding_policy`, and
+   `required_send_evidence`.
+4. Register the adapter in `dating_boost/apps/registry.py`. Capabilities, CLI
+   harness app commands, managed sessions, and host loop must derive support
+   from that registry/profile pair.
+5. If the app needs a backward-compatible harness command, declare it in
+   `cli_aliases` rather than adding an app-specific argparse branch.
+6. Add fixtures that represent message-list and thread observations.
 7. Add unit tests for classification, dry-run behavior, redaction, blocked
-   screens/actions, and success-path command construction.
-8. Update the Codex skill and runbook references before publishing.
+   screens/actions, target binding, send evidence, and success-path command
+   construction.
+8. Use `dating-boost harness <app_id> action|workflow --options-json <path>`
+   for app-specific parameters. Do not add new app-specific argparse flags to
+   global CLI code.
+9. Update the Codex skill and runbook references before publishing.
 
 ## Review Checklist
 

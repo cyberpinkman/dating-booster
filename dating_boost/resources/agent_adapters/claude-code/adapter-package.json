@@ -41,7 +41,7 @@
     "observation_authoring": 1,
     "conversation_eval": 1,
     "replay_timeline": 1,
-    "app_profile": 1,
+    "app_profile": 2,
     "data_store": 2,
     "migration": 1,
     "automation_lock": 1,

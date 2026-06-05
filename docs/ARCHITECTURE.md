@@ -86,13 +86,23 @@ Support levels:
 
 Implementation rules:
 
-- `app_profiles/<app_id>.json` is the product contract.
+- `app_profiles/<app_id>.json` is the product contract; schema v2 declares the
+  adapter backend, capabilities, selectors/coordinates, blocked actions,
+  target-binding policy, live-send evidence, managed-session policy, and special
+  app rules.
+- `dating_boost/apps/<app_id>/adapter.py` is the runtime behavior boundary. App
+  page semantics, workflows, target binding, send verification, and special
+  social rules live in the adapter/profile pair or adapter-owned session
+  modules under `dating_boost/apps/`, not in `dating_boost/core/gui_harness.py`.
+- `dating_boost/apps/registry.py` is the only source for supported app ids,
+  host-loop app ids, and app capability manifests.
 - `schemas/app_profile.schema.json` is the formal profile schema and
   `tests/test_app_profiles.py` keeps profile files aligned.
-- `dating_boost/core/capabilities.py` exposes only runtime-supported app
-  profiles.
-- `dating_boost/core/gui_harness.py` owns native GUI mechanics. Do not scatter
-  app coordinates or OS gestures into skills or README.
+- `dating_boost/core/capabilities.py`, managed sessions, host loop, and CLI
+  harness commands derive supported apps from the registry.
+- `dating_boost/core/gui_harness.py` owns native GUI mechanics only: window
+  location, screenshot/OCR, click/swipe/wheel, clipboard/paste, IME commit, and
+  platform backend execution.
 - Unsupported apps must be absent from `app_profiles/`, capabilities, native
   harness commands, and host-loop execution.
 
@@ -178,11 +188,16 @@ For a new host agent adapter:
 For a new app:
 
 1. Keep it as a roadmap candidate until fixtures and preflight are testable.
-2. Add `app_profiles/<app_id>.json` only when the app is runtime-supported.
-3. Add it to `supported_app_profiles` only when the runtime behavior is tested;
-   add it to `host_loop_app_profiles` only after host-loop behavior is tested.
-4. Add fixtures and tests before native harness support.
-5. Update README, `docs/README.md`, `app_profiles/README.md`, and relevant host
+2. Add `app_profiles/<app_id>.json` using schema v2 only when the app is
+   runtime-supported.
+3. Add `dating_boost/apps/<app_id>/adapter.py` and register it in
+   `dating_boost/apps/registry.py`.
+4. Add fixtures and tests for classifier behavior, dry-run action/workflow
+   planning, blocked actions, target binding, send evidence, and host-loop
+   preflight.
+5. Let capabilities, CLI harness, managed session, and host loop consume the
+   registry; do not add app-specific branches to those global layers.
+6. Update README, `docs/README.md`, `app_profiles/README.md`, and relevant host
    adapter docs.
 
 For a new goal:

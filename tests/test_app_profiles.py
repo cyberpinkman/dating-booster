@@ -26,6 +26,13 @@ REQUIRED_FIELDS = {
     "thread_observation",
     "stage_send_verification",
     "native_gui_harness",
+    "adapter",
+    "capabilities",
+    "selectors",
+    "target_binding",
+    "live_send_requirements",
+    "managed_session",
+    "special_policies",
     "post_send_verification",
     "known_gui_pitfalls",
     "unsupported_actions",
@@ -52,12 +59,27 @@ class AppProfileContractTests(unittest.TestCase):
                 profile = json.loads(path.read_text(encoding="utf-8"))
                 errors = sorted(validator.iter_errors(profile), key=lambda error: tuple(error.path))
                 self.assertEqual([error.message for error in errors], [])
-                self.assertEqual(profile["schema_version"], 1)
+                self.assertEqual(profile["schema_version"], 2)
                 self.assertEqual(profile["app_id"], path.stem)
                 if profile["host_loop_supported"]:
                     self.assertTrue(profile["host_loop_send_modes"], path.name)
                 self.assertIn("native_gui_harness", profile)
                 self.assertTrue(profile["native_gui_harness"]["supported_stage_actions"])
+                self.assertEqual(profile["adapter"]["backend"], profile["native_gui_harness"]["backend"])
+                self.assertEqual(profile["capabilities"]["host_loop_supported"], profile["host_loop_supported"])
+                self.assertEqual(profile["capabilities"]["send_modes"], profile["host_loop_send_modes"])
+                self.assertEqual(
+                    profile["capabilities"]["stage_actions"],
+                    profile["native_gui_harness"]["supported_stage_actions"],
+                )
+                self.assertEqual(
+                    profile["capabilities"]["live_actions"],
+                    profile["native_gui_harness"]["supported_live_actions"],
+                )
+                self.assertEqual(
+                    profile["selectors"]["blocked_actions"],
+                    profile["native_gui_harness"]["blocked_actions"],
+                )
                 if "native_gui_harness" in profile:
                     harness = profile["native_gui_harness"]
                     self.assertTrue(harness["backend"])
@@ -113,6 +135,23 @@ class AppProfileContractTests(unittest.TestCase):
                 "opening_move_send",
             }.issubset(blocked)
         )
+
+    def test_live_send_required_evidence_names_match_harness_payload_keys(self):
+        known_evidence_keys = {
+            "staged_text_verified",
+            "staged_exact_text_ocr_verified",
+            "input_cleared_after_send",
+            "post_action_screen_captured",
+            "outbound_message_verified",
+            "outbound_exact_text_ocr_verified",
+        }
+
+        for path in PROFILE_DIR.glob("*.json"):
+            profile = json.loads(path.read_text(encoding="utf-8"))
+            with self.subTest(app_id=profile["app_id"]):
+                required = set(profile["live_send_requirements"]["required_evidence"])
+                self.assertTrue(required)
+                self.assertLessEqual(required, known_evidence_keys)
 
 
 if __name__ == "__main__":

@@ -25,10 +25,10 @@ agent and uses iPhone Mirroring only for observe, paste, and verify.
    safe launch/profile-tab navigation plan.
    Run `dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json`
    once iPhone Mirroring is unlocked to record redacted page/layout hints.
-   Also dry-run `dating-boost harness tinder workflow self-profile-read --photo-steps 2 --scroll-steps 2 --dry-run --json`
-   `dating-boost harness tinder workflow chat-read-match-profile --conversation-row 1 --profile-scroll-steps 2 --dry-run --json`,
-   `dating-boost harness tinder workflow new-match-open --carousel-swipes 1 --match-index 2 --dry-run --json`,
-   and `dating-boost harness tinder workflow new-match-read-profile --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --dry-run --json`
+   Also dry-run `dating-boost harness tinder workflow self-profile-read --options-json tinder-self-profile-options.json --dry-run --json`
+   `dating-boost harness tinder workflow chat-read-match-profile --options-json tinder-chat-profile-options.json --dry-run --json`,
+   `dating-boost harness tinder workflow new-match-open --options-json tinder-new-match-open-options.json --dry-run --json`,
+   and `dating-boost harness tinder workflow new-match-read-profile --options-json tinder-new-match-profile-options.json --dry-run --json`
    before using those chains on the real GUI.
 9. Stop if capabilities, required schema versions, data doctor, harness doctor, or required
    commands mismatch.
@@ -47,20 +47,20 @@ staging, but no WeChat-specific profile navigation chain.
 
 1. Start with `dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json`.
 2. If the user profile needs refresh, run `dating-boost harness tinder open-profile --launch-if-needed --output-dir .local/dating-boost-harness --json`; stop if it returns `blocked` or `needs_verification`.
-   Then run `dating-boost harness tinder workflow self-profile-read --photo-steps 2 --scroll-steps 2 --output-dir .local/dating-boost-harness --json` only after a fresh observation confirms the self profile page.
+   Then run `dating-boost harness tinder workflow self-profile-read --options-json tinder-self-profile-options.json --output-dir .local/dating-boost-harness --json` only after a fresh observation confirms the self profile page.
    Save the before/after screenshots and author the user profile observation from visible content only.
 3. Run `dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json`.
 4. Codex must run `dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json`
    before selecting a bounded navigation chain and again after each chain when
    collecting smoke artifacts.
 5. Codex may use `dating-boost harness tinder action open-chats --json`,
-   `dating-boost harness tinder action open-conversation --row-index N --json`,
+   `dating-boost harness tinder action open-conversation --options-json tinder-open-row-options.json --json`,
    and `dating-boost harness tinder action open-thread-profile --json` for
    bounded navigation after each screen is freshly observed. For match profile
-   refreshes, it may use `dating-boost harness tinder workflow chat-read-match-profile --conversation-row N --output-dir .local/dating-boost-harness --json`
+   refreshes, it may use `dating-boost harness tinder workflow chat-read-match-profile --options-json tinder-chat-profile-options.json --output-dir .local/dating-boost-harness --json`
    after confirming the chat page layout.
-   For unopened matches, use `dating-boost harness tinder workflow new-match-open --match-index N --output-dir .local/dating-boost-harness --json`
-   or `dating-boost harness tinder workflow new-match-read-profile --match-index N --profile-scroll-steps 2 --output-dir .local/dating-boost-harness --json`.
+   For unopened matches, use `dating-boost harness tinder workflow new-match-open --options-json tinder-new-match-open-options.json --output-dir .local/dating-boost-harness --json`
+   or `dating-boost harness tinder workflow new-match-read-profile --options-json tinder-new-match-profile-options.json --output-dir .local/dating-boost-harness --json`.
    Process one unopened match at a time; after a managed opener send, return
    with `dating-boost harness tinder action return-to-chats --output-dir .local/dating-boost-harness --json`
    before selecting the next visible unopened match.

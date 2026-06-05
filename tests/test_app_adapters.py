@@ -1,0 +1,227 @@
+import json
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+from unittest.mock import patch
+
+from dating_boost.cli import main
+from dating_boost.core.gui_harness import NativeGuiHarness
+from dating_boost.core.live_send_contract import live_send_action_request_block_reason
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PROFILE_DIR = ROOT / "app_profiles"
+
+
+class AppAdapterArchitectureTests(unittest.TestCase):
+    def test_registry_discovers_all_runtime_profiles(self):
+        from dating_boost.apps.registry import host_loop_app_ids, supported_app_ids
+
+        profiles = {
+            json.loads(path.read_text(encoding="utf-8"))["app_id"]: json.loads(path.read_text(encoding="utf-8"))
+            for path in PROFILE_DIR.glob("*.json")
+        }
+
+        self.assertEqual(set(supported_app_ids()), set(profiles))
+        self.assertEqual(
+            set(host_loop_app_ids()),
+            {app_id for app_id, profile in profiles.items() if profile["host_loop_supported"]},
+        )
+
+    def test_each_profile_has_matching_adapter_manifest(self):
+        from dating_boost.apps.registry import get_adapter
+
+        for path in PROFILE_DIR.glob("*.json"):
+            profile = json.loads(path.read_text(encoding="utf-8"))
+            with self.subTest(app_id=profile["app_id"]):
+                adapter = get_adapter(profile["app_id"])
+                manifest = adapter.manifest
+
+                self.assertEqual(manifest.app_id, profile["app_id"])
+                self.assertEqual(manifest.display_name, profile["display_name"])
+                self.assertEqual(manifest.support_level, profile["support_level"])
+                self.assertEqual(manifest.host_loop_supported, profile["host_loop_supported"])
+                self.assertEqual(manifest.host_loop_send_modes, tuple(profile["host_loop_send_modes"]))
+                self.assertEqual(
+                    set(manifest.supported_stage_actions),
+                    set(profile["native_gui_harness"]["supported_stage_actions"]),
+                )
+                self.assertEqual(
+                    set(manifest.supported_live_actions),
+                    set(profile["native_gui_harness"]["supported_live_actions"]),
+                )
+
+    def test_platform_harness_no_longer_exposes_app_specific_public_methods(self):
+        app_specific_methods = {
+            "launch_tinder",
+            "launch_bumble",
+            "launch_wechat",
+            "observe_tinder_screen",
+            "observe_bumble_screen",
+            "observe_wechat_screen",
+            "run_tinder_action",
+            "run_bumble_action",
+            "run_tinder_workflow",
+            "run_bumble_workflow",
+            "send_tinder_message",
+            "send_bumble_message",
+            "send_wechat_message",
+            "stage_wechat_draft",
+        }
+
+        self.assertTrue(app_specific_methods.isdisjoint(set(dir(NativeGuiHarness))))
+
+    def test_platform_harness_source_no_longer_owns_app_specific_methods_or_bridge(self):
+        source = Path(NativeGuiHarness.__module__.replace(".", "/") + ".py")
+        source_path = ROOT / source
+        core_source = source_path.read_text(encoding="utf-8")
+
+        self.assertNotIn("_APP_SPECIFIC_NATIVE_GUI_METHODS", core_source)
+        self.assertNotIn('self.app_id == "wechat"', core_source)
+        self.assertNotIn('self.app_id == "bumble"', core_source)
+        for method_name in (
+            "doctor_wechat",
+            "launch_tinder",
+            "launch_bumble",
+            "launch_wechat",
+            "observe_tinder_screen",
+            "observe_bumble_screen",
+            "observe_wechat_screen",
+            "run_tinder_action",
+            "run_bumble_action",
+            "send_tinder_message",
+            "send_bumble_message",
+            "send_wechat_message",
+            "stage_wechat_draft",
+        ):
+            with self.subTest(method=method_name):
+                self.assertNotIn(f"    def {method_name}(", core_source)
+
+    def test_live_send_target_binding_policy_load_failure_blocks_supported_live_app(self):
+        draft_text = "hi"
+        action_request = {
+            "schema_version": 1,
+            "action_request_id": "act_bumble_send",
+            "action": "send_message",
+            "app_id": "bumble",
+            "match_id": "match_bumble",
+            "candidate_key": "bumble_ada",
+            "payload_hash": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
+            "precondition_hash": "pre_hash",
+            "autonomous_audit_binding": {
+                "binding_type": "autonomous_authorization",
+                "authorization_id": "auth_bumble_live",
+                "action": "send_message",
+                "target_match_id": "match_bumble",
+                "payload_hash": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
+                "precondition_hash": "pre_hash",
+            },
+            "requires_post_action_verification": True,
+            "policy": {"allowed": True},
+            "target_binding": {
+                "required_visible_text": ["Opening Move", "Aa"],
+                "target_match_id": "match_bumble",
+                "candidate_key": "bumble_ada",
+            },
+        }
+        authorization = {
+            "authorization_id": "auth_bumble_live",
+            "scope": "send_chat_messages",
+            "app_id": "bumble",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "allowed_actions": ["send_message"],
+            "autonomous_send": True,
+            "live_send": True,
+            "requires_post_action_verification": True,
+        }
+
+        with patch("dating_boost.apps.registry.target_binding_policy", side_effect=RuntimeError("profile unavailable")):
+            reason = live_send_action_request_block_reason(
+                action_request,
+                draft_text,
+                authorization=authorization,
+                app_id="bumble",
+                data_dir=None,
+            )
+
+        self.assertEqual(reason, "target_binding_policy_unavailable")
+
+    def test_host_loop_required_send_evidence_comes_from_adapter_manifest(self):
+        from dating_boost.apps.registry import manifest_for_app
+        from dating_boost.host_loop import _managed_gui_send_required_evidence
+
+        self.assertEqual(
+            _managed_gui_send_required_evidence("bumble"),
+            manifest_for_app("bumble").required_send_evidence,
+        )
+        self.assertIn("staged_exact_text_ocr_verified", _managed_gui_send_required_evidence("bumble"))
+
+    def test_manifest_declares_cli_aliases_for_app_specific_compat_commands(self):
+        from dating_boost.apps.registry import manifest_for_app
+
+        self.assertIn("open-profile", manifest_for_app("tinder").cli_aliases)
+
+    def test_harness_doctor_dispatches_to_adapter_not_session_app_branch(self):
+        calls: dict[str, object] = {}
+
+        class FakeAdapter:
+            def doctor(self, *, capture=True, output=None):
+                calls["capture"] = capture
+                calls["output"] = output
+                return {"schema_version": 2, "status": "ok", "app_id": "wechat"}
+
+        with patch("dating_boost.cli.create_adapter", return_value=FakeAdapter()):
+            with redirect_stdout(StringIO()) as output:
+                exit_code = main(["harness", "doctor", "--app-id", "wechat", "--no-capture", "--json"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(output.getvalue())["status"], "ok")
+        self.assertEqual(calls, {"capture": False, "output": None})
+
+    def test_cli_action_uses_registry_adapter_and_options_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            options_path = Path(temp_dir) / "options.json"
+            options_path.write_text(json.dumps({"visible_name": "Ada", "y_ratio": 0.71}), encoding="utf-8")
+            calls: dict[str, object] = {}
+
+            class FakeAdapter:
+                def run_action(self, action, *, dry_run=False, output_dir=None, **options):
+                    calls["action"] = action
+                    calls["dry_run"] = dry_run
+                    calls["output_dir"] = output_dir
+                    calls["options"] = options
+                    return {"schema_version": 2, "status": "ok", "app_id": "tinder", "action": action}
+
+            with patch("dating_boost.cli.create_adapter", return_value=FakeAdapter()):
+                with redirect_stdout(StringIO()):
+                    exit_code = main([
+                        "harness",
+                        "tinder",
+                        "action",
+                        "open-conversation",
+                        "--options-json",
+                        str(options_path),
+                        "--dry-run",
+                        "--json",
+                    ])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(calls["action"], "open-conversation")
+        self.assertTrue(calls["dry_run"])
+        self.assertEqual(calls["options"], {"visible_name": "Ada", "y_ratio": 0.71})
+
+    def test_cli_harness_unknown_app_returns_structured_block(self):
+        with redirect_stdout(StringIO()) as output:
+            exit_code = main(["harness", "hinge", "observe", "--json"])
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "unsupported_native_harness_for_app")
+        self.assertEqual(payload["app_id"], "hinge")
+
+
+if __name__ == "__main__":
+    unittest.main()

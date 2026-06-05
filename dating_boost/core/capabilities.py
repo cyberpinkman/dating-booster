@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost import __version__
+from dating_boost.apps.registry import adapter_manifests, capability_manifest
 from dating_boost.core.production_store import (
     BACKUP_RECOVERY_KEY_SCHEMA_VERSION,
     DIAGNOSTIC_BUNDLE_SCHEMA_VERSION,
@@ -51,7 +52,7 @@ SCHEMA_VERSIONS: dict[str, int] = {
     "observation_authoring": 1,
     "conversation_eval": 1,
     "replay_timeline": 1,
-    "app_profile": 1,
+    "app_profile": 2,
     "data_store": 2,
     "migration": 1,
     "automation_lock": 1,
@@ -70,7 +71,7 @@ SCHEMA_VERSIONS: dict[str, int] = {
     "release_manifest": RELEASE_MANIFEST_SCHEMA_VERSION,
 }
 
-SUPPORTED_COMMANDS: list[str] = [
+_BASE_SUPPORTED_COMMANDS: list[str] = [
     "capabilities",
     "adapter codex install",
     "adapter codex doctor",
@@ -161,21 +162,6 @@ SUPPORTED_COMMANDS: list[str] = [
     "support bundle",
     "harness doctor",
     "harness screenshot",
-    "harness tinder launch",
-    "harness tinder open-profile",
-    "harness tinder observe",
-    "harness tinder action",
-    "harness tinder workflow",
-    "harness tinder send-message",
-    "harness bumble launch",
-    "harness bumble observe",
-    "harness bumble action",
-    "harness bumble workflow",
-    "harness bumble send-message",
-    "harness wechat launch",
-    "harness wechat observe",
-    "harness wechat stage-draft",
-    "harness wechat send-message",
     "release doctor",
     "confirmation create",
     "confirmation confirm",
@@ -183,8 +169,34 @@ SUPPORTED_COMMANDS: list[str] = [
 ]
 
 
+def _registry_harness_commands() -> list[str]:
+    commands: list[str] = []
+    for app_id, manifest in adapter_manifests().items():
+        commands.extend([f"harness {app_id} launch", f"harness {app_id} observe"])
+        if manifest.supported_actions:
+            commands.append(f"harness {app_id} action")
+        if manifest.supported_workflows:
+            commands.append(f"harness {app_id} workflow")
+        if "stage_draft" in manifest.supported_stage_actions:
+            commands.append(f"harness {app_id} stage-draft")
+        if "send_message" in manifest.supported_live_actions:
+            commands.append(f"harness {app_id} send-message")
+        commands.extend(f"harness {app_id} {alias_name}" for alias_name in manifest.cli_aliases)
+    return commands
+
+
+SUPPORTED_COMMANDS: list[str] = [
+    command
+    for command in _BASE_SUPPORTED_COMMANDS
+    if command in {"harness doctor", "harness screenshot"} or not command.startswith("harness ")
+] + _registry_harness_commands()
+
+
 def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
     storage_status = _storage_status(data_dir)
+    app_capabilities = capability_manifest()
+    supported_app_profiles = list(app_capabilities["supported_app_profiles"])
+    host_loop_app_profiles = list(app_capabilities["host_loop_app_profiles"])
     return {
         "schema_version": CAPABILITIES_SCHEMA_VERSION,
         "tool_version": __version__,
@@ -242,7 +254,7 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "managed_session_default_scan_interval_seconds": 120,
             "managed_session_default_nudge_delay_minutes": 30,
             "managed_session_scope": "user_explicit_session_only",
-            "managed_session_app_profiles": ["tinder", "wechat", "bumble"],
+            "managed_session_app_profiles": list(supported_app_profiles),
             "managed_session_notification_wake": True,
             "managed_session_global_background": False,
             "operator_session": True,
@@ -252,11 +264,13 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "host_loop_doctor": True,
             "host_loop_init": True,
             "host_loop_resume": True,
-            "tinder_host_loop": True,
-            "wechat_host_loop": True,
+            "tinder_host_loop": "tinder" in host_loop_app_profiles,
+            "wechat_host_loop": "wechat" in host_loop_app_profiles,
             "host_loop_command": "dating-boost-host-loop",
-            "supported_app_profiles": ["tinder", "wechat", "bumble"],
-            "host_loop_app_profiles": ["tinder", "wechat", "bumble"],
+            "supported_app_profiles": list(supported_app_profiles),
+            "host_loop_app_profiles": list(host_loop_app_profiles),
+            "app_adapter_registry": True,
+            "app_adapter_capabilities": dict(app_capabilities["apps"]),
             "multi_app_profiles": True,
             "observation_authoring": True,
             "conversation_eval": True,
@@ -288,28 +302,28 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "managed_gui_send": True,
             "managed_gui_send_default": False,
             "iphone_mirroring_harness": True,
-            "tinder_gui_launch": True,
-            "tinder_gui_navigation": True,
+            "tinder_gui_launch": "tinder" in supported_app_profiles,
+            "tinder_gui_navigation": "tinder" in supported_app_profiles,
             "native_gui_profile_navigation": True,
-            "tinder_profile_read_harness": True,
-            "tinder_chat_navigation_harness": True,
-            "tinder_live_send_harness": True,
-            "bumble_gui_launch": True,
-            "bumble_gui_navigation": True,
-            "bumble_profile_read_harness": True,
-            "bumble_chat_navigation_harness": True,
-            "bumble_opening_move_role_policy": True,
-            "bumble_opening_move_male_draft": True,
-            "bumble_opening_move_stage_harness": True,
-            "bumble_opening_move_send_harness": True,
+            "tinder_profile_read_harness": "tinder" in supported_app_profiles,
+            "tinder_chat_navigation_harness": "tinder" in supported_app_profiles,
+            "tinder_live_send_harness": "tinder" in supported_app_profiles,
+            "bumble_gui_launch": "bumble" in supported_app_profiles,
+            "bumble_gui_navigation": "bumble" in supported_app_profiles,
+            "bumble_profile_read_harness": "bumble" in supported_app_profiles,
+            "bumble_chat_navigation_harness": "bumble" in supported_app_profiles,
+            "bumble_opening_move_role_policy": "bumble" in supported_app_profiles,
+            "bumble_opening_move_male_draft": "bumble" in supported_app_profiles,
+            "bumble_opening_move_stage_harness": "bumble" in supported_app_profiles,
+            "bumble_opening_move_send_harness": "bumble" in supported_app_profiles,
             "bumble_opening_move_autonomous_send": False,
-            "bumble_live_send_harness": True,
-            "bumble_host_loop": True,
-            "wechat_macos_harness": True,
-            "wechat_gui_launch": True,
-            "wechat_chat_observation_harness": True,
-            "wechat_draft_stage_harness": True,
-            "wechat_live_send_harness": True,
+            "bumble_live_send_harness": "bumble" in supported_app_profiles,
+            "bumble_host_loop": "bumble" in host_loop_app_profiles,
+            "wechat_macos_harness": "wechat" in supported_app_profiles,
+            "wechat_gui_launch": "wechat" in supported_app_profiles,
+            "wechat_chat_observation_harness": "wechat" in supported_app_profiles,
+            "wechat_draft_stage_harness": "wechat" in supported_app_profiles,
+            "wechat_live_send_harness": "wechat" in supported_app_profiles,
             "ci_tested_version": __version__,
             "data_doctor": True,
             "capability_mismatch_blocks_startup": True,

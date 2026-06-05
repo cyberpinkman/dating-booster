@@ -106,7 +106,7 @@ For public production, treat the local safety switch as authoritative. If
 paused, do not send, paste, stage, or continue a live host loop until the user
 explicitly resumes it. Live sends require `--send-mode live`, authorization with
 `live_send: true`, exact staged-text verification, and post-action verification.
-For Tinder or macOS WeChat fully managed sending, also require
+For Tinder, Bumble ordinary chat, or macOS WeChat fully managed sending, also require
 `--managed-gui-send` and the app-specific `harness <app> send-message
 --text-file ...` path.
 
@@ -189,11 +189,11 @@ dating-boost harness tinder open-profile --dry-run --json
 dating-boost harness tinder open-profile --launch-if-needed --json
 dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
 dating-boost harness tinder action profile-photo-next --dry-run --json
-dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
-dating-boost harness tinder workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
-dating-boost harness tinder workflow new-match-open --dry-run --carousel-swipes 1 --match-index 2 --json
-dating-boost harness tinder workflow new-match-read-profile --dry-run --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --json
-dating-boost harness tinder action open-conversation --visible-name Iris --target-binding target-binding.json --json
+dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --json
+dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-open-options.json --json
+dating-boost harness tinder workflow new-match-read-profile --dry-run --options-json tinder-new-match-profile-options.json --json
+dating-boost harness tinder action open-conversation --options-json tinder-open-iris-options.json --json
 dating-boost harness tinder action dismiss-subscription-paywall --json
 dating-boost harness tinder action dismiss-feedback-survey --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
@@ -248,9 +248,9 @@ dating-boost harness doctor --app-id bumble --json
 dating-boost harness bumble launch --dry-run --json
 dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
 dating-boost harness bumble action open-chats --dry-run --json
-dating-boost harness bumble workflow browse-profile-read --dry-run --profile-scroll-steps 2 --json
-dating-boost harness bumble workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
-dating-boost harness bumble workflow opening-move-open --dry-run --match-index 2 --json
+dating-boost harness bumble workflow browse-profile-read --dry-run --options-json bumble-profile-options.json --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --json
+dating-boost harness bumble workflow opening-move-open --dry-run --options-json bumble-opening-move-options.json --json
 dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --json
 ```
 

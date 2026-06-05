@@ -67,23 +67,23 @@ dating-boost harness tinder open-profile --dry-run --json
 dating-boost harness tinder open-profile --launch-if-needed --output-dir .local/dating-boost-harness --json
 dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
 dating-boost harness tinder action profile-photo-next --dry-run --json
-dating-boost harness tinder action open-conversation --row-index 1 --target row --dry-run --json
-dating-boost harness tinder action open-conversation --visible-name Iris --target-binding target-binding.json --json
+dating-boost harness tinder action open-conversation --options-json tinder-open-row-options.json --dry-run --json
+dating-boost harness tinder action open-conversation --options-json tinder-open-iris-options.json --json
 dating-boost harness tinder action dismiss-subscription-paywall --json
 dating-boost harness tinder action dismiss-feedback-survey --json
-dating-boost harness tinder workflow self-profile-read --dry-run --photo-steps 2 --scroll-steps 2 --json
-dating-boost harness tinder workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
-dating-boost harness tinder workflow new-match-open --dry-run --carousel-swipes 1 --match-index 2 --json
-dating-boost harness tinder workflow new-match-read-profile --dry-run --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --json
+dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --json
+dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-open-options.json --json
+dating-boost harness tinder workflow new-match-read-profile --dry-run --options-json tinder-new-match-profile-options.json --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
 dating-boost harness doctor --app-id bumble --json
 dating-boost harness screenshot --app-id bumble --output bumble.png --json
 dating-boost harness bumble launch --dry-run --json
 dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
 dating-boost harness bumble action open-chats --dry-run --json
-dating-boost harness bumble workflow browse-profile-read --dry-run --profile-scroll-steps 2 --json
-dating-boost harness bumble workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
-dating-boost harness bumble workflow opening-move-open --dry-run --match-index 2 --json
+dating-boost harness bumble workflow browse-profile-read --dry-run --options-json bumble-profile-options.json --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --json
+dating-boost harness bumble workflow opening-move-open --dry-run --options-json bumble-opening-move-options.json --json
 dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --json
 dating-boost harness doctor --app-id wechat --window-title WeChat --json
 dating-boost harness screenshot --app-id wechat --window-title WeChat --output wechat.png --json
@@ -131,18 +131,15 @@ Supported high-level workflows:
   preview, enter full-profile read mode, scroll profile content, tap the visible
   expand-control area, and return to the conversation.
 - `new-match-open`: open the chats tab, optionally move the new-match carousel
-  with wheel events, open one visible unopened match by `--match-index`, and
+  with wheel events, open one visible unopened match by `match_index` in `--options-json`, and
   stop in that conversation so the host agent can draft and gated-send an
   opener.
 - `new-match-read-profile`: open the chats tab, optionally move the new-match
-  carousel with wheel events, open one visible unopened match by `--match-index`,
+  carousel with wheel events, open one visible unopened match by `match_index` in `--options-json`,
   read the match profile, and return to that conversation for the next opener
   step.
 
-Use `open-conversation --visible-name NAME` or `--target-binding target-binding.json`
-for existing message-list rows. Use `--row-index N --target row` and
-`--target avatar` only as compatibility fallbacks when the visible target is
-clear and stable. Treat the
+Use `open-conversation --options-json <path>` for existing message-list rows. Keep target-binding evidence inside that options file.  The options JSON may contain `visible_name`, `row_index`, `target`, and `target_binding`; use avatar targeting only as a compatibility fallback when the visible target is clear and stable. Treat the
 top horizontal carousel as new or not-yet-started matches; treat the vertical
 message list as opened conversations. The text marker `等你回应` is only an
 observation cue that the match sent the latest message; it is not by itself an

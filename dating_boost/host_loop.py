@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from dating_boost.apps.registry import host_loop_app_ids, manifest_for_app, supported_app_ids
 from dating_boost.core.live_send_contract import validate_live_send_contract
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.production_store import ProductionDataStore
@@ -692,7 +693,7 @@ class HostLoopSupervisor:
         return None
 
     def _handle_managed_gui_send(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
-        if self.args.app_id not in {"tinder", "wechat", "bumble"}:
+        if self.args.app_id not in set(host_loop_app_ids()):
             return self._finish("blocked", f"managed_gui_send_not_supported_for_app:{self.args.app_id}", current=work_item)
         if SafetyRepository(self.data_dir).is_paused():
             return self._finish("blocked", "safety_paused", current=work_item)
@@ -1364,20 +1365,7 @@ def _redacted_managed_send_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _managed_gui_send_required_evidence(app_id: str) -> tuple[str, ...]:
-    common = (
-        "staged_text_verified",
-        "input_cleared_after_send",
-        "post_action_screen_captured",
-        "outbound_message_verified",
-    )
-    if app_id == "wechat":
-        return (
-            "staged_text_verified",
-            "input_cleared_after_send",
-            "post_action_screen_captured",
-            "outbound_message_verified",
-        )
-    return common
+    return manifest_for_app(app_id).required_send_evidence
 
 
 def _target_binding_for_work_item(work_item: dict[str, Any], pending_scan_batch: dict[str, Any] | None) -> dict[str, Any]:
@@ -1472,6 +1460,8 @@ def _now_iso() -> str:
 
 
 def _load_app_profile(app_id: str) -> dict[str, Any]:
+    if app_id not in set(supported_app_ids()):
+        raise HostLoopError(f"unsupported app profile: {app_id}")
     path = ROOT / "app_profiles" / f"{_safe_name(app_id)}.json"
     if not path.exists():
         raise HostLoopError(f"unsupported app profile: {app_id}")

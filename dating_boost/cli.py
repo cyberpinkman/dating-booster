@@ -11,6 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from dating_boost.apps.registry import adapter_manifests, create_adapter, manifest_for_app, supported_app_ids
 from dating_boost.core.agent_adapters import (
     install_claude_code_adapter,
     install_codex_adapter,
@@ -26,7 +27,6 @@ from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.daemon import DaemonRepository
 from dating_boost.core.diagnostics import DiagnosticsRepository
 from dating_boost.core.feedback import create_feedback_event
-from dating_boost.core.gui_harness import NativeGuiHarness
 from dating_boost.core.identity import resolve_match_identity
 from dating_boost.core.live_send_contract import (
     live_send_action_request_block_reason,
@@ -67,8 +67,8 @@ from dating_boost.core.user_disclosure import UserDisclosureRepository, intervie
 
 
 MVP_TIMESTAMP = "2026-05-25T00:00:00Z"
-SUPPORTED_NATIVE_HARNESS_APPS = ("tinder", "wechat", "bumble")
-SUPPORTED_MANAGED_SESSION_APPS = ("tinder", "wechat", "bumble")
+SUPPORTED_NATIVE_HARNESS_APPS = tuple(supported_app_ids())
+SUPPORTED_MANAGED_SESSION_APPS = tuple(supported_app_ids())
 
 
 def _now_iso() -> str:
@@ -80,6 +80,10 @@ def main(argv: list[str] | None = None) -> int:
     command_tokens = sys.argv[1:] if argv is None else argv_list
     if command_tokens and command_tokens[0] in {action.value for action in Action}:
         return _run_authorization(command_tokens)
+    unsupported_harness_payload = _unsupported_harness_app_argv_payload(command_tokens)
+    if unsupported_harness_payload is not None:
+        _print_json(unsupported_harness_payload)
+        return 2
 
     parser = argparse.ArgumentParser(
         prog="dating-boost",
@@ -307,148 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     harness_screenshot_parser.add_argument("--output", required=True, type=Path)
     harness_screenshot_parser.add_argument("--json", action="store_true")
     harness_screenshot_parser.set_defaults(handler=_handle_harness_screenshot)
-    harness_tinder_parser = harness_subparsers.add_parser("tinder")
-    harness_tinder_subparsers = harness_tinder_parser.add_subparsers(dest="harness_tinder_command", required=True)
-    harness_tinder_launch_parser = harness_tinder_subparsers.add_parser("launch")
-    harness_tinder_launch_parser.add_argument("--data-dir", type=Path)
-    harness_tinder_launch_parser.add_argument("--window-title", default="iPhone Mirroring")
-    harness_tinder_launch_parser.add_argument("--dry-run", action="store_true")
-    harness_tinder_launch_parser.add_argument("--output-dir", type=Path)
-    harness_tinder_launch_parser.add_argument("--json", action="store_true")
-    harness_tinder_launch_parser.set_defaults(handler=_handle_harness_tinder_launch)
-    harness_tinder_profile_parser = harness_tinder_subparsers.add_parser("open-profile")
-    harness_tinder_profile_parser.add_argument("--data-dir", type=Path)
-    harness_tinder_profile_parser.add_argument("--window-title", default="iPhone Mirroring")
-    harness_tinder_profile_parser.add_argument("--dry-run", action="store_true")
-    harness_tinder_profile_parser.add_argument("--launch-if-needed", action="store_true")
-    harness_tinder_profile_parser.add_argument("--output-dir", type=Path)
-    harness_tinder_profile_parser.add_argument("--json", action="store_true")
-    harness_tinder_profile_parser.set_defaults(handler=_handle_harness_tinder_open_profile)
-    harness_tinder_observe_parser = harness_tinder_subparsers.add_parser("observe")
-    harness_tinder_observe_parser.add_argument("--data-dir", type=Path)
-    harness_tinder_observe_parser.add_argument("--window-title", default="iPhone Mirroring")
-    harness_tinder_observe_parser.add_argument("--output-dir", type=Path)
-    harness_tinder_observe_parser.add_argument("--json", action="store_true")
-    harness_tinder_observe_parser.set_defaults(handler=_handle_harness_tinder_observe)
-    harness_tinder_action_parser = harness_tinder_subparsers.add_parser("action")
-    harness_tinder_action_parser.add_argument("action")
-    harness_tinder_action_parser.add_argument("--data-dir", type=Path)
-    harness_tinder_action_parser.add_argument("--window-title", default="iPhone Mirroring")
-    harness_tinder_action_parser.add_argument("--dry-run", action="store_true")
-    harness_tinder_action_parser.add_argument("--output-dir", type=Path)
-    harness_tinder_action_parser.add_argument("--row-index", type=int)
-    harness_tinder_action_parser.add_argument("--match-index", type=int)
-    harness_tinder_action_parser.add_argument("--y-ratio", type=float)
-    harness_tinder_action_parser.add_argument("--target", choices=["row", "avatar"], default="row")
-    harness_tinder_action_parser.add_argument("--visible-name")
-    harness_tinder_action_parser.add_argument("--target-binding", type=Path)
-    harness_tinder_action_parser.add_argument("--json", action="store_true")
-    harness_tinder_action_parser.set_defaults(handler=_handle_harness_tinder_action)
-    harness_tinder_workflow_parser = harness_tinder_subparsers.add_parser("workflow")
-    harness_tinder_workflow_parser.add_argument("workflow")
-    harness_tinder_workflow_parser.add_argument("--data-dir", type=Path)
-    harness_tinder_workflow_parser.add_argument("--window-title", default="iPhone Mirroring")
-    harness_tinder_workflow_parser.add_argument("--dry-run", action="store_true")
-    harness_tinder_workflow_parser.add_argument("--output-dir", type=Path)
-    harness_tinder_workflow_parser.add_argument("--photo-steps", type=int)
-    harness_tinder_workflow_parser.add_argument("--scroll-steps", type=int)
-    harness_tinder_workflow_parser.add_argument("--carousel-swipes", type=int)
-    harness_tinder_workflow_parser.add_argument("--match-index", type=int)
-    harness_tinder_workflow_parser.add_argument("--conversation-row", type=int)
-    harness_tinder_workflow_parser.add_argument("--profile-scroll-steps", type=int)
-    harness_tinder_workflow_parser.add_argument("--json", action="store_true")
-    harness_tinder_workflow_parser.set_defaults(handler=_handle_harness_tinder_workflow)
-    harness_tinder_send_parser = harness_tinder_subparsers.add_parser("send-message")
-    harness_tinder_send_parser.add_argument("--window-title", default="iPhone Mirroring")
-    harness_tinder_send_parser.add_argument("--text-file", required=True, type=Path)
-    harness_tinder_send_parser.add_argument("--data-dir", type=Path)
-    harness_tinder_send_parser.add_argument("--authorization", type=Path)
-    harness_tinder_send_parser.add_argument("--action-request", type=Path)
-    harness_tinder_send_parser.add_argument("--dry-run", action="store_true")
-    harness_tinder_send_parser.add_argument("--output-dir", type=Path)
-    harness_tinder_send_parser.add_argument("--json", action="store_true")
-    harness_tinder_send_parser.set_defaults(handler=_handle_harness_tinder_send_message)
-    harness_bumble_parser = harness_subparsers.add_parser("bumble")
-    harness_bumble_subparsers = harness_bumble_parser.add_subparsers(dest="harness_bumble_command", required=True)
-    harness_bumble_launch_parser = harness_bumble_subparsers.add_parser("launch")
-    harness_bumble_launch_parser.add_argument("--data-dir", type=Path)
-    harness_bumble_launch_parser.add_argument("--window-title", default="iPhone Mirroring")
-    harness_bumble_launch_parser.add_argument("--dry-run", action="store_true")
-    harness_bumble_launch_parser.add_argument("--output-dir", type=Path)
-    harness_bumble_launch_parser.add_argument("--json", action="store_true")
-    harness_bumble_launch_parser.set_defaults(handler=_handle_harness_bumble_launch)
-    harness_bumble_observe_parser = harness_bumble_subparsers.add_parser("observe")
-    harness_bumble_observe_parser.add_argument("--data-dir", type=Path)
-    harness_bumble_observe_parser.add_argument("--window-title", default="iPhone Mirroring")
-    harness_bumble_observe_parser.add_argument("--output-dir", type=Path)
-    harness_bumble_observe_parser.add_argument("--json", action="store_true")
-    harness_bumble_observe_parser.set_defaults(handler=_handle_harness_bumble_observe)
-    harness_bumble_action_parser = harness_bumble_subparsers.add_parser("action")
-    harness_bumble_action_parser.add_argument("action")
-    harness_bumble_action_parser.add_argument("--data-dir", type=Path)
-    harness_bumble_action_parser.add_argument("--window-title", default="iPhone Mirroring")
-    harness_bumble_action_parser.add_argument("--dry-run", action="store_true")
-    harness_bumble_action_parser.add_argument("--output-dir", type=Path)
-    harness_bumble_action_parser.add_argument("--row-index", type=int)
-    harness_bumble_action_parser.add_argument("--match-index", type=int)
-    harness_bumble_action_parser.add_argument("--y-ratio", type=float)
-    harness_bumble_action_parser.add_argument("--json", action="store_true")
-    harness_bumble_action_parser.set_defaults(handler=_handle_harness_bumble_action)
-    harness_bumble_workflow_parser = harness_bumble_subparsers.add_parser("workflow")
-    harness_bumble_workflow_parser.add_argument("workflow")
-    harness_bumble_workflow_parser.add_argument("--data-dir", type=Path)
-    harness_bumble_workflow_parser.add_argument("--window-title", default="iPhone Mirroring")
-    harness_bumble_workflow_parser.add_argument("--dry-run", action="store_true")
-    harness_bumble_workflow_parser.add_argument("--output-dir", type=Path)
-    harness_bumble_workflow_parser.add_argument("--conversation-row", type=int)
-    harness_bumble_workflow_parser.add_argument("--match-index", type=int)
-    harness_bumble_workflow_parser.add_argument("--profile-scroll-steps", type=int)
-    harness_bumble_workflow_parser.add_argument("--scroll-steps", type=int)
-    harness_bumble_workflow_parser.add_argument("--json", action="store_true")
-    harness_bumble_workflow_parser.set_defaults(handler=_handle_harness_bumble_workflow)
-    harness_bumble_send_parser = harness_bumble_subparsers.add_parser("send-message")
-    harness_bumble_send_parser.add_argument("--window-title", default="iPhone Mirroring")
-    harness_bumble_send_parser.add_argument("--text-file", required=True, type=Path)
-    harness_bumble_send_parser.add_argument("--data-dir", type=Path)
-    harness_bumble_send_parser.add_argument("--authorization", type=Path)
-    harness_bumble_send_parser.add_argument("--action-request", type=Path)
-    harness_bumble_send_parser.add_argument("--dry-run", action="store_true")
-    harness_bumble_send_parser.add_argument("--output-dir", type=Path)
-    harness_bumble_send_parser.add_argument("--json", action="store_true")
-    harness_bumble_send_parser.set_defaults(handler=_handle_harness_bumble_send_message)
-    harness_wechat_parser = harness_subparsers.add_parser("wechat")
-    harness_wechat_subparsers = harness_wechat_parser.add_subparsers(dest="harness_wechat_command", required=True)
-    harness_wechat_launch_parser = harness_wechat_subparsers.add_parser("launch")
-    harness_wechat_launch_parser.add_argument("--data-dir", type=Path)
-    harness_wechat_launch_parser.add_argument("--window-title", default="WeChat")
-    harness_wechat_launch_parser.add_argument("--dry-run", action="store_true")
-    harness_wechat_launch_parser.add_argument("--output-dir", type=Path)
-    harness_wechat_launch_parser.add_argument("--json", action="store_true")
-    harness_wechat_launch_parser.set_defaults(handler=_handle_harness_wechat_launch)
-    harness_wechat_observe_parser = harness_wechat_subparsers.add_parser("observe")
-    harness_wechat_observe_parser.add_argument("--data-dir", type=Path)
-    harness_wechat_observe_parser.add_argument("--window-title", default="WeChat")
-    harness_wechat_observe_parser.add_argument("--output-dir", type=Path)
-    harness_wechat_observe_parser.add_argument("--json", action="store_true")
-    harness_wechat_observe_parser.set_defaults(handler=_handle_harness_wechat_observe)
-    harness_wechat_stage_parser = harness_wechat_subparsers.add_parser("stage-draft")
-    harness_wechat_stage_parser.add_argument("--window-title", default="WeChat")
-    harness_wechat_stage_parser.add_argument("--text-file", required=True, type=Path)
-    harness_wechat_stage_parser.add_argument("--data-dir", type=Path)
-    harness_wechat_stage_parser.add_argument("--dry-run", action="store_true")
-    harness_wechat_stage_parser.add_argument("--output-dir", type=Path)
-    harness_wechat_stage_parser.add_argument("--json", action="store_true")
-    harness_wechat_stage_parser.set_defaults(handler=_handle_harness_wechat_stage_draft)
-    harness_wechat_send_parser = harness_wechat_subparsers.add_parser("send-message")
-    harness_wechat_send_parser.add_argument("--window-title", default="WeChat")
-    harness_wechat_send_parser.add_argument("--text-file", required=True, type=Path)
-    harness_wechat_send_parser.add_argument("--data-dir", type=Path)
-    harness_wechat_send_parser.add_argument("--authorization", type=Path)
-    harness_wechat_send_parser.add_argument("--action-request", type=Path)
-    harness_wechat_send_parser.add_argument("--dry-run", action="store_true")
-    harness_wechat_send_parser.add_argument("--output-dir", type=Path)
-    harness_wechat_send_parser.add_argument("--json", action="store_true")
-    harness_wechat_send_parser.set_defaults(handler=_handle_harness_wechat_send_message)
+    _add_harness_app_parsers(harness_subparsers)
 
     release_parser = subparsers.add_parser("release", help="Public release diagnostics.")
     release_subparsers = release_parser.add_subparsers(dest="release_command", required=True)
@@ -870,6 +733,80 @@ def main(argv: list[str] | None = None) -> int:
     return _run_handler_with_support_logging(args, command_tokens)
 
 
+def _add_harness_app_parsers(harness_subparsers: argparse._SubParsersAction) -> None:
+    for app_id, manifest in adapter_manifests().items():
+        app_parser = harness_subparsers.add_parser(app_id)
+        app_subparsers = app_parser.add_subparsers(dest="harness_app_command", required=True)
+
+        launch_parser = app_subparsers.add_parser("launch")
+        _add_harness_common_args(launch_parser, include_dry_run=True)
+        launch_parser.set_defaults(handler=_handle_harness_app_launch, app_id=app_id)
+
+        observe_parser = app_subparsers.add_parser("observe")
+        _add_harness_common_args(observe_parser)
+        observe_parser.set_defaults(handler=_handle_harness_app_observe, app_id=app_id)
+
+        if manifest.supported_actions:
+            action_parser = app_subparsers.add_parser("action")
+            action_parser.add_argument("action")
+            _add_harness_common_args(action_parser, include_dry_run=True)
+            action_parser.add_argument("--options-json", type=Path)
+            action_parser.set_defaults(handler=_handle_harness_app_action, app_id=app_id)
+
+        if manifest.supported_workflows:
+            workflow_parser = app_subparsers.add_parser("workflow")
+            workflow_parser.add_argument("workflow")
+            _add_harness_common_args(workflow_parser, include_dry_run=True)
+            workflow_parser.add_argument("--options-json", type=Path)
+            workflow_parser.set_defaults(handler=_handle_harness_app_workflow, app_id=app_id)
+
+        if "stage_draft" in manifest.supported_stage_actions:
+            stage_parser = app_subparsers.add_parser("stage-draft")
+            _add_harness_common_args(stage_parser, include_dry_run=True)
+            stage_parser.add_argument("--text-file", required=True, type=Path)
+            stage_parser.set_defaults(handler=_handle_harness_app_stage_draft, app_id=app_id)
+
+        if "send_message" in manifest.supported_live_actions:
+            send_parser = app_subparsers.add_parser("send-message")
+            _add_harness_common_args(send_parser, include_dry_run=True)
+            send_parser.add_argument("--text-file", required=True, type=Path)
+            send_parser.add_argument("--authorization", type=Path)
+            send_parser.add_argument("--action-request", type=Path)
+            send_parser.set_defaults(handler=_handle_harness_app_send_message, app_id=app_id)
+
+        for alias_name, alias_spec in manifest.cli_aliases.items():
+            alias_parser = app_subparsers.add_parser(alias_name)
+            include_dry_run = alias_spec.get("include_dry_run") is not False
+            _add_harness_common_args(alias_parser, include_dry_run=include_dry_run)
+            for option in alias_spec.get("options") or []:
+                if not isinstance(option, dict):
+                    continue
+                option_name = str(option.get("name") or "")
+                if not option_name:
+                    continue
+                kwargs: dict[str, Any] = {}
+                if option.get("dest"):
+                    kwargs["dest"] = str(option["dest"])
+                if option.get("action") == "store_true":
+                    kwargs["action"] = "store_true"
+                alias_parser.add_argument(option_name, **kwargs)
+            alias_parser.set_defaults(
+                handler=_handle_harness_app_alias,
+                app_id=app_id,
+                harness_alias=alias_name,
+                harness_alias_spec=alias_spec,
+            )
+
+
+def _add_harness_common_args(parser: argparse.ArgumentParser, *, include_dry_run: bool = False) -> None:
+    parser.add_argument("--data-dir", type=Path)
+    parser.add_argument("--window-title")
+    parser.add_argument("--output-dir", type=Path)
+    if include_dry_run:
+        parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--json", action="store_true")
+
+
 def _run_authorization(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="dating-boost",
@@ -887,6 +824,21 @@ def _run_authorization(argv: list[str]) -> int:
     )
     args = parser.parse_args(argv)
     return _handle_authorize(args)
+
+
+def _unsupported_harness_app_argv_payload(argv: list[str]) -> dict[str, Any] | None:
+    if len(argv) < 3 or argv[0] != "harness":
+        return None
+    app_id = argv[1]
+    if app_id in {"doctor", "screenshot"} or app_id in SUPPORTED_NATIVE_HARNESS_APPS:
+        return None
+    return {
+        "schema_version": 2,
+        "status": "blocked",
+        "reason": "unsupported_native_harness_for_app",
+        "app_id": app_id,
+        "supported_native_harness_apps": list(SUPPORTED_NATIVE_HARNESS_APPS),
+    }
 
 
 def _run_handler_with_support_logging(args: argparse.Namespace, command_tokens: list[str]) -> int:
@@ -1171,11 +1123,8 @@ def _handle_harness_doctor(args: argparse.Namespace) -> int:
         _record_support_harness_result(args.data_dir, app_id=args.app_id, action="doctor", harness_payload=block_payload)
         _print_json(block_payload)
         return 2
-    harness = NativeGuiHarness(app_id=args.app_id, window_title=_harness_window_title(args.app_id, args.window_title))
-    if args.app_id == "wechat":
-        payload = harness.doctor_wechat(capture=not args.no_capture, output=args.output)
-    else:
-        payload = harness.doctor(capture=not args.no_capture, output=args.output)
+    adapter = _create_harness_adapter(args.app_id, args.window_title)
+    payload = adapter.doctor(capture=not args.no_capture, output=args.output)
     _record_support_harness_result(args.data_dir, app_id=args.app_id, action="doctor", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "degraded"} else 2
@@ -1187,10 +1136,7 @@ def _handle_harness_screenshot(args: argparse.Namespace) -> int:
         _record_support_harness_result(args.data_dir, app_id=args.app_id, action="screenshot", harness_payload=block_payload)
         _print_json(block_payload)
         return 2
-    payload = NativeGuiHarness(
-        app_id=args.app_id,
-        window_title=_harness_window_title(args.app_id, args.window_title),
-    ).capture_window(output=args.output)
+    payload = _create_harness_adapter(args.app_id, args.window_title).session.capture_window(output=args.output)
     payload.pop("text", None)
     _record_support_harness_result(args.data_dir, app_id=args.app_id, action="screenshot", harness_payload=payload)
     _print_json(payload)
@@ -1209,228 +1155,109 @@ def _unsupported_native_harness_payload(app_id: str) -> dict[str, object] | None
     }
 
 
-def _handle_harness_tinder_launch(args: argparse.Namespace) -> int:
-    payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).launch_tinder(
+def _create_harness_adapter(app_id: str, window_title: str | None):
+    return create_adapter(app_id, window_title=_harness_window_title(app_id, window_title))
+
+
+def _options_from_json(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    return _read_json_object(path)
+
+
+def _handle_harness_app_launch(args: argparse.Namespace) -> int:
+    payload = _create_harness_adapter(args.app_id, args.window_title).launch(
         dry_run=args.dry_run,
         output_dir=args.output_dir,
     )
-    _record_support_harness_result(args.data_dir, app_id="tinder", action="launch", harness_payload=payload)
-    _print_json(payload)
-    return 0 if payload.get("status") == "ok" else 2
-
-
-def _handle_harness_tinder_open_profile(args: argparse.Namespace) -> int:
-    payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).open_tinder_profile(
-        dry_run=args.dry_run,
-        output_dir=args.output_dir,
-        launch_if_needed=args.launch_if_needed,
-    )
-    _record_support_harness_result(args.data_dir, app_id="tinder", action="open_profile", harness_payload=payload)
-    _print_json(payload)
-    return 0 if payload.get("status") == "ok" else 2
-
-
-def _handle_harness_tinder_observe(args: argparse.Namespace) -> int:
-    payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).observe_tinder_screen(
-        output_dir=args.output_dir,
-    )
-    _record_support_harness_result(args.data_dir, app_id="tinder", action="observe", harness_payload=payload)
+    _record_support_harness_result(args.data_dir, app_id=args.app_id, action="launch", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
 
 
-def _handle_harness_tinder_action(args: argparse.Namespace) -> int:
-    target_binding = _read_json_object(args.target_binding) if args.target_binding is not None else None
-    options = {
-        "row_index": args.row_index,
-        "match_index": args.match_index,
-        "y_ratio": args.y_ratio,
-        "target": args.target,
-        "visible_name": args.visible_name,
-        "target_binding": target_binding,
-    }
-    payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).run_tinder_action(
+def _handle_harness_app_alias(args: argparse.Namespace) -> int:
+    adapter = _create_harness_adapter(args.app_id, args.window_title)
+    alias_spec = getattr(args, "harness_alias_spec", {})
+    operation = str(alias_spec.get("operation") or "")
+    if not operation or not hasattr(adapter, operation):
+        payload = {
+            "schema_version": 2,
+            "status": "blocked",
+            "app_id": args.app_id,
+            "reason": "harness_alias_not_supported_for_app",
+            "alias": getattr(args, "harness_alias", None),
+        }
+    else:
+        kwargs: dict[str, Any] = {"output_dir": args.output_dir}
+        if alias_spec.get("include_dry_run") is not False:
+            kwargs["dry_run"] = args.dry_run
+        for option in alias_spec.get("options") or []:
+            if isinstance(option, dict) and option.get("dest"):
+                kwargs[str(option["dest"])] = getattr(args, str(option["dest"]))
+        payload = getattr(adapter, operation)(**kwargs)
+    _record_support_harness_result(
+        args.data_dir,
+        app_id=args.app_id,
+        action=str(operation or getattr(args, "harness_alias", "alias")),
+        harness_payload=payload,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_app_observe(args: argparse.Namespace) -> int:
+    payload = _create_harness_adapter(args.app_id, args.window_title).observe(
+        output_dir=args.output_dir,
+    )
+    _record_support_harness_result(args.data_dir, app_id=args.app_id, action="observe", harness_payload=payload)
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_app_action(args: argparse.Namespace) -> int:
+    options = _options_from_json(getattr(args, "options_json", None))
+    payload = _create_harness_adapter(args.app_id, args.window_title).run_action(
         args.action,
         dry_run=args.dry_run,
         output_dir=args.output_dir,
-        **{key: value for key, value in options.items() if value is not None},
+        **options,
     )
-    _record_support_harness_result(args.data_dir, app_id="tinder", action=f"action_{args.action}", harness_payload=payload)
+    _record_support_harness_result(
+        args.data_dir,
+        app_id=args.app_id,
+        action=f"action_{args.action}",
+        harness_payload=payload,
+    )
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
 
 
-def _handle_harness_tinder_workflow(args: argparse.Namespace) -> int:
-    options = {
-        "photo_steps": args.photo_steps,
-        "scroll_steps": args.scroll_steps,
-        "carousel_swipes": args.carousel_swipes,
-        "match_index": args.match_index,
-        "conversation_row": args.conversation_row,
-        "profile_scroll_steps": args.profile_scroll_steps,
-    }
-    payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).run_tinder_workflow(
+def _handle_harness_app_workflow(args: argparse.Namespace) -> int:
+    options = _options_from_json(getattr(args, "options_json", None))
+    payload = _create_harness_adapter(args.app_id, args.window_title).run_workflow(
         args.workflow,
         dry_run=args.dry_run,
         output_dir=args.output_dir,
-        **{key: value for key, value in options.items() if value is not None},
+        **options,
     )
-    _record_support_harness_result(args.data_dir, app_id="tinder", action=f"workflow_{args.workflow}", harness_payload=payload)
-    _print_json(payload)
-    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
-
-
-def _handle_harness_bumble_launch(args: argparse.Namespace) -> int:
-    payload = NativeGuiHarness(app_id="bumble", window_title=args.window_title).launch_bumble(
-        dry_run=args.dry_run,
-        output_dir=args.output_dir,
-    )
-    _record_support_harness_result(args.data_dir, app_id="bumble", action="launch", harness_payload=payload)
-    _print_json(payload)
-    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
-
-
-def _handle_harness_bumble_observe(args: argparse.Namespace) -> int:
-    payload = NativeGuiHarness(app_id="bumble", window_title=args.window_title).observe_bumble_screen(
-        output_dir=args.output_dir,
-    )
-    _record_support_harness_result(args.data_dir, app_id="bumble", action="observe", harness_payload=payload)
-    _print_json(payload)
-    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
-
-
-def _handle_harness_bumble_action(args: argparse.Namespace) -> int:
-    options = {
-        "row_index": args.row_index,
-        "match_index": args.match_index,
-        "y_ratio": args.y_ratio,
-    }
-    payload = NativeGuiHarness(app_id="bumble", window_title=args.window_title).run_bumble_action(
-        args.action,
-        dry_run=args.dry_run,
-        output_dir=args.output_dir,
-        **{key: value for key, value in options.items() if value is not None},
-    )
-    _record_support_harness_result(args.data_dir, app_id="bumble", action=f"action_{args.action}", harness_payload=payload)
-    _print_json(payload)
-    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
-
-
-def _handle_harness_bumble_workflow(args: argparse.Namespace) -> int:
-    options = {
-        "conversation_row": args.conversation_row,
-        "match_index": args.match_index,
-        "profile_scroll_steps": args.profile_scroll_steps,
-        "scroll_steps": args.scroll_steps,
-    }
-    payload = NativeGuiHarness(app_id="bumble", window_title=args.window_title).run_bumble_workflow(
-        args.workflow,
-        dry_run=args.dry_run,
-        output_dir=args.output_dir,
-        **{key: value for key, value in options.items() if value is not None},
-    )
-    _record_support_harness_result(args.data_dir, app_id="bumble", action=f"workflow_{args.workflow}", harness_payload=payload)
-    _print_json(payload)
-    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
-
-
-def _handle_harness_bumble_send_message(args: argparse.Namespace) -> int:
-    draft_text = args.text_file.read_text(encoding="utf-8")
-    action_request: dict[str, Any] | None = None
-    if not args.dry_run:
-        block_payload = _live_send_cli_block_payload(args, app_id="bumble", draft_text=draft_text)
-        if block_payload is not None:
-            _record_support_harness_action(
-                args.data_dir,
-                app_id="bumble",
-                action="send_message",
-                draft_text=draft_text,
-                harness_payload=block_payload,
-                action_request=None,
-            )
-            _print_json(block_payload)
-            return 2
-        action_request = _read_json_object(args.action_request)
-    payload = NativeGuiHarness(app_id="bumble", window_title=args.window_title).send_bumble_message(
-        draft_text,
-        dry_run=args.dry_run,
-        output_dir=args.output_dir,
-        target_binding=action_request.get("target_binding") if isinstance(action_request, dict) else None,
-    )
-    _record_support_harness_action(
+    _record_support_harness_result(
         args.data_dir,
-        app_id="bumble",
-        action="send_message",
-        draft_text=draft_text,
+        app_id=args.app_id,
+        action=f"workflow_{args.workflow}",
         harness_payload=payload,
-        action_request=action_request,
     )
-    _print_json(payload)
-    return 0 if payload.get("status") == "ok" else 2
-
-
-def _handle_harness_tinder_send_message(args: argparse.Namespace) -> int:
-    draft_text = args.text_file.read_text(encoding="utf-8")
-    action_request: dict[str, Any] | None = None
-    if not args.dry_run:
-        block_payload = _live_send_cli_block_payload(args, app_id="tinder", draft_text=draft_text)
-        if block_payload is not None:
-            _record_support_harness_action(
-                args.data_dir,
-                app_id="tinder",
-                action="send_message",
-                draft_text=draft_text,
-                harness_payload=block_payload,
-                action_request=None,
-            )
-            _print_json(block_payload)
-            return 2
-        action_request = _read_json_object(args.action_request)
-    payload = NativeGuiHarness(app_id="tinder", window_title=args.window_title).send_tinder_message(
-        draft_text,
-        dry_run=args.dry_run,
-        output_dir=args.output_dir,
-        target_binding=action_request.get("target_binding") if isinstance(action_request, dict) else None,
-    )
-    _record_support_harness_action(
-        args.data_dir,
-        app_id="tinder",
-        action="send_message",
-        draft_text=draft_text,
-        harness_payload=payload,
-        action_request=action_request,
-    )
-    _print_json(payload)
-    return 0 if payload.get("status") == "ok" else 2
-
-
-def _handle_harness_wechat_launch(args: argparse.Namespace) -> int:
-    payload = NativeGuiHarness(app_id="wechat", window_title=args.window_title).launch_wechat(
-        dry_run=args.dry_run,
-        output_dir=args.output_dir,
-    )
-    _record_support_harness_result(args.data_dir, app_id="wechat", action="launch", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
 
 
-def _handle_harness_wechat_observe(args: argparse.Namespace) -> int:
-    payload = NativeGuiHarness(app_id="wechat", window_title=args.window_title).observe_wechat_screen(
-        output_dir=args.output_dir,
-    )
-    _record_support_harness_result(args.data_dir, app_id="wechat", action="observe", harness_payload=payload)
-    _print_json(payload)
-    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
-
-
-def _handle_harness_wechat_stage_draft(args: argparse.Namespace) -> int:
+def _handle_harness_app_stage_draft(args: argparse.Namespace) -> int:
     if not args.dry_run:
         if args.data_dir is None:
             _print_json(
                 {
                     "schema_version": 1,
                     "status": "blocked",
-                    "app_id": "wechat",
+                    "app_id": args.app_id,
                     "action": "stage_draft",
                     "reason": "data_dir_required_for_safety_check",
                     "next_host_action": "rerun_with_data_dir_or_use_dry_run",
@@ -1442,7 +1269,7 @@ def _handle_harness_wechat_stage_draft(args: argparse.Namespace) -> int:
                 {
                     "schema_version": 1,
                     "status": "blocked",
-                    "app_id": "wechat",
+                    "app_id": args.app_id,
                     "action": "stage_draft",
                     "reason": "safety_paused",
                     "next_host_action": "resume_safety_before_staging",
@@ -1450,14 +1277,14 @@ def _handle_harness_wechat_stage_draft(args: argparse.Namespace) -> int:
             )
             return 2
     draft_text = args.text_file.read_text(encoding="utf-8")
-    payload = NativeGuiHarness(app_id="wechat", window_title=args.window_title).stage_wechat_draft(
+    payload = _create_harness_adapter(args.app_id, args.window_title).stage_draft(
         draft_text,
         dry_run=args.dry_run,
         output_dir=args.output_dir,
     )
     _record_support_harness_action(
         args.data_dir,
-        app_id="wechat",
+        app_id=args.app_id,
         action="stage_draft",
         draft_text=draft_text,
         harness_payload=payload,
@@ -1467,15 +1294,15 @@ def _handle_harness_wechat_stage_draft(args: argparse.Namespace) -> int:
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
 
 
-def _handle_harness_wechat_send_message(args: argparse.Namespace) -> int:
+def _handle_harness_app_send_message(args: argparse.Namespace) -> int:
     draft_text = args.text_file.read_text(encoding="utf-8")
     action_request: dict[str, Any] | None = None
     if not args.dry_run:
-        block_payload = _live_send_cli_block_payload(args, app_id="wechat", draft_text=draft_text)
+        block_payload = _live_send_cli_block_payload(args, app_id=args.app_id, draft_text=draft_text)
         if block_payload is not None:
             _record_support_harness_action(
                 args.data_dir,
-                app_id="wechat",
+                app_id=args.app_id,
                 action="send_message",
                 draft_text=draft_text,
                 harness_payload=block_payload,
@@ -1484,7 +1311,7 @@ def _handle_harness_wechat_send_message(args: argparse.Namespace) -> int:
             _print_json(block_payload)
             return 2
         action_request = _read_json_object(args.action_request)
-    payload = NativeGuiHarness(app_id="wechat", window_title=args.window_title).send_wechat_message(
+    payload = _create_harness_adapter(args.app_id, args.window_title).send_message(
         draft_text,
         dry_run=args.dry_run,
         output_dir=args.output_dir,
@@ -1492,7 +1319,7 @@ def _handle_harness_wechat_send_message(args: argparse.Namespace) -> int:
     )
     _record_support_harness_action(
         args.data_dir,
-        app_id="wechat",
+        app_id=args.app_id,
         action="send_message",
         draft_text=draft_text,
         harness_payload=payload,
@@ -1591,9 +1418,11 @@ def _live_send_next_host_action(reason: str) -> str:
 def _harness_window_title(app_id: str, explicit: str | None) -> str:
     if explicit:
         return explicit
-    if app_id == "wechat":
-        return "WeChat"
-    return "iPhone Mirroring"
+    try:
+        default_title = manifest_for_app(app_id).default_window_title
+    except KeyError:
+        default_title = ""
+    return default_title or "iPhone Mirroring"
 
 
 def _handle_release_doctor(args: argparse.Namespace) -> int:

@@ -9,28 +9,6 @@ from typing import Any
 from dating_boost.core.production_store import ProductionDataStore
 
 
-BUMBLE_GENERIC_TARGET_BINDING_MARKERS = {
-    "aa",
-    "gif",
-    "hi",
-    "hello",
-    "hey",
-    "opening move",
-    "send",
-    "your turn",
-    "reply time",
-    "发送",
-    "回复",
-    "回复时间",
-    "小时后失效",
-    "轮到您了",
-    "该您给对方回复了",
-    "聊天",
-    "配对列表",
-    "聊天（最近）",
-}
-
-
 def validate_live_send_contract(
     authorization: dict[str, Any],
     action_request: dict[str, Any],
@@ -182,12 +160,34 @@ def _target_binding_block_reason(action_request: dict[str, Any], target_match_id
     request_candidate = _stripped_or_none(action_request.get("candidate_key"))
     if binding_candidate is not None and request_candidate is not None and binding_candidate != request_candidate:
         return "action_request_target_binding_mismatch"
-    if app_id == "bumble" and not bumble_target_binding_specific_marker_present(target_binding):
+    try:
+        policy = _target_binding_policy(app_id)
+    except Exception:
+        return "target_binding_policy_unavailable"
+    if policy.get("requires_target_specific_marker") is True and not _target_binding_specific_marker_present(
+        target_binding,
+        generic_marker_blacklist=policy.get("generic_marker_blacklist"),
+    ):
         return "action_request_target_binding_not_target_specific"
     return None
 
 
 def bumble_target_binding_specific_marker_present(target_binding: dict[str, Any]) -> bool:
+    try:
+        policy = _target_binding_policy("bumble")
+    except Exception:
+        return False
+    return _target_binding_specific_marker_present(
+        target_binding,
+        generic_marker_blacklist=policy.get("generic_marker_blacklist"),
+    )
+
+
+def _target_binding_specific_marker_present(
+    target_binding: dict[str, Any],
+    *,
+    generic_marker_blacklist: Any,
+) -> bool:
     markers: list[str] = []
     required_visible_text = target_binding.get("required_visible_text")
     if isinstance(required_visible_text, list):
@@ -195,21 +195,29 @@ def bumble_target_binding_specific_marker_present(target_binding: dict[str, Any]
     visible_name = _stripped_or_none(target_binding.get("visible_name"))
     if visible_name is not None:
         markers.append(visible_name)
-    return any(_bumble_marker_is_target_specific(marker) for marker in markers)
+    generic_marker_items = generic_marker_blacklist if isinstance(generic_marker_blacklist, list) else []
+    generic_markers = {_normalize_target_binding_marker(str(item)) for item in generic_marker_items}
+    return any(_target_binding_marker_is_specific(marker, generic_markers=generic_markers) for marker in markers)
 
 
-def _bumble_marker_is_target_specific(marker: str) -> bool:
-    normalized = _normalize_bumble_marker(marker)
+def _target_binding_marker_is_specific(marker: str, *, generic_markers: set[str]) -> bool:
+    normalized = _normalize_target_binding_marker(marker)
     if not normalized:
         return False
-    if normalized in BUMBLE_GENERIC_TARGET_BINDING_MARKERS:
+    if normalized in generic_markers:
         return False
     return len(normalized) >= 2
 
 
-def _normalize_bumble_marker(marker: str) -> str:
+def _normalize_target_binding_marker(marker: str) -> str:
     stripped = marker.strip().lower().strip(" .,:;!?()[]{}<>，。！？（）【】")
     return " ".join(stripped.split())
+
+
+def _target_binding_policy(app_id: str) -> dict[str, Any]:
+    from dating_boost.apps.registry import target_binding_policy
+
+    return target_binding_policy(app_id)
 
 
 def _confirmation_or_audit_binding_block_reason(
