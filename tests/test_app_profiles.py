@@ -136,6 +136,55 @@ class AppProfileContractTests(unittest.TestCase):
             }.issubset(blocked)
         )
 
+    def test_tashuo_question_gate_policy_is_role_sensitive_and_managed_send_safe(self):
+        profile = json.loads((PROFILE_DIR / "tashuo.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(profile["support_level"], "managed_live_send")
+        self.assertTrue(profile["host_loop_supported"])
+        self.assertEqual(profile["host_loop_send_modes"], ["stage", "live"])
+        self.assertIn("send_message", profile["native_gui_harness"]["supported_live_actions"])
+        self.assertEqual(profile["native_gui_harness"]["launch_navigation"]["app_name"], "tashu")
+        self.assertEqual(
+            profile["native_gui_harness"]["launch_navigation"]["expected_app_labels"],
+            ["tashu", "她说", "TaShuo"],
+        )
+        self.assertEqual(profile["native_gui_harness"]["launch_navigation"]["bundle_id"], "com.intelcupid.tashuo")
+        self.assertTrue(profile["native_gui_harness"]["live_send"]["requires_exact_staged_text_verification"])
+        self.assertTrue(profile["native_gui_harness"]["live_send"]["requires_outbound_bubble_verification"])
+
+        policy = profile["question_gate_policy"]
+
+        self.assertEqual(policy["scope"], "tashuo_question_gate")
+        self.assertEqual(policy["female_user"]["agent_decision_authority"], "none")
+        self.assertEqual(
+            set(policy["female_user"]["user_decision_required"]),
+            {"enable_question", "skip_question_gate", "accept_male_reply", "reject_male_reply"},
+        )
+        self.assertIn("ask_user_to_decide", policy["female_user"]["agent_allowed_actions"])
+        self.assertIn("skip_question_gate", policy["female_user"]["agent_disallowed_actions"])
+        self.assertIn("reject_male_reply", policy["female_user"]["agent_disallowed_actions"])
+
+        self.assertTrue(policy["male_user"]["agent_may_draft_reply"])
+        self.assertTrue(policy["male_user"]["requires_user_confirmation_before_send"])
+        self.assertFalse(policy["male_user"]["current_harness_stage_supported"])
+        self.assertFalse(policy["male_user"]["current_harness_send_supported"])
+        self.assertFalse(policy["male_user"]["autonomous_question_gate_send_supported"])
+        self.assertIn("draft_question_gate_reply", policy["male_user"]["agent_allowed_actions"])
+        self.assertIn(
+            "send_question_gate_reply_without_user_confirmation",
+            policy["male_user"]["agent_disallowed_actions"],
+        )
+
+        blocked = set(profile["native_gui_harness"]["blocked_actions"])
+        self.assertTrue(
+            {
+                "question_gate_enable",
+                "question_gate_skip",
+                "question_gate_decide_reply_satisfaction",
+                "question_gate_send",
+            }.issubset(blocked)
+        )
+
     def test_live_send_required_evidence_names_match_harness_payload_keys(self):
         known_evidence_keys = {
             "staged_text_verified",

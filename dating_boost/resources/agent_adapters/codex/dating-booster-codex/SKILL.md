@@ -106,9 +106,9 @@ For public production, treat the local safety switch as authoritative. If
 paused, do not send, paste, stage, or continue a live host loop until the user
 explicitly resumes it. Live sends require `--send-mode live`, authorization with
 `live_send: true`, exact staged-text verification, and post-action verification.
-For Tinder, Bumble ordinary chat, or macOS WeChat fully managed sending, also require
-`--managed-gui-send` and the app-specific `harness <app> send-message
---text-file ...` path.
+For Tinder, Bumble ordinary chat, TaShuo ordinary chat, or macOS WeChat fully
+managed sending, also require `--managed-gui-send` and the app-specific
+`harness <app> send-message --text-file ...` path.
 
 ## Default Draft Output
 
@@ -281,6 +281,50 @@ authorization to bypass this rule.
 Launch search should type `Bumble` first and verify the English app search
 result by screenshot/OCR before tapping. Switch the macOS input source and retry
 only when the app result is not visible.
+
+## TaShuo iPhone Mirroring Input
+
+TaShuo/她说 supports navigation plus opt-in managed ordinary chat send. Before
+real TaShuo observation or send, run:
+
+```bash
+dating-boost harness doctor --app-id tashuo --json
+dating-boost harness tashuo launch --dry-run --json
+dating-boost harness tashuo observe --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo action open-chats --dry-run --json
+dating-boost harness tashuo workflow self-profile-read --dry-run --options-json tashuo-self-profile-options.json --json
+dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options-json tashuo-chat-profile-options.json --json
+dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
+dating-boost harness tashuo send-message --text-file tashuo-draft.txt --dry-run --json
+```
+
+Use `harness tashuo observe` before choosing a bounded navigation action. It
+returns redacted page/layout hints for the four top-level tabs (`推荐`, `飞行`,
+`消息`, `我的`), visible chat rows, conversation pages, thread profiles, and
+question-gate/`待回答` prompts. Safe navigation may open top-level tabs, open
+visible ordinary chat rows, open a thread profile from the header name,
+vertically scroll profiles or message lists with wheel/trackpad-style scroll,
+and open a visible question-gate prompt for observation. It must not like, pass,
+start a 飞行 chat, unmatch, report, edit profile, purchase Premium, or make
+question-gate decisions.
+
+Question gate is role-sensitive. For a female user's account, do not decide
+whether to enable the question, skip the gate, accept a male reply, or reject a
+male reply; observe or summarize the visible prompt/reply, then ask the user to
+decide. For a male user's account, you may draft a question-gate reply for user
+review, but the current harness does not stage or send question-gate replies;
+the user must handle that path manually. Do not use a generic autonomous
+authorization to bypass this rule. Ordinary chat send is allowed only through
+`harness tashuo send-message --text-file ... --data-dir ... --authorization ...
+--action-request ...`; it requires target-specific binding, exact staged-text
+OCR verification, a fresh post-send observation, and outbound-message
+verification. Visual-only button or bubble evidence alone does not satisfy
+exact-text verification.
+
+Launch search should type `tashu`, not full `tashuo`, and verify the `她说` or
+`TaShuo` app result by screenshot/OCR before tapping. If moving Home Screen or
+App Library pages, use wheel/trackpad-style scroll, not click-drag; click-drag
+can enter iOS edit mode.
 
 ## macOS WeChat Input
 

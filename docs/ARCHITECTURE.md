@@ -32,7 +32,7 @@ core, but they must not fork domain rules.
 | Priority | Axis | Immediate shape | Long-term shape |
 | --- | --- | --- | --- |
 | P1 | More host agents | Codex and Claude Code installable adapters | Codex, Claude Code, Hermes, OpenClaw, and MCP-compatible hosts |
-| P1 | More dating apps | App support profiles for Tinder, WeChat, and managed-send Bumble; roadmap candidates include tashuo, Hinge, and other mainstream apps | New apps graduate into runtime profiles only after fixtures, preflight, and harness or host-loop tests exist |
+| P1 | More dating apps | App support profiles for Tinder, WeChat, managed-send Bumble, and managed-send TaShuo; roadmap candidates include Hinge and other mainstream apps | New apps graduate into runtime profiles only after fixtures, preflight, and harness or host-loop tests exist |
 | P2 | More user goals | `meet_in_person` remains the first supported goal | Goal type registry with goal-specific milestones, policy rules, handoff rules, and context requirements |
 | P3 | Smarter workflows and memory | Planner, topic lifecycle, feedback, and match-local goal plans | Memory evolution with stronger provenance, learned preferences, scenario-specific workflows, and self-improving summaries |
 
@@ -66,13 +66,13 @@ Rules:
 ## App Support Profile Axis
 
 Runtime app profiles are only for apps Dating Booster can actually support.
-Bumble has graduated to iPhone Mirroring navigation plus opt-in managed ordinary
-chat send. Roadmap candidates such as Hinge, Ta Shuo, and other mainstream
-dating apps stay in planning docs until the path is testable.
+Bumble and TaShuo have graduated to iPhone Mirroring navigation plus opt-in
+managed ordinary chat send. Roadmap candidates such as Hinge and other
+mainstream dating apps stay in planning docs until the path is testable.
 
-runtime app profile 只用于已经可支持的 app。Bumble 已进入 iPhone Mirroring
-导航和授权托管普通聊天发送支持；Hinge、她说以及其他主流 dating app
-在测试路径明确前只作为 roadmap candidate，不进入 capabilities。
+runtime app profile 只用于已经可支持的 app。Bumble 和她说已进入 iPhone
+Mirroring 导航和授权托管普通聊天发送支持；Hinge 以及其他主流 dating app 在测试路径
+明确前只作为 roadmap candidate，不进入 capabilities。
 
 Support levels:
 

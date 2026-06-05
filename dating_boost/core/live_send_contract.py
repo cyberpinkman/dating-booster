@@ -173,8 +173,12 @@ def _target_binding_block_reason(action_request: dict[str, Any], target_match_id
 
 
 def bumble_target_binding_specific_marker_present(target_binding: dict[str, Any]) -> bool:
+    return target_binding_specific_marker_present("bumble", target_binding)
+
+
+def target_binding_specific_marker_present(app_id: str, target_binding: dict[str, Any]) -> bool:
     try:
-        policy = _target_binding_policy("bumble")
+        policy = _target_binding_policy(app_id)
     except Exception:
         return False
     return _target_binding_specific_marker_present(

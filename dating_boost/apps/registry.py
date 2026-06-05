@@ -6,6 +6,7 @@ from typing import Any
 
 from dating_boost.apps.base import AppManifest
 from dating_boost.apps.bumble import BumbleAdapter
+from dating_boost.apps.tashuo import TaShuoAdapter
 from dating_boost.apps.tinder import TinderAdapter
 from dating_boost.apps.wechat import WeChatAdapter
 
@@ -17,6 +18,7 @@ _ADAPTER_CLASSES = {
     "tinder": TinderAdapter,
     "wechat": WeChatAdapter,
     "bumble": BumbleAdapter,
+    "tashuo": TaShuoAdapter,
 }
 
 

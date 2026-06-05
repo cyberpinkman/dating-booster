@@ -34,7 +34,9 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertTrue(payload["agent_native_capabilities"]["host_loop_supervisor"])
             self.assertTrue(payload["agent_native_capabilities"]["tinder_host_loop"])
             self.assertTrue(payload["agent_native_capabilities"]["bumble_host_loop"])
+            self.assertTrue(payload["agent_native_capabilities"]["tashuo_host_loop"])
             self.assertIn("bumble", payload["agent_native_capabilities"]["host_loop_app_profiles"])
+            self.assertIn("tashuo", payload["agent_native_capabilities"]["host_loop_app_profiles"])
             self.assertEqual(payload["agent_native_capabilities"]["host_loop_command"], "dating-boost-host-loop")
             self.assertFalse(payload["agent_native_capabilities"]["live_gui_harness"])
 

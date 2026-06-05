@@ -116,7 +116,19 @@ class AppSpecificNativeGuiSessionMixin:
                 "ocr_status": "not_run",
             }
         ocr = self._ocr(output)
-        if self.app_id == "wechat":
+        app_observer = getattr(self, "app_screen_state_observer", None)
+        if callable(app_observer):
+            text = ocr.get("text", "")
+            observed = app_observer(output, text)
+            text_state = observed["text_state"]
+            visual = {
+                "status": observed["visual_status"],
+                "state": observed["visual_state"],
+                "active_tab": observed.get("visual_active_tab", "unknown"),
+                "bottom_nav_present": observed.get("visual_bottom_nav_present", False),
+            }
+            state = observed["state"]
+        elif self.app_id == "wechat":
             text_state = classify_wechat_screen_text(ocr.get("text", ""))
             visual = {"status": "not_applicable", "state": "unknown"}
             state = text_state
@@ -562,6 +574,8 @@ class AppSpecificNativeGuiSessionMixin:
             "planned_steps": planned_steps,
             "blocked_actions": list(BLOCKED_GUI_ACTIONS),
         }
+        if dry_run:
+            return payload
         doctor_output = None
         if output_dir is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -574,8 +588,6 @@ class AppSpecificNativeGuiSessionMixin:
         state = doctor.get("screen", {}).get("state")
         if state in TINDER_FOREGROUND_STATES:
             payload["reason"] = "tinder_already_foreground"
-            return payload
-        if dry_run:
             return payload
 
         window_payload = doctor.get("window") or {}
@@ -606,6 +618,8 @@ class AppSpecificNativeGuiSessionMixin:
             "planned_steps": planned_steps,
             **_bumble_guardrails_payload(),
         }
+        if dry_run:
+            return payload
         doctor_output = None
         if output_dir is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -618,8 +632,6 @@ class AppSpecificNativeGuiSessionMixin:
         state = doctor.get("screen", {}).get("state")
         if state in BUMBLE_FOREGROUND_STATES:
             payload["reason"] = "bumble_already_foreground"
-            return payload
-        if dry_run:
             return payload
 
         window = _window_from_payload(doctor.get("window") or {})
@@ -1418,6 +1430,18 @@ class AppSpecificNativeGuiSessionMixin:
                     }
                 )
                 return payload
+        app_verified_screen_key = getattr(self, "app_verified_screen_key", None)
+        app_foreground_states = getattr(self, "app_foreground_states", None)
+        if app_verified_screen_key and any(step.get(app_verified_screen_key) for step in payload["planned_steps"]):
+            if screen_state not in set(app_foreground_states or ()):
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": getattr(self, "app_foreground_not_verified_reason", "app_foreground_not_verified"),
+                        "screen_state": screen_state,
+                    }
+                )
+                return payload
         executed_steps: list[dict[str, Any]] = []
         profile_read_captures: list[dict[str, Any]] = []
         profile_read_texts: list[str] = []
@@ -1428,6 +1452,16 @@ class AppSpecificNativeGuiSessionMixin:
                 output_dir=output_dir,
                 step_index=len(executed_steps) + 1,
             )
+            if precondition["status"] == "ok":
+                app_precondition_verifier = getattr(self, "app_step_precondition_verifier", None)
+                if callable(app_precondition_verifier):
+                    precondition = app_precondition_verifier(
+                        self,
+                        window,
+                        step,
+                        output_dir=output_dir,
+                        step_index=len(executed_steps) + 1,
+                    )
             if precondition["status"] != "ok":
                 payload.update(
                     {
@@ -1487,6 +1521,16 @@ class AppSpecificNativeGuiSessionMixin:
                 output_dir=output_dir,
                 step_index=len(executed_steps) + 1,
             )
+            if postcondition.get("status") == "ok" and postcondition.get("checked") is False:
+                app_postcondition_verifier = getattr(self, "app_step_postcondition_verifier", None)
+                if callable(app_postcondition_verifier):
+                    postcondition = app_postcondition_verifier(
+                        self,
+                        window,
+                        step,
+                        output_dir=output_dir,
+                        step_index=len(executed_steps) + 1,
+                    )
             if postcondition["status"] != "ok":
                 executed_step["postcondition"] = postcondition
                 executed_steps.append(executed_step)
@@ -1506,7 +1550,10 @@ class AppSpecificNativeGuiSessionMixin:
         payload["executed_steps"] = executed_steps
         if profile_read_captures:
             payload["profile_read_captures"] = profile_read_captures
-            if self.app_id == "bumble":
+            app_profile_field_coverage = getattr(self, "app_profile_field_coverage", None)
+            if callable(app_profile_field_coverage):
+                payload["field_coverage"] = app_profile_field_coverage("\n".join(profile_read_texts))
+            elif self.app_id == "bumble":
                 payload["field_coverage"] = _bumble_profile_field_coverage("\n".join(profile_read_texts))
             else:
                 payload["field_coverage"] = _tinder_profile_field_coverage("\n".join(profile_read_texts))
@@ -2428,7 +2475,6 @@ def _verify_bumble_outbound_message(
     return {**result, **extra, "status": "ok"}
 
 
-
 def _verify_outbound_message(screen: dict[str, Any], expected_text: str) -> dict[str, Any]:
     observed_text = str(screen.get("text") or "")
     text_matches = _message_text_matches(observed_text, expected_text)
@@ -2521,6 +2567,11 @@ def _screen_region_stats(screen: dict[str, Any], x1: float, y1: float, x2: float
     except (OSError, ValueError, zlib.error, struct.error):
         return None
     return _region_stats_for_send_button(pixels, x1, y1, x2, y2)
+
+
+
+def _direct_type_fallback_allowed(text: str) -> bool:
+    return bool(text) and "\n" not in text
 
 
 
@@ -2655,7 +2706,10 @@ def _wheel_step(
 
 
 def _capture_profile_read_step(*, app_id: str = "tinder") -> dict[str, Any]:
-    requires_key = "requires_verified_bumble_screen" if app_id == "bumble" else "requires_verified_tinder_screen"
+    if app_id == "bumble":
+        requires_key = "requires_verified_bumble_screen"
+    else:
+        requires_key = "requires_verified_tinder_screen"
     step = {
         "intent": "capture_profile_read_step",
         requires_key: True,
@@ -3042,13 +3096,25 @@ def _bumble_workflow_steps(workflow: str, **options: Any) -> list[dict[str, Any]
     raise KeyError(workflow)
 
 
-
 def _launch_tinder_steps() -> list[dict[str, Any]]:
     return _launch_app_steps(app_name="Tinder", search_result_intent="tap_tinder_search_result_icon")
 
 
 
-def _launch_app_steps(*, app_name: str, search_result_intent: str) -> list[dict[str, Any]]:
+def _launch_app_steps(
+    *,
+    app_name: str,
+    search_result_intent: str,
+    expected_app_labels: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    type_step: dict[str, Any] = {
+        "intent": "type_app_name_verified",
+        "text": app_name,
+        "risk": "navigation_only",
+        "wait_after_seconds": 0.2,
+    }
+    if expected_app_labels is not None:
+        type_step["expected_app_labels"] = list(expected_app_labels)
     return [
         {
             "intent": "open_iphone_home_screen",
@@ -3060,12 +3126,7 @@ def _launch_app_steps(*, app_name: str, search_result_intent: str) -> list[dict[
             "risk": "navigation_only",
             "wait_after_seconds": 0.4,
         },
-        {
-            "intent": "type_app_name_verified",
-            "text": app_name,
-            "risk": "navigation_only",
-            "wait_after_seconds": 0.2,
-        },
+        type_step,
         {
             "intent": search_result_intent,
             "tap_ratio": {"x": 0.18, "y": 0.20},

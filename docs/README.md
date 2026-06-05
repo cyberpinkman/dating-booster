@@ -75,6 +75,7 @@ host adapter。新增 host 时新增自己的 adapter，不修改已有 Claude C
 | Tinder | Host-loop, profile/chat navigation, observation, draft workflow, opt-in managed live send | iPhone Mirroring on macOS | Stage by default; managed send only with explicit authorization and verification |
 | WeChat / 微信 | App profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | Stage by default; managed send only with explicit authorization and verification |
 | Bumble | Host-loop, iPhone Mirroring launch/observation, profile/chat navigation, role-sensitive Opening Move observation/drafting policy, opt-in managed live send | iPhone Mirroring on macOS | Stage by default; managed ordinary chat send only with explicit authorization, target-specific binding, exact OCR verification, and post-send evidence |
+| TaShuo / 她说 | Host-loop, iPhone Mirroring launch/observation, profile/chat navigation, role-sensitive question-gate observation/drafting policy, opt-in managed live send | iPhone Mirroring on macOS | Stage by default; managed ordinary chat send only with explicit authorization, target-specific binding, exact OCR verification, and post-send evidence |
 
 `supported_app_profiles` 只列 runtime-supported app。未支持 app 不创建 placeholder
 profile，也不进入 capabilities。
@@ -89,8 +90,8 @@ four axes that should not be mixed in one-off patches:
 
 - host agent adapters: Codex and Claude Code are installable now; Hermes,
   OpenClaw, and MCP-compatible hosts should reuse the same adapter contract.
-- app support profiles: Tinder, WeChat, and Bumble at runtime; Ta Shuo/tashuo,
-  Hinge, and other mainstream apps stay as roadmap candidates until testable.
+- app support profiles: Tinder, WeChat, Bumble, and TaShuo at runtime; Hinge
+  and other mainstream apps stay as roadmap candidates until testable.
 - goal type registry: `meet_in_person` first, then additional goals with their
   own milestones, policy constraints, and handoff rules.
 - workflow and memory evolution: smarter scenario workflows, provenance-backed
@@ -144,10 +145,10 @@ four axes that should not be mixed in one-off patches:
   scale-out automation。不要加入私有 API、绕过、反检测或账号规模化能力。
 - Do not let a harness send messages, likes, reports, payments, calls, or
   profile edits unless policy, confirmation, staged-text verification, and
-  post-action verification explicitly support that action。Managed Tinder/WeChat send
+  post-action verification explicitly support that action。Managed Tinder/WeChat/Bumble/TaShuo send
   also needs policy-checked action requests, target-chat binding, and outbound
   bubble verification。除非策略、确认、staged-text verification 和 post-action
-  verification 明确支持，否则 harness 不得执行高风险动作；Tinder/WeChat 全托管发送还必须有
+  verification 明确支持，否则 harness 不得执行高风险动作；Tinder/WeChat/Bumble/TaShuo 全托管发送还必须有
   policy-checked action request、目标聊天绑定和 outbound bubble 校验。
 - Prefer paste-based draft staging for Chinese text。中文草稿优先 paste staging，
   避免直接输入导致文本损坏。

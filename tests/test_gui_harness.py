@@ -10,12 +10,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.apps.registry import create_adapter
-from dating_boost.cli import main
+from dating_boost.cli import SUPPORTED_NATIVE_HARNESS_APPS, main
 from dating_boost.core.gui_harness import (
     classify_bumble_screen_text,
     classify_screen_text,
     classify_wechat_screen_text,
 )
+from dating_boost.apps.tashuo.screen_state import classify_tashuo_screen_text
 from dating_boost.harness.input_backends import core_graphics_command_v, core_graphics_drag
 
 
@@ -239,6 +240,11 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertIn("harness bumble action", payload["supported_commands"])
         self.assertIn("harness bumble workflow", payload["supported_commands"])
         self.assertIn("harness bumble send-message", payload["supported_commands"])
+        self.assertIn("harness tashuo launch", payload["supported_commands"])
+        self.assertIn("harness tashuo observe", payload["supported_commands"])
+        self.assertIn("harness tashuo action", payload["supported_commands"])
+        self.assertIn("harness tashuo workflow", payload["supported_commands"])
+        self.assertIn("harness tashuo send-message", payload["supported_commands"])
         self.assertIn("harness wechat launch", payload["supported_commands"])
         self.assertIn("harness wechat observe", payload["supported_commands"])
         self.assertIn("harness wechat stage-draft", payload["supported_commands"])
@@ -263,6 +269,19 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertFalse(payload["agent_native_capabilities"]["bumble_opening_move_autonomous_send"])
         self.assertTrue(payload["agent_native_capabilities"]["bumble_live_send_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["bumble_host_loop"])
+        self.assertIn("tashuo", payload["agent_native_capabilities"]["supported_app_profiles"])
+        self.assertIn("tashuo", payload["agent_native_capabilities"]["host_loop_app_profiles"])
+        self.assertTrue(payload["agent_native_capabilities"]["tashuo_gui_launch"])
+        self.assertTrue(payload["agent_native_capabilities"]["tashuo_gui_navigation"])
+        self.assertTrue(payload["agent_native_capabilities"]["tashuo_profile_read_harness"])
+        self.assertTrue(payload["agent_native_capabilities"]["tashuo_chat_navigation_harness"])
+        self.assertTrue(payload["agent_native_capabilities"]["tashuo_question_gate_role_policy"])
+        self.assertTrue(payload["agent_native_capabilities"]["tashuo_question_gate_male_draft"])
+        self.assertFalse(payload["agent_native_capabilities"]["tashuo_question_gate_stage_harness"])
+        self.assertFalse(payload["agent_native_capabilities"]["tashuo_question_gate_send_harness"])
+        self.assertFalse(payload["agent_native_capabilities"]["tashuo_question_gate_autonomous_send"])
+        self.assertTrue(payload["agent_native_capabilities"]["tashuo_live_send_harness"])
+        self.assertTrue(payload["agent_native_capabilities"]["tashuo_host_loop"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_host_loop"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_macos_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_gui_launch"])
@@ -288,7 +307,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["reason"], "unsupported_native_harness_for_app")
         self.assertEqual(payload["app_id"], "hinge")
-        self.assertEqual(payload["supported_native_harness_apps"], ["tinder", "wechat", "bumble"])
+        self.assertEqual(payload["supported_native_harness_apps"], list(SUPPORTED_NATIVE_HARNESS_APPS))
         harness_class.assert_not_called()
 
     def test_bumble_launch_dry_run_uses_home_search_without_send_support(self):
@@ -312,6 +331,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["planned_steps"][2]["text"], "Bumble")
         self.assertIn("send", payload["blocked_actions"])
         self.assertIn("superswipe", payload["blocked_actions"])
+        self.assertEqual(runner.commands, [])
         self.assertFalse(any("keystroke" in " ".join(command) for command in runner.commands))
 
     def test_bumble_launch_retries_after_input_source_switch_when_first_search_is_not_english(self):
@@ -722,6 +742,7 @@ class GuiHarnessTests(unittest.TestCase):
             ],
         )
         self.assertEqual(payload["planned_steps"][-1]["tap_ratio"], {"x": 0.18, "y": 0.20})
+        self.assertEqual(runner.commands, [])
         self.assertFalse(any("keystroke" in " ".join(command) for command in runner.commands))
 
     def test_tinder_launch_executes_home_search_and_taps_app_result(self):
@@ -747,6 +768,230 @@ class GuiHarnessTests(unittest.TestCase):
         )
         self.assertTrue(any('keystroke "Tinder"' in " ".join(command) for command in runner.commands))
         self.assertEqual(payload["executed_steps"][-1]["tap_ratio"], {"x": 0.18, "y": 0.20})
+
+    def test_tashuo_launch_dry_run_uses_tashu_search_term(self):
+        runner = FakeRunner(ocr_text="今天 周五\n搜索\n电话\n微信\nChrome\n")
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        payload = harness.launch(dry_run=True)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["target"], "tashuo_app")
+        self.assertEqual(payload["mode"], "dry_run")
+        self.assertEqual(
+            [step["intent"] for step in payload["planned_steps"]],
+            [
+                "open_iphone_home_screen",
+                "open_ios_spotlight",
+                "type_app_name_verified",
+                "tap_tashuo_search_result_icon",
+            ],
+        )
+        self.assertEqual(payload["planned_steps"][2]["text"], "tashu")
+        self.assertEqual(payload["planned_steps"][2]["expected_app_labels"], ["tashu", "她说", "TaShuo"])
+        self.assertEqual(runner.commands, [])
+
+    def test_tashuo_launch_accepts_chinese_app_result_for_tashu_query(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "今天 周五\n搜索\n电话\n微信\nChrome\n",
+                "她说\nApp\nSiri建议\n",
+                "推荐\nsmilewen 31\n1日内活跃\n推荐\n飞行\n消息\n我的\n",
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        payload = harness.launch(dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        type_step = next(step for step in payload["executed_steps"] if step["intent"] == "type_app_name_verified")
+        self.assertFalse(type_step["result"]["retried_after_input_source_switch"])
+        self.assertTrue(type_step["result"]["search_result_verified"])
+        self.assertTrue(any('keystroke "tashu"' in " ".join(command) for command in runner.commands))
+
+    def test_tashuo_action_and_workflow_dry_runs_are_navigation_only(self):
+        runner = FakeRunner(ocr_text="消息\n待回答 (0)\n全部消息\n推荐\n飞行\n消息\n我的\n")
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        action = harness.run_action("open-conversation", conversation_row=2, dry_run=True)
+        workflow = harness.run_workflow("chat-read-match-profile", conversation_row=1, dry_run=True)
+
+        self.assertEqual(action["status"], "ok")
+        self.assertEqual(action["planned_steps"][0]["intent"], "tap_tashuo_conversation_row")
+        self.assertEqual(action["planned_steps"][0]["tap_ratio"], {"x": 0.45, "y": 0.64})
+        self.assertIn("question_gate_send", action["blocked_actions"])
+        self.assertEqual(workflow["status"], "ok")
+        self.assertIn("capture_profile_read_step", [step["intent"] for step in workflow["planned_steps"]])
+        self.assertTrue(all(step.get("risk") == "navigation_only" for step in workflow["planned_steps"]))
+
+    def test_tashuo_bottom_tab_action_requires_complete_top_level_nav(self):
+        runner = FakeRunner(
+            ocr_text="她说\nVIP\n谁喜欢了我\n",
+            missing_commands={"xcrun"},
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        payload = harness.run_action("open-chats", dry_run=False)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "tashuo_top_level_tab_bar_not_verified")
+        self.assertNotIn("executed_steps", payload)
+
+    def test_tashuo_question_gate_policy_is_in_payloads(self):
+        runner = FakeRunner(ocr_text="消息\n待回答 (1)\n全部消息\n推荐\n飞行\n消息\n我的\n")
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        observe = harness.observe()
+        action = harness.run_action("open-question-gate", dry_run=True)
+        workflow = harness.run_workflow("question-gate-open", dry_run=True)
+
+        for payload in (observe, action, workflow):
+            with self.subTest(target=payload.get("target") or payload.get("action") or payload.get("workflow")):
+                policy = payload["question_gate_policy"]
+                self.assertEqual(policy["scope"], "tashuo_question_gate")
+                self.assertEqual(policy["female_user"]["agent_decision_authority"], "none")
+                self.assertIn("ask_user_to_decide", policy["female_user"]["agent_allowed_actions"])
+                self.assertTrue(policy["male_user"]["agent_may_draft_reply"])
+                self.assertTrue(policy["male_user"]["requires_user_confirmation_before_send"])
+                self.assertFalse(policy["male_user"]["current_harness_stage_supported"])
+                self.assertFalse(policy["male_user"]["current_harness_send_supported"])
+                self.assertFalse(policy["male_user"]["autonomous_question_gate_send_supported"])
+                self.assertIn("question_gate_skip", payload["blocked_actions"])
+                self.assertIn("question_gate_decide_reply_satisfaction", payload["blocked_actions"])
+                self.assertIn("question_gate_send", payload["blocked_actions"])
+
+    def test_tashuo_send_message_blocks_on_question_gate_page_without_user_confirmation_path(self):
+        runner = FakeRunner(ocr_text="待回答\n她向你提了一个问题\n回答后即可开启聊天\n点击此处输入文字\n")
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        payload = harness.send_message("这个问题我会认真回答。", dry_run=False)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "tashuo_question_gate_requires_user_confirmation")
+
+    def test_tashuo_send_message_blocks_generic_target_binding_markers_before_staging(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Yasmine\n点击此处输入文字\n发送\n",
+                "Yasmine\n点击此处输入文字\n发送\n",
+                "Yasmine\n点击此处输入文字\n发送\n",
+                "Yasmine\nhi\n发送\n",
+                "Yasmine\nhi\n点击此处输入文字\n",
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        payload = harness.send_message(
+            "hi",
+            dry_run=False,
+            target_binding={"required_visible_text": ["点击此处输入文字", "发送"], "target_match_id": "match_tashuo"},
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "target_binding_not_target_specific")
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+
+    def test_tashuo_send_message_verifies_target_staged_text_and_outbound_bubble(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n今晚可以聊十分钟吗？\n发送\n",
+                "Yasmine\n不理解\n今晚可以聊十分钟吗？\n点击此处输入文字\n",
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        payload = harness.send_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Yasmine"], "target_match_id": "match_tashuo"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["staged_text_verified"])
+        self.assertTrue(payload["evidence"]["staged_text_verified"])
+        self.assertTrue(payload["evidence"]["staged_exact_text_ocr_verified"])
+        self.assertTrue(payload["evidence"]["input_cleared_after_send"])
+        self.assertTrue(payload["evidence"]["outbound_message_verified"])
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+
+    def test_tashuo_send_message_blocks_when_target_marker_is_not_in_thread_header(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Ada\n不理解\nYasmine 昨天说过\n点击此处输入文字\n",
+                "Ada\n不理解\nYasmine 昨天说过\n点击此处输入文字\n",
+                "Ada\n不理解\nYasmine 昨天说过\n点击此处输入文字\n",
+                "Ada\n不理解\nYasmine 昨天说过\nhi\n发送\n",
+                "Ada\n不理解\nYasmine 昨天说过\nhi\n点击此处输入文字\n",
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        payload = harness.send_message(
+            "hi",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Yasmine"], "target_match_id": "match_tashuo"},
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "target_binding_header_mismatch")
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+
+    def test_tashuo_send_message_direct_type_fallback_commits_chinese_ime_candidate(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n点击此处输入文字\n发送\n",
+                "Yasmine\n不理解\n你好\n发送\n",
+                "Yasmine\n不理解\n你好\n点击此处输入文字\n",
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        payload = harness.send_message(
+            "你好",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Yasmine"], "target_match_id": "match_tashuo"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        intents = [step["intent"] for step in payload["executed_steps"]]
+        self.assertIn("type_tashuo_message_input_if_paste_did_not_stage", intents)
+        self.assertIn("commit_tashuo_message_input_ime_candidate_if_needed", intents)
+
+    def test_classifies_tashuo_screens_and_question_gate(self):
+        self.assertEqual(
+            classify_tashuo_screen_text("推荐\nsmilewen 31\n1日内活跃\n推荐\n飞行\n消息\n我的"),
+            "tashuo_recommend",
+        )
+        self.assertEqual(
+            classify_tashuo_screen_text("飞行\n背上行囊 偶遇新的朋友\n轻触屏幕 马上开聊\n推荐\n飞行\n消息\n我的"),
+            "tashuo_flight",
+        )
+        self.assertEqual(
+            classify_tashuo_screen_text("消息\n待回答 (0)\n全部消息\nYasmine\n不理解\n推荐\n飞行\n消息\n我的"),
+            "tashuo_chat_list",
+        )
+        self.assertEqual(
+            classify_tashuo_screen_text("Pink\n编辑资料\n我的认证\n谁喜欢了我\n我喜欢的人\n推荐\n飞行\n消息\n我的"),
+            "tashuo_self_profile",
+        )
+        self.assertEqual(
+            classify_tashuo_screen_text("Yasmine\n不理解\n点击此处输入文字\n"),
+            "tashuo_conversation",
+        )
+        self.assertEqual(
+            classify_tashuo_screen_text("待回答\n她向你提了一个问题\n回答后即可开启聊天\n"),
+            "tashuo_question_gate",
+        )
+        self.assertEqual(
+            classify_tashuo_screen_text("Yasmine\n她向你提了一个问题\n点击此处输入文字\n发送\n"),
+            "tashuo_question_gate",
+        )
 
     def test_open_profile_launch_if_needed_combines_launch_and_profile_navigation(self):
         runner = FakeRunner(ocr_text="周三\n03\n搜索\n电话\n微信\nChrome\n")

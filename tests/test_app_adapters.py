@@ -163,6 +163,20 @@ class AppAdapterArchitectureTests(unittest.TestCase):
 
         self.assertIn("open-profile", manifest_for_app("tinder").cli_aliases)
 
+    def test_tashuo_semantics_live_in_tashuo_adapter_package_not_global_session(self):
+        import dating_boost.apps.tashuo.native as tashuo_native
+        import dating_boost.apps.tashuo.screen_state as tashuo_screen_state
+
+        native_session_source = (ROOT / "dating_boost" / "apps" / "native_gui_session.py").read_text(encoding="utf-8")
+        global_screen_state_source = (ROOT / "dating_boost" / "harness" / "screen_state.py").read_text(encoding="utf-8")
+
+        self.assertTrue(hasattr(tashuo_native, "send_tashuo_message"))
+        self.assertTrue(hasattr(tashuo_native, "run_tashuo_workflow"))
+        self.assertTrue(hasattr(tashuo_screen_state, "classify_tashuo_screen_text"))
+        self.assertNotIn("def send_tashuo_message", native_session_source)
+        self.assertNotIn("def _tashuo_action_steps", native_session_source)
+        self.assertNotIn("classify_tashuo_screen_text", global_screen_state_source)
+
     def test_harness_doctor_dispatches_to_adapter_not_session_app_branch(self):
         calls: dict[str, object] = {}
 

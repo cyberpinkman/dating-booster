@@ -56,15 +56,16 @@ verification, and post-action verification.
 | Tinder | host loop, profile/chat navigation, observation, draft workflow, opt-in managed live send | iPhone Mirroring on macOS | stage by default; `send-message` can click Send only after explicit live-send authorization and verification |
 | WeChat / 微信 | app profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | stage by default; `send-message` can press Enter only after explicit live-send authorization and verification |
 | Bumble | host loop, iPhone Mirroring launch/observation, profile/chat navigation, Opening Move observation, opt-in managed live send | iPhone Mirroring on macOS | stage by default; ordinary chat `send-message` can click Send only after explicit live-send authorization and verification |
+| 她说 / TaShuo | host loop, iPhone Mirroring launch/observation, profile/chat navigation, question-gate observation, opt-in managed live send | iPhone Mirroring on macOS | stage by default; ordinary chat `send-message` can click Send only after explicit live-send authorization, target-specific binding, exact OCR verification, and post-send evidence |
 
-未支持 app 不进入 `app_profiles/` 或 `supported_app_profiles`。Hinge、她说
+未支持 app 不进入 `app_profiles/` 或 `supported_app_profiles`。Hinge
 以及其他主流 dating app 先作为 roadmap candidate 记录在
 `docs/ARCHITECTURE.md`；只有具备 fixture、preflight、harness 或 host-loop 测试后，
 才新增 runtime app profile。
 
 Unsupported apps do not appear in `app_profiles/` or `supported_app_profiles`.
-Hinge, Ta Shuo, and other mainstream dating apps are roadmap candidates until
-fixtures, preflight, harness, or host-loop tests justify a runtime app profile.
+Hinge and other mainstream dating apps are roadmap candidates until fixtures,
+preflight, harness, or host-loop tests justify a runtime app profile.
 
 未来扩展蓝图见 `docs/ARCHITECTURE.md`。它把扩展拆成四条独立轴：更多 host
 agent（Codex、Claude Code、Hermes、OpenClaw）、更多 dating app、更多目标类型，
@@ -292,9 +293,9 @@ dating-boost harness doctor --app-id bumble --json
 dating-boost harness bumble launch --dry-run --json
 dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
 dating-boost harness bumble action open-chats --dry-run --json
-dating-boost harness bumble workflow browse-profile-read --dry-run --profile-scroll-steps 2 --json
-dating-boost harness bumble workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
-dating-boost harness bumble workflow opening-move-open --dry-run --match-index 2 --json
+dating-boost harness bumble workflow browse-profile-read --dry-run --options-json bumble-profile-options.json --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --json
+dating-boost harness bumble workflow opening-move-open --dry-run --options-json bumble-opening-move-options.json --json
 dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --json
 ```
 
@@ -316,6 +317,35 @@ autonomous Opening Move send. Ordinary Bumble chat managed send requires
 policy-checked action request, target-specific binding, staged-text OCR
 verification, and fresh post-send outbound-bubble evidence. Visual send-button
 or yellow-bubble evidence alone does not satisfy exact-text verification.
+
+### TaShuo / 她说
+
+```bash
+dating-boost harness tashuo launch --dry-run --json
+dating-boost harness tashuo observe --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo action open-chats --dry-run --json
+dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options-json tashuo-chat-profile-options.json --json
+dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
+dating-boost harness tashuo send-message --text-file tashuo-draft.txt --dry-run --json
+```
+
+TaShuo can launch through iOS search using `tashu` and a verified `她说`/`TaShuo`
+result, open the four top-level tabs (`推荐`, `飞行`, `消息`, `我的`), read ordinary
+chat rows, open a thread profile, and run opt-in managed sends for verified
+ordinary chat conversations. `飞行` screen-tap chat starts, recommendation likes,
+passes, unmatches, reports, profile edits, premium purchases, and question-gate
+decisions are blocked actions.
+
+TaShuo question-gate handling is role-sensitive like Bumble Opening Move. For
+female users, the agent must not decide whether to enable/skip the question
+gate or whether a male reply is good enough; it can observe or summarize and
+ask the user to decide. For male users, the agent may draft a question-gate
+reply for user review, but the current harness does not stage or send
+question-gate replies; the user must handle that path manually. Ordinary
+TaShuo chat managed send requires `harness tashuo send-message` with explicit
+authorization, `live_send: true`, policy-checked action request,
+target-specific binding, staged-text OCR verification, and fresh post-send
+outbound evidence. Visual-only evidence is not exact-text verification.
 
 ### macOS WeChat / 微信桌面端
 
@@ -499,11 +529,12 @@ you explicitly want to inspect the context pack in terminal output.
 1. 新增或更新 `app_profiles/<app_id>.json`。
 2. 先证明它是 runtime-supported app：至少有 fixture、preflight 和可测试的
    observation/navigation/staging/live-send 边界。
-3. 如需 native GUI support，在 `dating_boost/core/gui_harness.py` 实现 backend。
-4. 只有在 harness contract 可测试后，才在 `dating_boost/cli.py` 暴露 app-specific
-   commands。
-5. 在 `dating_boost/core/capabilities.py` 增加 supported commands 和 capability
-   flags。
+3. 在 `dating_boost/apps/<app_id>/adapter.py` 和 adapter-owned session 代码实现
+   app 语义、workflow、target binding、send verification 和特殊社交规则。
+4. 在 `dating_boost/apps/registry.py` 注册 adapter；CLI、capabilities、
+   managed session 和 host loop 必须从 registry/profile 派生。
+5. app-specific 参数通过 `harness <app_id> action|workflow --options-json` 传入，
+   不为新增 app 修改全局 argparse 分支。
 6. 在 `tests/fixtures/` 和 `tests/` 增加 deterministic fixtures 与 focused tests。
 7. 更新 `README.md`、`app_profiles/README.md`、`docs/README.md` 和 Codex skill
    references。
@@ -512,12 +543,14 @@ you explicitly want to inspect the context pack in terminal output.
 1. Add or update `app_profiles/<app_id>.json`.
 2. Prove it is a runtime-supported app with fixtures, preflight, and testable
    observation/navigation/staging/live-send boundaries.
-3. If native GUI support is needed, implement the backend in
-   `dating_boost/core/gui_harness.py`.
-4. Expose app-specific commands in `dating_boost/cli.py` only after the harness
-   contract is testable.
-5. Add supported commands and capability flags in
-   `dating_boost/core/capabilities.py`.
+3. Implement app semantics, workflows, target binding, send verification, and
+   special social rules in `dating_boost/apps/<app_id>/adapter.py` and
+   adapter-owned session code.
+4. Register the adapter in `dating_boost/apps/registry.py`; CLI, capabilities,
+   managed sessions, and host loop must derive support from registry/profile.
+5. Pass app-specific parameters through
+   `harness <app_id> action|workflow --options-json`; do not add global argparse
+   branches for new apps.
 6. Add deterministic fixtures and focused tests under `tests/fixtures/` and
    `tests/`.
 7. Update `README.md`, `app_profiles/README.md`, `docs/README.md`, and Codex

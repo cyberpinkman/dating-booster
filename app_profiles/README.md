@@ -17,6 +17,9 @@ every `app_profiles/*.json` file against the same required contract shape.
 - `bumble.json`: Bumble iPhone Mirroring launch, observation, profile/chat
   navigation, role-sensitive Opening Move observation/drafting policy, and
   explicitly authorized managed ordinary-chat live-send contract.
+- `tashuo.json`: TaShuo/她说 iPhone Mirroring launch, observation,
+  profile/chat navigation, role-sensitive question-gate observation/drafting
+  policy, and explicitly authorized managed ordinary-chat live-send contract.
 
 ## Required Fields
 
@@ -42,7 +45,8 @@ every `app_profiles/*.json` file against the same required contract shape.
   policy, generic-marker blacklist, and visual-only verification boundary.
 - `live_send_requirements`: exact evidence required before/after live send.
 - `managed_session`: profile-owned precheck failure status and recovery action.
-- `special_policies`: app-specific social rules such as Bumble Opening Move.
+- `special_policies`: app-specific social rules such as Bumble Opening Move or
+  TaShuo question gate.
 - `post_send_verification`: rules for recording a send result.
 - `known_gui_pitfalls`: app-specific failure modes that should stop or slow a
   host run.
@@ -56,8 +60,8 @@ runtime app profiles; v2 profiles also expose normalized `adapter`,
 blocks for registry consumers. Unsupported apps do not get placeholder
 profiles. Current backends:
 
-- `iphone_mirroring_macos`: macOS iPhone Mirroring harness used by Tinder and
-  Bumble.
+- `iphone_mirroring_macos`: macOS iPhone Mirroring harness used by Tinder,
+  Bumble, and TaShuo.
 - `macos_wechat_desktop`: desktop WeChat window harness used by WeChat.
 
 Every native harness block should define:
@@ -121,9 +125,9 @@ requires it.
 - Managed live send defaults to off and is represented as a conditional
   exception, not by removing `send` from default blocked actions.
 - Latest inbound messages are clearly separated from old visible context.
-- Draft staging requires exact staged-text verification. For Bumble, paste is
-  primary and direct typing is only a fallback; OCR must still verify the exact
-  payload text before Send.
+- Draft staging requires exact staged-text verification. For Bumble and TaShuo,
+  paste is primary and direct typing is only a fallback; OCR must still verify
+  the exact payload text before Send.
 - Raw OCR text is not exposed in normal JSON output when it could contain
   private chat history.
 - Unsupported actions include app-specific high-risk operations such as likes,

@@ -53,7 +53,9 @@ from dating_boost.harness.screen_state import (
     tinder_profile_field_coverage as _tinder_profile_field_coverage,
     wechat_layout_hints as _wechat_layout_hints,
 )
-from dating_boost.core.live_send_contract import bumble_target_binding_specific_marker_present
+from dating_boost.core.live_send_contract import (
+    bumble_target_binding_specific_marker_present,
+)
 from dating_boost.core.support import classify_text_topics
 
 
@@ -268,7 +270,9 @@ class NativeGuiHarness:
             return {**fallback, "fallback_from": "spotlight_menu"}
         if step["intent"] == "type_app_name_verified":
             app_name = str(step.get("text") or "Tinder")
-            return self._type_app_name_with_search_verification(window, app_name)
+            expected_labels = step.get("expected_app_labels")
+            labels = [str(item) for item in expected_labels] if isinstance(expected_labels, list) else None
+            return self._type_app_name_with_search_verification(window, app_name, expected_app_labels=labels)
         if step["intent"] == "type_app_name":
             app_name = str(step.get("text") or "Tinder")
             return self._type_text_with_ime_commit(app_name, failure_reason="text_entry_failed")
@@ -279,19 +283,26 @@ class NativeGuiHarness:
             return {"status": "ok"}
         return {"status": "blocked", "reason": "unknown_gui_step"}
 
-    def _type_app_name_with_search_verification(self, window: WindowInfo, app_name: str) -> dict[str, Any]:
+    def _type_app_name_with_search_verification(
+        self,
+        window: WindowInfo,
+        app_name: str,
+        *,
+        expected_app_labels: list[str] | None = None,
+    ) -> dict[str, Any]:
         first_type = self._type_text_with_ime_commit(app_name, failure_reason="text_entry_failed")
         if first_type["status"] != "ok":
             return first_type
         time.sleep(0.2)
         first_screen = self.capture_window(window=window)
-        first_verified = _app_search_result_visible(first_screen, app_name)
+        first_verified = _app_search_result_visible(first_screen, app_name, expected_app_labels=expected_app_labels)
         if first_verified:
             return {
                 "status": "ok",
                 "search_result_verified": True,
                 "retried_after_input_source_switch": False,
                 "ime_commit_after_typing": True,
+                "expected_app_labels": list(expected_app_labels or [app_name]),
                 "text_entry": first_type,
                 "verification": _redacted_screen(first_screen),
             }
@@ -330,7 +341,7 @@ class NativeGuiHarness:
             }
         time.sleep(0.2)
         second_screen = self.capture_window(window=window)
-        if not _app_search_result_visible(second_screen, app_name):
+        if not _app_search_result_visible(second_screen, app_name, expected_app_labels=expected_app_labels):
             return {
                 "status": "blocked",
                 "reason": "app_search_result_not_verified",
@@ -345,6 +356,7 @@ class NativeGuiHarness:
             "search_result_verified": True,
             "retried_after_input_source_switch": True,
             "ime_commit_after_typing": True,
+            "expected_app_labels": list(expected_app_labels or [app_name]),
             "first_verification": _redacted_screen(first_screen),
             "retry_verification": _redacted_screen(second_screen),
             "first_text_entry": first_type,
@@ -543,14 +555,21 @@ def _input_source_id_is_ascii(input_source_id: str) -> bool:
     }
 
 
-def _app_search_result_visible(screen: dict[str, Any], app_name: str) -> bool:
+def _app_search_result_visible(
+    screen: dict[str, Any],
+    app_name: str,
+    *,
+    expected_app_labels: list[str] | None = None,
+) -> bool:
     if screen.get("status") != "ok":
         return False
     normalized = _normalize_text(str(screen.get("text") or ""))
-    app = app_name.strip().lower()
-    if not app:
-        return False
-    return app in normalized
+    labels = expected_app_labels or [app_name]
+    for label in labels:
+        app = str(label).strip().lower()
+        if app and app in normalized:
+            return True
+    return False
 
 
 def _default_screenshot_path() -> Path:

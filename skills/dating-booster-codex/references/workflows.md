@@ -44,19 +44,27 @@ data dir after support session start and before support bundle export.
 ## Native GUI Harness
 
 The native harness is stage/navigation-first. It may diagnose iPhone Mirroring,
-capture a screenshot/OCR artifact, navigate Tinder and Bumble through bounded
-profile/chat reading chains, and execute `send_message` only through gated
-app-specific `harness <app> send-message` paths. Bumble ordinary chat managed
-send is supported with the same authorization, target-specific binding,
-staged-text OCR, and post-send evidence gates. Visual send-button or
-yellow-bubble evidence alone is not exact-text verification. Bumble must not
-like, pass, SuperSwipe, unmatch, report, edit profile data, or purchase Premium.
+capture a screenshot/OCR artifact, navigate Tinder, Bumble, and TaShuo through
+bounded profile/chat reading chains, and execute `send_message` only through
+gated app-specific `harness <app> send-message` paths. Bumble and TaShuo
+ordinary chat managed send are supported with the same authorization,
+target-specific binding, staged-text OCR, and post-send evidence gates. Visual
+send-button or bubble evidence alone is not exact-text verification. Bumble
+must not like, pass, SuperSwipe, unmatch, report, edit profile data, or purchase
+Premium. TaShuo must not like, pass, start a 飞行 chat, unmatch, report, edit
+profile data, purchase Premium, or make question-gate decisions.
 
 Bumble Opening Move is role-sensitive. On a female user's account, observe or
 summarize the prompt/reply and ask the user whether to enable Opening Move,
 skip it, accept the male reply, or reject it. On a male user's account, drafting
 an Opening Move reply is allowed for user review, but autonomous Opening Move
 send remains unsupported.
+
+TaShuo question gate is role-sensitive. On a female user's account, observe or
+summarize the prompt/reply and ask the user whether to enable the question,
+skip the gate, accept the male reply, or reject it. On a male user's account,
+drafting a question-gate reply is allowed for user review, but the current
+harness does not stage or send question-gate replies.
 
 ```bash
 dating-boost harness doctor --app-id tinder --json
@@ -85,6 +93,14 @@ dating-boost harness bumble workflow browse-profile-read --dry-run --options-jso
 dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --json
 dating-boost harness bumble workflow opening-move-open --dry-run --options-json bumble-opening-move-options.json --json
 dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --json
+dating-boost harness doctor --app-id tashuo --json
+dating-boost harness screenshot --app-id tashuo --output tashuo.png --json
+dating-boost harness tashuo launch --dry-run --json
+dating-boost harness tashuo observe --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo action open-chats --dry-run --json
+dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options-json tashuo-chat-profile-options.json --json
+dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
+dating-boost harness tashuo send-message --text-file tashuo-draft.txt --dry-run --json
 dating-boost harness doctor --app-id wechat --window-title WeChat --json
 dating-boost harness screenshot --app-id wechat --window-title WeChat --output wechat.png --json
 dating-boost harness wechat launch --dry-run --json

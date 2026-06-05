@@ -1,10 +1,10 @@
 # App Host Loop
 
-Use this workflow when the user wants Codex to run a real Tinder or Bumble host
-loop with iPhone Mirroring. `dating-boost-host-loop` drives the operator state
-machine.
-The Tinder host loop remains the baseline reference path; Bumble uses the same
-supervisor contract for ordinary chat sends.
+Use this workflow when the user wants Codex to run a real Tinder, Bumble, or
+TaShuo host loop with iPhone Mirroring. `dating-boost-host-loop` drives the
+operator state machine.
+The Tinder host loop remains the baseline reference path; Bumble and TaShuo use
+the same supervisor contract for ordinary chat sends.
 `dating-boost harness ...` provides the native stage/navigation harness for
 iPhone Mirroring diagnostics, screenshots/OCR, safe app navigation, profile
 reading, chat/profile opening chains, and gated managed send. Codex still
@@ -29,6 +29,10 @@ dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run 
 dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
 dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --json
 dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --json
+dating-boost harness tashuo observe --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options-json tashuo-chat-profile-options.json --json
+dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
+dating-boost harness tashuo send-message --text-file tashuo-draft.txt --dry-run --json
 dating-boost-host-loop doctor \
   --data-dir .local/dating-boost \
   --app-id tinder \
@@ -45,12 +49,14 @@ run `harness tinder action return-to-chats` before selecting the next unopened
 match. A real send is allowed only via `harness tinder send-message` or
 `--managed-gui-send` with explicit live-send authorization, a policy-checked
 action request, target-chat binding, staged text verification, outbound-bubble
-verification, and an unpaused safety switch. Bumble managed send additionally
-requires target-specific binding and exact OCR payload verification; visual-only
-button or bubble evidence is not enough. Bumble managed send applies to ordinary
-chat sends; autonomous Opening Move send is not supported. The harness never
-authorizes like, super-like, SuperSwipe, pass, unmatch, report, premium
-purchase, or profile edit actions.
+verification, and an unpaused safety switch. Bumble and TaShuo managed send
+additionally require target-specific binding and exact OCR payload verification;
+visual-only button or bubble evidence is not enough. Bumble managed send applies
+to ordinary chat sends; autonomous Opening Move send is not supported. TaShuo
+managed send applies to ordinary chat sends; current harness question-gate
+staging/sending is not supported. The harness never authorizes like,
+super-like, SuperSwipe, pass, unmatch, report, premium purchase, profile edit,
+TaShuo 飞行 start-chat, or question-gate decision actions.
 
 If configuration files are missing, generate templates:
 

@@ -1,0 +1,508 @@
+{
+  "schema_version": 2,
+  "app_id": "tashuo",
+  "display_name": "她说",
+  "support_level": "managed_live_send",
+  "host_loop_supported": true,
+  "host_loop_send_modes": [
+    "stage",
+    "live"
+  ],
+  "message_list_observation": [
+    "Observe only visible rows in the 消息 page and the visible 待回答 cards.",
+    "Use candidate_key = visible_name + row_index_or_gate_index + latest_preview_hash.",
+    "Record whether the item is an ordinary conversation, pending question-gate item, or premium/liked-you gate.",
+    "Do not open discovery, like, pass, or 飞行 start-chat controls while scanning messages."
+  ],
+  "thread_observation": [
+    "Open the requested visible ordinary chat row before reading messages.",
+    "If a 待回答 or question-gate page is visible, record the prompt and do not treat it as an ordinary conversation.",
+    "latest_inbound_messages must contain only messages after the user's latest outbound.",
+    "Record visible permanent-chat/question-gate markers separately from ordinary chat content."
+  ],
+  "question_gate_policy": {
+    "scope": "tashuo_question_gate",
+    "female_user": {
+      "agent_decision_authority": "none",
+      "user_decision_required": [
+        "enable_question",
+        "skip_question_gate",
+        "accept_male_reply",
+        "reject_male_reply"
+      ],
+      "agent_allowed_actions": [
+        "observe_question_prompt",
+        "summarize_visible_reply",
+        "ask_user_to_decide"
+      ],
+      "agent_disallowed_actions": [
+        "enable_question",
+        "skip_question_gate",
+        "accept_male_reply",
+        "reject_male_reply"
+      ]
+    },
+    "male_user": {
+      "agent_may_draft_reply": true,
+      "requires_user_confirmation_before_send": true,
+      "current_harness_stage_supported": false,
+      "current_harness_send_supported": false,
+      "autonomous_question_gate_send_supported": false,
+      "agent_allowed_actions": [
+        "draft_question_gate_reply"
+      ],
+      "agent_disallowed_actions": [
+        "send_question_gate_reply_without_user_confirmation",
+        "autonomous_question_gate_send"
+      ]
+    }
+  },
+  "stage_send_verification": [
+    "Managed TaShuo draft staging is supported only inside harness tashuo send-message.",
+    "Paste the draft into a verified TaShuo ordinary conversation input first; direct typing is only a no-newline fallback when paste does not stage, and IME space commit follows direct typing before final verification.",
+    "After paste, direct typing, or IME space commit, OCR must verify staged text exactly equals payload_text before clicking Send.",
+    "Visual send-button or bubble evidence alone is not exact-text verification.",
+    "Question-gate replies may be drafted for user review, but current harness question-gate staging/sending is not supported."
+  ],
+  "native_gui_harness": {
+    "backend": "iphone_mirroring_macos",
+    "supported_stage_actions": [
+      "doctor",
+      "screenshot",
+      "launch_app",
+      "observe_screen",
+      "open_recommend",
+      "open_flight",
+      "open_chats",
+      "open_profile_tab",
+      "conversation_list_scroll_down",
+      "conversation_list_scroll_up",
+      "open_conversation",
+      "open_question_gate",
+      "open_thread_profile",
+      "profile_scroll_down",
+      "profile_scroll_up",
+      "close_profile",
+      "return_to_chats"
+    ],
+    "supported_live_actions": [
+      "send_message"
+    ],
+    "launch_navigation": {
+      "intent": "ios_home_search_launch",
+      "requires_verified_screen_state": "not_required",
+      "steps": [
+        "open_iphone_home_screen",
+        "open_ios_spotlight",
+        "type_app_name_verified",
+        "tap_search_result_icon"
+      ],
+      "app_name": "tashu",
+      "expected_app_labels": [
+        "tashu",
+        "她说",
+        "TaShuo"
+      ],
+      "bundle_id": "com.intelcupid.tashuo",
+      "search_result_icon_tap_ratio": {
+        "x": 0.18,
+        "y": 0.2
+      },
+      "input_source_retry": "Type tashu first because iOS Siri suggestions surface 她说 for tashu but not reliably for tashuo; verify the app result by screenshot/OCR before tapping."
+    },
+    "bottom_navigation": {
+      "recommend_tab_tap_ratio": {
+        "x": 0.14,
+        "y": 0.92
+      },
+      "flight_tab_tap_ratio": {
+        "x": 0.38,
+        "y": 0.92
+      },
+      "messages_tab_tap_ratio": {
+        "x": 0.62,
+        "y": 0.92
+      },
+      "mine_tab_tap_ratio": {
+        "x": 0.86,
+        "y": 0.92
+      }
+    },
+    "profile_navigation": {
+      "read_down_wheel": {
+        "x": 0.5,
+        "y": 0.78,
+        "delta_y": -18,
+        "repeats": 18
+      },
+      "read_up_wheel": {
+        "x": 0.5,
+        "y": 0.46,
+        "delta_y": 18,
+        "repeats": 18
+      },
+      "thread_profile_name_tap_ratio": {
+        "x": 0.5,
+        "y": 0.13
+      },
+      "close_profile_tap_ratio": {
+        "x": 0.09,
+        "y": 0.13
+      }
+    },
+    "chat_navigation": {
+      "conversation_row_base_tap_ratio": {
+        "x": 0.45,
+        "y": 0.52
+      },
+      "conversation_row_y_step": 0.12,
+      "question_gate_card_base_tap_ratio": {
+        "x": 0.15,
+        "y": 0.3
+      },
+      "question_gate_card_x_step": 0.22,
+      "thread_back_to_chats_tap_ratio": {
+        "x": 0.09,
+        "y": 0.13
+      },
+      "reply_required_markers": [
+        "待回答",
+        "回答后即可开启聊天",
+        "提了一个问题",
+        "问答"
+      ]
+    },
+    "high_level_workflows": [
+      "self-profile-read",
+      "recommend-profile-read",
+      "chat-read-match-profile",
+      "question-gate-open",
+      "question-gate-reply-composer"
+    ],
+    "live_send": {
+      "intent": "tap_send_after_exact_staged_text_verification",
+      "default_enabled": false,
+      "requires_authorization_fields": [
+        "autonomous_send",
+        "live_send",
+        "allowed_actions",
+        "requires_post_action_verification"
+      ],
+      "requires_safety_active": true,
+      "requires_policy_checked_action_request": true,
+      "requires_target_binding_verification": true,
+      "requires_target_specific_binding_marker": true,
+      "requires_exact_staged_text_verification": true,
+      "requires_post_action_verification": true,
+      "requires_outbound_bubble_verification": true,
+      "visual_only_exact_verification_allowed": false,
+      "question_gate_autonomous_send_supported": false
+    },
+    "blocked_actions": [
+      "send",
+      "like",
+      "pass",
+      "super_like",
+      "unmatch",
+      "report",
+      "profile_edit",
+      "premium_purchase",
+      "flight_start_chat",
+      "question_gate_enable",
+      "question_gate_skip",
+      "question_gate_decide_reply_satisfaction",
+      "question_gate_send"
+    ]
+  },
+  "post_send_verification": [
+    "Record succeeded only after a fresh TaShuo screenshot shows the exact sent text in the thread.",
+    "The input must no longer show an active Send marker after clicking Send.",
+    "If exact text or input-cleared evidence is not verifiable, record unknown or block managed send."
+  ],
+  "known_gui_pitfalls": [
+    "TaShuo full query tashuo may not surface the app in iOS search; use tashu and verify the 她说 app result.",
+    "Home Screen or App Library page changes must use trackpad-style wheel/scroll gestures, not click-drag, because click-drag can enter edit mode.",
+    "The 推荐 card like/pass/special buttons are high-risk dating actions and are not navigation.",
+    "飞行 shows a map prompt to tap screen and start chat; do not tap the map/start-chat surface during autonomous observation.",
+    "待回答/question-gate pages are not ordinary chat threads until the user-owned gate decision permits conversation.",
+    "Question-gate replies require user confirmation and are not eligible for autonomous question-gate send.",
+    "macOS pbcopy alone may not update iPhone Universal Clipboard; do not treat clipboard state as TaShuo staging evidence.",
+    "TaShuo live send requires a target-specific marker such as the visible match name; generic UI text like 点击此处输入文字, 发送, 待回答, or 全部消息 is not enough.",
+    "Visual send-button or bubble evidence can support diagnosis but cannot replace exact OCR verification of the payload text.",
+    "Non-ABC input sources can leave app names in the iOS Spotlight candidate bar; verify the app result after typing before tapping."
+  ],
+  "unsupported_actions": [
+    "like",
+    "pass",
+    "super_like",
+    "unmatch",
+    "report",
+    "profile_edit",
+    "premium_purchase",
+    "flight_start_chat",
+    "question_gate_enable",
+    "question_gate_skip",
+    "question_gate_decide_reply_satisfaction",
+    "question_gate_send",
+    "contact_exchange",
+    "call",
+    "video_call"
+  ],
+  "adapter": {
+    "backend": "iphone_mirroring_macos",
+    "module": "dating_boost.apps.tashuo.adapter",
+    "class_name": "TaShuoAdapter",
+    "default_window_title": "iPhone Mirroring"
+  },
+  "capabilities": {
+    "host_loop_supported": true,
+    "send_modes": [
+      "stage",
+      "live"
+    ],
+    "stage_actions": [
+      "doctor",
+      "screenshot",
+      "launch_app",
+      "observe_screen",
+      "open_recommend",
+      "open_flight",
+      "open_chats",
+      "open_profile_tab",
+      "conversation_list_scroll_down",
+      "conversation_list_scroll_up",
+      "open_conversation",
+      "open_question_gate",
+      "open_thread_profile",
+      "profile_scroll_down",
+      "profile_scroll_up",
+      "close_profile",
+      "return_to_chats"
+    ],
+    "live_actions": [
+      "send_message"
+    ],
+    "actions": [
+      "doctor",
+      "screenshot",
+      "launch_app",
+      "observe_screen",
+      "open_recommend",
+      "open_flight",
+      "open_chats",
+      "open_profile_tab",
+      "conversation_list_scroll_down",
+      "conversation_list_scroll_up",
+      "open_conversation",
+      "open_question_gate",
+      "open_thread_profile",
+      "profile_scroll_down",
+      "profile_scroll_up",
+      "close_profile",
+      "return_to_chats"
+    ],
+    "workflows": [
+      "self-profile-read",
+      "recommend-profile-read",
+      "chat-read-match-profile",
+      "question-gate-open",
+      "question-gate-reply-composer"
+    ]
+  },
+  "selectors": {
+    "coordinates": {
+      "chat_navigation": {
+        "conversation_row_base_tap_ratio": {
+          "x": 0.45,
+          "y": 0.52
+        },
+        "conversation_row_y_step": 0.12,
+        "question_gate_card_base_tap_ratio": {
+          "x": 0.15,
+          "y": 0.3
+        },
+        "question_gate_card_x_step": 0.22,
+        "thread_back_to_chats_tap_ratio": {
+          "x": 0.09,
+          "y": 0.13
+        },
+        "reply_required_markers": [
+          "待回答",
+          "回答后即可开启聊天",
+          "提了一个问题",
+          "问答"
+        ]
+      },
+      "bottom_navigation": {
+        "recommend_tab_tap_ratio": {
+          "x": 0.14,
+          "y": 0.92
+        },
+        "flight_tab_tap_ratio": {
+          "x": 0.38,
+          "y": 0.92
+        },
+        "messages_tab_tap_ratio": {
+          "x": 0.62,
+          "y": 0.92
+        },
+        "mine_tab_tap_ratio": {
+          "x": 0.86,
+          "y": 0.92
+        }
+      },
+      "profile_navigation": {
+        "read_down_wheel": {
+          "x": 0.5,
+          "y": 0.78,
+          "delta_y": -18,
+          "repeats": 18
+        },
+        "read_up_wheel": {
+          "x": 0.5,
+          "y": 0.46,
+          "delta_y": 18,
+          "repeats": 18
+        },
+        "thread_profile_name_tap_ratio": {
+          "x": 0.5,
+          "y": 0.13
+        },
+        "close_profile_tap_ratio": {
+          "x": 0.09,
+          "y": 0.13
+        }
+      },
+      "launch_navigation": {
+        "intent": "ios_home_search_launch",
+        "requires_verified_screen_state": "not_required",
+        "steps": [
+          "open_iphone_home_screen",
+          "open_ios_spotlight",
+          "type_app_name_verified",
+          "tap_search_result_icon"
+        ],
+        "app_name": "tashu",
+        "expected_app_labels": [
+          "tashu",
+          "她说",
+          "TaShuo"
+        ],
+        "bundle_id": "com.intelcupid.tashuo",
+        "search_result_icon_tap_ratio": {
+          "x": 0.18,
+          "y": 0.2
+        },
+        "input_source_retry": "Type tashu first and verify 她说/TaShuo result before tapping."
+      }
+    },
+    "blocked_actions": [
+      "send",
+      "like",
+      "pass",
+      "super_like",
+      "unmatch",
+      "report",
+      "profile_edit",
+      "premium_purchase",
+      "flight_start_chat",
+      "question_gate_enable",
+      "question_gate_skip",
+      "question_gate_decide_reply_satisfaction",
+      "question_gate_send"
+    ]
+  },
+  "target_binding": {
+    "requires_target_binding": true,
+    "requires_target_specific_marker": true,
+    "generic_marker_blacklist": [
+      "hi",
+      "hello",
+      "hey",
+      "send",
+      "发送",
+      "点击此处输入文字",
+      "输入文字",
+      "待回答",
+      "全部消息",
+      "消息",
+      "动态",
+      "开启聊天",
+      "开启通知",
+      "有人喜欢你",
+      "在线等你聊天",
+      "推荐",
+      "飞行",
+      "我的",
+      "资料",
+      "问答",
+      "回答",
+      "回答后即可开启聊天"
+    ],
+    "visual_only_exact_verification_allowed": false
+  },
+  "live_send_requirements": {
+    "authorization_fields": [
+      "autonomous_send",
+      "live_send",
+      "allowed_actions",
+      "requires_post_action_verification"
+    ],
+    "required_evidence": [
+      "staged_text_verified",
+      "staged_exact_text_ocr_verified",
+      "input_cleared_after_send",
+      "post_action_screen_captured",
+      "outbound_message_verified",
+      "outbound_exact_text_ocr_verified"
+    ],
+    "exact_text_verification": true,
+    "post_action_verification": true,
+    "outbound_bubble_verification": true,
+    "visual_only_exact_verification_allowed": false
+  },
+  "managed_session": {
+    "precheck_failure_status": "stopped",
+    "precheck_failure_reason": "iphone_mirroring_unavailable",
+    "precheck_failure_next_host_action": "enable_iphone_mirroring_and_restart_managed_session"
+  },
+  "special_policies": {
+    "question_gate": {
+      "scope": "tashuo_question_gate",
+      "female_user": {
+        "agent_decision_authority": "none",
+        "user_decision_required": [
+          "enable_question",
+          "skip_question_gate",
+          "accept_male_reply",
+          "reject_male_reply"
+        ],
+        "agent_allowed_actions": [
+          "observe_question_prompt",
+          "summarize_visible_reply",
+          "ask_user_to_decide"
+        ],
+        "agent_disallowed_actions": [
+          "enable_question",
+          "skip_question_gate",
+          "accept_male_reply",
+          "reject_male_reply"
+        ]
+      },
+      "male_user": {
+        "agent_may_draft_reply": true,
+        "requires_user_confirmation_before_send": true,
+        "current_harness_stage_supported": false,
+        "current_harness_send_supported": false,
+        "autonomous_question_gate_send_supported": false,
+        "agent_allowed_actions": [
+          "draft_question_gate_reply"
+        ],
+        "agent_disallowed_actions": [
+          "send_question_gate_reply_without_user_confirmation",
+          "autonomous_question_gate_send"
+        ]
+      }
+    }
+  }
+}
