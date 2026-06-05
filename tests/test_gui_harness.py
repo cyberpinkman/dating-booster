@@ -10,7 +10,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
-from dating_boost.core.gui_harness import NativeGuiHarness, classify_screen_text, classify_wechat_screen_text
+from dating_boost.core.gui_harness import (
+    NativeGuiHarness,
+    classify_bumble_screen_text,
+    classify_screen_text,
+    classify_wechat_screen_text,
+)
 from dating_boost.harness.input_backends import core_graphics_drag
 
 
@@ -175,6 +180,11 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertIn("harness tinder action", payload["supported_commands"])
         self.assertIn("harness tinder workflow", payload["supported_commands"])
         self.assertIn("harness tinder send-message", payload["supported_commands"])
+        self.assertIn("harness bumble launch", payload["supported_commands"])
+        self.assertIn("harness bumble observe", payload["supported_commands"])
+        self.assertIn("harness bumble action", payload["supported_commands"])
+        self.assertIn("harness bumble workflow", payload["supported_commands"])
+        self.assertNotIn("harness bumble send-message", payload["supported_commands"])
         self.assertIn("harness wechat launch", payload["supported_commands"])
         self.assertIn("harness wechat observe", payload["supported_commands"])
         self.assertIn("harness wechat stage-draft", payload["supported_commands"])
@@ -186,6 +196,14 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["agent_native_capabilities"]["tinder_profile_read_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["tinder_chat_navigation_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["tinder_live_send_harness"])
+        self.assertIn("bumble", payload["agent_native_capabilities"]["supported_app_profiles"])
+        self.assertNotIn("bumble", payload["agent_native_capabilities"]["host_loop_app_profiles"])
+        self.assertTrue(payload["agent_native_capabilities"]["bumble_gui_launch"])
+        self.assertTrue(payload["agent_native_capabilities"]["bumble_gui_navigation"])
+        self.assertTrue(payload["agent_native_capabilities"]["bumble_profile_read_harness"])
+        self.assertTrue(payload["agent_native_capabilities"]["bumble_chat_navigation_harness"])
+        self.assertFalse(payload["agent_native_capabilities"]["bumble_live_send_harness"])
+        self.assertFalse(payload["agent_native_capabilities"]["bumble_host_loop"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_host_loop"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_macos_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["wechat_gui_launch"])
@@ -196,13 +214,13 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["agent_native_capabilities"]["wechat_live_send_harness"])
         self.assertFalse(payload["agent_native_capabilities"]["live_gui_harness"])
 
-    def test_cli_generic_harness_blocks_unsupported_app_before_native_execution(self):
+    def test_cli_generic_harness_blocks_unknown_app_before_native_execution(self):
         with patch("dating_boost.cli.NativeGuiHarness") as harness_class:
             exit_code, payload = _run_cli_json([
                 "harness",
                 "doctor",
                 "--app-id",
-                "bumble",
+                "hinge",
                 "--no-capture",
                 "--json",
             ])
@@ -210,9 +228,163 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["reason"], "unsupported_native_harness_for_app")
-        self.assertEqual(payload["app_id"], "bumble")
-        self.assertEqual(payload["supported_native_harness_apps"], ["tinder", "wechat"])
+        self.assertEqual(payload["app_id"], "hinge")
+        self.assertEqual(payload["supported_native_harness_apps"], ["tinder", "wechat", "bumble"])
         harness_class.assert_not_called()
+
+    def test_bumble_launch_dry_run_uses_home_search_without_send_support(self):
+        runner = FakeRunner(ocr_text="今天 周五\n搜索\n电话\n微信\nChrome\n")
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.launch_bumble(dry_run=True)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["target"], "bumble_app")
+        self.assertEqual(payload["mode"], "dry_run")
+        self.assertEqual(
+            [step["intent"] for step in payload["planned_steps"]],
+            [
+                "open_iphone_home_screen",
+                "open_ios_spotlight",
+                "type_app_name_verified",
+                "tap_bumble_search_result_icon",
+            ],
+        )
+        self.assertEqual(payload["planned_steps"][2]["text"], "Bumble")
+        self.assertIn("send", payload["blocked_actions"])
+        self.assertIn("superswipe", payload["blocked_actions"])
+        self.assertFalse(any("keystroke" in " ".join(command) for command in runner.commands))
+
+    def test_bumble_launch_retries_after_input_source_switch_when_first_search_is_not_english(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "今天 周五\n搜索\n电话\n微信\nChrome\n",
+                "懂球帝\n搜索\n候选\n",
+                "Bumble\nApp\n",
+                "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+            ],
+        )
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.launch_bumble(dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        type_step = next(step for step in payload["executed_steps"] if step["intent"] == "type_app_name_verified")
+        self.assertTrue(type_step["result"]["retried_after_input_source_switch"])
+        self.assertTrue(any("key code 49" in " ".join(command) for command in runner.commands))
+
+    def test_bumble_launch_does_not_switch_input_source_when_first_search_has_app_result(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "今天 周五\n搜索\n电话\n微信\nChrome\n",
+                "Bumble\nApp\n",
+                "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+            ],
+        )
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.launch_bumble(dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        type_step = next(step for step in payload["executed_steps"] if step["intent"] == "type_app_name_verified")
+        self.assertFalse(type_step["result"]["retried_after_input_source_switch"])
+        self.assertFalse(any("key code 49" in " ".join(command) for command in runner.commands))
+
+    def test_bumble_action_and_workflow_dry_runs_are_navigation_only(self):
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=FakeRunner(ocr_text="Bumble\n聊天\n"))
+
+        action = harness.run_bumble_action("open-match", match_index=2, dry_run=True)
+        workflow = harness.run_bumble_workflow("chat-read-match-profile", conversation_row=1, dry_run=True)
+
+        self.assertEqual(action["status"], "ok")
+        self.assertEqual(action["planned_steps"][0]["intent"], "tap_bumble_match_circle")
+        self.assertEqual(action["planned_steps"][0]["tap_ratio"], {"x": 0.55, "y": 0.245})
+        self.assertIn("send", action["blocked_actions"])
+        self.assertEqual(workflow["status"], "ok")
+        self.assertIn("capture_profile_read_step", [step["intent"] for step in workflow["planned_steps"]])
+        self.assertTrue(all(step.get("risk") == "navigation_only" for step in workflow["planned_steps"]))
+
+    def test_bumble_bottom_tab_action_requires_complete_top_level_nav(self):
+        runner = FakeRunner(
+            ocr_text="Bumble\nPremium\n查看喜欢您的人\n",
+            missing_commands={"xcrun"},
+        )
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.run_bumble_action("open-chats", dry_run=False)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "bumble_top_level_tab_bar_not_verified")
+        self.assertNotIn("executed_steps", payload)
+
+    def test_bumble_bottom_tab_action_allows_complete_top_level_nav(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+                "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+                "聊天\n配对列表 (2)\n你的Opening Moves\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+            ],
+            missing_commands={"xcrun"},
+        )
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.run_bumble_action("open-chats", dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["executed_steps"][0]["intent"], "tap_bumble_chats_tab")
+
+    def test_bumble_workflow_blocks_when_step_postcondition_is_not_verified(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+                "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+                "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+            ],
+        )
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.run_bumble_workflow("chat-read-match-profile", dry_run=False)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "bumble_step_postcondition_not_verified")
+        self.assertEqual(payload["postcondition"]["expected_bumble_states"], ["bumble_chat_list"])
+
+    def test_bumble_opening_move_reply_requires_opening_move_page_before_tapping_reply(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+                "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+                "聊天\n配对列表 (2)\n你的Opening Moves\nJessie\nHi!\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+                "聊天\n配对列表 (2)\n你的Opening Moves\nJessie\nHi!\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+                "Jessie\nHi!\n您有8个小时的回复时间\nAa\nGIF\n",
+                "Jessie\nHi!\n您有8个小时的回复时间\nAa\nGIF\n",
+            ],
+        )
+        harness = NativeGuiHarness(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.run_bumble_workflow("opening-move-reply-composer", dry_run=False)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "bumble_step_precondition_not_verified")
+        self.assertEqual(payload["precondition"]["expected_bumble_states"], ["bumble_opening_move"])
+
+    def test_classifies_bumble_screens_and_reply_deadlines(self):
+        self.assertEqual(
+            classify_bumble_screen_text("Bumble\n照片通过验证\n我们可以谈论的话题\n咖啡\n个人档案\n发现\n浏览用户\n为你心动\n聊天"),
+            "bumble_browse",
+        )
+        self.assertEqual(
+            classify_bumble_screen_text("聊天\n配对列表 (2)\n你的Opening Moves\nJessie\nHi!\n对话将在8小时后失效\n个人档案\n发现\n浏览用户\n为你心动\n聊天"),
+            "bumble_chat_list",
+        )
+        self.assertEqual(
+            classify_bumble_screen_text("Jessie\nHi!\n您有8个小时的回复时间\n该您给对方回复了\nAa\nGIF"),
+            "bumble_conversation",
+        )
+        self.assertEqual(
+            classify_bumble_screen_text("旺仔的Opening Move\n旺仔预设了Opening Move。发送消息回复。\n回复"),
+            "bumble_opening_move",
+        )
 
     def test_input_backend_v2_reports_explicit_contract_for_drag_failures(self):
         class FailingRunner:
@@ -311,7 +483,12 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["mode"], "dry_run")
         self.assertEqual(
             [step["intent"] for step in payload["planned_steps"]],
-            ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "tap_tinder_search_result_icon"],
+            [
+                "open_iphone_home_screen",
+                "open_ios_spotlight",
+                "type_app_name_verified",
+                "tap_tinder_search_result_icon",
+            ],
         )
         self.assertEqual(payload["planned_steps"][-1]["tap_ratio"], {"x": 0.18, "y": 0.20})
         self.assertFalse(any("keystroke" in " ".join(command) for command in runner.commands))
@@ -330,7 +507,12 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(
             [step["intent"] for step in payload["executed_steps"]],
-            ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "tap_tinder_search_result_icon"],
+            [
+                "open_iphone_home_screen",
+                "open_ios_spotlight",
+                "type_app_name_verified",
+                "tap_tinder_search_result_icon",
+            ],
         )
         self.assertTrue(any('keystroke "Tinder"' in " ".join(command) for command in runner.commands))
         self.assertEqual(payload["executed_steps"][-1]["tap_ratio"], {"x": 0.18, "y": 0.20})
@@ -347,7 +529,7 @@ class GuiHarnessTests(unittest.TestCase):
             [
                 "open_iphone_home_screen",
                 "open_ios_spotlight",
-                "type_app_name",
+                "type_app_name_verified",
                 "tap_tinder_search_result_icon",
                 "tap_tinder_profile_tab",
             ],
@@ -488,6 +670,60 @@ class GuiHarnessTests(unittest.TestCase):
                 self.assertEqual(payload["visual_state"], expected_state)
                 self.assertEqual(payload["visual_active_tab"], active_tab)
                 self.assertEqual(payload["state"], expected_state)
+
+    def test_visual_bumble_browse_uses_bottom_nav_and_header_title(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness = NativeGuiHarness(
+                app_id="bumble",
+                platform="darwin",
+                runner=FakeRunner(
+                    ocr_text="Bumble 25\n@® © = YG Oo\n",
+                    screenshot_bytes=_bumble_browse_png(),
+                ),
+            )
+
+            payload = harness.capture_window(output=Path(temp_dir) / "bumble-browse.png")
+
+        self.assertEqual(payload["text_state"], "bumble_unknown")
+        self.assertEqual(payload["visual_state"], "bumble_browse")
+        self.assertEqual(payload["visual_active_tab"], "browse_users")
+        self.assertTrue(payload["visual_bottom_nav_present"])
+        self.assertEqual(payload["state"], "bumble_browse")
+
+    def test_visual_bumble_browse_does_not_override_without_header_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness = NativeGuiHarness(
+                app_id="bumble",
+                platform="darwin",
+                runner=FakeRunner(
+                    ocr_text="13:06\n@® © = YG Oo\n",
+                    screenshot_bytes=_bumble_browse_png(),
+                ),
+            )
+
+            payload = harness.capture_window(output=Path(temp_dir) / "bumble-browse-no-title.png")
+
+        self.assertEqual(payload["text_state"], "unknown")
+        self.assertEqual(payload["visual_state"], "bumble_browse")
+        self.assertTrue(payload["visual_bottom_nav_present"])
+        self.assertEqual(payload["state"], "unknown")
+
+    def test_bumble_top_level_page_uses_bottom_nav_and_header_title(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            harness = NativeGuiHarness(
+                app_id="bumble",
+                platform="darwin",
+                runner=FakeRunner(
+                    ocr_text="Bumble\n照片通过验证\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+                    screenshot_bytes=_bumble_browse_png(),
+                ),
+            )
+
+            payload = harness.capture_window(output=Path(temp_dir) / "bumble-browse-nav.png")
+
+        self.assertEqual(payload["text_state"], "bumble_browse")
+        self.assertEqual(payload["visual_state"], "bumble_browse")
+        self.assertEqual(payload["state"], "bumble_browse")
 
     def test_tinder_observe_preserves_visual_bottom_active_tab_for_home_surfaces(self):
         runner = FakeRunner(ocr_text="20:29 RO 37\n", screenshot_bytes=_tinder_bottom_nav_png("likes"))
@@ -1524,7 +1760,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "authorization_id": "auth_wechat_live",
                 "scope": "send_chat_messages",
                 "app_id": "wechat",
-                "expires_at": "2026-06-05T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "allowed_actions": ["send_message"],
                 "autonomous_send": True,
                 "live_send": True,
@@ -1610,7 +1846,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "authorization_id": "auth_wechat_live",
                 "scope": "send_chat_messages",
                 "app_id": "wechat",
-                "expires_at": "2026-06-05T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "allowed_actions": ["send_message"],
                 "autonomous_send": True,
                 "live_send": True,
@@ -1662,7 +1898,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "authorization_id": "auth_tinder_live",
                 "scope": "send_chat_messages",
                 "app_id": "tinder",
-                "expires_at": "2026-06-05T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "allowed_actions": ["send_message"],
                 "autonomous_send": True,
                 "live_send": True,
@@ -1715,7 +1951,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "authorization_id": "auth_tinder_live",
                 "scope": "send_chat_messages",
                 "app_id": "tinder",
-                "expires_at": "2026-06-05T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "allowed_match_ids": ["match_bea"],
                 "allowed_actions": ["send_message"],
                 "autonomous_send": True,
@@ -1779,7 +2015,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "authorization_id": "auth_tinder_live",
                 "scope": "send_chat_messages",
                 "app_id": "tinder",
-                "expires_at": "2026-06-05T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "allowed_match_ids": ["match_ada"],
                 "allowed_actions": ["send_message"],
                 "autonomous_send": True,
@@ -1833,7 +2069,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "authorization_id": "auth_tinder_live",
                 "scope": "send_chat_messages",
                 "app_id": "tinder",
-                "expires_at": "2026-06-05T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "allowed_match_ids": ["match_ada"],
                 "allowed_actions": ["send_message"],
                 "autonomous_send": True,
@@ -2319,6 +2555,26 @@ def _tinder_bottom_nav_png(active_tab: str) -> bytes:
         if name == "likes":
             fill(center + 0.018, 0.920, center + 0.045, 0.940, (245, 210, 70, 255))
 
+    return _png_from_pixels(pixels, width, height)
+
+
+def _bumble_browse_png() -> bytes:
+    width, height = 200, 400
+    pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.05, 0.10, 0.23, 0.13, (18, 18, 18, 255))
+    fill(0.04, 0.18, 0.96, 0.88, (83, 132, 176, 255))
+    fill(0.06, 0.73, 0.20, 0.81, (250, 214, 70, 255))
+    fill(0.76, 0.70, 0.96, 0.82, (250, 214, 70, 255))
+    fill(0.06, 0.89, 0.94, 0.98, (255, 255, 255, 255))
+    for center in (0.11, 0.26, 0.50, 0.68, 0.88):
+        fill(center - 0.020, 0.905, center + 0.020, 0.930, (80, 80, 80, 255))
+        fill(center - 0.040, 0.948, center + 0.040, 0.965, (45, 45, 45, 255))
     return _png_from_pixels(pixels, width, height)
 
 

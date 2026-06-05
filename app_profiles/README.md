@@ -14,6 +14,8 @@ every `app_profiles/*.json` file against the same required contract shape.
   explicitly authorized managed live-send contract.
 - `wechat.json`: macOS WeChat desktop observation, draft-staging, and
   explicitly authorized managed live-send contract.
+- `bumble.json`: Bumble iPhone Mirroring launch, observation, profile/chat
+  navigation, and Opening Move observation without draft staging or live send.
 
 ## Required Fields
 

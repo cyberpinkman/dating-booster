@@ -67,7 +67,8 @@ from dating_boost.core.user_disclosure import UserDisclosureRepository, intervie
 
 
 MVP_TIMESTAMP = "2026-05-25T00:00:00Z"
-SUPPORTED_NATIVE_HARNESS_APPS = ("tinder", "wechat")
+SUPPORTED_NATIVE_HARNESS_APPS = ("tinder", "wechat", "bumble")
+SUPPORTED_MANAGED_SESSION_APPS = ("tinder", "wechat")
 
 
 def _now_iso() -> str:
@@ -367,6 +368,44 @@ def main(argv: list[str] | None = None) -> int:
     harness_tinder_send_parser.add_argument("--output-dir", type=Path)
     harness_tinder_send_parser.add_argument("--json", action="store_true")
     harness_tinder_send_parser.set_defaults(handler=_handle_harness_tinder_send_message)
+    harness_bumble_parser = harness_subparsers.add_parser("bumble")
+    harness_bumble_subparsers = harness_bumble_parser.add_subparsers(dest="harness_bumble_command", required=True)
+    harness_bumble_launch_parser = harness_bumble_subparsers.add_parser("launch")
+    harness_bumble_launch_parser.add_argument("--data-dir", type=Path)
+    harness_bumble_launch_parser.add_argument("--window-title", default="iPhone Mirroring")
+    harness_bumble_launch_parser.add_argument("--dry-run", action="store_true")
+    harness_bumble_launch_parser.add_argument("--output-dir", type=Path)
+    harness_bumble_launch_parser.add_argument("--json", action="store_true")
+    harness_bumble_launch_parser.set_defaults(handler=_handle_harness_bumble_launch)
+    harness_bumble_observe_parser = harness_bumble_subparsers.add_parser("observe")
+    harness_bumble_observe_parser.add_argument("--data-dir", type=Path)
+    harness_bumble_observe_parser.add_argument("--window-title", default="iPhone Mirroring")
+    harness_bumble_observe_parser.add_argument("--output-dir", type=Path)
+    harness_bumble_observe_parser.add_argument("--json", action="store_true")
+    harness_bumble_observe_parser.set_defaults(handler=_handle_harness_bumble_observe)
+    harness_bumble_action_parser = harness_bumble_subparsers.add_parser("action")
+    harness_bumble_action_parser.add_argument("action")
+    harness_bumble_action_parser.add_argument("--data-dir", type=Path)
+    harness_bumble_action_parser.add_argument("--window-title", default="iPhone Mirroring")
+    harness_bumble_action_parser.add_argument("--dry-run", action="store_true")
+    harness_bumble_action_parser.add_argument("--output-dir", type=Path)
+    harness_bumble_action_parser.add_argument("--row-index", type=int)
+    harness_bumble_action_parser.add_argument("--match-index", type=int)
+    harness_bumble_action_parser.add_argument("--y-ratio", type=float)
+    harness_bumble_action_parser.add_argument("--json", action="store_true")
+    harness_bumble_action_parser.set_defaults(handler=_handle_harness_bumble_action)
+    harness_bumble_workflow_parser = harness_bumble_subparsers.add_parser("workflow")
+    harness_bumble_workflow_parser.add_argument("workflow")
+    harness_bumble_workflow_parser.add_argument("--data-dir", type=Path)
+    harness_bumble_workflow_parser.add_argument("--window-title", default="iPhone Mirroring")
+    harness_bumble_workflow_parser.add_argument("--dry-run", action="store_true")
+    harness_bumble_workflow_parser.add_argument("--output-dir", type=Path)
+    harness_bumble_workflow_parser.add_argument("--conversation-row", type=int)
+    harness_bumble_workflow_parser.add_argument("--match-index", type=int)
+    harness_bumble_workflow_parser.add_argument("--profile-scroll-steps", type=int)
+    harness_bumble_workflow_parser.add_argument("--scroll-steps", type=int)
+    harness_bumble_workflow_parser.add_argument("--json", action="store_true")
+    harness_bumble_workflow_parser.set_defaults(handler=_handle_harness_bumble_workflow)
     harness_wechat_parser = harness_subparsers.add_parser("wechat")
     harness_wechat_subparsers = harness_wechat_parser.add_subparsers(dest="harness_wechat_command", required=True)
     harness_wechat_launch_parser = harness_wechat_subparsers.add_parser("launch")
@@ -734,7 +773,7 @@ def main(argv: list[str] | None = None) -> int:
     managed_session_parser = subparsers.add_parser("managed-session", help="Session-scoped managed runner commands.")
     managed_session_subparsers = managed_session_parser.add_subparsers(dest="managed_session_command", required=True)
     managed_start_parser = managed_session_subparsers.add_parser("start")
-    managed_start_parser.add_argument("--app-id", required=True, choices=SUPPORTED_NATIVE_HARNESS_APPS)
+    managed_start_parser.add_argument("--app-id", required=True, choices=SUPPORTED_MANAGED_SESSION_APPS)
     managed_start_parser.add_argument("--data-dir", required=True, type=Path)
     managed_start_parser.add_argument("--authorization", required=True, type=Path)
     managed_start_parser.add_argument("--goal", required=True, type=Path)
@@ -759,7 +798,7 @@ def main(argv: list[str] | None = None) -> int:
     managed_notify_parser = managed_session_subparsers.add_parser("notify")
     managed_notify_parser.add_argument("--data-dir", required=True, type=Path)
     managed_notify_parser.add_argument("--source", required=True, choices=["host_notification", "manual"])
-    managed_notify_parser.add_argument("--app-id", required=True, choices=SUPPORTED_NATIVE_HARNESS_APPS)
+    managed_notify_parser.add_argument("--app-id", required=True, choices=SUPPORTED_MANAGED_SESSION_APPS)
     managed_notify_parser.add_argument("--json", action="store_true")
     managed_notify_parser.set_defaults(handler=_handle_managed_session_notify)
     managed_status_parser = managed_session_subparsers.add_parser("status")
@@ -1227,6 +1266,60 @@ def _handle_harness_tinder_workflow(args: argparse.Namespace) -> int:
         **{key: value for key, value in options.items() if value is not None},
     )
     _record_support_harness_result(args.data_dir, app_id="tinder", action=f"workflow_{args.workflow}", harness_payload=payload)
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_bumble_launch(args: argparse.Namespace) -> int:
+    payload = NativeGuiHarness(app_id="bumble", window_title=args.window_title).launch_bumble(
+        dry_run=args.dry_run,
+        output_dir=args.output_dir,
+    )
+    _record_support_harness_result(args.data_dir, app_id="bumble", action="launch", harness_payload=payload)
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_bumble_observe(args: argparse.Namespace) -> int:
+    payload = NativeGuiHarness(app_id="bumble", window_title=args.window_title).observe_bumble_screen(
+        output_dir=args.output_dir,
+    )
+    _record_support_harness_result(args.data_dir, app_id="bumble", action="observe", harness_payload=payload)
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_bumble_action(args: argparse.Namespace) -> int:
+    options = {
+        "row_index": args.row_index,
+        "match_index": args.match_index,
+        "y_ratio": args.y_ratio,
+    }
+    payload = NativeGuiHarness(app_id="bumble", window_title=args.window_title).run_bumble_action(
+        args.action,
+        dry_run=args.dry_run,
+        output_dir=args.output_dir,
+        **{key: value for key, value in options.items() if value is not None},
+    )
+    _record_support_harness_result(args.data_dir, app_id="bumble", action=f"action_{args.action}", harness_payload=payload)
+    _print_json(payload)
+    return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
+
+
+def _handle_harness_bumble_workflow(args: argparse.Namespace) -> int:
+    options = {
+        "conversation_row": args.conversation_row,
+        "match_index": args.match_index,
+        "profile_scroll_steps": args.profile_scroll_steps,
+        "scroll_steps": args.scroll_steps,
+    }
+    payload = NativeGuiHarness(app_id="bumble", window_title=args.window_title).run_bumble_workflow(
+        args.workflow,
+        dry_run=args.dry_run,
+        output_dir=args.output_dir,
+        **{key: value for key, value in options.items() if value is not None},
+    )
+    _record_support_harness_result(args.data_dir, app_id="bumble", action=f"workflow_{args.workflow}", harness_payload=payload)
     _print_json(payload)
     return 0 if payload.get("status") in {"ok", "needs_verification"} else 2
 

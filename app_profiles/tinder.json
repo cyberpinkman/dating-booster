@@ -49,9 +49,9 @@
     "launch_navigation": {
       "intent": "ios_home_spotlight_search_launch",
       "requires_verified_screen_state": "not_required",
-      "steps": ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "press_return"],
-      "primary_path": ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "press_return"],
-      "fallback_path": ["open_iphone_home_screen", "tap_home_search_entry", "type_app_name", "press_return"]
+      "steps": ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name_verified", "tap_search_result_icon"],
+      "primary_path": ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name_verified", "tap_search_result_icon"],
+      "fallback_path": ["open_iphone_home_screen", "open_ios_spotlight", "switch_input_source", "type_app_name_verified", "tap_search_result_icon"]
     },
     "self_profile_navigation": {
       "intent": "tap_tinder_profile_tab",

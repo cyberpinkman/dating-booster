@@ -55,16 +55,16 @@ verification, and post-action verification.
 | --- | --- | --- | --- |
 | Tinder | host loop, profile/chat navigation, observation, draft workflow, opt-in managed live send | iPhone Mirroring on macOS | stage by default; `send-message` can click Send only after explicit live-send authorization and verification |
 | WeChat / 微信 | app profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | stage by default; `send-message` can press Enter only after explicit live-send authorization and verification |
+| Bumble | app profile, iPhone Mirroring launch/observation, profile/chat navigation, Opening Move observation | iPhone Mirroring on macOS | navigation only; no draft staging, send-message, or host-loop support |
 
-未支持 app 不进入 `app_profiles/` 或 `supported_app_profiles`。Bumble、Hinge、
-她说以及其他主流 dating app 先作为 roadmap candidate 记录在
+未支持 app 不进入 `app_profiles/` 或 `supported_app_profiles`。Hinge、她说
+以及其他主流 dating app 先作为 roadmap candidate 记录在
 `docs/ARCHITECTURE.md`；只有具备 fixture、preflight、harness 或 host-loop 测试后，
 才新增 runtime app profile。
 
 Unsupported apps do not appear in `app_profiles/` or `supported_app_profiles`.
-Bumble, Hinge, Ta Shuo, and other mainstream dating apps are roadmap candidates
-until fixtures, preflight, harness, or host-loop tests justify a runtime app
-profile.
+Hinge, Ta Shuo, and other mainstream dating apps are roadmap candidates until
+fixtures, preflight, harness, or host-loop tests justify a runtime app profile.
 
 未来扩展蓝图见 `docs/ARCHITECTURE.md`。它把扩展拆成四条独立轴：更多 host
 agent（Codex、Claude Code、Hermes、OpenClaw）、更多 dating app、更多目标类型，
@@ -284,6 +284,25 @@ an active safety switch, a policy-checked action request, target-chat binding
 verification, staged-text OCR verification, and outbound-bubble post-action
 verification. It does not authorize like, super-like, unmatch, report, or
 profile edit.
+
+### Bumble via iPhone Mirroring
+
+```bash
+dating-boost harness doctor --app-id bumble --json
+dating-boost harness bumble launch --dry-run --json
+dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
+dating-boost harness bumble action open-chats --dry-run --json
+dating-boost harness bumble workflow browse-profile-read --dry-run --profile-scroll-steps 2 --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness bumble workflow opening-move-open --dry-run --match-index 2 --json
+```
+
+Bumble support is navigation-only. It can launch the app, classify Bumble pages,
+open bottom tabs, read visible profile cards with vertical scroll, open visible
+chat rows, open match-circle Opening Move prompts, and open an empty Opening
+Move reply composer. It must not stage drafts, click Send, like, pass,
+SuperSwipe, unmatch, report, edit profile, or purchase Premium. Horizontal
+swipes on browse cards are treated as high risk because they can like or pass.
 
 ### macOS WeChat / 微信桌面端
 

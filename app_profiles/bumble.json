@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "app_id": "bumble",
+  "display_name": "Bumble",
+  "support_level": "native_navigation",
+  "host_loop_supported": false,
+  "host_loop_send_modes": [],
+  "message_list_observation": [
+    "Observe only visible chat rows and top match circles.",
+    "Use candidate_key = visible_name + row_index_or_match_index + latest_preview_hash.",
+    "Record visible reply-deadline markers such as 轮到您了, 回复时间, or 小时后失效 before opening a thread.",
+    "Opening Move match circles may require opening a prompt page before a normal composer exists."
+  ],
+  "thread_observation": [
+    "Open the requested visible chat row or match circle.",
+    "If an Opening Move prompt is visible, record the prompt text and do not assume a normal message thread.",
+    "latest_inbound_messages must contain only messages after the user's latest outbound.",
+    "Record reply-deadline evidence separately from ordinary chat content."
+  ],
+  "stage_send_verification": [
+    "Managed Bumble draft staging is not supported in this profile.",
+    "Do not paste or type into Bumble unless a future profile exposes a tested stage-draft path.",
+    "Opening the empty Opening Move reply composer is navigation only; it is not staged text verification."
+  ],
+  "native_gui_harness": {
+    "backend": "iphone_mirroring_macos",
+    "supported_stage_actions": [
+      "doctor",
+      "screenshot",
+      "launch_app",
+      "observe_screen",
+      "open_profile_tab",
+      "open_discover",
+      "open_browse",
+      "open_liked_you",
+      "open_chats",
+      "conversation_list_scroll_down",
+      "conversation_list_scroll_up",
+      "open_conversation",
+      "open_match",
+      "open_thread_profile",
+      "open_opening_move_reply",
+      "profile_scroll_down",
+      "profile_scroll_up",
+      "close_profile",
+      "return_to_chats"
+    ],
+    "supported_live_actions": [],
+    "launch_navigation": {
+      "intent": "ios_home_search_launch",
+      "requires_verified_screen_state": "not_required",
+      "steps": ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name_verified", "tap_search_result_icon"],
+      "app_name": "Bumble",
+      "search_result_icon_tap_ratio": {"x": 0.18, "y": 0.20},
+      "input_source_retry": "Type the app name first, verify the English app search result by screenshot/OCR, then switch input source and retry only if the app result is not visible."
+    },
+    "bottom_navigation": {
+      "profile_tab_tap_ratio": {"x": 0.11, "y": 0.93},
+      "discover_tab_tap_ratio": {"x": 0.31, "y": 0.93},
+      "browse_tab_tap_ratio": {"x": 0.50, "y": 0.93},
+      "liked_you_tab_tap_ratio": {"x": 0.70, "y": 0.93},
+      "chats_tab_tap_ratio": {"x": 0.89, "y": 0.93}
+    },
+    "profile_navigation": {
+      "read_down_wheel": {"x": 0.50, "y": 0.78, "delta_y": -18, "repeats": 18},
+      "read_up_wheel": {"x": 0.50, "y": 0.46, "delta_y": 18, "repeats": 18},
+      "thread_profile_name_tap_ratio": {"x": 0.32, "y": 0.13},
+      "close_profile_tap_ratio": {"x": 0.09, "y": 0.13}
+    },
+    "chat_navigation": {
+      "conversation_row_base_tap_ratio": {"x": 0.43, "y": 0.53},
+      "conversation_row_y_step": 0.12,
+      "match_circle_base_tap_ratio": {"x": 0.34, "y": 0.245},
+      "match_circle_x_step": 0.21,
+      "thread_back_to_chats_tap_ratio": {"x": 0.09, "y": 0.13},
+      "opening_move_reply_tap_ratio": {"x": 0.24, "y": 0.735},
+      "reply_required_markers": ["轮到您了", "回复时间", "小时后失效", "Opening Move"]
+    },
+    "high_level_workflows": [
+      "browse-profile-read",
+      "chat-read-match-profile",
+      "opening-move-open",
+      "opening-move-reply-composer"
+    ],
+    "blocked_actions": [
+      "send",
+      "like",
+      "superswipe",
+      "pass",
+      "unmatch",
+      "report",
+      "profile_edit",
+      "premium_purchase"
+    ]
+  },
+  "post_send_verification": [
+    "Managed Bumble sending is unsupported.",
+    "Do not record a Bumble send result unless a future live-send profile adds exact staged-text and outbound-bubble verification."
+  ],
+  "known_gui_pitfalls": [
+    "Bumble browse-card horizontal swipes can pass or like; do not use horizontal swipes for read-only navigation.",
+    "Top match circles and chat rows may expire if the required party does not reply before the visible deadline.",
+    "Opening Move pages are not normal chat threads until the reply composer is opened.",
+    "macOS pbcopy alone may not update iPhone Universal Clipboard; do not treat clipboard state as Bumble staging evidence.",
+    "Non-ABC input sources can leave app names in the iOS Spotlight candidate bar; verify the app result after typing before tapping.",
+    "Premium gates such as liked-you reveal and plan selection are not agent actions."
+  ],
+  "unsupported_actions": [
+    "send",
+    "like",
+    "superswipe",
+    "pass",
+    "unmatch",
+    "report",
+    "profile_edit",
+    "premium_purchase",
+    "contact_exchange",
+    "call",
+    "video_call"
+  ]
+}

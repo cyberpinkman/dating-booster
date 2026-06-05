@@ -54,7 +54,8 @@ class AppProfileContractTests(unittest.TestCase):
                 self.assertEqual([error.message for error in errors], [])
                 self.assertEqual(profile["schema_version"], 1)
                 self.assertEqual(profile["app_id"], path.stem)
-                self.assertTrue(profile["host_loop_supported"], path.name)
+                if profile["host_loop_supported"]:
+                    self.assertTrue(profile["host_loop_send_modes"], path.name)
                 self.assertIn("native_gui_harness", profile)
                 self.assertTrue(profile["native_gui_harness"]["supported_stage_actions"])
                 if "native_gui_harness" in profile:

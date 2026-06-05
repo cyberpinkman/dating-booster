@@ -28,11 +28,17 @@ from dating_boost.harness.input_backends import (
     core_graphics_wheel as _core_graphics_wheel_backend,
 )
 from dating_boost.harness.screen_state import (
+    BUMBLE_FOREGROUND_STATES,
     TINDER_FOREGROUND_STATES,
     WECHAT_FOREGROUND_STATES,
+    bumble_layout_hints as _bumble_layout_hints,
+    bumble_top_level_bottom_nav_present as _bumble_top_level_bottom_nav_present,
+    classify_bumble_screen_text,
+    classify_bumble_screen_image,
     classify_screen_image,
     classify_screen_text,
     classify_wechat_screen_text,
+    combine_bumble_screen_states as _combine_bumble_screen_states,
     combine_screen_states as _combine_screen_states,
     hash_text as _hash_text,
     _read_png_pixels as _read_png_pixels_for_send_button,
@@ -54,6 +60,16 @@ WECHAT_HARNESS_BACKEND = "macos_wechat_desktop"
 HARNESS_BACKEND = IPHONE_MIRRORING_HARNESS_BACKEND
 BLOCKED_GUI_ACTIONS = ["send", "like", "super_like", "unmatch", "report", "profile_edit"]
 WECHAT_BLOCKED_GUI_ACTIONS = ["send", "payments", "calls", "contact_exchange_without_user"]
+BUMBLE_BLOCKED_GUI_ACTIONS = [
+    "send",
+    "like",
+    "superswipe",
+    "pass",
+    "unmatch",
+    "report",
+    "profile_edit",
+    "premium_purchase",
+]
 TINDER_SUBSCRIPTION_PAYWALL_STATE = "tinder_subscription_paywall"
 TINDER_FEEDBACK_SURVEY_STATE = "tinder_feedback_survey"
 
@@ -178,6 +194,16 @@ class NativeGuiHarness:
             text_state = classify_wechat_screen_text(ocr.get("text", ""))
             visual = {"status": "not_applicable", "state": "unknown"}
             state = text_state
+        elif self.app_id == "bumble":
+            text = ocr.get("text", "")
+            text_state = classify_bumble_screen_text(text)
+            visual = classify_bumble_screen_image(output)
+            state = _combine_bumble_screen_states(
+                text_state,
+                visual["state"],
+                text,
+                visual_bottom_nav_present=bool(visual.get("bottom_nav_present")),
+            )
         else:
             text = ocr.get("text", "")
             text_state = classify_screen_text(text)
@@ -192,6 +218,7 @@ class NativeGuiHarness:
             "visual_state": visual["state"],
             "visual_status": visual["status"],
             "visual_active_tab": visual.get("active_tab", "unknown"),
+            "visual_bottom_nav_present": visual.get("bottom_nav_present", False),
             "ocr_status": ocr["status"],
             "ocr_error": ocr.get("error"),
             "text": ocr.get("text", ""),
@@ -530,6 +557,34 @@ class NativeGuiHarness:
             payload.update({"status": "needs_verification", "reason": "tinder_foreground_not_verified"})
         return payload
 
+    def observe_bumble_screen(self, *, output_dir: Path | None = None) -> dict[str, Any]:
+        payload = {
+            **self._base_payload("ok"),
+            "target": "bumble_screen",
+            "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+        }
+        if output_dir is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        doctor = self.doctor(capture=False)
+        payload["preflight"] = doctor
+        if doctor["status"] == "blocked":
+            payload.update({"status": "blocked", "reason": doctor.get("reason")})
+            return payload
+
+        window = _window_from_payload(doctor.get("window") or {})
+        output = output_dir / "iphone_mirroring.bumble.observe.png" if output_dir is not None else None
+        screen = self.capture_window(output=output, window=window)
+        payload["screen"] = _redacted_screen(screen)
+        payload["screen_state"] = screen.get("state", "unknown")
+        payload["layout_hints"] = _bumble_layout_hints(screen)
+        if screen.get("status") != "ok":
+            payload.update({"status": "blocked", "reason": screen.get("reason")})
+        elif screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
+            payload.update({"status": "blocked", "reason": screen.get("state")})
+        elif screen.get("state") not in BUMBLE_FOREGROUND_STATES:
+            payload.update({"status": "needs_verification", "reason": "bumble_foreground_not_verified"})
+        return payload
+
     def launch_tinder(self, *, dry_run: bool = False, output_dir: Path | None = None) -> dict[str, Any]:
         planned_steps = _launch_tinder_steps()
         payload = {
@@ -571,6 +626,48 @@ class NativeGuiHarness:
         payload["verification"] = _redacted_screen(verification)
         if verification["state"] not in TINDER_FOREGROUND_STATES:
             payload.update({"status": "needs_verification", "reason": "tinder_launch_not_verified"})
+        return payload
+
+    def launch_bumble(self, *, dry_run: bool = False, output_dir: Path | None = None) -> dict[str, Any]:
+        planned_steps = _launch_app_steps(app_name="Bumble", search_result_intent="tap_bumble_search_result_icon")
+        payload = {
+            **self._base_payload("ok"),
+            "target": "bumble_app",
+            "mode": "dry_run" if dry_run else "execute",
+            "planned_steps": planned_steps,
+            "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+        }
+        doctor_output = None
+        if output_dir is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            doctor_output = output_dir / "iphone_mirroring.bumble.before_launch.png"
+        doctor = self.doctor(capture=True, output=doctor_output)
+        payload["preflight"] = doctor
+        if doctor["status"] == "blocked":
+            payload.update({"status": "blocked", "reason": doctor.get("reason")})
+            return payload
+        state = doctor.get("screen", {}).get("state")
+        if state in BUMBLE_FOREGROUND_STATES:
+            payload["reason"] = "bumble_already_foreground"
+            return payload
+        if dry_run:
+            return payload
+
+        window = _window_from_payload(doctor.get("window") or {})
+        executed_steps: list[dict[str, Any]] = []
+        for step in planned_steps:
+            result = self._execute_step(window, step)
+            executed_steps.append({**step, "result": result})
+            if result["status"] != "ok":
+                payload.update({"status": "blocked", "reason": result["reason"], "executed_steps": executed_steps})
+                return payload
+            time.sleep(float(step.get("wait_after_seconds", 0.2)))
+        payload["executed_steps"] = executed_steps
+        verification_output = output_dir / "iphone_mirroring.bumble.after_launch.png" if output_dir is not None else None
+        verification = self.capture_window(output=verification_output, window=window)
+        payload["verification"] = _redacted_screen(verification)
+        if verification["state"] not in BUMBLE_FOREGROUND_STATES:
+            payload.update({"status": "needs_verification", "reason": "bumble_launch_not_verified"})
         return payload
 
     def open_tinder_profile(
@@ -702,6 +799,62 @@ class NativeGuiHarness:
             "mode": "dry_run" if dry_run else "execute",
             "planned_steps": planned_steps,
             "blocked_actions": list(BLOCKED_GUI_ACTIONS),
+        }
+        if dry_run:
+            return payload
+        return self._execute_planned_steps(payload, output_dir=output_dir)
+
+    def run_bumble_action(
+        self,
+        action: str,
+        *,
+        dry_run: bool = False,
+        output_dir: Path | None = None,
+        **options: Any,
+    ) -> dict[str, Any]:
+        try:
+            planned_steps = _bumble_action_steps(action, **options)
+        except KeyError:
+            return {
+                **self._base_payload("blocked"),
+                "action": action,
+                "reason": "unknown_bumble_harness_action",
+                "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+            }
+        payload = {
+            **self._base_payload("ok"),
+            "action": action,
+            "mode": "dry_run" if dry_run else "execute",
+            "planned_steps": planned_steps,
+            "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+        }
+        if dry_run:
+            return payload
+        return self._execute_planned_steps(payload, output_dir=output_dir)
+
+    def run_bumble_workflow(
+        self,
+        workflow: str,
+        *,
+        dry_run: bool = False,
+        output_dir: Path | None = None,
+        **options: Any,
+    ) -> dict[str, Any]:
+        try:
+            planned_steps = _bumble_workflow_steps(workflow, **options)
+        except KeyError:
+            return {
+                **self._base_payload("blocked"),
+                "workflow": workflow,
+                "reason": "unknown_bumble_harness_workflow",
+                "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+            }
+        payload = {
+            **self._base_payload("ok"),
+            "workflow": workflow,
+            "mode": "dry_run" if dry_run else "execute",
+            "planned_steps": planned_steps,
+            "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
         }
         if dry_run:
             return payload
@@ -1024,10 +1177,36 @@ class NativeGuiHarness:
                     }
                 )
                 return payload
+        if any(step.get("requires_verified_bumble_screen") for step in payload["planned_steps"]):
+            if screen_state not in BUMBLE_FOREGROUND_STATES:
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": "bumble_foreground_not_verified",
+                        "screen_state": screen_state,
+                    }
+                )
+                return payload
         executed_steps: list[dict[str, Any]] = []
         profile_read_captures: list[dict[str, Any]] = []
         profile_read_texts: list[str] = []
         for step in payload["planned_steps"]:
+            precondition = self._verify_bumble_step_precondition(
+                window,
+                step,
+                output_dir=output_dir,
+                step_index=len(executed_steps) + 1,
+            )
+            if precondition["status"] != "ok":
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": precondition["reason"],
+                        "screen_state": precondition.get("screen_state"),
+                        "precondition": precondition,
+                    }
+                )
+                return payload
             if step["intent"] == "capture_profile_read_step":
                 output = None
                 if output_dir is not None:
@@ -1065,15 +1244,41 @@ class NativeGuiHarness:
                 profile_read_texts.append(observed_text)
             else:
                 result = self._execute_step(window, step)
-            executed_steps.append({**step, "result": result})
+            executed_step = {**step, "result": result}
             if result["status"] != "ok":
+                executed_steps.append(executed_step)
                 payload.update({"status": "blocked", "reason": result.get("reason", "tinder_action_step_failed"), "executed_steps": executed_steps})
                 return payload
             time.sleep(float(step.get("wait_after_seconds", 0.2)))
+            postcondition = self._verify_bumble_step_postcondition(
+                window,
+                step,
+                output_dir=output_dir,
+                step_index=len(executed_steps) + 1,
+            )
+            if postcondition["status"] != "ok":
+                executed_step["postcondition"] = postcondition
+                executed_steps.append(executed_step)
+                payload.update(
+                    {
+                        "status": "blocked",
+                        "reason": postcondition["reason"],
+                        "screen_state": postcondition.get("screen_state"),
+                        "postcondition": postcondition,
+                        "executed_steps": executed_steps,
+                    }
+                )
+                return payload
+            if postcondition.get("status") == "ok" and postcondition.get("checked"):
+                executed_step["postcondition"] = postcondition
+            executed_steps.append(executed_step)
         payload["executed_steps"] = executed_steps
         if profile_read_captures:
             payload["profile_read_captures"] = profile_read_captures
-            payload["field_coverage"] = _tinder_profile_field_coverage("\n".join(profile_read_texts))
+            if self.app_id == "bumble":
+                payload["field_coverage"] = _bumble_profile_field_coverage("\n".join(profile_read_texts))
+            else:
+                payload["field_coverage"] = _tinder_profile_field_coverage("\n".join(profile_read_texts))
         after = output_dir / "iphone_mirroring.after_action.png" if output_dir is not None else None
         verification_screen = self.capture_window(output=after, window=window)
         payload["verification"] = _redacted_screen(verification_screen)
@@ -1085,6 +1290,65 @@ class NativeGuiHarness:
             )
             _apply_tinder_paywall_recovery_result(payload, recovery)
         return payload
+
+    def _verify_bumble_step_precondition(
+        self,
+        window: WindowInfo,
+        step: dict[str, Any],
+        *,
+        output_dir: Path | None,
+        step_index: int,
+    ) -> dict[str, Any]:
+        if not _has_bumble_step_precondition(step):
+            return {"status": "ok"}
+        output = None
+        if output_dir is not None:
+            output = output_dir / f"iphone_mirroring.bumble_precondition_{step_index:02d}.png"
+        screen = self.capture_window(output=output, window=window)
+        result = {
+            "status": screen.get("status", "blocked"),
+            "screen": _redacted_screen(screen),
+            "screen_state": screen.get("state", "unknown"),
+        }
+        if result["status"] != "ok":
+            result["reason"] = screen.get("reason") or "bumble_precondition_capture_failed"
+        elif step.get("requires_bumble_top_level_tab_bar") and not _bumble_top_level_bottom_nav_present(screen):
+            result.update({"status": "blocked", "reason": "bumble_top_level_tab_bar_not_verified"})
+        else:
+            state_check = _verify_bumble_step_state(screen, step, key="requires_bumble_states")
+            if state_check["status"] != "ok":
+                result.update(state_check)
+                result["reason"] = "bumble_step_precondition_not_verified"
+        return result
+
+    def _verify_bumble_step_postcondition(
+        self,
+        window: WindowInfo,
+        step: dict[str, Any],
+        *,
+        output_dir: Path | None,
+        step_index: int,
+    ) -> dict[str, Any]:
+        if not _has_bumble_step_postcondition(step):
+            return {"status": "ok", "checked": False}
+        output = None
+        if output_dir is not None:
+            output = output_dir / f"iphone_mirroring.bumble_postcondition_{step_index:02d}.png"
+        screen = self.capture_window(output=output, window=window)
+        result = {
+            "status": screen.get("status", "blocked"),
+            "checked": True,
+            "screen": _redacted_screen(screen),
+            "screen_state": screen.get("state", "unknown"),
+        }
+        if result["status"] != "ok":
+            result["reason"] = screen.get("reason") or "bumble_postcondition_capture_failed"
+        else:
+            state_check = _verify_bumble_step_state(screen, step, key="expected_bumble_states")
+            if state_check["status"] != "ok":
+                result.update(state_check)
+                result["reason"] = "bumble_step_postcondition_not_verified"
+        return result
 
     def _open_tinder_conversation_by_visible_name(
         self,
@@ -1540,8 +1804,12 @@ class NativeGuiHarness:
                 return result
             fallback = self._click_ratio(window, {"x": 0.5, "y": 0.84})
             return {**fallback, "fallback_from": "spotlight_menu"}
+        if step["intent"] == "type_app_name_verified":
+            app_name = str(step.get("text") or "Tinder")
+            return self._type_app_name_with_search_verification(window, app_name)
         if step["intent"] == "type_app_name":
-            result = self.runner.run(["osascript", "-e", 'tell application "System Events" to keystroke "Tinder"'])
+            app_name = str(step.get("text") or "Tinder")
+            result = self.runner.run(["osascript", "-e", f'tell application "System Events" to keystroke "{app_name}"'])
             if result.returncode != 0:
                 return {"status": "blocked", "reason": "text_entry_failed", "stderr": _short(result.stderr)}
             return {"status": "ok"}
@@ -1551,6 +1819,71 @@ class NativeGuiHarness:
                 return {"status": "blocked", "reason": "return_key_failed", "stderr": _short(result.stderr)}
             return {"status": "ok"}
         return {"status": "blocked", "reason": "unknown_gui_step"}
+
+    def _type_app_name_with_search_verification(self, window: WindowInfo, app_name: str) -> dict[str, Any]:
+        first_type = self.runner.run(["osascript", "-e", f'tell application "System Events" to keystroke "{app_name}"'])
+        if first_type.returncode != 0:
+            return {"status": "blocked", "reason": "text_entry_failed", "stderr": _short(first_type.stderr)}
+        time.sleep(0.2)
+        first_screen = self.capture_window(window=window)
+        first_verified = _app_search_result_visible(first_screen, app_name)
+        if first_verified:
+            return {
+                "status": "ok",
+                "search_result_verified": True,
+                "retried_after_input_source_switch": False,
+                "verification": _redacted_screen(first_screen),
+            }
+
+        switch = _switch_ascii_input_source(self.runner)
+        if switch["status"] != "ok":
+            return {
+                **switch,
+                "first_verification": _redacted_screen(first_screen),
+                "search_result_verified": False,
+            }
+        home = self._click_iphone_mirroring_view_menu_item("Home Screen")
+        if home["status"] != "ok":
+            return {**home, "first_verification": _redacted_screen(first_screen), "input_source_switch": switch}
+        time.sleep(0.3)
+        spotlight = self._click_iphone_mirroring_view_menu_item("Spotlight")
+        if spotlight["status"] != "ok":
+            fallback = self._click_ratio(window, {"x": 0.5, "y": 0.84})
+            if fallback["status"] != "ok":
+                return {
+                    **fallback,
+                    "fallback_from": "spotlight_menu_after_input_source_switch",
+                    "first_verification": _redacted_screen(first_screen),
+                    "input_source_switch": switch,
+                }
+        time.sleep(0.3)
+        second_type = self.runner.run(["osascript", "-e", f'tell application "System Events" to keystroke "{app_name}"'])
+        if second_type.returncode != 0:
+            return {
+                "status": "blocked",
+                "reason": "text_entry_retry_failed",
+                "stderr": _short(second_type.stderr),
+                "first_verification": _redacted_screen(first_screen),
+                "input_source_switch": switch,
+            }
+        time.sleep(0.2)
+        second_screen = self.capture_window(window=window)
+        if not _app_search_result_visible(second_screen, app_name):
+            return {
+                "status": "blocked",
+                "reason": "app_search_result_not_verified",
+                "first_verification": _redacted_screen(first_screen),
+                "retry_verification": _redacted_screen(second_screen),
+                "input_source_switch": switch,
+            }
+        return {
+            "status": "ok",
+            "search_result_verified": True,
+            "retried_after_input_source_switch": True,
+            "first_verification": _redacted_screen(first_screen),
+            "retry_verification": _redacted_screen(second_screen),
+            "input_source_switch": switch,
+        }
 
     def _dismiss_tinder_subscription_paywall(
         self,
@@ -2061,6 +2394,99 @@ def _apply_tinder_paywall_recovery_result(payload: dict[str, Any], recovery: dic
         )
 
 
+def _ensure_ascii_input_source(runner: SubprocessRunner) -> dict[str, Any]:
+    before = _read_current_input_source(runner)
+    before_id = str(before.get("input_source_id") or "")
+    if before.get("status") == "ok" and _input_source_id_is_ascii(before_id):
+        return {"status": "ok", "changed": False, "input_source_id": before_id}
+
+    return _switch_ascii_input_source(runner, before_input_source_id=before_id or None)
+
+
+def _switch_ascii_input_source(
+    runner: SubprocessRunner,
+    *,
+    before_input_source_id: str | None = None,
+) -> dict[str, Any]:
+    result = runner.run(["osascript", "-e", 'tell application "System Events" to key code 49 using {control down}'])
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "ascii_input_source_switch_failed",
+            "before_input_source_id": before_input_source_id,
+            "stderr": _short(result.stderr),
+        }
+    time.sleep(0.1)
+    after = _read_current_input_source(runner)
+    after_id = str(after.get("input_source_id") or "")
+    payload = {
+        "status": "ok",
+        "changed": True,
+        "before_input_source_id": before_input_source_id,
+        "after_input_source_id": after_id or None,
+    }
+    if after.get("status") == "ok" and after_id and not _input_source_id_is_ascii(after_id):
+        payload.update({"status": "blocked", "reason": "ascii_input_source_not_verified"})
+    elif after.get("status") != "ok":
+        payload["verification_status"] = after.get("status", "unknown")
+    return payload
+
+
+def _read_current_input_source(runner: SubprocessRunner) -> dict[str, Any]:
+    result = runner.run(["defaults", "read", "com.apple.HIToolbox", "AppleCurrentKeyboardLayoutInputSourceID"])
+    if result.returncode != 0:
+        return {"status": "unknown", "stderr": _short(result.stderr)}
+    input_source_id = result.stdout.strip()
+    if not input_source_id:
+        return {"status": "unknown"}
+    return {"status": "ok", "input_source_id": input_source_id}
+
+
+def _input_source_id_is_ascii(input_source_id: str) -> bool:
+    normalized = input_source_id.strip().lower()
+    return normalized in {
+        "com.apple.keylayout.abc",
+        "com.apple.keylayout.us",
+        "com.apple.keylayout.british",
+        "com.apple.keylayout.australian",
+        "com.apple.keylayout.dvorak",
+        "com.apple.keylayout.colemak",
+    }
+
+
+def _app_search_result_visible(screen: dict[str, Any], app_name: str) -> bool:
+    if screen.get("status") != "ok":
+        return False
+    normalized = _normalize_text(str(screen.get("text") or ""))
+    app = app_name.strip().lower()
+    if not app:
+        return False
+    return app in normalized
+
+
+def _has_bumble_step_precondition(step: dict[str, Any]) -> bool:
+    return bool(step.get("requires_bumble_top_level_tab_bar") or step.get("requires_bumble_states"))
+
+
+def _has_bumble_step_postcondition(step: dict[str, Any]) -> bool:
+    return bool(step.get("expected_bumble_states"))
+
+
+def _verify_bumble_step_state(screen: dict[str, Any], step: dict[str, Any], *, key: str) -> dict[str, Any]:
+    expected = step.get(key)
+    if not expected:
+        return {"status": "ok"}
+    expected_states = [str(expected)] if isinstance(expected, str) else [str(state) for state in expected]
+    actual = str(screen.get("state") or "unknown")
+    if actual in expected_states:
+        return {"status": "ok"}
+    return {
+        "status": "blocked",
+        "expected_bumble_states": expected_states,
+        "actual_bumble_state": actual,
+    }
+
+
 def _tap_step(intent: str, *, x: float, y: float) -> dict[str, Any]:
     return {
         "intent": intent,
@@ -2127,13 +2553,17 @@ def _wheel_step(
     }
 
 
-def _capture_profile_read_step() -> dict[str, Any]:
-    return {
+def _capture_profile_read_step(*, app_id: str = "tinder") -> dict[str, Any]:
+    requires_key = "requires_verified_bumble_screen" if app_id == "bumble" else "requires_verified_tinder_screen"
+    step = {
         "intent": "capture_profile_read_step",
-        "requires_verified_tinder_screen": True,
+        requires_key: True,
         "risk": "navigation_only",
         "wait_after_seconds": 0.0,
     }
+    if app_id == "bumble":
+        step["requires_bumble_states"] = ["bumble_browse", "bumble_profile", "bumble_self_profile"]
+    return step
 
 
 def _safe_expand_step() -> dict[str, Any]:
@@ -2277,7 +2707,237 @@ def _tinder_workflow_steps(workflow: str, **options: Any) -> list[dict[str, Any]
     raise KeyError(workflow)
 
 
+def _bumble_tap_step(
+    intent: str,
+    *,
+    x: float,
+    y: float,
+    requires_states: list[str] | str | None = None,
+    expected_states: list[str] | str | None = None,
+) -> dict[str, Any]:
+    step = {
+        "intent": intent,
+        "tap_ratio": {"x": x, "y": y},
+        "requires_verified_bumble_screen": True,
+        "risk": "navigation_only",
+    }
+    if requires_states is not None:
+        step["requires_bumble_states"] = requires_states
+    if expected_states is not None:
+        step["expected_bumble_states"] = expected_states
+    return step
+
+
+def _bumble_bottom_tab_step(intent: str, *, x: float, y: float, expected_state: str) -> dict[str, Any]:
+    return {
+        "intent": intent,
+        "tap_ratio": {"x": x, "y": y},
+        "requires_verified_bumble_screen": True,
+        "requires_bumble_top_level_tab_bar": True,
+        "expected_bumble_states": [expected_state],
+        "risk": "navigation_only",
+    }
+
+
+def _bumble_wheel_step(
+    intent: str,
+    *,
+    x: float,
+    y: float,
+    delta_y: int = 0,
+    delta_x: int = 0,
+    repeats: int = 18,
+    requires_states: list[str] | str | None = None,
+    expected_states: list[str] | str | None = None,
+) -> dict[str, Any]:
+    step = {
+        "intent": intent,
+        "wheel": {
+            "x": x,
+            "y": y,
+            "delta_y": delta_y,
+            "delta_x": delta_x,
+            "repeats": repeats,
+            "interval_us": 18000,
+        },
+        "requires_verified_bumble_screen": True,
+        "risk": "navigation_only",
+    }
+    if requires_states is not None:
+        step["requires_bumble_states"] = requires_states
+    if expected_states is not None:
+        step["expected_bumble_states"] = expected_states
+    return step
+
+
+def _bumble_action_steps(action: str, **options: Any) -> list[dict[str, Any]]:
+    row_index = int(options.get("row_index") or options.get("conversation_row") or 1)
+    match_index = int(options.get("match_index") or 1)
+    row_y = min(0.86, 0.53 + (max(row_index, 1) - 1) * 0.12)
+    if options.get("y_ratio") is not None:
+        row_y = max(0.16, min(0.88, float(options["y_ratio"])))
+    match_x = min(0.84, 0.34 + (max(match_index, 1) - 1) * 0.21)
+    profile_read_states = ["bumble_browse", "bumble_profile", "bumble_self_profile"]
+    actions: dict[str, list[dict[str, Any]]] = {
+        "open-profile-tab": [_bumble_bottom_tab_step("tap_bumble_profile_tab", x=0.11, y=0.93, expected_state="bumble_self_profile")],
+        "open-discover": [_bumble_bottom_tab_step("tap_bumble_discover_tab", x=0.31, y=0.93, expected_state="bumble_discover")],
+        "open-browse": [_bumble_bottom_tab_step("tap_bumble_browse_tab", x=0.50, y=0.93, expected_state="bumble_browse")],
+        "open-liked-you": [_bumble_bottom_tab_step("tap_bumble_liked_you_tab", x=0.70, y=0.93, expected_state="bumble_liked_you")],
+        "open-chats": [_bumble_bottom_tab_step("tap_bumble_chats_tab", x=0.89, y=0.93, expected_state="bumble_chat_list")],
+        "conversation-list-scroll-down": [
+            _bumble_wheel_step(
+                "wheel_bumble_conversation_list_down",
+                x=0.50,
+                y=0.78,
+                delta_y=-18,
+                repeats=14,
+                requires_states="bumble_chat_list",
+                expected_states="bumble_chat_list",
+            )
+        ],
+        "conversation-list-scroll-up": [
+            _bumble_wheel_step(
+                "wheel_bumble_conversation_list_up",
+                x=0.50,
+                y=0.46,
+                delta_y=18,
+                repeats=14,
+                requires_states="bumble_chat_list",
+                expected_states="bumble_chat_list",
+            )
+        ],
+        "open-conversation": [
+            {
+                **_bumble_tap_step(
+                    "tap_bumble_conversation_row",
+                    x=0.43,
+                    y=row_y,
+                    requires_states="bumble_chat_list",
+                    expected_states="bumble_conversation",
+                ),
+                "row_index": row_index,
+            }
+        ],
+        "open-match": [
+            {
+                **_bumble_tap_step(
+                    "tap_bumble_match_circle",
+                    x=match_x,
+                    y=0.245,
+                    requires_states="bumble_chat_list",
+                    expected_states=["bumble_opening_move", "bumble_conversation"],
+                ),
+                "match_index": match_index,
+            }
+        ],
+        "open-thread-profile": [
+            _bumble_tap_step(
+                "tap_bumble_thread_name",
+                x=0.32,
+                y=0.13,
+                requires_states="bumble_conversation",
+                expected_states="bumble_profile",
+            )
+        ],
+        "open-opening-move-reply": [
+            _bumble_tap_step(
+                "tap_bumble_opening_move_reply",
+                x=0.24,
+                y=0.735,
+                requires_states="bumble_opening_move",
+                expected_states="bumble_conversation",
+            )
+        ],
+        "profile-scroll-down": [
+            _bumble_wheel_step(
+                "wheel_bumble_profile_read_down",
+                x=0.50,
+                y=0.78,
+                delta_y=-18,
+                repeats=18,
+                requires_states=profile_read_states,
+                expected_states=profile_read_states,
+            )
+        ],
+        "profile-scroll-up": [
+            _bumble_wheel_step(
+                "wheel_bumble_profile_read_up",
+                x=0.50,
+                y=0.46,
+                delta_y=18,
+                repeats=18,
+                requires_states=profile_read_states,
+                expected_states=profile_read_states,
+            )
+        ],
+        "close-profile": [
+            _bumble_tap_step(
+                "tap_bumble_profile_close",
+                x=0.09,
+                y=0.13,
+                requires_states="bumble_profile",
+                expected_states="bumble_conversation",
+            )
+        ],
+        "return-to-chats": [
+            _bumble_tap_step(
+                "tap_bumble_back_to_chats",
+                x=0.09,
+                y=0.13,
+                requires_states=["bumble_conversation", "bumble_opening_move"],
+                expected_states="bumble_chat_list",
+            )
+        ],
+    }
+    if action not in actions:
+        raise KeyError(action)
+    return actions[action]
+
+
+def _bumble_workflow_steps(workflow: str, **options: Any) -> list[dict[str, Any]]:
+    if workflow == "browse-profile-read":
+        profile_scroll_steps = max(0, int(options.get("profile_scroll_steps") or options.get("scroll_steps") or 2))
+        steps = []
+        steps.extend(_bumble_action_steps("open-browse"))
+        steps.append(_capture_profile_read_step(app_id="bumble"))
+        for _ in range(profile_scroll_steps):
+            steps.extend(_bumble_action_steps("profile-scroll-down"))
+            steps.append(_capture_profile_read_step(app_id="bumble"))
+        return steps
+    if workflow == "chat-read-match-profile":
+        conversation_row = int(options.get("conversation_row") or 1)
+        profile_scroll_steps = max(0, int(options.get("profile_scroll_steps") or 2))
+        steps = []
+        steps.extend(_bumble_action_steps("open-chats"))
+        steps.extend(_bumble_action_steps("open-conversation", row_index=conversation_row))
+        steps.extend(_bumble_action_steps("open-thread-profile"))
+        steps.append(_capture_profile_read_step(app_id="bumble"))
+        for _ in range(profile_scroll_steps):
+            steps.extend(_bumble_action_steps("profile-scroll-down"))
+            steps.append(_capture_profile_read_step(app_id="bumble"))
+        steps.extend(_bumble_action_steps("close-profile"))
+        return steps
+    if workflow == "opening-move-open":
+        match_index = int(options.get("match_index") or 1)
+        steps = []
+        steps.extend(_bumble_action_steps("open-chats"))
+        steps.extend(_bumble_action_steps("open-match", match_index=match_index))
+        return steps
+    if workflow == "opening-move-reply-composer":
+        match_index = int(options.get("match_index") or 1)
+        steps = []
+        steps.extend(_bumble_action_steps("open-chats"))
+        steps.extend(_bumble_action_steps("open-match", match_index=match_index))
+        steps.extend(_bumble_action_steps("open-opening-move-reply"))
+        return steps
+    raise KeyError(workflow)
+
+
 def _launch_tinder_steps() -> list[dict[str, Any]]:
+    return _launch_app_steps(app_name="Tinder", search_result_intent="tap_tinder_search_result_icon")
+
+
+def _launch_app_steps(*, app_name: str, search_result_intent: str) -> list[dict[str, Any]]:
     return [
         {
             "intent": "open_iphone_home_screen",
@@ -2290,18 +2950,30 @@ def _launch_tinder_steps() -> list[dict[str, Any]]:
             "wait_after_seconds": 0.4,
         },
         {
-            "intent": "type_app_name",
-            "text": "Tinder",
+            "intent": "type_app_name_verified",
+            "text": app_name,
             "risk": "navigation_only",
             "wait_after_seconds": 0.2,
         },
         {
-            "intent": "tap_tinder_search_result_icon",
+            "intent": search_result_intent,
             "tap_ratio": {"x": 0.18, "y": 0.20},
             "risk": "navigation_only",
-            "wait_after_seconds": 1.0,
+            "wait_after_seconds": 2.5,
         },
     ]
+
+
+def _bumble_profile_field_coverage(text: str) -> dict[str, bool]:
+    normalized = _normalize_text(text)
+    return {
+        "about_me": any(marker in normalized for marker in ("我的简介", "about me")),
+        "basic_info": any(marker in normalized for marker in ("关于我", "cm", "身高")),
+        "looking_for": any(marker in normalized for marker in ("我在寻找", "长期恋爱关系", "终身伴侣")),
+        "interests": any(marker in normalized for marker in ("我的兴趣爱好", "兴趣")),
+        "opening_move": "opening move" in normalized,
+        "reply_deadline": any(marker in normalized for marker in ("回复时间", "小时后失效", "失效")),
+    }
 
 
 def _default_screenshot_path() -> Path:

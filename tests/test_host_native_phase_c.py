@@ -178,12 +178,12 @@ class HostNativePhaseCTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         caps = payload["agent_native_capabilities"]
         self.assertTrue(caps["multi_app_profiles"])
-        self.assertEqual(set(caps["supported_app_profiles"]), {"tinder", "wechat"})
+        self.assertEqual(set(caps["supported_app_profiles"]), {"tinder", "wechat", "bumble"})
         self.assertEqual(set(caps["host_loop_app_profiles"]), {"tinder", "wechat"})
         self.assertNotIn("contract_only_app_profiles", caps)
         for app_id in caps["supported_app_profiles"]:
             self.assertTrue((Path("app_profiles") / f"{app_id}.json").exists())
-        for app_id in ("bumble", "tashuo", "hinge"):
+        for app_id in ("tashuo", "hinge"):
             self.assertFalse((Path("app_profiles") / f"{app_id}.json").exists())
 
     def _run_cli(self, argv):

@@ -44,10 +44,11 @@ data dir after support session start and before support bundle export.
 ## Native GUI Harness
 
 The native harness is stage/navigation-first. It may diagnose iPhone Mirroring,
-capture a screenshot/OCR artifact, navigate Tinder through bounded profile/chat
-reading chains, and execute `send_message` only through the gated
-`harness tinder send-message` path. It must not like, super-like, unmatch,
-report, or edit profile data.
+capture a screenshot/OCR artifact, navigate Tinder and Bumble through bounded
+profile/chat reading chains, and execute `send_message` only through the gated
+`harness tinder send-message` path. Bumble is navigation-only: it must not stage
+drafts, send, like, pass, SuperSwipe, unmatch, report, edit profile data, or
+purchase Premium.
 
 ```bash
 dating-boost harness doctor --app-id tinder --json
@@ -67,6 +68,14 @@ dating-boost harness tinder workflow chat-read-match-profile --dry-run --convers
 dating-boost harness tinder workflow new-match-open --dry-run --carousel-swipes 1 --match-index 2 --json
 dating-boost harness tinder workflow new-match-read-profile --dry-run --carousel-swipes 1 --match-index 2 --profile-scroll-steps 2 --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
+dating-boost harness doctor --app-id bumble --json
+dating-boost harness screenshot --app-id bumble --output bumble.png --json
+dating-boost harness bumble launch --dry-run --json
+dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
+dating-boost harness bumble action open-chats --dry-run --json
+dating-boost harness bumble workflow browse-profile-read --dry-run --profile-scroll-steps 2 --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness bumble workflow opening-move-open --dry-run --match-index 2 --json
 dating-boost harness doctor --app-id wechat --window-title WeChat --json
 dating-boost harness screenshot --app-id wechat --window-title WeChat --output wechat.png --json
 dating-boost harness wechat launch --dry-run --json

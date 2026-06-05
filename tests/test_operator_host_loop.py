@@ -83,7 +83,9 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertEqual(payload["status"], "blocked")
             self.assertEqual(payload["next_host_action"], "choose_supported_host_loop_app")
-            self.assertEqual(payload["reason"], "unsupported app profile: bumble")
+            self.assertIn("host_loop_supported_app", payload["missing"])
+            self.assertEqual(payload["details"]["app_profile"]["app_id"], "bumble")
+            self.assertFalse(payload["details"]["app_profile"]["host_loop_supported"])
 
     def test_wechat_waiting_template_uses_wechat_desktop_evidence(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -447,7 +449,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "authorization_id": "auth_tinder_live",
                 "scope": "send_chat_messages",
                 "app_id": "tinder",
-                "expires_at": "2026-06-05T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "allowed_match_ids": ["match_bea"],
                 "allowed_actions": ["send_message"],
                 "autonomous_send": True,
@@ -533,7 +535,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "authorization_id": "auth_wechat_live",
                 "scope": "send_chat_messages",
                 "app_id": "wechat",
-                "expires_at": "2026-06-05T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "allowed_actions": ["send_message"],
                 "autonomous_send": True,
                 "live_send": True,
@@ -642,7 +644,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "authorization_id": "auth_wechat_live",
                 "scope": "send_chat_messages",
                 "app_id": "wechat",
-                "expires_at": "2026-06-05T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "allowed_actions": ["send_message"],
                 "autonomous_send": True,
                 "live_send": True,
@@ -735,7 +737,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "authorization_id": "auth_wechat_live",
                 "scope": "send_chat_messages",
                 "app_id": "wechat",
-                "expires_at": "2026-06-05T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "allowed_actions": ["send_message"],
                 "autonomous_send": True,
                 "live_send": True,
@@ -800,7 +802,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "authorization_id": "auth_tinder_live",
                 "scope": "send_chat_messages",
                 "app_id": "tinder",
-                "expires_at": "2026-06-05T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
                 "allowed_actions": ["send_message"],
                 "autonomous_send": True,
                 "live_send": True,

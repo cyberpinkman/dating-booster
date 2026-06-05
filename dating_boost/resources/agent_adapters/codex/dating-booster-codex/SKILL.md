@@ -238,6 +238,35 @@ or `feedback_survey_visible`, run
 `dating-boost harness tinder action dismiss-feedback-survey --json`. This must
 use the ignore/no-rating path; `rating_submitted` must remain false.
 
+## Bumble iPhone Mirroring Input
+
+Bumble support is navigation-only. Before real Bumble observation, run:
+
+```bash
+dating-boost harness doctor --app-id bumble --json
+dating-boost harness bumble launch --dry-run --json
+dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
+dating-boost harness bumble action open-chats --dry-run --json
+dating-boost harness bumble workflow browse-profile-read --dry-run --profile-scroll-steps 2 --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --conversation-row 1 --profile-scroll-steps 2 --json
+dating-boost harness bumble workflow opening-move-open --dry-run --match-index 2 --json
+```
+
+Use `harness bumble observe` before choosing a bounded navigation action. It
+returns redacted page/layout hints for browse cards, self profile, discover,
+liked-you, chat list, conversations, Opening Move prompts, visible reply
+deadlines such as `轮到您了`/`小时后失效`, and Premium gates. Safe navigation may
+open bottom tabs, open visible chat rows, open match-circle Opening Move
+prompts, open a thread profile from the header name, vertically scroll profiles,
+and open an empty Opening Move reply composer. It must not stage drafts, click
+Send, like, pass, SuperSwipe, unmatch, report, edit profile, call, video-call,
+or purchase Premium. Do not use horizontal swipes on Bumble browse cards for
+read-only work; they can like or pass.
+
+Launch search should type `Bumble` first and verify the English app search
+result by screenshot/OCR before tapping. Switch the macOS input source and retry
+only when the app result is not visible.
+
 ## macOS WeChat Input
 
 For real macOS WeChat work, use the desktop WeChat harness instead of iPhone

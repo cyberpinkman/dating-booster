@@ -215,6 +215,10 @@ class SkillPackageTests(unittest.TestCase):
             "harness tinder action dismiss-feedback-survey",
             "harness tinder workflow",
             "harness tinder send-message",
+            "harness bumble launch",
+            "harness bumble observe",
+            "harness bumble action",
+            "harness bumble workflow",
             "harness wechat launch",
             "harness wechat observe",
             "harness wechat stage-draft",
@@ -369,7 +373,7 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("return_to_chats", harness["supported_stage_actions"])
         self.assertEqual(
             harness["launch_navigation"]["steps"],
-            ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name", "press_return"],
+            ["open_iphone_home_screen", "open_ios_spotlight", "type_app_name_verified", "tap_search_result_icon"],
         )
         self.assertIn("new_matches_carousel_wheel_left", harness["chat_navigation"])
         self.assertEqual(harness["chat_navigation"]["new_match_card_base_tap_ratio"], {"x": 0.42, "y": 0.30})
