@@ -292,6 +292,21 @@ chat screen.
 3. If the result requires user confirmation, ask the user whether this is the
    same match before relying on the merged memory.
 4. Run `dating-boost memory get-match --data-dir .local/dating-boost --match-id MATCH_ID`.
+5. If the user confirms identity, corrects a fact, rejects an assumption, or
+   asks to merge two identities, write the correction JSON and run
+   `dating-boost memory update-match --data-dir .local/dating-boost --match-id MATCH_ID --input correction.json`.
+
+## Memory Maintenance
+
+Use this for local privacy requests, local recovery, or regression checks.
+
+1. Rebuild one match with `dating-boost memory rebuild --data-dir .local/dating-boost --match-id MATCH_ID`.
+2. Rebuild all local match projections with `dating-boost memory rebuild --data-dir .local/dating-boost --all`.
+3. Export one match with `dating-boost memory export --data-dir .local/dating-boost --match-id MATCH_ID`.
+4. Delete one match only after exact confirmation with
+   `dating-boost memory delete-match --data-dir .local/dating-boost --match-id MATCH_ID --confirm delete-match:MATCH_ID`.
+5. Run deterministic memory regressions with
+   `dating-boost eval run --suite memory --input tests/fixtures/evals/memory_cases.jsonl --json`.
 
 ## Send
 

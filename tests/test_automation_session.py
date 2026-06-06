@@ -8,6 +8,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
+from dating_boost.core.automation import AutomationRepository
+from dating_boost.core.memory.models import IdentityTrustStatus, MatchMemoryProjection
+from dating_boost.core.memory.repositories import MemoryRepository
+from dating_boost.perception.observations import AppObservation
 
 
 FIXTURE_DIR = Path("tests/fixtures/automation")
@@ -171,6 +175,73 @@ class AutomationSessionTests(unittest.TestCase):
             self.assertEqual(post_result_repeat_exit, 0)
             self.assertEqual(post_result_repeat_payload["action_requests"], [])
             self.assertIn("duplicate_send_request_suppressed", post_result_repeat_payload["warnings"])
+
+    def test_automation_context_uses_projection_plus_latest_observation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            repo = AutomationRepository(data_dir)
+            first_payload = json.loads(Path("tests/fixtures/intelligence/app_observation_chat.json").read_text(encoding="utf-8"))
+            first_observation = AppObservation.from_dict(first_payload)
+            first_ingest = repo._store_observation(first_observation)
+            match_id = first_ingest["match_id"]
+
+            second_payload = dict(first_payload)
+            second_payload["observation_id"] = "obs_chat_002"
+            second_payload["captured_at"] = "2026-05-26T00:00:00Z"
+            second_payload["profile_observation"] = {
+                "profile_text": "",
+                "photo_cues": [],
+                "hook_candidates": [],
+            }
+            second_payload["conversation_observation"] = {
+                "visible_messages": [
+                    {"sender": "user", "text": "哈哈这个我记得"},
+                    {"sender": "match", "text": "那你周末一般会去听现场吗"},
+                ],
+                "input_state": "empty",
+                "thread_cues": ["weekend live music question"],
+            }
+            second_observation = AppObservation.from_dict(second_payload)
+            repo._store_observation(second_observation)
+
+            context_pack = repo._context_pack(match_id, second_observation)
+
+            items = {item["label"]: item["content"] for item in context_pack["items"]}
+            self.assertIn("match_hooks", items)
+            self.assertIn("Ask about live music", items["match_hooks"])
+            self.assertEqual(
+                items["latest_inbound_messages"][-1]["text"],
+                "那你周末一般会去听现场吗",
+            )
+
+    def test_automation_context_exposes_only_identity_diagnostic_for_untrusted_memory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            repo = AutomationRepository(data_dir)
+            match_id = "match_untrusted"
+            payload = json.loads(Path("tests/fixtures/intelligence/app_observation_chat.json").read_text(encoding="utf-8"))
+            observation = AppObservation.from_dict(payload)
+            MemoryRepository(data_dir).save_projection(
+                match_id,
+                MatchMemoryProjection(
+                    match_id=match_id,
+                    identity_status=IdentityTrustStatus.NEEDS_CONFIRMATION,
+                    trusted_for_context=False,
+                    trusted_for_managed_send=False,
+                    updated_at="2026-06-06T00:00:00Z",
+                ),
+            )
+
+            context_pack = repo._context_pack(match_id, observation)
+            encoded_context = json.dumps(context_pack, ensure_ascii=False)
+            items = {item["label"]: item["content"] for item in context_pack["items"]}
+
+            self.assertIn("identity_trust", items)
+            self.assertNotIn("latest_inbound_messages", items)
+            self.assertNotIn("recent_messages", items)
+            self.assertNotIn("It was. What are you up to this weekend?", encoded_context)
 
     def test_session_stop_report_and_resume(self):
         with tempfile.TemporaryDirectory() as temp_dir:

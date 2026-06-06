@@ -9,6 +9,7 @@ from dating_boost.core.storage import (
     SchemaVersionError,
     StorageCorruptionError,
 )
+from dating_boost.core.production_store import ProductionDataStore
 
 
 class StorageTests(unittest.TestCase):
@@ -79,6 +80,17 @@ class StorageTests(unittest.TestCase):
 
             self.assertFalse(outside_path.exists())
 
+    def test_write_jsonl_rejects_parent_escape_without_creating_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "storage"
+            outside_path = Path(temp_dir) / "outside.jsonl"
+            storage = JsonStorage(root)
+
+            with self.assertRaises(InvalidStoragePathError):
+                storage.write_jsonl(Path("../outside.jsonl"), [{"event_id": "fb_escape"}])
+
+            self.assertFalse(outside_path.exists())
+
     def test_unknown_schema_version_raises(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "user_profile.json"
@@ -127,6 +139,39 @@ class StorageTests(unittest.TestCase):
 
             self.assertEqual([event["event_id"] for event in events], ["fb_1", "fb_2"])
             self.assertEqual(missing_events, [])
+
+    def test_jsonl_write_replaces_existing_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = JsonStorage(Path(temp_dir))
+            storage.append_jsonl(Path("feedback_events.jsonl"), {"event_id": "fb_old"})
+            storage.write_jsonl(
+                Path("feedback_events.jsonl"),
+                [{"event_id": "fb_1"}, {"event_id": "fb_2"}],
+            )
+
+            events = storage.read_jsonl(Path("feedback_events.jsonl"))
+
+            self.assertEqual([event["event_id"] for event in events], ["fb_1", "fb_2"])
+
+    def test_jsonl_write_replaces_sqlite_mirrored_stream(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            store = ProductionDataStore(data_dir)
+            store.ensure_schema()
+            storage = JsonStorage(data_dir)
+
+            storage.append_jsonl(
+                Path("matches/match_alex/memory_events.jsonl"),
+                {"event_id": "old", "created_at": "2026-06-01T00:00:00Z"},
+            )
+            storage.write_jsonl(
+                Path("matches/match_alex/memory_events.jsonl"),
+                [{"event_id": "new", "created_at": "2026-06-02T00:00:00Z"}],
+            )
+
+            events = store.list_audit_events(stream="matches/match_alex/memory_events.jsonl")
+
+            self.assertEqual([event["event_id"] for event in events], ["new"])
 
 
 if __name__ == "__main__":

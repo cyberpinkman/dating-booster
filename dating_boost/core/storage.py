@@ -91,6 +91,24 @@ class JsonStorage:
                 temp_path.unlink()
             raise
 
+    def write_jsonl(self, relative_path: Path, items: list[dict[str, Any]]) -> None:
+        path = self._resolve_path(relative_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        try:
+            content = "".join(json.dumps(item, sort_keys=True) + "\n" for item in items)
+            temp_path.write_text(content, encoding="utf-8")
+            with temp_path.open("r+", encoding="utf-8") as handle:
+                handle.flush()
+                os.fsync(handle.fileno())
+            self._replace_event_stream_in_sqlite(relative_path, items)
+            os.replace(temp_path, path)
+            self._fsync_directory(path.parent)
+        except Exception:
+            if temp_path.exists():
+                temp_path.unlink()
+            raise
+
     def read_jsonl(self, relative_path: Path) -> list[dict[str, Any]]:
         path = self._resolve_path(relative_path)
         if not path.exists():
@@ -125,3 +143,10 @@ class JsonStorage:
         from dating_boost.core.production_store import ProductionDataStore
 
         ProductionDataStore(self.root).append_audit_event(relative_path.as_posix(), data)
+
+    def _replace_event_stream_in_sqlite(self, relative_path: Path, items: list[dict[str, Any]]) -> None:
+        if not self._sqlite_db_exists():
+            return
+        from dating_boost.core.production_store import ProductionDataStore
+
+        ProductionDataStore(self.root).replace_audit_stream(relative_path.as_posix(), items)

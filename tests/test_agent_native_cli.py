@@ -12,6 +12,7 @@ REQUIRED_AGENT_NATIVE_COMMANDS = {
     "capabilities",
     "memory ingest-observation",
     "memory get-match",
+    "memory update-match",
     "context build",
     "policy check-draft",
     "policy check-action",

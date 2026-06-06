@@ -27,13 +27,24 @@ from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.daemon import DaemonRepository
 from dating_boost.core.diagnostics import DiagnosticsRepository
 from dating_boost.core.feedback import create_feedback_event
-from dating_boost.core.identity import resolve_match_identity
 from dating_boost.core.live_send_contract import (
     live_send_action_request_block_reason,
     live_send_authorization_block_reason,
     validate_live_send_contract,
 )
 from dating_boost.core.managed_session import ManagedSessionRepository
+from dating_boost.core.memory.ingest import store_observation_with_memory
+from dating_boost.core.memory.models import (
+    CommitmentMemory,
+    EvidenceRef,
+    MemoryEvent,
+    MemoryEventType,
+    MemoryFact,
+    MemoryFactType,
+    MemoryScope,
+)
+from dating_boost.core.memory.repositories import MemoryRepository
+from dating_boost.core.memory.retrieval import build_memory_context
 from dating_boost.core.models import Divergence, MemoryItem, ReplyMode, UserProfile
 from dating_boost.core.observation_authoring import (
     normalize_observation,
@@ -54,10 +65,11 @@ from dating_boost.core.scan_authoring import (
 )
 from dating_boost.core.skill_doctor import run_skill_doctor
 from dating_boost.core.safety import SafetyRepository
+from dating_boost.core.storage import StorageError
 from dating_boost.core.support import SupportLogRepository, classify_text_topics, context_source_manifest
 from dating_boost.intelligence.backends import ModelBackend, OpenAIBackend, ScriptedBackend
 from dating_boost.intelligence.reply_generator import DraftResponse, generate_reply
-from dating_boost.evals.runner import run_conversation_eval
+from dating_boost.evals.runner import run_conversation_eval, run_memory_eval
 from dating_boost.perception.fixture_loader import load_observation
 from dating_boost.perception.observations import AppObservation
 from dating_boost.perception.screenshot_loader import build_observation_from_screenshot_analysis
@@ -424,6 +436,38 @@ def main(argv: list[str] | None = None) -> int:
     memory_get_parser.add_argument("--data-dir", required=True, type=Path)
     memory_get_parser.add_argument("--match-id", required=True)
     memory_get_parser.set_defaults(handler=_handle_memory_get_match)
+    memory_rebuild_parser = memory_subparsers.add_parser(
+        "rebuild",
+        help="Rebuild one match memory projection from existing observations.",
+    )
+    memory_rebuild_parser.add_argument("--data-dir", required=True, type=Path)
+    memory_rebuild_target = memory_rebuild_parser.add_mutually_exclusive_group(required=True)
+    memory_rebuild_target.add_argument("--match-id")
+    memory_rebuild_target.add_argument("--all", action="store_true")
+    memory_rebuild_parser.set_defaults(handler=_handle_memory_rebuild)
+    memory_update_parser = memory_subparsers.add_parser(
+        "update-match",
+        help="Append a user-authored memory update event and rebuild the match projection.",
+    )
+    memory_update_parser.add_argument("--data-dir", required=True, type=Path)
+    memory_update_parser.add_argument("--match-id", required=True)
+    memory_update_parser.add_argument("--input", required=True, type=Path)
+    memory_update_parser.set_defaults(handler=_handle_memory_update_match)
+    memory_export_parser = memory_subparsers.add_parser(
+        "export",
+        help="Export one match memory projection and event stream without raw screenshots.",
+    )
+    memory_export_parser.add_argument("--data-dir", required=True, type=Path)
+    memory_export_parser.add_argument("--match-id", required=True)
+    memory_export_parser.set_defaults(handler=_handle_memory_export)
+    memory_delete_parser = memory_subparsers.add_parser(
+        "delete-match",
+        help="Delete one match-local memory record after exact confirmation.",
+    )
+    memory_delete_parser.add_argument("--data-dir", required=True, type=Path)
+    memory_delete_parser.add_argument("--match-id", required=True)
+    memory_delete_parser.add_argument("--confirm", required=True)
+    memory_delete_parser.set_defaults(handler=_handle_memory_delete_match)
 
     screenshot_parser = subparsers.add_parser(
         "observe-screenshot",
@@ -453,6 +497,8 @@ def main(argv: list[str] | None = None) -> int:
     context_build_parser.add_argument("--data-dir", required=True, type=Path)
     context_build_parser.add_argument("--match-id", required=True)
     context_build_parser.add_argument("--mode", required=True, choices=[mode.value for mode in ReplyMode])
+    context_build_parser.add_argument("--max-memory-items", type=int)
+    context_build_parser.add_argument("--include-memory-diagnostics", action="store_true")
     context_build_parser.set_defaults(handler=_handle_context_build)
 
     policy_parser = subparsers.add_parser("policy", help="Agent-native policy commands.")
@@ -491,12 +537,17 @@ def main(argv: list[str] | None = None) -> int:
     feedback_parser.add_argument("--draft-id", required=True)
     feedback_parser.add_argument("--mode", required=True, choices=[mode.value for mode in ReplyMode])
     feedback_parser.add_argument("--label", required=True)
+    feedback_parser.add_argument("--referenced-memory-id", action="append", default=[])
+    feedback_parser.add_argument("--conversation-move")
+    feedback_parser.add_argument("--hook-source")
+    feedback_parser.add_argument("--edited-text-ref")
+    feedback_parser.add_argument("--user-confirmed-style-promotion", action="store_true")
     feedback_parser.set_defaults(handler=_handle_feedback)
 
     eval_parser = subparsers.add_parser("eval", help="Offline evaluation commands.")
     eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
     eval_run_parser = eval_subparsers.add_parser("run")
-    eval_run_parser.add_argument("--suite", required=True, choices=["conversation"])
+    eval_run_parser.add_argument("--suite", required=True, choices=["conversation", "memory"])
     eval_run_parser.add_argument("--input", type=Path)
     eval_run_parser.add_argument("--json", action="store_true")
     eval_run_parser.set_defaults(handler=_handle_eval_run)
@@ -1594,33 +1645,10 @@ def _persist_observation(data_dir: Path, observation: AppObservation) -> int:
 
 
 def _store_observation(data_dir: Path, observation: AppObservation) -> dict[str, Any]:
-    match_repo = MatchRepository(data_dir)
-    identity = resolve_match_identity(observation, existing_matches=match_repo.list_match_candidates())
-    _validate_storage_id(identity.match_id, "match_id")
+    payload = store_observation_with_memory(data_dir, observation)
+    _validate_storage_id(str(payload["match_id"]), "match_id")
     _validate_storage_id(observation.observation_id, "observation_id")
-
-    ObservationRepository(data_dir).save_observation(identity.match_id, observation)
-    match_repo.upsert_match_from_observation(
-        match_id=identity.match_id,
-        observation=observation,
-        confidence=identity.confidence.value,
-        requires_user_confirmation=identity.requires_user_confirmation,
-    )
-    if identity.requires_user_confirmation:
-        match_repo.append_identity_confirmation(
-            match_id=identity.match_id,
-            observation_id=observation.observation_id,
-            confidence=identity.confidence.value,
-            reason=identity.reason,
-        )
-
-    return {
-        "status": "ok",
-        "match_id": identity.match_id,
-        "confidence": identity.confidence.value,
-        "requires_user_confirmation": identity.requires_user_confirmation,
-        "observation_id": observation.observation_id,
-    }
+    return payload
 
 
 def _handle_memory_get_match(args: argparse.Namespace) -> int:
@@ -1642,6 +1670,472 @@ def _handle_memory_get_match(args: argparse.Namespace) -> int:
         }
     )
     return 2
+
+
+def _handle_memory_rebuild(args: argparse.Namespace) -> int:
+    if args.all:
+        return _handle_memory_rebuild_all(args)
+    try:
+        payload = _rebuild_memory_match(args.data_dir, args.match_id)
+        if payload is None:
+            _print_json(
+                {
+                    "schema_version": 1,
+                    "status": "not_found",
+                    "match_id": args.match_id,
+                }
+            )
+            return 2
+    except (StorageError, ValueError, KeyError, TypeError) as exc:
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "error",
+                "match_id": args.match_id,
+                "reason": str(exc),
+            }
+        )
+        return 2
+    _print_json(payload)
+    return 0
+
+
+def _handle_memory_rebuild_all(args: argparse.Namespace) -> int:
+    memory_repo = MemoryRepository(args.data_dir)
+    match_ids = memory_repo.match_ids_with_observations()
+    if not match_ids:
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "not_found",
+                "rebuilt_count": 0,
+                "error_count": 0,
+                "matches": [],
+            }
+        )
+        return 2
+
+    results: list[dict[str, Any]] = []
+    for match_id in match_ids:
+        try:
+            result = _rebuild_memory_match(args.data_dir, match_id)
+        except (StorageError, ValueError, KeyError, TypeError) as exc:
+            result = {
+                "schema_version": 1,
+                "status": "error",
+                "match_id": match_id,
+                "reason": str(exc),
+            }
+        if result is None:
+            result = {
+                "schema_version": 1,
+                "status": "not_found",
+                "match_id": match_id,
+                "reason": "missing_observations",
+            }
+        results.append(result)
+
+    rebuilt_count = sum(1 for item in results if item["status"] == "ok")
+    error_count = len(results) - rebuilt_count
+    status = "ok" if error_count == 0 else "partial"
+    _print_json(
+        {
+            "schema_version": 1,
+            "status": status,
+            "rebuilt_count": rebuilt_count,
+            "error_count": error_count,
+            "matches": results,
+        }
+    )
+    return 0 if status == "ok" else 2
+
+
+def _rebuild_memory_match(data_dir: Path, match_id: str) -> dict[str, Any] | None:
+    observations = ObservationRepository(data_dir).load_observations(match_id)
+    if not observations:
+        return None
+    memory_repo = MemoryRepository(data_dir)
+    match_record = _match_record(data_dir, match_id)
+    projection = memory_repo.rebuild_projection_from_observations(
+        match_id,
+        observations,
+        identity_confidence=(
+            str(match_record["identity_confidence"])
+            if match_record is not None and match_record.get("identity_confidence")
+            else None
+        ),
+        requires_user_confirmation=(
+            bool(match_record["requires_user_confirmation"])
+            if match_record is not None and "requires_user_confirmation" in match_record
+            else None
+        ),
+    )
+    return {
+        "schema_version": 1,
+        "status": "ok",
+        "match_id": match_id,
+        "memory_event_count": len(memory_repo.load_events(match_id)),
+        "projection_updated": True,
+        "identity_status": projection.identity_status.value,
+        "trusted_for_context": projection.trusted_for_context,
+        "trusted_for_managed_send": projection.trusted_for_managed_send,
+    }
+
+
+def _handle_memory_update_match(args: argparse.Namespace) -> int:
+    update = _read_json_object(args.input)
+    try:
+        payload = _apply_memory_update(args.data_dir, args.match_id, update)
+    except (StorageError, ValueError) as exc:
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "error",
+                "match_id": args.match_id,
+                "reason": str(exc),
+            }
+        )
+        return 2
+    _print_json(payload)
+    return 0
+
+
+def _handle_memory_export(args: argparse.Namespace) -> int:
+    try:
+        export_payload = MemoryRepository(args.data_dir).export_match(args.match_id)
+    except (StorageError, ValueError) as exc:
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "error",
+                "match_id": args.match_id,
+                "reason": str(exc),
+            }
+        )
+        return 2
+    status = "ok" if export_payload["projection"] is not None or export_payload["events"] else "not_found"
+    _print_json(
+        {
+            "schema_version": 1,
+            "status": status,
+            "match_id": args.match_id,
+            "export": export_payload,
+        }
+    )
+    return 0 if status == "ok" else 2
+
+
+def _handle_memory_delete_match(args: argparse.Namespace) -> int:
+    required = f"delete-match:{args.match_id}"
+    if args.confirm != required:
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "blocked",
+                "match_id": args.match_id,
+                "reason": "confirm_token_mismatch",
+                "required_confirm_token": required,
+            }
+        )
+        return 2
+
+    try:
+        prefix = f"matches/{args.match_id}/"
+        deleted_sqlite_documents = 0
+        deleted_sqlite_events = 0
+        store = ProductionDataStore(args.data_dir)
+        if (args.data_dir / "dating_boost.sqlite3").exists():
+            deleted_sqlite_documents = store.delete_documents_with_prefix(prefix)
+            deleted_sqlite_events = store.delete_audit_events_with_stream_prefix(prefix)
+        match_repo = MatchRepository(args.data_dir)
+        removed_identity_confirmations = match_repo.remove_identity_confirmations(args.match_id)
+        removed_index_records = match_repo.delete_match(args.match_id)
+        deleted_json_files = MemoryRepository(args.data_dir).delete_match_documents(args.match_id)
+    except (OSError, RuntimeError, StorageError, ValueError) as exc:
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "error",
+                "match_id": args.match_id,
+                "reason": str(exc),
+            }
+        )
+        return 2
+
+    _print_json(
+        {
+            "schema_version": 1,
+            "status": "ok",
+            "match_id": args.match_id,
+            "deleted_json_files": deleted_json_files,
+            "deleted_sqlite_documents": deleted_sqlite_documents,
+            "deleted_sqlite_events": deleted_sqlite_events,
+            "removed_identity_confirmations": removed_identity_confirmations,
+            "removed_index_records": removed_index_records,
+        }
+    )
+    return 0
+
+
+def _apply_memory_update(data_dir: Path, match_id: str, update: dict[str, Any]) -> dict[str, Any]:
+    action = str(update.get("action") or "")
+    if action == "merge_identity":
+        return _apply_memory_identity_merge(data_dir, match_id, update)
+
+    memory_repo = MemoryRepository(data_dir)
+    event = _memory_update_event(data_dir, match_id, update)
+    memory_repo.append_event(match_id, event)
+    projection = memory_repo.rebuild_projection(match_id)
+    return {
+        "schema_version": 1,
+        "status": "ok",
+        "match_id": match_id,
+        "action": action,
+        "event_id": event.event_id,
+        "projection_updated": True,
+        "identity_status": projection.identity_status.value,
+        "trusted_for_context": projection.trusted_for_context,
+        "trusted_for_managed_send": projection.trusted_for_managed_send,
+    }
+
+
+def _apply_memory_identity_merge(data_dir: Path, match_id: str, update: dict[str, Any]) -> dict[str, Any]:
+    source_match_id = str(update.get("source_match_id") or "")
+    target_match_id = str(update.get("target_match_id") or "")
+    confirmation_token = str(update.get("confirmation_token") or "")
+    expected_token = f"merge_identity:{source_match_id}:{target_match_id}"
+    if not source_match_id or not target_match_id:
+        raise ValueError("merge_identity requires source_match_id and target_match_id")
+    if target_match_id != match_id:
+        raise ValueError("merge_identity target_match_id must match --match-id")
+    if confirmation_token != expected_token:
+        raise ValueError(f"merge_identity requires confirmation_token {expected_token!r}")
+
+    memory_repo = MemoryRepository(data_dir)
+    observation_repo = ObservationRepository(data_dir)
+    source_events = memory_repo.load_events(source_match_id)
+    target_events_before = memory_repo.load_events(target_match_id)
+    for observation in observation_repo.load_observations(source_match_id):
+        observation_repo.save_observation(target_match_id, observation)
+    MatchRepository(data_dir).merge_matches(
+        source_match_id=source_match_id,
+        target_match_id=target_match_id,
+    )
+    for source_event in source_events:
+        memory_repo.append_event(
+            target_match_id,
+            _merged_memory_event(
+                source_event,
+                source_match_id=source_match_id,
+                target_match_id=target_match_id,
+            ),
+        )
+    event = MemoryEvent(
+        event_id=_memory_event_id(
+            target_match_id,
+            "merge_identity",
+            {"source_match_id": source_match_id, "target_match_id": target_match_id},
+        ),
+        event_type=MemoryEventType.MATCH_IDENTITY_CONFIRMED,
+        match_id=target_match_id,
+        scope=MemoryScope.MATCH_PROFILE,
+        created_at=_now_iso(),
+        payload={
+            "confirmed_by": str(update.get("confirmed_by") or "user"),
+            "action": "merge_identity",
+            "source_match_id": source_match_id,
+            "target_match_id": target_match_id,
+            "merged_event_count": len(source_events),
+            "target_event_count_before_merge": len(target_events_before),
+        },
+        evidence=_manual_evidence("identity_merge", "User confirmed identity merge."),
+    )
+    memory_repo.append_event(target_match_id, event)
+    projection = memory_repo.rebuild_projection(target_match_id)
+    return {
+        "schema_version": 1,
+        "status": "ok",
+        "match_id": target_match_id,
+        "action": "merge_identity",
+        "event_id": event.event_id,
+        "source_match_id": source_match_id,
+        "target_match_id": target_match_id,
+        "merged_event_count": len(source_events),
+        "projection_updated": True,
+        "identity_status": projection.identity_status.value,
+        "trusted_for_context": projection.trusted_for_context,
+        "trusted_for_managed_send": projection.trusted_for_managed_send,
+    }
+
+
+def _memory_update_event(data_dir: Path, match_id: str, update: dict[str, Any]) -> MemoryEvent:
+    action = str(update.get("action") or "")
+    created_at = str(update.get("created_at") or _now_iso())
+    if action == "confirm_identity":
+        return MemoryEvent(
+            event_id=_memory_event_id(match_id, action, update),
+            event_type=MemoryEventType.MATCH_IDENTITY_CONFIRMED,
+            match_id=match_id,
+            scope=MemoryScope.MATCH_PROFILE,
+            created_at=created_at,
+            payload={
+                "confirmed_by": str(update.get("confirmed_by") or "user"),
+                "action": action,
+            },
+            evidence=_manual_evidence("user_confirmation", "User confirmed match identity."),
+        )
+    if action in {"reject_fact", "archive_fact"}:
+        target_fact_id = _required_text(update, "target_fact_id")
+        return MemoryEvent(
+            event_id=_memory_event_id(match_id, action, update),
+            event_type=MemoryEventType.FACT_REJECTED if action == "reject_fact" else MemoryEventType.FACT_ARCHIVED,
+            match_id=match_id,
+            scope=MemoryScope.MATCH_PROFILE,
+            created_at=created_at,
+            payload={
+                "target_fact_id": target_fact_id,
+                "reason": str(update.get("reason") or action),
+            },
+            evidence=_manual_evidence("user_correction", f"User requested {action}."),
+        )
+    if action == "correct_fact":
+        target_fact_id = _required_text(update, "target_fact_id")
+        fact = _corrected_fact(data_dir, match_id, target_fact_id, update, created_at)
+        return MemoryEvent(
+            event_id=_memory_event_id(match_id, action, update),
+            event_type=MemoryEventType.FACT_CORRECTED,
+            match_id=match_id,
+            scope=MemoryScope.MATCH_PROFILE,
+            created_at=created_at,
+            payload={
+                "target_fact_id": target_fact_id,
+                "fact": fact.to_dict(),
+                "reason": str(update.get("reason") or "user_correction"),
+            },
+            evidence=_manual_evidence("user_correction", "User corrected a memory fact."),
+        )
+    if action == "create_commitment":
+        commitment = CommitmentMemory(
+            commitment_id=str(update.get("commitment_id") or f"commitment_{_digest(update)[:12]}"),
+            text=_required_text(update, "text"),
+            evidence=_manual_evidence("user_update", "User created a commitment memory."),
+            created_at=created_at,
+            last_seen_at=created_at,
+        )
+        return MemoryEvent(
+            event_id=_memory_event_id(match_id, action, update),
+            event_type=MemoryEventType.COMMITMENT_CREATED,
+            match_id=match_id,
+            scope=MemoryScope.COMMITMENT,
+            created_at=created_at,
+            payload={"commitment": commitment.to_dict()},
+            evidence=commitment.evidence,
+        )
+    if action == "resolve_commitment":
+        commitment_id = _required_text(update, "commitment_id")
+        return MemoryEvent(
+            event_id=_memory_event_id(match_id, action, update),
+            event_type=MemoryEventType.COMMITMENT_RESOLVED,
+            match_id=match_id,
+            scope=MemoryScope.COMMITMENT,
+            created_at=created_at,
+            payload={
+                "commitment_id": commitment_id,
+                "resolved_at": str(update.get("resolved_at") or created_at),
+            },
+            evidence=_manual_evidence("user_update", "User resolved a commitment memory."),
+        )
+    raise ValueError(f"unsupported memory update action: {action!r}")
+
+
+def _corrected_fact(
+    data_dir: Path,
+    match_id: str,
+    target_fact_id: str,
+    update: dict[str, Any],
+    created_at: str,
+) -> MemoryFact:
+    if isinstance(update.get("fact"), dict):
+        fact_data = dict(update["fact"])
+        fact_data.setdefault("evidence", _manual_evidence("user_correction", "User corrected a memory fact.").to_dict())
+        fact_data.setdefault("created_at", created_at)
+        fact_data.setdefault("last_seen_at", created_at)
+        fact_data.setdefault("fact_type", MemoryFactType.USER_CONFIRMED.value)
+        return MemoryFact.from_dict(fact_data)
+    target = _find_memory_fact(data_dir, match_id, target_fact_id)
+    subject = str(update.get("subject") or (target.subject if target else match_id))
+    predicate = str(update.get("predicate") or (target.predicate if target else "user_corrected_fact"))
+    qualifiers = dict(update.get("qualifiers") or (target.qualifiers if target else {}))
+    return MemoryFact(
+        fact_id=str(update.get("fact_id") or "manual_corrected_fact"),
+        scope=MemoryScope.MATCH_PROFILE,
+        fact_type=MemoryFactType.USER_CONFIRMED,
+        subject=subject,
+        predicate=predicate,
+        value=update.get("value"),
+        qualifiers=qualifiers,
+        confidence=str(update.get("confidence") or "high"),
+        evidence=_manual_evidence("user_correction", "User corrected a memory fact."),
+        created_at=created_at,
+        last_seen_at=created_at,
+    )
+
+
+def _find_memory_fact(data_dir: Path, match_id: str, fact_id: str) -> MemoryFact | None:
+    projection = MemoryRepository(data_dir).load_projection(match_id)
+    if projection is None:
+        return None
+    for fact in [*projection.facts, *projection.inferences]:
+        if fact.fact_id == fact_id:
+            return fact
+    return None
+
+
+def _merged_memory_event(
+    event: MemoryEvent,
+    *,
+    source_match_id: str,
+    target_match_id: str,
+) -> MemoryEvent:
+    payload = dict(event.payload)
+    payload["original_match_id"] = source_match_id
+    payload["original_event_id"] = event.event_id
+    return MemoryEvent(
+        event_id=f"merged_{_digest({'source': source_match_id, 'target': target_match_id, 'event_id': event.event_id})[:16]}",
+        event_type=event.event_type,
+        match_id=target_match_id,
+        scope=event.scope,
+        created_at=event.created_at,
+        payload=payload,
+        evidence=EvidenceRef(
+            source_type="identity_merge",
+            source_event_id=event.event_id,
+            evidence_text="Source match memory event preserved during identity merge.",
+            metadata={"source_match_id": source_match_id},
+        ),
+    )
+
+
+def _memory_event_id(match_id: str, action: str, payload: dict[str, Any]) -> str:
+    return f"mem_evt_{_digest({'match_id': match_id, 'action': action, 'payload': payload})[:16]}"
+
+
+def _manual_evidence(source_type: str, evidence_text: str) -> EvidenceRef:
+    return EvidenceRef(source_type=source_type, evidence_text=evidence_text, confidence="user_confirmed")
+
+
+def _required_text(payload: dict[str, Any], key: str) -> str:
+    value = str(payload.get(key) or "")
+    if not value:
+        raise ValueError(f"{key} is required")
+    return value
+
+
+def _match_record(data_dir: Path, match_id: str) -> dict[str, object] | None:
+    for record in MatchRepository(data_dir).list_match_candidates():
+        if record.get("match_id") == match_id:
+            return record
+    return None
 
 
 def _handle_draft(args: argparse.Namespace) -> int:
@@ -1680,10 +2174,27 @@ def _handle_draft(args: argparse.Namespace) -> int:
 
 
 def _handle_context_build(args: argparse.Namespace) -> int:
+    if args.max_memory_items is not None and args.max_memory_items < 1:
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "error",
+                "reason": "max_memory_items_must_be_positive",
+            }
+        )
+        return 2
     profile = JsonMemoryRepository(args.data_dir).load_user_profile()
     reply_mode = ReplyMode(args.mode)
     observation = ObservationRepository(args.data_dir).load_latest_observation(args.match_id)
-    context_pack = _build_mvp_context_pack(profile, args.match_id, reply_mode, observation, args.data_dir)
+    context_pack = _build_mvp_context_pack(
+        profile,
+        args.match_id,
+        reply_mode,
+        observation,
+        args.data_dir,
+        max_memory_items=args.max_memory_items,
+        include_memory_diagnostics=bool(args.include_memory_diagnostics),
+    )
     _print_json(
         {
             "schema_version": 1,
@@ -2173,20 +2684,28 @@ def _handle_feedback(args: argparse.Namespace) -> int:
         draft_id=args.draft_id,
         mode=ReplyMode(args.mode),
         label=args.label,
+        referenced_memory_ids=list(args.referenced_memory_id),
+        conversation_move=args.conversation_move,
+        hook_source=args.hook_source,
+        edited_text_ref=args.edited_text_ref,
+        user_confirmed_style_promotion=bool(args.user_confirmed_style_promotion),
     )
     _print_json(event_payload)
     return 0
 
 
 def _handle_eval_run(args: argparse.Namespace) -> int:
-    if args.suite != "conversation":
+    if args.suite == "conversation":
+        result = run_conversation_eval(args.input)
+    elif args.suite == "memory":
+        result = run_memory_eval(args.input)
+    else:
         _print_json({"schema_version": 1, "status": "error", "reason": "unsupported_eval_suite"})
         return 2
-    result = run_conversation_eval(args.input)
     payload = {
         "schema_version": 1,
         "status": "ok" if result.passed else "failed",
-        "suite": "conversation",
+        "suite": args.suite,
         "case_count": result.case_count,
         "passed": result.passed,
         "failures": list(result.failures),
@@ -2212,6 +2731,11 @@ def _record_feedback(
     draft_id: str,
     mode: ReplyMode,
     label: str,
+    referenced_memory_ids: list[str] | None = None,
+    conversation_move: str | None = None,
+    hook_source: str | None = None,
+    edited_text_ref: str | None = None,
+    user_confirmed_style_promotion: bool = False,
 ) -> dict[str, Any]:
     event = create_feedback_event(
         event_id=f"feedback_{match_id}_{draft_id}_{label}",
@@ -2220,14 +2744,37 @@ def _record_feedback(
         mode=mode,
         label=label,
         created_at=MVP_TIMESTAMP,
+        referenced_memory_ids=referenced_memory_ids,
+        conversation_move=conversation_move,
+        hook_source=hook_source,
+        edited_text_ref=edited_text_ref,
+        user_confirmed_style_promotion=True if user_confirmed_style_promotion else None,
     )
     JsonMemoryRepository(data_dir).append_feedback_event(match_id, event)
+    memory_event = MemoryEvent(
+        event_id=str(event["event_id"]),
+        event_type=MemoryEventType.FEEDBACK_RECORDED,
+        match_id=match_id,
+        scope=MemoryScope.FEEDBACK_PREFERENCE,
+        created_at=str(event["created_at"]),
+        payload=dict(event),
+        evidence=EvidenceRef(
+            source_type="user_feedback",
+            evidence_text="User recorded feedback for a generated draft.",
+            confidence="user_confirmed",
+        ),
+    )
+    memory_repo = MemoryRepository(data_dir)
+    memory_repo.append_event(match_id, memory_event)
+    projection = memory_repo.rebuild_projection(match_id)
     return {
         "status": "ok",
         "match_id": match_id,
         "event_id": event["event_id"],
         "draft_id": draft_id,
         "label": label,
+        "projection_updated": True,
+        "identity_status": projection.identity_status.value,
     }
 
 
@@ -2237,6 +2784,9 @@ def _build_mvp_context_pack(
     reply_mode: ReplyMode,
     observation: AppObservation | None,
     data_dir: Path | None = None,
+    *,
+    max_memory_items: int | None = None,
+    include_memory_diagnostics: bool = False,
 ) -> dict[str, Any]:
     user_profile = _profile_to_context_dict(profile)
     if data_dir is not None:
@@ -2245,7 +2795,27 @@ def _build_mvp_context_pack(
         if disclosure_profile is not None:
             user_profile["disclosure_profile"] = disclosure_profile
         user_profile["disclosure_readiness"] = disclosure_repo.readiness(mode="draft")
-    if observation is None:
+    memory_context: dict[str, Any] | None = None
+    if data_dir is not None:
+        projection = MemoryRepository(data_dir).load_projection(match_id)
+        if projection is not None:
+            memory_context = build_memory_context(
+                match_id,
+                projection,
+                latest_observation=observation,
+                now=_now_iso(),
+                max_items=max_memory_items,
+                reply_mode=reply_mode.value,
+            )
+    if memory_context is not None:
+        match_profile = dict(memory_context["match_profile"])
+        conversation_memory = dict(memory_context["conversation_memory"])
+        conversation_memory["memory_items"] = memory_context.get("memory_items")
+        if include_memory_diagnostics:
+            conversation_memory["excluded_memory"] = memory_context.get("excluded_memory")
+        if max_memory_items is not None:
+            _suppress_unbudgeted_memory_context(match_profile, conversation_memory)
+    elif observation is None:
         match_profile = {
             "match_id": match_id,
             "conversation_hooks": [],
@@ -2270,6 +2840,19 @@ def _build_mvp_context_pack(
         reply_mode=reply_mode,
         max_items=None,
     )
+
+
+def _suppress_unbudgeted_memory_context(
+    match_profile: dict[str, Any],
+    conversation_memory: dict[str, Any],
+) -> None:
+    match_profile["conversation_hooks"] = []
+    match_profile["possible_interests"] = []
+    conversation_memory["recent_messages"] = []
+    conversation_memory["latest_inbound_messages"] = []
+    conversation_memory["open_threads"] = []
+    conversation_memory["commitments"] = []
+    conversation_memory["running_summary"] = ""
 
 
 def _match_profile_from_observation(match_id: str, observation: AppObservation) -> dict[str, Any]:

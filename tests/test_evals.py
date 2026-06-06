@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dating_boost.evals.runner import run_conversation_eval, run_reply_quality_eval
+from dating_boost.evals.runner import run_conversation_eval, run_memory_eval, run_reply_quality_eval
 
 
 class EvalTests(unittest.TestCase):
@@ -46,6 +46,24 @@ class EvalTests(unittest.TestCase):
         self.assertTrue(result.passed)
         self.assertTrue(result.cases)
         self.assertTrue(all(case["passed"] for case in result.cases))
+
+    def test_memory_eval_passes_static_fixture_suite(self):
+        result = run_memory_eval(Path("tests/fixtures/evals/memory_cases.jsonl"))
+
+        self.assertEqual(result.case_count, 12)
+        self.assertTrue(result.passed)
+        self.assertTrue(result.cases)
+        self.assertTrue(all(case["passed"] for case in result.cases))
+
+    def test_memory_eval_fails_empty_suite(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "memory_cases.jsonl"
+            path.write_text("", encoding="utf-8")
+
+            result = run_memory_eval(path)
+
+        self.assertFalse(result.passed)
+        self.assertIn("Expected at least 12 memory eval cases", result.failures[0])
 
 
 if __name__ == "__main__":

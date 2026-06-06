@@ -10,11 +10,13 @@ from typing import Any
 
 from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.goals import DEFAULT_GOAL_TYPE, get_goal_type_definition
-from dating_boost.core.identity import resolve_match_identity
+from dating_boost.core.memory.ingest import store_observation_with_memory
+from dating_boost.core.memory.repositories import MemoryRepository
+from dating_boost.core.memory.retrieval import build_memory_context
 from dating_boost.core.models import Divergence, ReplyMode
 from dating_boost.core.planner import PlannerRepository, planner_context_items
 from dating_boost.core.production_store import payload_digest
-from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
+from dating_boost.core.repositories import JsonMemoryRepository
 from dating_boost.core.storage import JsonStorage
 from dating_boost.core.user_disclosure import UserDisclosureRepository
 from dating_boost.intelligence.reply_generator import DraftResponse
@@ -676,21 +678,7 @@ class AutomationRepository:
         path.write_text(text, encoding="utf-8")
 
     def _store_observation(self, observation: AppObservation) -> dict[str, Any]:
-        match_repo = MatchRepository(self.root)
-        identity = resolve_match_identity(observation, existing_matches=match_repo.list_match_candidates())
-        ObservationRepository(self.root).save_observation(identity.match_id, observation)
-        match_repo.upsert_match_from_observation(
-            match_id=identity.match_id,
-            observation=observation,
-            confidence=identity.confidence.value,
-            requires_user_confirmation=identity.requires_user_confirmation,
-        )
-        return {
-            "match_id": identity.match_id,
-            "confidence": identity.confidence.value,
-            "requires_user_confirmation": identity.requires_user_confirmation,
-            "observation_id": observation.observation_id,
-        }
+        return store_observation_with_memory(self.root, observation)
 
     def _context_pack(self, match_id: str, observation: AppObservation) -> dict[str, Any]:
         profile = JsonMemoryRepository(self.root).load_user_profile()
@@ -709,31 +697,45 @@ class AutomationRepository:
         if disclosure_profile is not None:
             user_profile["disclosure_profile"] = disclosure_profile
         user_profile["disclosure_readiness"] = disclosure_repo.readiness(mode="draft")
-        match_profile = {
-            "match_id": match_id,
-            "display_name": observation.match_identity_hints.visible_name,
-            "profile_text": observation.profile_observation.profile_text,
-            "conversation_hooks": list(observation.profile_observation.hook_candidates),
-            "possible_interests": [
-                {"name": cue, "confidence": "medium"}
-                for cue in [
-                    *observation.profile_observation.photo_cues,
-                    *observation.profile_observation.hook_candidates,
-                ]
-            ],
-        }
-        messages = [dict(message) for message in observation.conversation_observation.visible_messages]
-        latest_inbound_messages = [
-            dict(message)
-            for message in observation.conversation_observation.latest_inbound_messages
-        ]
-        conversation_memory = {
-            "recent_messages": messages,
-            "latest_inbound_messages": latest_inbound_messages,
-            "open_threads": list(observation.conversation_observation.thread_cues),
-            "commitments": [],
-            "running_summary": " ".join(message.get("text", "") for message in messages).strip(),
-        }
+        projection = MemoryRepository(self.root).load_projection(match_id)
+        if projection is not None:
+            memory_context = build_memory_context(
+                match_id,
+                projection,
+                latest_observation=observation,
+                now=self._now(),
+                max_items=None,
+                reply_mode=ReplyMode.ADAPTIVE.value,
+            )
+            match_profile = memory_context["match_profile"]
+            conversation_memory = dict(memory_context["conversation_memory"])
+            conversation_memory["memory_items"] = memory_context.get("memory_items")
+        else:
+            match_profile = {
+                "match_id": match_id,
+                "display_name": observation.match_identity_hints.visible_name,
+                "profile_text": observation.profile_observation.profile_text,
+                "conversation_hooks": list(observation.profile_observation.hook_candidates),
+                "possible_interests": [
+                    {"name": cue, "confidence": "medium"}
+                    for cue in [
+                        *observation.profile_observation.photo_cues,
+                        *observation.profile_observation.hook_candidates,
+                    ]
+                ],
+            }
+            messages = [dict(message) for message in observation.conversation_observation.visible_messages]
+            latest_inbound_messages = [
+                dict(message)
+                for message in observation.conversation_observation.latest_inbound_messages
+            ]
+            conversation_memory = {
+                "recent_messages": messages,
+                "latest_inbound_messages": latest_inbound_messages,
+                "open_threads": list(observation.conversation_observation.thread_cues),
+                "commitments": [],
+                "running_summary": " ".join(message.get("text", "") for message in messages).strip(),
+            }
         conversation_memory.update(planner_context_items(PlannerRepository(self.root).load_plan(match_id)))
         conversation_memory["appointment_constraints"] = self._load_collection(
             Path("automation") / "availability.json",

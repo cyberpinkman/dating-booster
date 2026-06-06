@@ -355,6 +355,30 @@ class ProductionDataStore:
                 ),
             )
 
+    def replace_audit_stream(self, relative_path: str, payloads: list[dict[str, Any]]) -> None:
+        self.ensure_schema()
+        with self._connect() as conn:
+            conn.execute("DELETE FROM audit_events WHERE stream = ?", (relative_path,))
+            for payload in payloads:
+                event_id = str(payload.get("event_id") or f"event_{_digest(payload)[:16]}")
+                conn.execute(
+                    """
+                    INSERT INTO audit_events (stream, event_id, target_match_id, payload_json, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(stream, event_id) DO UPDATE SET
+                        target_match_id = excluded.target_match_id,
+                        payload_json = excluded.payload_json,
+                        created_at = excluded.created_at
+                    """,
+                    (
+                        relative_path,
+                        event_id,
+                        payload.get("target_match_id"),
+                        self._encode_audit_event(relative_path, event_id, _redact_if_blocked(payload)),
+                        str(payload.get("created_at") or _now_iso()),
+                    ),
+                )
+
     def get_document(self, relative_path: str) -> dict[str, Any] | None:
         self.ensure_schema()
         with self._connect() as conn:
@@ -412,6 +436,28 @@ class ProductionDataStore:
                 }
             )
         return events
+
+    def delete_documents_with_prefix(self, prefix: str) -> int:
+        _validate_match_local_prefix(prefix)
+        self.ensure_schema()
+        with self._connect() as conn:
+            return int(
+                conn.execute(
+                    "DELETE FROM documents WHERE substr(path, 1, ?) = ?",
+                    (len(prefix), prefix),
+                ).rowcount
+            )
+
+    def delete_audit_events_with_stream_prefix(self, prefix: str) -> int:
+        _validate_match_local_prefix(prefix)
+        self.ensure_schema()
+        with self._connect() as conn:
+            return int(
+                conn.execute(
+                    "DELETE FROM audit_events WHERE substr(stream, 1, ?) = ?",
+                    (len(prefix), prefix),
+                ).rowcount
+            )
 
     def delete(self, *, scope: str, match_id: str | None, confirm: str) -> dict[str, Any]:
         required = delete_confirm_token(scope, match_id)
@@ -1255,25 +1301,58 @@ class ProductionDataStore:
         deleted = 0
         for row in conn.execute("SELECT path, payload_json FROM documents").fetchall():
             path = str(row["path"])
-            should_delete = match_id in path
-            if not should_delete:
-                payload = self._decode_document(path, row["payload_json"])
-                should_delete = _contains_match_reference(payload, match_id)
-            if should_delete:
+            if _is_match_local_path(path, match_id):
                 deleted += conn.execute("DELETE FROM documents WHERE path = ?", (path,)).rowcount
+                continue
+            payload = self._decode_document(path, row["payload_json"])
+            cleaned, remove_node, changed = _remove_match_reference(payload, match_id)
+            if remove_node:
+                deleted += conn.execute("DELETE FROM documents WHERE path = ?", (path,)).rowcount
+            elif changed:
+                deleted += conn.execute(
+                    """
+                    UPDATE documents
+                    SET payload_json = ?, updated_at = ?
+                    WHERE path = ?
+                    """,
+                    (
+                        self._encode_document(path, _redact_if_blocked(cleaned)),
+                        _now_iso(),
+                        path,
+                    ),
+                ).rowcount
         return deleted
 
     def _delete_match_audit_events(self, conn: sqlite3.Connection, match_id: str) -> int:
         deleted = 0
         for row in conn.execute("SELECT stream, event_id, target_match_id, payload_json FROM audit_events").fetchall():
-            should_delete = row["target_match_id"] == match_id
-            if not should_delete:
-                payload = self._decode_audit_event(row["stream"], row["event_id"], row["payload_json"])
-                should_delete = _contains_match_reference(payload, match_id)
-            if should_delete:
+            stream = str(row["stream"])
+            event_id = str(row["event_id"])
+            if row["target_match_id"] == match_id or _is_match_local_path(stream, match_id):
                 deleted += conn.execute(
                     "DELETE FROM audit_events WHERE stream = ? AND event_id = ?",
-                    (row["stream"], row["event_id"]),
+                    (stream, event_id),
+                ).rowcount
+                continue
+            payload = self._decode_audit_event(stream, event_id, row["payload_json"])
+            cleaned, remove_node, changed = _remove_match_reference(payload, match_id)
+            if remove_node:
+                deleted += conn.execute(
+                    "DELETE FROM audit_events WHERE stream = ? AND event_id = ?",
+                    (stream, event_id),
+                ).rowcount
+            elif changed:
+                deleted += conn.execute(
+                    """
+                    UPDATE audit_events
+                    SET payload_json = ?
+                    WHERE stream = ? AND event_id = ?
+                    """,
+                    (
+                        self._encode_audit_event(stream, event_id, _redact_if_blocked(cleaned)),
+                        stream,
+                        event_id,
+                    ),
                 ).rowcount
         return deleted
 
@@ -1302,11 +1381,16 @@ class ProductionDataStore:
                     except json.JSONDecodeError:
                         kept_lines.append(line)
                         continue
-                    if _contains_match_reference(item, match_id):
+                    cleaned, remove_node, item_changed = _remove_match_reference(item, match_id)
+                    if remove_node:
                         changed = True
                         removed_jsonl_events += 1
                         continue
-                    kept_lines.append(json.dumps(item, ensure_ascii=False, sort_keys=True))
+                    if item_changed:
+                        changed = True
+                        kept_lines.append(json.dumps(cleaned, ensure_ascii=False, sort_keys=True))
+                    else:
+                        kept_lines.append(json.dumps(item, ensure_ascii=False, sort_keys=True))
                 if changed:
                     if kept_lines:
                         path.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
@@ -1366,6 +1450,27 @@ def delete_confirm_token(scope: str, match_id: str | None) -> str:
     if scope == "archived":
         return "delete:archived"
     return "delete:all"
+
+
+def _validate_match_local_prefix(prefix: str) -> None:
+    if prefix in {"", ".", "..", "/"}:
+        raise ValueError(f"invalid match-local prefix: {prefix!r}")
+    if prefix.startswith("/") or "\\" in prefix or not prefix.endswith("/"):
+        raise ValueError(f"invalid match-local prefix: {prefix!r}")
+    parts = prefix.split("/")
+    if len(parts) != 3 or parts[0] != "matches" or parts[2] != "":
+        raise ValueError(f"invalid match-local prefix: {prefix!r}")
+    match_id = parts[1]
+    if match_id in {"", ".", ".."} or any(part in {".", ".."} for part in parts if part):
+        raise ValueError(f"invalid match-local prefix: {prefix!r}")
+
+
+def _is_match_local_path(path: str, match_id: str) -> bool:
+    parts = path.split("/")
+    for index, part in enumerate(parts):
+        if part == "matches" and len(parts) > index + 1 and parts[index + 1] == match_id:
+            return True
+    return False
 
 
 def payload_digest(payload: Any) -> str:
@@ -1456,19 +1561,9 @@ def _remove_empty_dirs(root: Path) -> None:
             path.rmdir()
 
 
-def _contains_match_reference(value: Any, match_id: str) -> bool:
-    if isinstance(value, str):
-        return match_id in value
-    if isinstance(value, dict):
-        return any(_contains_match_reference(item, match_id) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_match_reference(item, match_id) for item in value)
-    return False
-
-
 def _remove_match_reference(value: Any, match_id: str) -> tuple[Any, bool, bool]:
     if isinstance(value, str):
-        return (None, True, True) if match_id in value else (value, False, False)
+        return (None, True, True) if value == match_id else (value, False, False)
     if isinstance(value, list):
         changed = False
         result: list[Any] = []

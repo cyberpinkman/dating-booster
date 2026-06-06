@@ -39,6 +39,8 @@ def build_context_pack(
     _append(items, "user_disclosure_readiness", user_profile.get("disclosure_readiness"))
     _append(items, "goal_plan", conversation_memory.get("goal_plan"))
     _append(items, "planner_recommendation", conversation_memory.get("planner_recommendation"))
+    _append_memory_items(items, conversation_memory.get("memory_items"))
+    _append(items, "excluded_memory", conversation_memory.get("excluded_memory"))
     _append(items, "conversation_scores", conversation_memory.get("conversation_scores"))
     _append(items, "topic_lifecycle", conversation_memory.get("topic_lifecycle"))
     _append(items, "avoid_next", conversation_memory.get("avoid_next"))
@@ -86,8 +88,20 @@ def build_context_pack(
 
 
 def _append(items: list[dict[str, Any]], label: str, content: Any) -> None:
-    if content:
+    if content and not any(item["label"] == label for item in items):
         items.append({"label": label, "content": deepcopy(content)})
+
+
+def _append_memory_items(items: list[dict[str, Any]], memory_items: Any) -> None:
+    if not isinstance(memory_items, list):
+        return
+    for item in memory_items:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("label")
+        if not isinstance(label, str):
+            continue
+        _append(items, label, item.get("content"))
 
 
 def _reply_mode_value(reply_mode: ReplyMode | str) -> str:

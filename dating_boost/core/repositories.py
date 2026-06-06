@@ -98,6 +98,12 @@ class ObservationRepository:
             return None
         return max(observations, key=lambda observation: (observation.captured_at, observation.observation_id))
 
+    def load_observations(self, match_id: str) -> list["AppObservation"]:
+        from dating_boost.perception.observations import AppObservation
+
+        document = self._load_document(match_id)
+        return [AppObservation.from_dict(item) for item in document["observations"]]
+
     def _load_document(self, match_id: str) -> dict[str, Any]:
         try:
             return self._storage.read_json(self._observations_path(match_id), expected_schema_version=1)
@@ -179,6 +185,19 @@ class MatchRepository:
             },
         )
 
+    def remove_identity_confirmations(self, match_id: str) -> int:
+        _validate_match_id(match_id)
+        events = self._storage.read_jsonl(self._CONFIRMATIONS_PATH)
+        kept_events = [
+            event
+            for event in events
+            if event.get("match_id") != match_id
+        ]
+        removed = len(events) - len(kept_events)
+        if removed:
+            self._storage.write_jsonl(self._CONFIRMATIONS_PATH, kept_events)
+        return removed
+
     def merge_matches(self, *, source_match_id: str, target_match_id: str) -> None:
         _validate_match_id(source_match_id)
         _validate_match_id(target_match_id)
@@ -199,6 +218,20 @@ class MatchRepository:
         )
         index["matches"] = sorted(records.values(), key=lambda record: str(record["match_id"]))
         self._storage.write_json(self._INDEX_PATH, index)
+
+    def delete_match(self, match_id: str) -> int:
+        _validate_match_id(match_id)
+        index = self._load_index()
+        before = len(index["matches"])
+        index["matches"] = [
+            record
+            for record in index["matches"]
+            if record.get("match_id") != match_id
+        ]
+        removed = before - len(index["matches"])
+        if removed:
+            self._storage.write_json(self._INDEX_PATH, index)
+        return removed
 
     def _load_index(self) -> dict[str, Any]:
         try:

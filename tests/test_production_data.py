@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
+from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.storage import JsonStorage
 
 
@@ -259,6 +260,95 @@ class ProductionDataCliTests(unittest.TestCase):
             self.assertNotIn("match_ada", remaining_live_text)
             self.assertIn("match_bea", remaining_live_text)
 
+    def test_data_delete_match_does_not_delete_prefix_collision(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            for match_id in ("match_1", "match_10"):
+                match_dir = data_dir / "matches" / match_id
+                match_dir.mkdir(parents=True, exist_ok=True)
+                self._write_json(
+                    match_dir / "match.json",
+                    {"schema_version": 1, "match_id": match_id, "display_name": match_id},
+                )
+            self._run(["data", "migrate", "--data-dir", str(data_dir), "--json"])
+
+            delete_exit, delete_payload, _ = self._run(
+                [
+                    "data",
+                    "delete",
+                    "--data-dir",
+                    str(data_dir),
+                    "--scope",
+                    "match",
+                    "--match-id",
+                    "match_1",
+                    "--confirm",
+                    "delete:match:match_1",
+                    "--json",
+                ]
+            )
+            export_path = Path(temp_dir) / "export_after_collision_delete.json"
+            self._run(["data", "export", "--data-dir", str(data_dir), "--output", str(export_path), "--json"])
+            exported = json.loads(export_path.read_text(encoding="utf-8"))
+            exported_paths = {item["path"] for item in exported["documents"]}
+
+            self.assertEqual(delete_exit, 0)
+            self.assertEqual(delete_payload["status"], "ok")
+            self.assertFalse((data_dir / "matches" / "match_1").exists())
+            self.assertTrue((data_dir / "matches" / "match_10" / "match.json").exists())
+            self.assertNotIn("matches/match_1/match.json", exported_paths)
+            self.assertIn("matches/match_10/match.json", exported_paths)
+
+    def test_data_delete_match_updates_shared_sqlite_documents_instead_of_deleting_them(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            for match_id in ("match_1", "match_10"):
+                match_dir = data_dir / "matches" / match_id
+                match_dir.mkdir(parents=True, exist_ok=True)
+                self._write_json(
+                    match_dir / "match.json",
+                    {"schema_version": 1, "match_id": match_id, "display_name": match_id},
+                )
+            self._write_json(
+                data_dir / "automation" / "states.json",
+                {
+                    "schema_version": 1,
+                    "states": [
+                        {"match_id": "match_1", "candidate_key": "row_1"},
+                        {"match_id": "match_10", "candidate_key": "row_10"},
+                    ],
+                },
+            )
+            self._run(["data", "migrate", "--data-dir", str(data_dir), "--json"])
+
+            delete_exit, delete_payload, _ = self._run(
+                [
+                    "data",
+                    "delete",
+                    "--data-dir",
+                    str(data_dir),
+                    "--scope",
+                    "match",
+                    "--match-id",
+                    "match_1",
+                    "--confirm",
+                    "delete:match:match_1",
+                    "--json",
+                ]
+            )
+            export_path = Path(temp_dir) / "export_after_shared_delete.json"
+            self._run(["data", "export", "--data-dir", str(data_dir), "--output", str(export_path), "--json"])
+            exported = json.loads(export_path.read_text(encoding="utf-8"))
+            documents = {item["path"]: item["payload"] for item in exported["documents"]}
+
+            self.assertEqual(delete_exit, 0)
+            self.assertEqual(delete_payload["status"], "ok")
+            self.assertIn("automation/states.json", documents)
+            self.assertEqual(
+                documents["automation/states.json"]["states"],
+                [{"candidate_key": "row_10", "match_id": "match_10"}],
+            )
+
     def test_data_delete_all_removes_backups_and_sqlite_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
@@ -348,6 +438,51 @@ class ProductionDataCliTests(unittest.TestCase):
 
             self.assertFalse((data_dir / "unsafe.json").exists())
             self.assertFalse((data_dir / "unsafe.json.tmp").exists())
+
+    def test_sqlite_prefix_delete_helpers_only_delete_match_local_rows(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            store = ProductionDataStore(data_dir)
+            store.upsert_document("matches/match_ada/match_memory_projection.json", {"schema_version": 1})
+            store.upsert_document("matches/match_bea/match_memory_projection.json", {"schema_version": 1})
+            store.append_audit_event(
+                "matches/match_ada/memory_events.jsonl",
+                {"event_id": "event_ada", "target_match_id": "match_ada"},
+            )
+            store.append_audit_event(
+                "matches/match_bea/memory_events.jsonl",
+                {"event_id": "event_bea", "target_match_id": "match_bea"},
+            )
+
+            deleted_documents = store.delete_documents_with_prefix("matches/match_ada/")
+            deleted_events = store.delete_audit_events_with_stream_prefix("matches/match_ada/")
+
+            self.assertEqual(deleted_documents, 1)
+            self.assertEqual(deleted_events, 1)
+            self.assertEqual(store.list_documents(prefix="matches/match_ada/"), [])
+            self.assertTrue(store.list_documents(prefix="matches/match_bea/"))
+            self.assertEqual(store.list_audit_events(stream="matches/match_ada/memory_events.jsonl"), [])
+            self.assertTrue(store.list_audit_events(stream="matches/match_bea/memory_events.jsonl"))
+
+    def test_sqlite_prefix_delete_helpers_reject_unsafe_prefixes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProductionDataStore(Path(temp_dir) / "data")
+            unsafe_prefixes = [
+                "",
+                ".",
+                "..",
+                "/matches/match_ada/",
+                "matches/",
+                "matches/../match_ada/",
+                "profiles/user_local/",
+            ]
+
+            for prefix in unsafe_prefixes:
+                with self.subTest(prefix=prefix):
+                    with self.assertRaises(ValueError):
+                        store.delete_documents_with_prefix(prefix)
+                    with self.assertRaises(ValueError):
+                        store.delete_audit_events_with_stream_prefix(prefix)
 
     def _run(self, argv):
         output = StringIO()

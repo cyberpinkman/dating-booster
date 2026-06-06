@@ -165,6 +165,7 @@ class SkillPackageTests(unittest.TestCase):
             self.assertIn(harness_phrase, workflows_text)
         for command in (
             "memory ingest-observation",
+            "memory update-match",
             "context build",
             "policy check-draft",
             "policy check-action",

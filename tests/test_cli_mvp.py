@@ -7,7 +7,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
+from dating_boost.core.memory.models import (
+    EvidenceRef,
+    IdentityTrustStatus,
+    MatchMemoryProjection,
+    MemoryFact,
+    MemoryFactStatus,
+    MemoryFactType,
+    MemoryScope,
+)
+from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.core.repositories import ObservationRepository
+from dating_boost.perception.fixture_loader import load_observation
 
 
 class CliMvpTests(unittest.TestCase):
@@ -98,6 +109,128 @@ class CliMvpTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertIn("best_reply", payload)
             self.assertNotIn("context_pack", payload)
+
+    def test_context_build_exposes_only_identity_diagnostic_for_untrusted_memory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            with redirect_stdout(StringIO()):
+                main([
+                    "init-profile",
+                    "--data-dir",
+                    str(data_dir),
+                    "--input",
+                    "tests/fixtures/intelligence/user_profile.json",
+                ])
+            match_id = "match_untrusted"
+            observation = load_observation(Path("tests/fixtures/intelligence/app_observation_chat.json"))
+            ObservationRepository(data_dir).save_observation(match_id, observation)
+            MemoryRepository(data_dir).save_projection(
+                match_id,
+                MatchMemoryProjection(
+                    match_id=match_id,
+                    identity_status=IdentityTrustStatus.NEEDS_CONFIRMATION,
+                    trusted_for_context=False,
+                    trusted_for_managed_send=False,
+                    updated_at="2026-06-06T00:00:00Z",
+                ),
+            )
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = main([
+                    "context",
+                    "build",
+                    "--data-dir",
+                    str(data_dir),
+                    "--match-id",
+                    match_id,
+                    "--mode",
+                    "adaptive",
+                ])
+            payload = json.loads(output.getvalue())
+            encoded_context = json.dumps(payload["context_pack"], ensure_ascii=False)
+            items = {item["label"]: item["content"] for item in payload["context_pack"]["items"]}
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("identity_trust", items)
+            self.assertNotIn("latest_inbound_messages", items)
+            self.assertNotIn("recent_messages", items)
+            self.assertNotIn("It was. What are you up to this weekend?", encoded_context)
+
+    def test_context_build_memory_budget_and_diagnostics_are_explicit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            with redirect_stdout(StringIO()):
+                main([
+                    "init-profile",
+                    "--data-dir",
+                    str(data_dir),
+                    "--input",
+                    "tests/fixtures/intelligence/user_profile.json",
+                ])
+            match_id = "match_budget"
+            observation = load_observation(Path("tests/fixtures/intelligence/app_observation_chat.json"))
+            ObservationRepository(data_dir).save_observation(match_id, observation)
+            MemoryRepository(data_dir).save_projection(
+                match_id,
+                MatchMemoryProjection(
+                    match_id=match_id,
+                    identity_status=IdentityTrustStatus.TRUSTED,
+                    trusted_for_context=True,
+                    trusted_for_managed_send=True,
+                    updated_at="2026-06-06T00:00:00Z",
+                    facts=[
+                        self._memory_fact("active_hook", "profile_cue", "likes jazz"),
+                        self._memory_fact(
+                            "stale_weekend",
+                            "availability",
+                            "free this weekend",
+                            valid_until="2026-06-01T00:00:00Z",
+                        ),
+                    ],
+                ),
+            )
+
+            default_exit, default_payload = self._run_json([
+                "context",
+                "build",
+                "--data-dir",
+                str(data_dir),
+                "--match-id",
+                match_id,
+                "--mode",
+                "adaptive",
+                "--max-memory-items",
+                "1",
+            ])
+            diagnostic_exit, diagnostic_payload = self._run_json([
+                "context",
+                "build",
+                "--data-dir",
+                str(data_dir),
+                "--match-id",
+                match_id,
+                "--mode",
+                "adaptive",
+                "--max-memory-items",
+                "1",
+                "--include-memory-diagnostics",
+            ])
+            default_labels = [item["label"] for item in default_payload["context_pack"]["items"]]
+            diagnostic_items = {
+                item["label"]: item["content"]
+                for item in diagnostic_payload["context_pack"]["items"]
+            }
+
+            self.assertEqual(default_exit, 0)
+            self.assertEqual(diagnostic_exit, 0)
+            self.assertIn("turn_boundary", default_labels)
+            self.assertNotIn("latest_inbound_messages", default_labels)
+            self.assertNotIn("match_hooks", default_labels)
+            self.assertNotIn("excluded_memory", default_labels)
+            self.assertIn("excluded_memory", diagnostic_items)
+            self.assertIn("stale", {item["reason"] for item in diagnostic_items["excluded_memory"]})
+            self.assertIn("budget", {item["reason"] for item in diagnostic_items["excluded_memory"]})
 
     def test_draft_can_use_openai_backend_without_scripted_output(self):
         class FakeOpenAIBackend:
@@ -343,6 +476,41 @@ class CliMvpTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(events[0]["label"], "accepted")
+
+    def _memory_fact(
+        self,
+        fact_id: str,
+        predicate: str,
+        value: str,
+        *,
+        valid_until: str | None = None,
+    ) -> MemoryFact:
+        return MemoryFact(
+            fact_id=fact_id,
+            scope=MemoryScope.MATCH_PROFILE,
+            fact_type=MemoryFactType.VISIBLE_FACT,
+            subject="Alex",
+            predicate=predicate,
+            value=value,
+            qualifiers={"app_id": "tinder"},
+            confidence="medium",
+            evidence=EvidenceRef(
+                source_type="observation",
+                source_observation_id="obs_chat_001",
+                evidence_text="test evidence",
+                confidence="medium",
+            ),
+            created_at="2026-06-06T00:00:00Z",
+            last_seen_at="2026-06-06T00:00:00Z",
+            valid_until=valid_until,
+            status=MemoryFactStatus.ACTIVE,
+        )
+
+    def _run_json(self, argv: list[str]) -> tuple[int, dict]:
+        output = StringIO()
+        with redirect_stdout(output):
+            exit_code = main(argv)
+        return exit_code, json.loads(output.getvalue())
 
 
 if __name__ == "__main__":
