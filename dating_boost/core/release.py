@@ -127,7 +127,8 @@ def _validate_release_package(
     for key in ("package_version", "dating_boost_min_version"):
         if package.get(key) != __version__:
             issues.append(f"{issue_prefix}{key}_mismatch")
-    if package.get("source_ref") != f"v{__version__}":
+    expected_source_ref = f"v{__version__}" if _strict_release_mode() else _expected_source_ref()
+    if package.get("source_ref") != expected_source_ref:
         issues.append(f"{issue_prefix}source_ref_mismatch")
     if package.get("target_host") != expected_target_host:
         issues.append(f"{issue_prefix}target_host_mismatch")
@@ -147,6 +148,10 @@ def _git_commit() -> str:
     except Exception:  # noqa: BLE001
         return "unknown"
     return result.stdout.strip() or "unknown"
+
+
+def _expected_source_ref() -> str:
+    return "main" if ".dev" in __version__ else f"v{__version__}"
 
 
 def _strict_release_mode() -> bool:

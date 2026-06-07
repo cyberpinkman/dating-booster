@@ -1,19 +1,15 @@
 # Claude Code Install
 
-Install the Python CLI first:
-
-```bash
-python3 -m pip install "dating-booster==1.0.0rc1"
-dating-boost release doctor --json
-```
-
-For test installs, give the repository URL to Claude Code or another
-shell-capable agent and let it clone, inspect, and install from source:
+For current source-checkout installs, give the repository URL to Claude Code or
+another shell-capable agent and let it clone, inspect, and install from source.
+Do not use a pinned public PyPI release when validating newly added app support;
+the public release channel can lag `main`.
 
 ```bash
 git clone https://github.com/cyberpinkman/dating-booster.git
 cd dating-booster
 python3 -m pip install --user -e .
+python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 python3 -m dating_boost.cli adapter claude-code install --scope user --json
 python3 -m dating_boost.cli adapter claude-code doctor --data-dir ~/.dating-boost --json
 ```
@@ -29,6 +25,11 @@ python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 ```
 
 The installed `.claude/skills/dating-booster/` directory is a generated copy. Updating the git checkout alone does not update the skill that Claude Code reads.
+
+If `dating-boost capabilities` and `python3 -m dating_boost.cli capabilities`
+return different supported apps, the console script is stale. Use
+`python3 -m dating_boost.cli ...` from the source checkout until the editable
+install and shell PATH are fixed.
 
 Install the Claude Code skill into the current project:
 
@@ -52,6 +53,7 @@ Before real dating-app work, run:
 ```bash
 dating-boost data doctor --data-dir .local/dating-boost --json
 dating-boost capabilities --json --data-dir .local/dating-boost
+python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 ```
 
 If data doctor reports `needs_migration`, run:

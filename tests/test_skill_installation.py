@@ -8,6 +8,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
+from dating_boost import __version__
 from dating_boost.cli import main
 
 
@@ -30,9 +31,9 @@ class SkillInstallationTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["skill_version"], "1.0.0-rc.1")
+        self.assertEqual(payload["skill_version"], __version__)
         self.assertTrue(payload["cli_found"])
-        self.assertEqual(payload["cli_version"], "1.0.0-rc.1")
+        self.assertEqual(payload["cli_version"], __version__)
         self.assertTrue(payload["capabilities_ok"])
         self.assertEqual(payload["missing_commands"], [])
         self.assertEqual(payload["schema_mismatches"], [])

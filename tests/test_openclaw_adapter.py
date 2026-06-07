@@ -1,3 +1,4 @@
+import filecmp
 import json
 import tempfile
 import tomllib
@@ -12,6 +13,7 @@ from dating_boost.core.release import release_doctor
 
 
 ADAPTER_DIR = Path("agent_adapters/openclaw")
+PACKAGED_ADAPTER_DIR = Path("dating_boost/resources/agent_adapters/openclaw")
 ADAPTER_PACKAGE = ADAPTER_DIR / "adapter-package.json"
 ADAPTER_SKILL = ADAPTER_DIR / "skills" / "dating-booster" / "SKILL.md"
 
@@ -34,7 +36,8 @@ class OpenClawAdapterTests(unittest.TestCase):
         self.assertEqual(metadata["skill_path"], "agent_adapters/openclaw/skills/dating-booster")
         self.assertEqual(metadata["cli_command"], "dating-boost")
         self.assertEqual(metadata["host_loop_command"], "dating-boost-host-loop")
-        self.assertEqual(metadata["source_ref"], f"v{__version__}")
+        self.assertEqual(metadata["source_ref"], _expected_source_ref(__version__))
+        self.assertEqual(metadata["source_spec_commit"], _expected_source_ref(__version__))
         self.assertTrue(set(metadata["required_commands"]).issubset(set(capabilities["supported_commands"])))
         for schema_name, schema_version in metadata["required_schema_versions"].items():
             self.assertEqual(capabilities["schema_versions"][schema_name], schema_version)
@@ -46,6 +49,19 @@ class OpenClawAdapterTests(unittest.TestCase):
         self.assertIn("hermes", agent_caps["host_agent_adapters"])
         self.assertTrue(agent_caps["openclaw_adapter"])
         self.assertTrue(agent_caps["hermes_openclaw_compatible_adapter"])
+
+    def test_openclaw_adapter_source_and_packaged_resources_stay_in_sync(self):
+        for relative_path in (
+            Path("adapter-package.json"),
+            Path("README.md"),
+            Path("INSTALL.md"),
+            Path("skills/dating-booster/SKILL.md"),
+        ):
+            with self.subTest(path=str(relative_path)):
+                self.assertTrue(
+                    filecmp.cmp(ADAPTER_DIR / relative_path, PACKAGED_ADAPTER_DIR / relative_path, shallow=False),
+                    f"{relative_path} differs between source adapter and packaged resource",
+                )
 
     def test_openclaw_skill_contains_complete_host_workflow_and_hermes_boundary(self):
         skill_text = ADAPTER_SKILL.read_text(encoding="utf-8").lower()
@@ -245,3 +261,7 @@ class OpenClawAdapterTests(unittest.TestCase):
         text = output.getvalue().strip()
         payload = json.loads(text) if text else {}
         return exit_code, payload
+
+
+def _expected_source_ref(version: str) -> str:
+    return "main" if ".dev" in version else f"v{version}"

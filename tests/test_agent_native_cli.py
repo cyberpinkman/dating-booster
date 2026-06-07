@@ -5,6 +5,7 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 
+from dating_boost import __version__
 from dating_boost.cli import main
 
 
@@ -34,7 +35,7 @@ class AgentNativeCliTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(payload["schema_version"], 1)
-            self.assertEqual(payload["tool_version"], "1.0.0-rc.1")
+            self.assertEqual(payload["tool_version"], __version__)
             self.assertIsInstance(payload["git_commit"], str)
             self.assertEqual(payload["data_dir"], str(data_dir.resolve()))
             self.assertEqual(payload["schema_versions"]["action_result"], 1)

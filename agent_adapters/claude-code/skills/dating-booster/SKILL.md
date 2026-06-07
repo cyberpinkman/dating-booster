@@ -17,6 +17,7 @@ If this is a freshly cloned or recently pulled repository, or if the installed C
 python3 -m pip install --user -e .
 python3 -m dating_boost.cli adapter claude-code install --scope project --target . --json
 python3 -m dating_boost.cli adapter claude-code doctor --data-dir .local/dating-boost --json
+python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 ```
 
 Run:
@@ -26,6 +27,7 @@ dating-boost adapter claude-code doctor --data-dir .local/dating-boost --json
 dating-boost release doctor --json
 dating-boost data doctor --data-dir .local/dating-boost --json
 dating-boost capabilities --json --data-dir .local/dating-boost
+python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 ```
 
 If data doctor returns `needs_migration`, run:
@@ -36,7 +38,7 @@ dating-boost data migrate --data-dir .local/dating-boost --json
 
 Stop before app observation if the adapter doctor, release doctor, data doctor, migration, or capabilities check fails; if required schemas or commands are missing; or if `agent_native_capabilities.claude_code_adapter` is not true.
 
-Treat `dating-boost capabilities --json` as the current machine truth for supported apps and commands. Do not rely on stale README text, cached memory, or an older installed `.claude/skills/dating-booster` copy.
+Treat capabilities output as the current machine truth for supported apps and commands. Do not infer app support from version strings, README prose, cached memory, or an older installed `.claude/skills/dating-booster` copy. If `dating-boost capabilities` and `python3 -m dating_boost.cli capabilities` disagree, report `stale console script`, prefer the `python3 -m dating_boost.cli ...` command from the checked-out repo, and reinstall the editable package before deciding an app is unsupported.
 
 After startup checks pass and the target app id is known, start a local support session before observing dating-app content:
 

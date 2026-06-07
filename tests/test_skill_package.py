@@ -1,5 +1,4 @@
 import json
-import re
 import tempfile
 import tomllib
 import unittest
@@ -29,18 +28,14 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(metadata["package_name"], "dating-booster-codex-skill")
         self.assertEqual(metadata["target_host"], "codex")
-        self.assertEqual(metadata["package_version"], "1.0.0-rc.1")
-        self.assertEqual(metadata["dating_boost_min_version"], "1.0.0-rc.1")
+        self.assertEqual(metadata["package_version"], __version__)
+        self.assertEqual(metadata["dating_boost_min_version"], __version__)
         self.assertEqual(metadata["source_repo"], "cyberpinkman/dating-booster")
         self.assertEqual(metadata["skill_path"], "skills/dating-booster-codex")
-        self.assertNotIn(metadata["source_ref"], {"main", "master", "codex/mvp-intelligence"})
-        self.assertEqual(metadata["source_ref"], f"v{metadata['package_version']}")
-        self.assertRegex(metadata["source_ref"], r"^v\d+\.\d+\.\d+(?:-rc\.\d+)?$")
-        self.assertNotIn(metadata["source_spec_commit"], {"main", "master", "codex/mvp-intelligence"})
-        self.assertTrue(
-            metadata["source_spec_commit"] == metadata["source_ref"]
-            or re.fullmatch(r"[0-9a-f]{7,40}", metadata["source_spec_commit"])
-        )
+        self.assertEqual(metadata["source_ref"], _expected_source_ref(__version__))
+        self.assertEqual(metadata["source_spec_commit"], _expected_source_ref(__version__))
+        if ".dev" not in __version__:
+            self.assertRegex(metadata["source_ref"], r"^v\d+\.\d+\.\d+(?:-rc\.\d+)?$")
         self.assertEqual(metadata["cli_command"], "dating-boost")
         self.assertEqual(metadata["host_loop_command"], "dating-boost-host-loop")
         self.assertEqual(metadata["bootstrap_script"], "scripts/bootstrap_cli.py")
@@ -408,8 +403,15 @@ class SkillPackageTests(unittest.TestCase):
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
-    normalized = version.replace("-rc.", ".")
-    return tuple(int(part) for part in normalized.split("."))
+    values: list[int] = []
+    for part in version.replace("-rc.", ".").split("."):
+        digits = "".join(character for character in part if character.isdigit())
+        values.append(int(digits or "0"))
+    return tuple(values)
+
+
+def _expected_source_ref(version: str) -> str:
+    return "main" if ".dev" in version else f"v{version}"
 
 
 if __name__ == "__main__":

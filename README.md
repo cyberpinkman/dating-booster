@@ -77,13 +77,15 @@ types, and smarter workflow/memory evolution.
 
 ## 安装和启动检查 / Install And Startup Checks
 
-Public production channel: `1.0.0-rc.1`.
+Current `main` source-checkout version is `1.0.0-rc.2.dev0`. For current app
+support such as Bumble/TaShuo, run the module CLI from the checkout and verify
+capabilities:
 
 ```bash
-python3 -m pip install "dating-booster==1.0.0rc1"
-dating-boost release doctor --json
-dating-boost data doctor --data-dir .local/dating-boost --json
-dating-boost capabilities --json --data-dir .local/dating-boost
+git pull --ff-only
+python3 -m pip install --user -e .
+python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
+python3 -m dating_boost.cli adapter claude-code install --scope project --target . --json
 ```
 
 任何 host agent 在观察 dating app 可见内容前，必须先跑 capabilities 并
@@ -133,6 +135,10 @@ python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 ```
 
 Pulling source code alone does not update `.claude/skills/dating-booster/`.
+If the `dating-boost capabilities` console-script output disagrees with the
+`python3 -m dating_boost.cli capabilities` module output, the console script is
+stale; use the module CLI from the checkout until the editable install and PATH
+are fixed.
 
 OpenClaw adapter:
 

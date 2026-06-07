@@ -27,6 +27,11 @@ python3 -m dating_boost.cli adapter claude-code doctor --data-dir .local/dating-
 python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 ```
 
+Do not infer app support from version strings. If `dating-boost capabilities`
+and `python3 -m dating_boost.cli capabilities` disagree after a source update,
+the console script is stale; use the module CLI from the checkout until the
+editable install and PATH are fixed.
+
 User-level install:
 
 ```bash
@@ -52,6 +57,8 @@ the target path and files before writing.
 - If the installed `.claude/skills/dating-booster/` content does not match
   capabilities after `git pull`, reinstall the adapter. Pulling source code
   alone does not update Claude Code's copied skill directory.
+- Use capabilities, not release version prose, as the source of truth for
+  supported apps.
 - Use `dating-boost-host-loop --adapter-package
   agent_adapters/claude-code/adapter-package.json ...` when Claude Code drives
   host-loop work items.

@@ -12,6 +12,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from dating_boost import __version__
 from dating_boost.cli import main
 from dating_boost.core import release as release_core
 
@@ -407,9 +408,10 @@ class PublicProductionTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["tool_version"], "1.0.0-rc.1")
-        self.assertEqual(payload["artifacts"]["wheel"], "dating_booster-1.0.0rc1-py3-none-any.whl")
-        self.assertEqual(payload["artifacts"]["sdist"], "dating_booster-1.0.0rc1.tar.gz")
+        dist_version = __version__.replace("-rc.", "rc")
+        self.assertEqual(payload["tool_version"], __version__)
+        self.assertEqual(payload["artifacts"]["wheel"], f"dating_booster-{dist_version}-py3-none-any.whl")
+        self.assertEqual(payload["artifacts"]["sdist"], f"dating_booster-{dist_version}.tar.gz")
         self.assertTrue(payload["release_capabilities"]["pypi"])
         self.assertTrue(payload["release_capabilities"]["github_release"])
         self.assertTrue(payload["release_capabilities"]["skill_package"])
@@ -432,7 +434,7 @@ class PublicProductionTests(unittest.TestCase):
         self.assertIn("release_tag_mismatch", payload["issues"])
 
     def test_release_doctor_blocks_dirty_source_in_strict_release_mode(self):
-        with patch.dict(os.environ, {"DATING_BOOST_RELEASE_STRICT": "1", "GITHUB_REF_NAME": "v1.0.0-rc.1"}):
+        with patch.dict(os.environ, {"DATING_BOOST_RELEASE_STRICT": "1", "GITHUB_REF_NAME": f"v{__version__}"}):
             with patch.object(release_core, "_git_dirty", return_value=True):
                 payload = release_core.release_doctor()
 

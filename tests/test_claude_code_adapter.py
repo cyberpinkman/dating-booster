@@ -37,7 +37,8 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         self.assertEqual(metadata["skill_path"], "agent_adapters/claude-code/skills/dating-booster")
         self.assertEqual(metadata["cli_command"], "dating-boost")
         self.assertEqual(metadata["host_loop_command"], "dating-boost-host-loop")
-        self.assertEqual(metadata["source_ref"], f"v{__version__}")
+        self.assertEqual(metadata["source_ref"], _expected_source_ref(__version__))
+        self.assertEqual(metadata["source_spec_commit"], _expected_source_ref(__version__))
         self.assertTrue(set(metadata["required_commands"]).issubset(set(capabilities["supported_commands"])))
         for schema_name, schema_version in metadata["required_schema_versions"].items():
             self.assertEqual(capabilities["schema_versions"][schema_name], schema_version)
@@ -65,6 +66,7 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         metadata = json.loads(ADAPTER_PACKAGE.read_text(encoding="utf-8"))
         skill_text = ADAPTER_SKILL.read_text(encoding="utf-8").lower()
         readme_text = (ADAPTER_DIR / "README.md").read_text(encoding="utf-8").lower()
+        install_text = (ADAPTER_DIR / "INSTALL.md").read_text(encoding="utf-8").lower()
 
         with tempfile.TemporaryDirectory() as temp_dir:
             exit_code, capabilities = self._run_cli(["capabilities", "--json", "--data-dir", temp_dir])
@@ -85,6 +87,12 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         self.assertIn("opening move", skill_text)
         self.assertIn("tashuo iphone mirroring harness", skill_text)
         self.assertIn("question-gate", skill_text)
+        self.assertIn(".dev", metadata["package_version"])
+        self.assertEqual(metadata["source_ref"], "main")
+        self.assertNotIn("dating-booster==", install_text)
+        self.assertIn("python3 -m dating_boost.cli capabilities", install_text)
+        self.assertIn("stale console script", skill_text)
+        self.assertIn("do not infer app support from version", skill_text)
 
     def test_claude_code_skill_contains_complete_host_workflow(self):
         skill_text = ADAPTER_SKILL.read_text(encoding="utf-8").lower()
@@ -325,6 +333,10 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         with redirect_stdout(output):
             exit_code = main(argv)
         return exit_code, json.loads(output.getvalue())
+
+
+def _expected_source_ref(version: str) -> str:
+    return "main" if ".dev" in version else f"v{version}"
 
 
 if __name__ == "__main__":
