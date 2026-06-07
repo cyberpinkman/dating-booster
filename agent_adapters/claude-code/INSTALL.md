@@ -18,6 +18,18 @@ python3 -m dating_boost.cli adapter claude-code install --scope user --json
 python3 -m dating_boost.cli adapter claude-code doctor --data-dir ~/.dating-boost --json
 ```
 
+After every source update, reinstall both the editable package and the copied Claude Code skill:
+
+```bash
+git pull --ff-only
+python3 -m pip install --user -e .
+python3 -m dating_boost.cli adapter claude-code install --scope project --target . --json
+python3 -m dating_boost.cli adapter claude-code doctor --data-dir .local/dating-boost --json
+python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
+```
+
+The installed `.claude/skills/dating-booster/` directory is a generated copy. Updating the git checkout alone does not update the skill that Claude Code reads.
+
 Install the Claude Code skill into the current project:
 
 ```bash

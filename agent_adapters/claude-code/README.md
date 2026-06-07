@@ -18,6 +18,15 @@ dating-boost adapter claude-code install --scope project --target . --json
 dating-boost adapter claude-code doctor --data-dir .local/dating-boost --json
 ```
 
+After cloning or pulling a newer Dating Booster checkout, refresh both the editable Python install and the installed Claude Code skill:
+
+```bash
+python3 -m pip install --user -e .
+python3 -m dating_boost.cli adapter claude-code install --scope project --target . --json
+python3 -m dating_boost.cli adapter claude-code doctor --data-dir .local/dating-boost --json
+python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
+```
+
 User-level install:
 
 ```bash
@@ -40,6 +49,9 @@ the target path and files before writing.
   `agent_adapters/shared/references/workflows.md`.
 - Use `dating-boost capabilities --json --data-dir <data-dir>` as the
   machine-readable startup contract.
+- If the installed `.claude/skills/dating-booster/` content does not match
+  capabilities after `git pull`, reinstall the adapter. Pulling source code
+  alone does not update Claude Code's copied skill directory.
 - Use `dating-boost-host-loop --adapter-package
   agent_adapters/claude-code/adapter-package.json ...` when Claude Code drives
   host-loop work items.
@@ -53,7 +65,11 @@ the target path and files before writing.
 - observation authoring, memory, context, draft workflow, policy checks
 - planner, goal plan, feedback, replay, diagnostics
 - Tinder iPhone Mirroring harness
+- Bumble iPhone Mirroring harness, including ordinary chat live-send and
+  role-sensitive Opening Move handling
+- TaShuo iPhone Mirroring harness, including ordinary chat live-send and
+  role-sensitive question-gate handling
 - macOS WeChat harness
 - opt-in managed live-send with authorization, target binding, staged-text
-  verification, and post-action verification
+  verification, planner evidence, and post-action verification
 - operator and host-loop workflows

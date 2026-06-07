@@ -173,8 +173,19 @@
     "harness tinder send-message",
     "harness wechat launch",
     "harness wechat observe",
+    "harness wechat action",
     "harness wechat stage-draft",
     "harness wechat send-message",
+    "harness bumble launch",
+    "harness bumble observe",
+    "harness bumble action",
+    "harness bumble workflow",
+    "harness bumble send-message",
+    "harness tashuo launch",
+    "harness tashuo observe",
+    "harness tashuo action",
+    "harness tashuo workflow",
+    "harness tashuo send-message",
     "release doctor"
   ]
 }

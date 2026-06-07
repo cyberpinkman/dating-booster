@@ -11,6 +11,14 @@ Use this skill when a Claude Code user asks for help with Dating Booster dating-
 
 Before observing any visible dating app content, screenshots, profile text, conversation text, or generated drafts, choose a local data directory. Prefer `.local/dating-boost` unless the user gives another path.
 
+If this is a freshly cloned or recently pulled repository, or if the installed Claude Code skill disagrees with `dating-boost capabilities`, refresh the local editable install and reinstall this adapter before startup checks:
+
+```bash
+python3 -m pip install --user -e .
+python3 -m dating_boost.cli adapter claude-code install --scope project --target . --json
+python3 -m dating_boost.cli adapter claude-code doctor --data-dir .local/dating-boost --json
+```
+
 Run:
 
 ```bash
@@ -27,6 +35,8 @@ dating-boost data migrate --data-dir .local/dating-boost --json
 ```
 
 Stop before app observation if the adapter doctor, release doctor, data doctor, migration, or capabilities check fails; if required schemas or commands are missing; or if `agent_native_capabilities.claude_code_adapter` is not true.
+
+Treat `dating-boost capabilities --json` as the current machine truth for supported apps and commands. Do not rely on stale README text, cached memory, or an older installed `.claude/skills/dating-booster` copy.
 
 After startup checks pass and the target app id is known, start a local support session before observing dating-app content:
 
@@ -138,6 +148,38 @@ dating-boost harness wechat send-message --text-file wechat-draft.txt --dry-run 
 
 Prefer `--text-file` so private draft text does not enter shell history or process arguments.
 
+## Bumble iPhone Mirroring Harness
+
+Use the Bumble harness for iPhone Mirroring work:
+
+```bash
+dating-boost harness doctor --app-id bumble --json
+dating-boost harness bumble launch --dry-run --json
+dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
+dating-boost harness bumble action open-chats --dry-run --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --json
+dating-boost harness bumble workflow opening-move-open --dry-run --options-json bumble-opening-move-options.json --json
+dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --json
+```
+
+Bumble live send is limited to ordinary chat messages. Opening Move is role-sensitive: for women, the user decides whether to start, skip, or accept Opening Move; for men, Claude Code may draft a response for user confirmation, but must not autonomously send an Opening Move response.
+
+## TaShuo iPhone Mirroring Harness
+
+Use the TaShuo harness for iPhone Mirroring work. Launch search should use `tashu` when Spotlight/Siri does not suggest the app for the full pinyin `tashuo`.
+
+```bash
+dating-boost harness doctor --app-id tashuo --json
+dating-boost harness tashuo launch --dry-run --json
+dating-boost harness tashuo observe --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo action open-chats --dry-run --json
+dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options-json tashuo-chat-profile-options.json --json
+dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
+dating-boost harness tashuo send-message --text-file tashuo-draft.txt --dry-run --json
+```
+
+TaShuo question-gate behaves like Bumble Opening Move: the user decides female-side question/skip/accept choices; male-side replies may be drafted for user confirmation, but autonomous question-gate sending is not supported.
+
 ## Managed Live-Send
 
 Managed live-send is allowed only for ordinary chat messages and only after explicit authorization. It is never a bypass for app rules, rate limits, verification, account restrictions, or user judgment.
@@ -146,25 +188,30 @@ Before any live send, require all of these:
 
 - explicit authorization with `live_send: true`
 - unpaused safety switch
+- planner-backed action request with `planner_alignment: ok`, `conversation_stage`, and `conversation_move`
 - policy-checked action request
 - target binding
 - verified conversation page
 - exact staged text verification
 - post-action verification
 
-For Tinder and WeChat, managed live-send must use:
+For Tinder, Bumble, TaShuo, and WeChat, managed live-send must use:
 
 ```bash
 dating-boost harness tinder send-message --text-file tinder-draft.txt --data-dir .local/dating-boost --authorization auth.json --action-request action_request.json --json
+dating-boost harness bumble send-message --text-file bumble-draft.txt --data-dir .local/dating-boost --authorization auth.json --action-request action_request.json --json
+dating-boost harness tashuo send-message --text-file tashuo-draft.txt --data-dir .local/dating-boost --authorization auth.json --action-request action_request.json --json
 dating-boost harness wechat send-message --text-file wechat-draft.txt --data-dir .local/dating-boost --authorization auth.json --action-request action_request.json --json
 ```
 
-If page identity, target binding, staged text, or post-send evidence is missing, block or return `needs_verification`. Do not manually click Send around the gate.
+For fully managed goal-oriented sessions, do not handcraft `action_request.json` and do not call direct harness live-send as a shortcut. Execute only `send_message` work items returned by `dating-boost operator next` or `dating-boost automation session step`; the work item must include `planner_alignment: ok`. If operator/session state is unavailable, stop with `operator_unavailable` or `planner_evidence_missing` instead of sending.
+
+If page identity, target binding, planner evidence, staged text, or post-send evidence is missing, block or return `needs_verification`. Do not manually click Send around the gate.
 
 ## Session-scoped Managed Runner
 
 Use this when the user explicitly starts a bounded managed window. It is not a
-global background agent. Tinder stops when iPhone Mirroring is unavailable;
+global background agent. iPhone Mirroring apps stop when the mirrored phone is unavailable;
 WeChat runs until user stop and pauses while unreadable. `run --wait` is local
 and tokenless while idle; when it returns `host_work_required`, process the
 included operator work item. When using the host-loop supervisor for that work,

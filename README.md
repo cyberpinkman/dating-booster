@@ -38,16 +38,16 @@ or scale-out abuse features.
 | 生产默认 / Production defaults | macOS-only, encrypted local storage, stage-first GUI operation, local-only diagnostics |
 
 `--send-mode stage` 是默认路径：只准备、粘贴或 staging 草稿，不点击发送。
-`--send-mode live` 只用于明确授权的普通聊天消息。Tinder/WeChat 的全托管发送还必须显式传
+`--send-mode live` 只用于明确授权的普通聊天消息。GUI harness 全托管发送还必须显式传
 `--managed-gui-send`，并且仍需要 `live_send: true`、安全开关未暂停、
-policy-checked action request、目标聊天绑定、草稿文本精确校验和发送后验证。
+planner-backed 且 policy-checked 的 action request、目标聊天绑定、草稿文本精确校验和发送后验证。
 
 `--send-mode stage` is the default path: it prepares, pastes, or stages drafts
 without clicking send. `--send-mode live` is only for explicitly authorized
-ordinary chat messages. Managed Tinder/WeChat sending must also pass
+ordinary chat messages. Managed GUI harness sending must also pass
 `--managed-gui-send` and still requires `live_send: true`, an unpaused safety
-switch, a policy-checked action request, target-chat binding, staged-text
-verification, and post-action verification.
+switch, a planner-backed and policy-checked action request, target-chat
+binding, staged-text verification, and post-action verification.
 
 ## 当前 App 支持 / Current App Support
 
@@ -122,6 +122,18 @@ write `~/.claude/skills/dating-booster/`. The Claude Code skill only explains
 how Claude Code should call Dating Booster; memory, policy, planner, harness,
 app profiles, and audit still come from the same CLI/core contracts.
 
+After `git pull`, reinstall the editable package and the copied Claude Code
+skill before asking Claude Code to use new app support:
+
+```bash
+python3 -m pip install --user -e .
+python3 -m dating_boost.cli adapter claude-code install --scope project --target . --json
+python3 -m dating_boost.cli adapter claude-code doctor --data-dir .local/dating-boost --json
+python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
+```
+
+Pulling source code alone does not update `.claude/skills/dating-booster/`.
+
 OpenClaw adapter:
 
 ```bash
@@ -152,6 +164,10 @@ python3 -m pip install --user -e .
 python3 -m dating_boost.cli adapter claude-code install --scope user --json
 python3 -m dating_boost.cli adapter claude-code doctor --data-dir ~/.dating-boost --json
 ```
+
+When that source checkout is updated later, the agent must rerun the editable
+install and `adapter claude-code install`; otherwise Claude Code may keep using
+an older copied skill.
 
 Codex users should replace the last two commands with:
 
@@ -257,7 +273,7 @@ profile wheel scroll/expand、chat tab、new-match carousel wheel、已有会话
 `chat-read-match-profile` 只用于已有消息行；`new-match-open` 用于打开一个未开聊匹配并停在会话页，方便后续破冰发送；`new-match-read-profile` 用于读取未开聊匹配资料后回到当前会话。
 默认路径不会点击 Send。全托管发送只能走 `harness tinder send-message`，
 并且必须满足显式授权、`live_send: true`、安全开关未暂停、
-policy-checked action request、目标聊天绑定校验、staged text OCR 校验和
+planner-backed 且 policy-checked action request、目标聊天绑定校验、staged text OCR 校验和
 发送后 outbound bubble 校验。它不会授权 like、super-like、unmatch、report 或
 profile edit。
 
@@ -281,10 +297,10 @@ shows a feedback survey after send/navigation, `dismiss-feedback-survey` closes
 it through the ignore path and reports `rating_submitted: false`. Fully managed
 sending is available only through
 `harness tinder send-message` with explicit authorization, `live_send: true`,
-an active safety switch, a policy-checked action request, target-chat binding
-verification, staged-text OCR verification, and outbound-bubble post-action
-verification. It does not authorize like, super-like, unmatch, report, or
-profile edit.
+an active safety switch, a planner-backed and policy-checked action request,
+target-chat binding verification, staged-text OCR verification, and
+outbound-bubble post-action verification. It does not authorize like,
+super-like, unmatch, report, or profile edit.
 
 ### Bumble via iPhone Mirroring
 
@@ -314,7 +330,7 @@ users, the agent may draft an Opening Move reply for user review; Opening Move
 send still requires explicit user confirmation and is not eligible for
 autonomous Opening Move send. Ordinary Bumble chat managed send requires
 `harness bumble send-message` with explicit authorization, `live_send: true`,
-policy-checked action request, target-specific binding, staged-text OCR
+planner-backed and policy-checked action request, target-specific binding, staged-text OCR
 verification, and fresh post-send outbound-bubble evidence. Visual send-button
 or yellow-bubble evidence alone does not satisfy exact-text verification.
 
@@ -343,7 +359,7 @@ ask the user to decide. For male users, the agent may draft a question-gate
 reply for user review, but the current harness does not stage or send
 question-gate replies; the user must handle that path manually. Ordinary
 TaShuo chat managed send requires `harness tashuo send-message` with explicit
-authorization, `live_send: true`, policy-checked action request,
+authorization, `live_send: true`, planner-backed and policy-checked action request,
 target-specific binding, staged-text OCR verification, and fresh post-send
 outbound evidence. Visual-only evidence is not exact-text verification.
 
@@ -360,7 +376,7 @@ dating-boost harness wechat send-message --text-file wechat-draft.txt --dry-run 
 WeChat harness 可激活微信桌面窗口、截图/OCR、返回已脱敏的布局提示，
 并通过剪贴板粘贴把草稿放入当前消息输入框。默认路径不会按 Enter、不会点击
 Send；全托管发送只能走 `harness wechat send-message`，并且必须满足显式授权、
-`live_send: true`、安全开关未暂停、policy-checked action request、目标聊天绑定校验、
+`live_send: true`、安全开关未暂停、planner-backed 且 policy-checked action request、目标聊天绑定校验、
 输入框文本精确匹配和发送后 outbound bubble 校验。它不会发起通话、不会处理支付、
 不会交换联系方式。优先使用 `--text-file`，避免私密草稿进入 shell history 或进程参数。
 真实 staging/send 必须传 `--data-dir`，以便全局安全暂停能阻断 paste/send。
@@ -370,9 +386,10 @@ screenshot/OCR it, return redacted layout hints, and paste a prepared draft into
 the current message input with the clipboard. The default path never presses
 Enter or clicks Send. Fully managed sending is available only through
 `harness wechat send-message` with explicit authorization, `live_send: true`,
-an active safety switch, a policy-checked action request, target-chat binding
-verification, exact input-text verification, and outbound-bubble post-action
-verification. It does not start calls, handle payments, or exchange contacts.
+an active safety switch, a planner-backed and policy-checked action request,
+target-chat binding verification, exact input-text verification, and
+outbound-bubble post-action verification. It does not start calls, handle
+payments, or exchange contacts.
 Prefer `--text-file` so private drafts do not enter shell history or process
 args. Real staging/send must pass `--data-dir` so the global safety pause can
 block paste/send.

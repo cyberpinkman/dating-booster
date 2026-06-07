@@ -1,4 +1,5 @@
 import argparse
+import filecmp
 import json
 import tempfile
 import tomllib
@@ -14,6 +15,7 @@ from dating_boost.host_loop import HostLoopSupervisor, _parse_args
 
 
 ADAPTER_DIR = Path("agent_adapters/claude-code")
+PACKAGED_ADAPTER_DIR = Path("dating_boost/resources/agent_adapters/claude-code")
 ADAPTER_PACKAGE = ADAPTER_DIR / "adapter-package.json"
 ADAPTER_SKILL = ADAPTER_DIR / "skills" / "dating-booster" / "SKILL.md"
 CODEX_SKILL_DIR = Path("skills/dating-booster-codex")
@@ -46,6 +48,44 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         self.assertIn("claude_code", agent_caps["host_agent_adapters"])
         self.assertTrue(agent_caps["claude_code_adapter"])
 
+    def test_claude_code_adapter_source_and_packaged_resources_stay_in_sync(self):
+        for relative_path in (
+            Path("adapter-package.json"),
+            Path("README.md"),
+            Path("INSTALL.md"),
+            Path("skills/dating-booster/SKILL.md"),
+        ):
+            with self.subTest(path=str(relative_path)):
+                self.assertTrue(
+                    filecmp.cmp(ADAPTER_DIR / relative_path, PACKAGED_ADAPTER_DIR / relative_path, shallow=False),
+                    f"{relative_path} differs between source adapter and packaged resource",
+                )
+
+    def test_claude_code_adapter_tracks_all_runtime_gui_harness_apps(self):
+        metadata = json.loads(ADAPTER_PACKAGE.read_text(encoding="utf-8"))
+        skill_text = ADAPTER_SKILL.read_text(encoding="utf-8").lower()
+        readme_text = (ADAPTER_DIR / "README.md").read_text(encoding="utf-8").lower()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            exit_code, capabilities = self._run_cli(["capabilities", "--json", "--data-dir", temp_dir])
+
+        self.assertEqual(exit_code, 0)
+        required_commands = set(metadata["required_commands"])
+        for command in capabilities["supported_commands"]:
+            if command.startswith("harness ") and command not in {"harness doctor", "harness screenshot"}:
+                with self.subTest(command=command):
+                    self.assertIn(command, required_commands)
+
+        for app_id in capabilities["agent_native_capabilities"]["supported_app_profiles"]:
+            with self.subTest(app_id=app_id):
+                self.assertIn(f"harness {app_id}", skill_text)
+                self.assertIn(app_id, readme_text)
+
+        self.assertIn("bumble iphone mirroring harness", skill_text)
+        self.assertIn("opening move", skill_text)
+        self.assertIn("tashuo iphone mirroring harness", skill_text)
+        self.assertIn("question-gate", skill_text)
+
     def test_claude_code_skill_contains_complete_host_workflow(self):
         skill_text = ADAPTER_SKILL.read_text(encoding="utf-8").lower()
         readme_text = (ADAPTER_DIR / "README.md").read_text(encoding="utf-8").lower()
@@ -70,6 +110,10 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
             "rating_submitted",
             "target-binding",
             "harness wechat",
+            "harness bumble",
+            "harness tashuo",
+            "opening move",
+            "question-gate",
             "dating-boost-host-loop",
             "references/contracts.md",
             "references/workflows.md",

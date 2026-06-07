@@ -581,6 +581,9 @@ class OperatorHostLoopTests(unittest.TestCase):
                 ),
                 "pre_action_observation_id": "obs_before",
                 "policy": {"allowed": True},
+                "planner_alignment": "ok",
+                "conversation_stage": "rapport_building",
+                "conversation_move": "warm_reciprocal_question",
                 "requires_post_action_verification": True,
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_wechat"},
             }
@@ -1169,6 +1172,9 @@ def _wechat_managed_work_item(payload_text: str, payload_hash: str) -> dict:
         "pre_action_observation_id": "obs_before",
         "requires_post_action_verification": True,
         "policy": {"allowed": True},
+        "planner_alignment": "ok",
+        "conversation_stage": "rapport_building",
+        "conversation_move": "warm_reciprocal_question",
         "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_wechat"},
     }
 

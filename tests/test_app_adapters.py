@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -110,6 +111,9 @@ class AppAdapterArchitectureTests(unittest.TestCase):
             "candidate_key": "bumble_ada",
             "payload_hash": "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
             "precondition_hash": "pre_hash",
+            "planner_alignment": "ok",
+            "conversation_stage": "rapport_building",
+            "conversation_move": "warm_reciprocal_question",
             "autonomous_audit_binding": {
                 "binding_type": "autonomous_authorization",
                 "authorization_id": "auth_bumble_live",
@@ -147,6 +151,92 @@ class AppAdapterArchitectureTests(unittest.TestCase):
             )
 
         self.assertEqual(reason, "target_binding_policy_unavailable")
+
+    def test_live_send_contract_requires_planner_evidence_before_gui_send(self):
+        draft_text = "hi"
+        payload_hash = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
+        action_request = {
+            "schema_version": 1,
+            "action_request_id": "act_bumble_send",
+            "action": "send_message",
+            "app_id": "bumble",
+            "match_id": "match_bumble",
+            "candidate_key": "bumble_ada",
+            "payload_hash": payload_hash,
+            "precondition_hash": "pre_hash",
+            "autonomous_audit_binding": {
+                "binding_type": "autonomous_authorization",
+                "authorization_id": "auth_bumble_live",
+                "action": "send_message",
+                "target_match_id": "match_bumble",
+                "payload_hash": payload_hash,
+                "precondition_hash": "pre_hash",
+            },
+            "requires_post_action_verification": True,
+            "policy": {"allowed": True},
+            "target_binding": {
+                "required_visible_text": ["Ada"],
+                "target_match_id": "match_bumble",
+                "candidate_key": "bumble_ada",
+            },
+        }
+        authorization = {
+            "authorization_id": "auth_bumble_live",
+            "scope": "send_chat_messages",
+            "app_id": "bumble",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "allowed_actions": ["send_message"],
+            "autonomous_send": True,
+            "live_send": True,
+            "requires_post_action_verification": True,
+        }
+
+        self.assertEqual(
+            live_send_action_request_block_reason(
+                action_request,
+                draft_text,
+                authorization=authorization,
+                app_id="bumble",
+                data_dir=None,
+            ),
+            "action_request_planner_alignment_required",
+        )
+
+        action_request["planner_alignment"] = "not_provided"
+        self.assertEqual(
+            live_send_action_request_block_reason(
+                action_request,
+                draft_text,
+                authorization=authorization,
+                app_id="bumble",
+                data_dir=None,
+            ),
+            "action_request_planner_alignment_required",
+        )
+
+        action_request["planner_alignment"] = "ok"
+        self.assertEqual(
+            live_send_action_request_block_reason(
+                action_request,
+                draft_text,
+                authorization=authorization,
+                app_id="bumble",
+                data_dir=None,
+            ),
+            "action_request_planner_context_required",
+        )
+
+        action_request["conversation_stage"] = "rapport_building"
+        action_request["conversation_move"] = "warm_reciprocal_question"
+        self.assertIsNone(
+            live_send_action_request_block_reason(
+                action_request,
+                draft_text,
+                authorization=authorization,
+                app_id="bumble",
+                data_dir=None,
+            )
+        )
 
     def test_host_loop_required_send_evidence_comes_from_adapter_manifest(self):
         from dating_boost.apps.registry import manifest_for_app

@@ -114,6 +114,10 @@ def live_send_action_request_block_reason(
     )
     if contract_reason is not None:
         return contract_reason
+
+    planner_reason = _planner_evidence_block_reason(action_request)
+    if planner_reason is not None:
+        return planner_reason
     return None
 
 
@@ -126,6 +130,16 @@ def live_send_target_match_id(action_request: dict[str, Any]) -> tuple[str, str 
     if target is None:
         return "", "action_request_target_match_id_required"
     return target, None
+
+
+def _planner_evidence_block_reason(action_request: dict[str, Any]) -> str | None:
+    if action_request.get("planner_alignment") != "ok":
+        return "action_request_planner_alignment_required"
+    if not _non_empty(action_request.get("conversation_stage")) or not _non_empty(
+        action_request.get("conversation_move")
+    ):
+        return "action_request_planner_context_required"
+    return None
 
 
 def _authorization_target_block_reason(authorization: dict[str, Any], target_match_id: str) -> str | None:

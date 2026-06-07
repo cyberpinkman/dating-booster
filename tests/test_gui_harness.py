@@ -216,6 +216,14 @@ def _autonomous_audit_binding(
     }
 
 
+def _planner_evidence() -> dict[str, object]:
+    return {
+        "planner_alignment": "ok",
+        "conversation_stage": "rapport_building",
+        "conversation_move": "warm_reciprocal_question",
+    }
+
+
 class GuiHarnessTests(unittest.TestCase):
     def test_capabilities_expose_stage_gui_harness_and_opt_in_managed_wechat_send(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3009,6 +3017,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "confirmation_precondition_hash": create_payload["precondition_hash"],
                 "requires_post_action_verification": True,
                 "policy": {"allowed": True},
+                **_planner_evidence(),
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
             })
 
@@ -3075,6 +3084,7 @@ class GuiHarnessTests(unittest.TestCase):
                         ),
                         "requires_post_action_verification": True,
                         "policy": {"allowed": True},
+                        **_planner_evidence(),
                         "target_binding": {
                             "required_visible_text": [marker],
                             "target_match_id": match_id,
@@ -3143,6 +3153,7 @@ class GuiHarnessTests(unittest.TestCase):
                         ),
                         "requires_post_action_verification": True,
                         "policy": {"allowed": True},
+                        **_planner_evidence(),
                         "target_binding": {
                             "binding_type": "chat_list_row_to_thread",
                             "target_match_id": match_id,
