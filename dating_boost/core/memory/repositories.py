@@ -7,6 +7,7 @@ from typing import Any
 from dating_boost.core.memory.extractors import events_from_observation
 from dating_boost.core.memory.models import MemoryEvent, MemoryEventType, MatchMemoryProjection
 from dating_boost.core.memory.reducers import reduce_match_memory
+from dating_boost.core.memory.review_queue import ReviewQueueRepository
 from dating_boost.core.storage import JsonStorage
 from dating_boost.perception.observations import AppObservation
 
@@ -95,6 +96,7 @@ class MemoryRepository:
             return 0
         deleted_files = sum(1 for path in match_dir.rglob("*") if path.is_file())
         shutil.rmtree(match_dir)
+        ReviewQueueRepository(self._storage.root).delete_items_for_match(match_id)
         return deleted_files
 
     def match_ids_with_observations(self) -> list[str]:

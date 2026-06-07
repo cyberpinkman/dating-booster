@@ -277,6 +277,9 @@ class OperatorRepository:
     def latest_human_report(self) -> str:
         return self._automation.latest_human_report()
 
+    def needs_memory_review(self) -> dict[str, Any]:
+        return self._automation.needs_memory_review()
+
     def get_state_payload(self) -> dict[str, Any]:
         return {
             "schema_version": 1,

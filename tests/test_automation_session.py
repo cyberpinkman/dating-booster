@@ -297,6 +297,29 @@ class AutomationSessionTests(unittest.TestCase):
                 "--authorization",
                 str(FIXTURE_DIR / "auth_send.json"),
             ])
+            if restart_exit != 0 and restart_payload.get("status") == "needs_memory_review":
+                from dating_boost.core.memory.review_queue import ReviewQueueRepository
+                review_repo = ReviewQueueRepository(data_dir)
+                pending = review_repo.load_items(status="pending")
+                session_id = pending[0].session_id if pending else ""
+                confirm_token = f"memory-review:{session_id}"
+                reject_ids = [item.review_item_id for item in pending]
+                if reject_ids:
+                    self._run([
+                        "memory", "review", "decide",
+                        "--data-dir", str(data_dir),
+                        "--confirm", confirm_token,
+                        "--reject", *reject_ids,
+                    ])
+                restart_exit, restart_payload, _ = self._run([
+                    "automation",
+                    "session",
+                    "start",
+                    "--data-dir",
+                    str(data_dir),
+                    "--authorization",
+                    str(FIXTURE_DIR / "auth_send.json"),
+                ])
 
             self.assertEqual(stop_exit, 0)
             self.assertEqual(stop_payload["status"], "stopped")

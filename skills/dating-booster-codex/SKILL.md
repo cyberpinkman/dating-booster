@@ -426,8 +426,10 @@ duplicates, gates risky actions, and writes reports.
 9. After each send, perform post-action verification and call `dating-boost operator record-action-result --data-dir .local/dating-boost --input action_result.json`.
 10. If the work item is `handoff`, appointment details, contact exchange, or high-risk content, stop automation for that match and ask the user to take over.
 11. Continue calling `operator next` until the user stops the session or the operator returns `wait`.
-12. Stop with `dating-boost operator stop --data-dir .local/dating-boost` and show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
-13. On a later run, use `dating-boost operator report latest` and local state to continue without relying on host-agent memory.
+ 12. Stop with `dating-boost operator stop --data-dir .local/dating-boost` and show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
+ 13. After stopping, check the report for Memory Suggestions. If any pending items exist, present them to the user and ask for accept/reject decisions. Execute `dating-boost memory review decide --data-dir .local/dating-boost --accept <id1> --reject <id2>` with the user's choices. Only accepted items become long-term memory.
+ 14. On a later run, if `operator session start` or `managed-session start` returns `needs_memory_review`, first resolve pending memory suggestions before starting a new session. Use `dating-boost memory review list --data-dir .local/dating-boost --status pending` and `memory review decide` to process them.
+ 15. On a later run, use `dating-boost operator report latest` and local state to continue without relying on host-agent memory.
 
 For each opened thread, read `references/planner-authoring.md` and author
 `planner_assessment` before allowing autonomous send: include engagement,
@@ -532,8 +534,10 @@ the local state engine; it does not scan the screen or click the app.
 9. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
 10. Execute only allowed ordinary `send_message` action requests whose planner alignment is `ok`.
 11. After each send, perform post-action verification and call `dating-boost action record-result`.
-12. Stop with `dating-boost automation session stop --data-dir .local/dating-boost` and show `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
-13. On a later run, use `dating-boost automation report latest` and local state to continue without relying on host-agent memory.
+ 12. Stop with `dating-boost automation session stop --data-dir .local/dating-boost` and show `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
+ 13. After stopping, check the report for Memory Suggestions. If any pending items exist, present them to the user and ask for accept/reject decisions. Execute `dating-boost memory review decide --data-dir .local/dating-boost --accept <id1> --reject <id2>` with the user's choices.
+ 14. On a later run, if `automation session start` returns `needs_memory_review`, first resolve pending memory suggestions. Use `dating-boost memory review list --data-dir .local/dating-boost --status pending` and `memory review decide`.
+ 15. On a later run, use `dating-boost automation report latest` and local state to continue without relying on host-agent memory.
 
 If the step output contains `handoffs`, appointment details, contact exchange,
 or high-risk content, stop automation for that match and ask the user to take

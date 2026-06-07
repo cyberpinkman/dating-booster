@@ -11,6 +11,7 @@ from dating_boost.core.memory.extractors import events_from_observation
 from dating_boost.core.memory.ingest import store_observation_with_memory
 from dating_boost.core.memory.models import MemoryEventType, MemoryFactType
 from dating_boost.core.memory.repositories import MemoryRepository
+from dating_boost.core.memory.review_queue import ReviewItem, ReviewQueueRepository
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.repositories import MatchRepository, ObservationRepository
 from dating_boost.perception.fixture_loader import load_observation
@@ -725,6 +726,91 @@ class MemoryUpdateMatchTests(unittest.TestCase):
         path = directory / name
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         return path
+
+    def _run(self, argv: list[str]) -> tuple[int, dict, str]:
+        output = StringIO()
+        with redirect_stdout(output):
+            exit_code = main(argv)
+        text = output.getvalue()
+        return exit_code, json.loads(text), text
+
+
+class MemoryReviewCliTests(unittest.TestCase):
+    def test_review_decide_requires_manual_confirm_for_legacy_blank_session_item(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            self._write_legacy_blank_session_review_item(data_dir)
+
+            wrong_exit, wrong_payload, _ = self._run([
+                "memory",
+                "review",
+                "decide",
+                "--data-dir",
+                str(data_dir),
+                "--accept",
+                "rev_manual_001",
+                "--confirm",
+                "memory-review:any-session",
+            ])
+            pending_after_wrong = ReviewQueueRepository(data_dir).load_items(status="pending")
+            projection_after_wrong = MemoryRepository(data_dir).load_projection("match_alex")
+
+            accept_exit, accept_payload, _ = self._run([
+                "memory",
+                "review",
+                "decide",
+                "--data-dir",
+                str(data_dir),
+                "--accept",
+                "rev_manual_001",
+                "--confirm",
+                "memory-review:manual",
+            ])
+            accepted_item = ReviewQueueRepository(data_dir).load_items()[0]
+            projection = MemoryRepository(data_dir).load_projection("match_alex")
+
+            self.assertEqual(wrong_exit, 2)
+            self.assertEqual(wrong_payload["status"], "blocked")
+            self.assertEqual(wrong_payload["reason"], "confirm_token_session_mismatch")
+            self.assertEqual(wrong_payload["item_session_id"], "manual")
+            self.assertEqual(pending_after_wrong[0].session_id, "manual")
+            self.assertIsNone(projection_after_wrong)
+            self.assertEqual(accept_exit, 0)
+            self.assertEqual(accept_payload["status"], "ok")
+            self.assertEqual(accept_payload["accepted"], ["rev_manual_001"])
+            self.assertEqual(accepted_item.status, "accepted")
+            self.assertEqual(projection.facts[0].fact_id, "rev_manual_001")
+            self.assertEqual(projection.facts[0].evidence.metadata["session_id"], "manual")
+
+    def _write_legacy_blank_session_review_item(self, data_dir: Path) -> None:
+        item = ReviewItem(
+            review_item_id="rev_manual_001",
+            session_id="manual",
+            match_id="match_alex",
+            observation_id="obs_manual_001",
+            proposal={
+                "predicate": "profile_cue",
+                "value": "likes live music",
+                "scope": "match_profile",
+                "fact_type": "visible_fact",
+                "confidence": "medium",
+                "evidence_text": "Visible profile cue from review queue.",
+                "subject": "Alex",
+                "qualifiers": {"app_id": "fixture"},
+            },
+            status="pending",
+            created_at="2026-06-07T00:00:00Z",
+            reported_at=None,
+            reviewed_at=None,
+            dedupe_key="dedupe_manual_001",
+            source="deterministic",
+            risk="low",
+        )
+        item_data = item.to_dict()
+        item_data["session_id"] = ""
+        queue_path = data_dir / "memory" / "review_queue.jsonl"
+        queue_path.parent.mkdir(parents=True, exist_ok=True)
+        queue_path.write_text(json.dumps(item_data, ensure_ascii=False) + "\n", encoding="utf-8")
 
     def _run(self, argv: list[str]) -> tuple[int, dict, str]:
         output = StringIO()

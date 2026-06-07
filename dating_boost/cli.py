@@ -69,7 +69,7 @@ from dating_boost.core.storage import StorageError
 from dating_boost.core.support import SupportLogRepository, classify_text_topics, context_source_manifest
 from dating_boost.intelligence.backends import ModelBackend, OpenAIBackend, ScriptedBackend
 from dating_boost.intelligence.reply_generator import DraftResponse, generate_reply
-from dating_boost.evals.runner import run_conversation_eval, run_memory_eval
+from dating_boost.evals.runner import run_conversation_eval, run_memory_eval, run_memory_review_eval
 from dating_boost.perception.fixture_loader import load_observation
 from dating_boost.perception.observations import AppObservation
 from dating_boost.perception.screenshot_loader import build_observation_from_screenshot_analysis
@@ -468,6 +468,36 @@ def main(argv: list[str] | None = None) -> int:
     memory_delete_parser.add_argument("--match-id", required=True)
     memory_delete_parser.add_argument("--confirm", required=True)
     memory_delete_parser.set_defaults(handler=_handle_memory_delete_match)
+    memory_propose_parser = memory_subparsers.add_parser(
+        "propose",
+        help="Extract memory proposals from an observation without writing to long-term memory.",
+    )
+    memory_propose_parser.add_argument("--data-dir", required=True, type=Path)
+    memory_propose_parser.add_argument("--match-id", required=True)
+    memory_propose_parser.add_argument("--input", required=True, type=Path)
+    memory_propose_parser.add_argument("--session-id", default="")
+    memory_propose_parser.add_argument("--store-review-queue", action="store_true")
+    memory_propose_parser.set_defaults(handler=_handle_memory_propose)
+    memory_review_parser = memory_subparsers.add_parser("review", help="Memory review queue commands.")
+    memory_review_subparsers = memory_review_parser.add_subparsers(dest="memory_review_command", required=True)
+    memory_review_list_parser = memory_review_subparsers.add_parser(
+        "list",
+        help="List pending or filtered memory review items.",
+    )
+    memory_review_list_parser.add_argument("--data-dir", required=True, type=Path)
+    memory_review_list_parser.add_argument("--status", default="pending")
+    memory_review_list_parser.add_argument("--match-id", default=None)
+    memory_review_list_parser.add_argument("--session-id", default=None)
+    memory_review_list_parser.set_defaults(handler=_handle_memory_review_list)
+    memory_review_decide_parser = memory_review_subparsers.add_parser(
+        "decide",
+        help="Accept or reject memory review items.",
+    )
+    memory_review_decide_parser.add_argument("--data-dir", required=True, type=Path)
+    memory_review_decide_parser.add_argument("--accept", nargs="*", default=[])
+    memory_review_decide_parser.add_argument("--reject", nargs="*", default=[])
+    memory_review_decide_parser.add_argument("--confirm", required=True)
+    memory_review_decide_parser.set_defaults(handler=_handle_memory_review_decide)
 
     screenshot_parser = subparsers.add_parser(
         "observe-screenshot",
@@ -499,6 +529,8 @@ def main(argv: list[str] | None = None) -> int:
     context_build_parser.add_argument("--mode", required=True, choices=[mode.value for mode in ReplyMode])
     context_build_parser.add_argument("--max-memory-items", type=int)
     context_build_parser.add_argument("--include-memory-diagnostics", action="store_true")
+    context_build_parser.add_argument("--semantic-provider", choices=["none", "lexical"], default="none")
+    context_build_parser.add_argument("--semantic-query", default=None)
     context_build_parser.set_defaults(handler=_handle_context_build)
 
     policy_parser = subparsers.add_parser("policy", help="Agent-native policy commands.")
@@ -547,7 +579,7 @@ def main(argv: list[str] | None = None) -> int:
     eval_parser = subparsers.add_parser("eval", help="Offline evaluation commands.")
     eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
     eval_run_parser = eval_subparsers.add_parser("run")
-    eval_run_parser.add_argument("--suite", required=True, choices=["conversation", "memory"])
+    eval_run_parser.add_argument("--suite", required=True, choices=["conversation", "memory", "memory-review"])
     eval_run_parser.add_argument("--input", type=Path)
     eval_run_parser.add_argument("--json", action="store_true")
     eval_run_parser.set_defaults(handler=_handle_eval_run)
@@ -1877,6 +1909,204 @@ def _handle_memory_delete_match(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_memory_propose(args: argparse.Namespace) -> int:
+    from dating_boost.core.memory.proposals import extract_proposals
+    from dating_boost.core.memory.review_queue import ReviewQueueRepository
+    from dating_boost.perception.fixture_loader import load_observation
+
+    observation = load_observation(args.input)
+    memory_repo = MemoryRepository(args.data_dir)
+    projection = memory_repo.load_projection(args.match_id)
+    if projection is None:
+        _print_json({"schema_version": 1, "status": "not_found", "match_id": args.match_id})
+        return 2
+    proposals = extract_proposals(
+        args.match_id,
+        observation,
+        projection,
+        session_id=args.session_id or None,
+        observation_id=observation.observation_id,
+        source="deterministic",
+    )
+    if args.store_review_queue:
+        review_repo = ReviewQueueRepository(args.data_dir)
+        enqueued = []
+        for proposal in proposals:
+            if review_repo.reject_dedupe_key_exists(proposal.dedupe_key):
+                continue
+            review_repo.enqueue(proposal)
+            enqueued.append(proposal.to_dict())
+        _print_json({
+            "schema_version": 1,
+            "status": "ok",
+            "match_id": args.match_id,
+            "enqueued_count": len(enqueued),
+            "items": enqueued,
+        })
+    else:
+        _print_json({
+            "schema_version": 1,
+            "status": "ok",
+            "match_id": args.match_id,
+            "proposal_count": len(proposals),
+            "items": [item.to_dict() for item in proposals],
+        })
+    return 0
+
+
+def _handle_memory_review_list(args: argparse.Namespace) -> int:
+    from dating_boost.core.memory.review_queue import ReviewQueueRepository
+
+    review_repo = ReviewQueueRepository(args.data_dir)
+    items = review_repo.load_items(
+        status=args.status or None,
+        match_id=args.match_id,
+        session_id=args.session_id,
+    )
+    _print_json({
+        "schema_version": 1,
+        "status": "ok",
+        "count": len(items),
+        "items": [item.to_dict() for item in items],
+    })
+    return 0
+
+
+def _handle_memory_review_decide(args: argparse.Namespace) -> int:
+    from dating_boost.core.memory.review_queue import ReviewQueueRepository
+
+    accept_ids = list(args.accept or [])
+    reject_ids = list(args.reject or [])
+    if not accept_ids and not reject_ids:
+        _print_json({"schema_version": 1, "status": "error", "reason": "no_ids_provided"})
+        return 2
+    confirm_token = str(args.confirm or "")
+    if not confirm_token.startswith("memory-review:"):
+        _print_json({
+            "schema_version": 1,
+            "status": "blocked",
+            "reason": "confirm_token_mismatch",
+            "required_format": "memory-review:<session_id>",
+        })
+        return 2
+    confirm_session_id = confirm_token[len("memory-review:"):]
+    review_repo = ReviewQueueRepository(args.data_dir)
+    all_ids = [*accept_ids, *reject_ids]
+    target_items = review_repo.load_items()
+    id_to_item = {item.review_item_id: item for item in target_items}
+    for item_id in all_ids:
+        item = id_to_item.get(item_id)
+        if item is None:
+            _print_json({
+                "schema_version": 1,
+                "status": "error",
+                "reason": f"review_item_not_found:{item_id}",
+            })
+            return 2
+        if item.session_id != confirm_session_id:
+            _print_json({
+                "schema_version": 1,
+                "status": "blocked",
+                "reason": "confirm_token_session_mismatch",
+                "item_id": item_id,
+                "item_session_id": item.session_id,
+                "confirm_session_id": confirm_session_id,
+            })
+            return 2
+        if item.status != "pending":
+            _print_json({
+                "schema_version": 1,
+                "status": "error",
+                "reason": f"item_not_pending:{item_id}",
+                "current_status": item.status,
+            })
+            return 2
+    memory_repo = MemoryRepository(args.data_dir)
+    accepted = []
+    rejected = []
+    errors = []
+    for item_id in accept_ids:
+        try:
+            item = id_to_item[item_id]
+            proposal = item.proposal
+            scope = MemoryScope(proposal.get("scope", MemoryScope.MATCH_PROFILE.value))
+            fact_type = MemoryFactType(proposal.get("fact_type", MemoryFactType.VISIBLE_FACT.value))
+            predicate = str(proposal.get("predicate", ""))
+            value = proposal.get("value")
+            projection = memory_repo.load_projection(item.match_id)
+            if projection is not None and not projection.trusted_for_context:
+                identity_predicates = {"identity", "real_name", "phone_number", "email", "address"}
+                if predicate not in identity_predicates:
+                    errors.append({
+                        "id": item_id,
+                        "action": "accept",
+                        "reason": "identity_not_trusted",
+                    })
+                    continue
+            fact = MemoryFact(
+                fact_id=item.review_item_id,
+                scope=scope,
+                fact_type=fact_type,
+                subject=proposal.get("subject", ""),
+                predicate=predicate,
+                value=value,
+                qualifiers=dict(proposal.get("qualifiers", {})),
+                confidence=proposal.get("confidence", "medium"),
+                evidence=EvidenceRef(
+                    source_type="memory_review",
+                    evidence_text=str(proposal.get("evidence_text", "")),
+                    confidence=proposal.get("confidence", "medium"),
+                    source_observation_id=item.observation_id,
+                    metadata={
+                        "dedupe_key": item.dedupe_key,
+                        "review_source": item.source,
+                        "risk": item.risk,
+                        "session_id": item.session_id,
+                    },
+                ),
+                created_at=item.created_at,
+                last_seen_at=item.created_at,
+            )
+            event = MemoryEvent(
+                event_id=_memory_event_id(item.match_id, "review_accept", {"review_item_id": item_id}),
+                event_type=MemoryEventType.PROFILE_FACT_OBSERVED,
+                match_id=item.match_id,
+                scope=scope,
+                created_at=_now_iso(),
+                payload={
+                    "fact": fact.to_dict(),
+                    "review_item_id": item_id,
+                    "source": "memory_review",
+                    "review_source": item.source,
+                    "risk": item.risk,
+                    "dedupe_key": item.dedupe_key,
+                    "observation_id": item.observation_id,
+                    "session_id": item.session_id,
+                },
+                evidence=fact.evidence,
+            )
+            memory_repo.append_event(item.match_id, event)
+            memory_repo.rebuild_projection(item.match_id)
+            review_repo.update_status(item_id, "accepted")
+            accepted.append(item_id)
+        except (ValueError, StorageError) as exc:
+            errors.append({"id": item_id, "action": "accept", "reason": str(exc)})
+    for item_id in reject_ids:
+        try:
+            review_repo.update_status(item_id, "rejected")
+            rejected.append(item_id)
+        except ValueError as exc:
+            errors.append({"id": item_id, "action": "reject", "reason": str(exc)})
+    _print_json({
+        "schema_version": 1,
+        "status": "ok" if not errors else "partial",
+        "accepted": accepted,
+        "rejected": rejected,
+        "errors": errors,
+    })
+    return 0 if not errors else 2
+
+
 def _apply_memory_update(data_dir: Path, match_id: str, update: dict[str, Any]) -> dict[str, Any]:
     action = str(update.get("action") or "")
     if action == "merge_identity":
@@ -2194,6 +2424,8 @@ def _handle_context_build(args: argparse.Namespace) -> int:
         args.data_dir,
         max_memory_items=args.max_memory_items,
         include_memory_diagnostics=bool(args.include_memory_diagnostics),
+        semantic_provider=args.semantic_provider,
+        semantic_query=args.semantic_query,
     )
     _print_json(
         {
@@ -2699,6 +2931,9 @@ def _handle_eval_run(args: argparse.Namespace) -> int:
         result = run_conversation_eval(args.input)
     elif args.suite == "memory":
         result = run_memory_eval(args.input)
+    elif args.suite == "memory-review":
+        from dating_boost.evals.runner import run_memory_review_eval
+        result = run_memory_review_eval(args.input)
     else:
         _print_json({"schema_version": 1, "status": "error", "reason": "unsupported_eval_suite"})
         return 2
@@ -2787,6 +3022,8 @@ def _build_mvp_context_pack(
     *,
     max_memory_items: int | None = None,
     include_memory_diagnostics: bool = False,
+    semantic_provider: str = "none",
+    semantic_query: str | None = None,
 ) -> dict[str, Any]:
     user_profile = _profile_to_context_dict(profile)
     if data_dir is not None:
@@ -2799,6 +3036,7 @@ def _build_mvp_context_pack(
     if data_dir is not None:
         projection = MemoryRepository(data_dir).load_projection(match_id)
         if projection is not None:
+            hook_provider = _semantic_hook_provider(semantic_provider)
             memory_context = build_memory_context(
                 match_id,
                 projection,
@@ -2806,6 +3044,8 @@ def _build_mvp_context_pack(
                 now=_now_iso(),
                 max_items=max_memory_items,
                 reply_mode=reply_mode.value,
+                semantic_hook_provider=hook_provider,
+                semantic_query=semantic_query,
             )
     if memory_context is not None:
         match_profile = dict(memory_context["match_profile"])
@@ -2853,6 +3093,16 @@ def _suppress_unbudgeted_memory_context(
     conversation_memory["open_threads"] = []
     conversation_memory["commitments"] = []
     conversation_memory["running_summary"] = ""
+
+
+def _semantic_hook_provider(name: str):
+    from dating_boost.core.memory.semantic import (
+        LocalLexicalSemanticHookProvider,
+        NoOpSemanticHookProvider,
+    )
+    if name == "lexical":
+        return LocalLexicalSemanticHookProvider()
+    return NoOpSemanticHookProvider()
 
 
 def _match_profile_from_observation(match_id: str, observation: AppObservation) -> dict[str, Any]:

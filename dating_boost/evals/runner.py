@@ -20,6 +20,9 @@ from dating_boost.core.memory.models import (
     MemoryScope,
 )
 from dating_boost.core.memory.retrieval import build_memory_context
+from dating_boost.core.memory.review_queue import ReviewItem, ReviewQueueRepository
+from dating_boost.core.memory.repositories import MemoryRepository
+from dating_boost.core.memory.semantic import LocalLexicalSemanticHookProvider
 from dating_boost.perception.fixture_loader import load_observation
 from dating_boost.evals.rubrics import (
     MIN_BOUNDARY_SAFETY,
@@ -157,6 +160,83 @@ def run_memory_eval(path: Path | None = None) -> EvalResult:
         )
         failures.extend(f"{case_id} {mismatch}" for mismatch in mismatches)
 
+    return EvalResult(
+        case_count=len(cases_payload),
+        averages={},
+        passed=not failures,
+        failures=tuple(failures),
+        cases=tuple(case_results),
+    )
+
+
+def run_memory_review_eval(path: Path | None = None) -> EvalResult:
+    """Run memory review queue and semantic hook regression assertions."""
+
+    fixture_path = path or Path("tests/fixtures/evals/memory_review_cases.jsonl")
+    cases_payload = _read_cases(fixture_path)
+    failures: list[str] = []
+    case_results: list[dict[str, Any]] = []
+    for index, raw_case in enumerate(cases_payload, start=1):
+        case_id = str(raw_case.get("case_id") or f"case_{index}")
+        mismatches: list[str] = []
+        expected = raw_case.get("expected")
+        if not isinstance(expected, dict):
+            failures.append(f"{case_id} expected must be an object")
+            case_results.append({"case_id": case_id, "passed": False, "mismatches": ["expected must be an object"]})
+            continue
+        now = str(raw_case.get("now") or MEMORY_EVAL_DEFAULT_NOW)
+        projection = _memory_projection_from_case(raw_case, now=now)
+        observation = None
+        observation_fixture = raw_case.get("latest_observation_fixture")
+        if isinstance(observation_fixture, str) and observation_fixture:
+            observation = load_observation(Path(observation_fixture))
+        semantic_query = raw_case.get("semantic_query")
+        semantic_provider_name = raw_case.get("semantic_provider", "none")
+        hook_provider = None
+        if semantic_provider_name == "lexical":
+            hook_provider = LocalLexicalSemanticHookProvider()
+        memory_context = build_memory_context(
+            projection.match_id,
+            projection,
+            latest_observation=observation,
+            now=now,
+            max_items=None,
+            reply_mode="adaptive",
+            semantic_hook_provider=hook_provider,
+            semantic_query=semantic_query,
+        )
+        context_text = json.dumps(memory_context, ensure_ascii=False, sort_keys=True)
+        for text in _expected_list(expected, "text_include"):
+            if text not in context_text:
+                mismatches.append(f"missing text {text!r}")
+        for text in _expected_list(expected, "text_exclude"):
+            if text in context_text:
+                mismatches.append(f"unexpected text {text!r}")
+        review_queue_items = raw_case.get("review_queue_items")
+        if isinstance(review_queue_items, list):
+            for raw_item in review_queue_items:
+                if not isinstance(raw_item, dict):
+                    continue
+                status = str(raw_item.get("status", "pending"))
+                if status != "pending":
+                    for text_key in ("value",):
+                        proposal = raw_item.get("proposal", {})
+                        val = str(proposal.get(text_key, ""))
+                        if val and val in context_text:
+                            mismatches.append(f"review queue {status} item text should not appear: {val!r}")
+        accepted_events = raw_case.get("accepted_events")
+        if isinstance(accepted_events, list):
+            for evt_spec in accepted_events:
+                if not isinstance(evt_spec, dict):
+                    continue
+                payload = evt_spec.get("payload", {})
+                fact_data = payload.get("fact", {}) if isinstance(payload, dict) else {}
+                for text_key in ("value",):
+                    val = str(fact_data.get(text_key, ""))
+                    if val and val not in context_text:
+                        mismatches.append(f"accepted event fact {text_key} missing from context: {val!r}")
+        case_results.append({"case_id": case_id, "passed": not mismatches, "mismatches": mismatches})
+        failures.extend(f"{case_id} {mismatch}" for mismatch in mismatches)
     return EvalResult(
         case_count=len(cases_payload),
         averages={},

@@ -11,8 +11,10 @@ from typing import Any
 from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.goals import DEFAULT_GOAL_TYPE, get_goal_type_definition
 from dating_boost.core.memory.ingest import store_observation_with_memory
+from dating_boost.core.memory.proposals import extract_proposals
 from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.core.memory.retrieval import build_memory_context
+from dating_boost.core.memory.review_queue import ReviewQueueRepository
 from dating_boost.core.models import Divergence, ReplyMode
 from dating_boost.core.planner import PlannerRepository, planner_context_items
 from dating_boost.core.production_store import payload_digest
@@ -85,6 +87,23 @@ class AutomationRepository:
             return None
 
     def start_session(self, authorization: dict[str, Any]) -> dict[str, Any]:
+        review_repo = ReviewQueueRepository(self.root)
+        if review_repo.has_pending():
+            latest_report_path = self._latest_machine_report_path()
+            pending = review_repo.load_items(status="pending")
+            session_ids = {item.session_id for item in pending if item.session_id}
+            confirm_hint = "memory review decide --data-dir DIR --confirm memory-review:" + (
+                session_ids.pop() if len(session_ids) == 1 else "<session_id>"
+            )
+            return {
+                "schema_version": 1,
+                "status": "needs_memory_review",
+                "reason": "pending_memory_suggestions_require_review",
+                "pending_count": len(pending),
+                "report_path": str(latest_report_path) if latest_report_path else None,
+                "resumed_from_report": str(latest_report_path) if latest_report_path else None,
+                "confirm_hint": confirm_hint,
+            }
         auth_result = self.save_authorization(authorization)
         readiness = UserDisclosureRepository(self.root).readiness(mode="autonomous")
         if authorization.get("autonomous_send") and not readiness["ready"]:
@@ -129,6 +148,22 @@ class AutomationRepository:
         now = self._now()
         machine_path = Path("automation") / "reports" / "machine_latest.json"
         human_path = Path("automation") / "reports" / "human_latest.md"
+        review_repo = ReviewQueueRepository(self.root)
+        pending_items = review_repo.load_items(session_id=session["session_id"], status="pending")
+        now_iso = now
+        for item in pending_items:
+            item.reported_at = now_iso
+        review_repo._storage.write_jsonl(
+            Path("memory") / "review_queue.jsonl",
+            [row.to_dict() for row in review_repo.load_items()],
+        )
+        memory_review = {
+            "required": len(pending_items) > 0,
+            "pending_count": len(pending_items),
+            "items": [item.to_dict() for item in pending_items],
+            "accept_command_template": "memory review decide --data-dir DIR --accept {review_item_id}",
+            "reject_command_template": "memory review decide --data-dir DIR --reject {review_item_id}",
+        }
         machine_report = {
             "schema_version": 1,
             "session_id": session["session_id"],
@@ -137,6 +172,7 @@ class AutomationRepository:
             "stopped_at": now,
             "summary": summary,
             "user_profile_readiness": user_readiness,
+            "memory_review": memory_review,
             "states": states,
             "conversation_plans": self._planner_plans(states),
             "appointment_ledger": ledger,
@@ -154,6 +190,7 @@ class AutomationRepository:
             "machine_report_path": str(machine_path),
             "human_report_path": str(human_path),
             "summary": summary,
+            "memory_review": memory_review,
         }
 
     def latest_report(self) -> dict[str, Any]:
@@ -368,6 +405,10 @@ class AutomationRepository:
             observation = AppObservation.from_dict(thread_item["observation"])
             ingest = self._store_observation(observation)
             match_id = ingest["match_id"]
+            self._extract_and_enqueue_proposals(
+                match_id, observation, session_id=session["session_id"],
+                observation_id=observation.observation_id, created_at=now,
+            )
             assessment = dict(thread_item.get("assessment", {}))
             host_identity_confidence = str(thread_item.get("identity_confidence") or "medium")
             latest_fingerprint = assessment.get("latest_inbound_fingerprint")
@@ -679,6 +720,59 @@ class AutomationRepository:
 
     def _store_observation(self, observation: AppObservation) -> dict[str, Any]:
         return store_observation_with_memory(self.root, observation)
+
+    def _extract_and_enqueue_proposals(
+        self,
+        match_id: str,
+        observation: AppObservation,
+        *,
+        session_id: str,
+        observation_id: str,
+        created_at: str,
+    ) -> int:
+        memory_repo = MemoryRepository(self.root)
+        projection = memory_repo.load_projection(match_id)
+        if projection is None:
+            return 0
+        proposals = extract_proposals(
+            match_id,
+            observation,
+            projection,
+            session_id=session_id,
+            observation_id=observation_id,
+            created_at=created_at,
+            source="deterministic",
+        )
+        review_repo = ReviewQueueRepository(self.root)
+        enqueued = 0
+        for proposal in proposals:
+            if review_repo.reject_dedupe_key_exists(proposal.dedupe_key):
+                continue
+            review_repo.enqueue(proposal)
+            enqueued += 1
+        return enqueued
+
+    def needs_memory_review(self) -> dict[str, Any]:
+        review_repo = ReviewQueueRepository(self.root)
+        if not review_repo.has_pending():
+            return {"schema_version": 1, "status": "ok", "needs_memory_review": False}
+        session = self._load_session_or_none()
+        session_id = session.get("session_id") if session else None
+        pending = review_repo.load_items(status="pending", session_id=session_id)
+        latest_report_path = self._latest_machine_report_path()
+        return {
+            "schema_version": 1,
+            "status": "needs_memory_review",
+            "needs_memory_review": True,
+            "pending_count": len(pending),
+            "report_path": str(latest_report_path) if latest_report_path else None,
+        }
+
+    def _load_session_or_none(self) -> dict[str, Any] | None:
+        try:
+            return self._storage.read_json(Path("automation") / "session.json", expected_schema_version=1)
+        except FileNotFoundError:
+            return None
 
     def _context_pack(self, match_id: str, observation: AppObservation) -> dict[str, Any]:
         profile = JsonMemoryRepository(self.root).load_user_profile()
@@ -1474,6 +1568,27 @@ def _human_report(report: dict[str, Any]) -> str:
                 f"- priority={item.get('priority')} match={item.get('match_id')} "
                 f"candidate={item.get('candidate_key')} state={item.get('state')}"
             )
+    else:
+        lines.append("- none")
+
+    memory_review = report.get("memory_review", {})
+    pending_items = list(memory_review.get("items", []))
+    lines.extend(["", "## Memory Suggestions", ""])
+    if pending_items:
+        for item in pending_items:
+            proposal = item.get("proposal", {})
+            lines.append(
+                f"- id={item.get('review_item_id')} "
+                f"match={item.get('match_id')} "
+                f"predicate={proposal.get('predicate')} "
+                f"value={proposal.get('value')} "
+                f"source={item.get('source')} "
+                f"risk={item.get('risk')} "
+                f"confidence={proposal.get('confidence')}"
+            )
+        lines.append("")
+        lines.append("To accept: memory review decide --data-dir DIR --accept <id>")
+        lines.append("To reject: memory review decide --data-dir DIR --reject <id>")
     else:
         lines.append("- none")
     lines.append("")
