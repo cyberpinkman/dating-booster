@@ -30,6 +30,8 @@ from dating_boost.core.feedback import create_feedback_event
 from dating_boost.core.live_send_contract import (
     live_send_action_request_block_reason,
     live_send_authorization_block_reason,
+    live_send_next_host_action,
+    managed_live_send_guidance,
     validate_live_send_contract,
 )
 from dating_boost.core.managed_session import ManagedSessionRepository
@@ -1441,13 +1443,17 @@ def _live_send_cli_block_payload(args: argparse.Namespace, *, app_id: str, draft
             "next_host_action": "resume_safety_before_live_send",
         }
     if args.action_request is None:
+        guidance = managed_live_send_guidance("action_request_required_for_live_send")
         return {
             "schema_version": 1,
             "status": "blocked",
             "app_id": app_id,
             "action": "send_message",
             "reason": "action_request_required_for_live_send",
-            "next_host_action": "provide_policy_checked_action_request",
+            "next_host_action": guidance["next_host_action"],
+            "managed_live_send_guidance": guidance,
+            "recovery_commands": guidance["recovery_commands"],
+            "forbidden_actions": guidance["forbidden_actions"],
         }
     action_request = _read_json_object(args.action_request)
     authorization = _read_json_object(args.authorization)
@@ -1459,13 +1465,17 @@ def _live_send_cli_block_payload(args: argparse.Namespace, *, app_id: str, draft
         data_dir=args.data_dir,
     )
     if reason is not None:
+        guidance = managed_live_send_guidance(reason)
         return {
             "schema_version": 1,
             "status": "blocked",
             "app_id": app_id,
             "action": "send_message",
             "reason": reason,
-            "next_host_action": _live_send_next_host_action(reason),
+            "next_host_action": guidance["next_host_action"],
+            "managed_live_send_guidance": guidance,
+            "recovery_commands": guidance["recovery_commands"],
+            "forbidden_actions": guidance["forbidden_actions"],
         }
     return None
 
@@ -1493,9 +1503,7 @@ def _live_send_action_request_block_reason(action_request: dict[str, Any], draft
 
 
 def _live_send_next_host_action(reason: str) -> str:
-    if reason.startswith("authorization_") or reason == "live_send_authorization_required":
-        return "provide_explicit_live_send_authorization"
-    return "provide_policy_checked_action_request"
+    return live_send_next_host_action(reason)
 
 
 def _harness_window_title(app_id: str, explicit: str | None) -> str:
@@ -3392,6 +3400,9 @@ def _support_safe_harness_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "post_send_verification",
         "outbound_message_verification",
         "target_binding_verification",
+        "managed_live_send_guidance",
+        "recovery_commands",
+        "forbidden_actions",
         "subscription_paywall_recovery",
         "paywall_recovered_and_retried",
         "feedback_survey_recovery",

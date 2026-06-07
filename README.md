@@ -53,10 +53,10 @@ binding, staged-text verification, and post-action verification.
 
 | App | 支持状态 / Support | Native harness | 发送归属 / Send ownership |
 | --- | --- | --- | --- |
-| Tinder | host loop, profile/chat navigation, observation, draft workflow, opt-in managed live send | iPhone Mirroring on macOS | stage by default; `send-message` can click Send only after explicit live-send authorization and verification |
-| WeChat / 微信 | app profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | stage by default; `send-message` can press Enter only after explicit live-send authorization and verification |
-| Bumble | host loop, iPhone Mirroring launch/observation, profile/chat navigation, Opening Move observation, opt-in managed live send | iPhone Mirroring on macOS | stage by default; ordinary chat `send-message` can click Send only after explicit live-send authorization and verification |
-| 她说 / TaShuo | host loop, iPhone Mirroring launch/observation, profile/chat navigation, question-gate observation, opt-in managed live send | iPhone Mirroring on macOS | stage by default; ordinary chat `send-message` can click Send only after explicit live-send authorization, target-specific binding, exact OCR verification, and post-send evidence |
+| Tinder | host loop, profile/chat navigation, observation, draft workflow, opt-in managed live send | iPhone Mirroring on macOS | stage by default; live send only through managed-session/host-loop with explicit authorization and verification |
+| WeChat / 微信 | app profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | stage by default; live send only through managed-session/host-loop with explicit authorization and verification |
+| Bumble | host loop, iPhone Mirroring launch/observation, profile/chat navigation, Opening Move observation, opt-in managed live send | iPhone Mirroring on macOS | stage by default; ordinary chat live send only through managed-session/host-loop with explicit authorization and verification |
+| 她说 / TaShuo | host loop, iPhone Mirroring launch/observation, profile/chat navigation, question-gate observation, opt-in managed live send | iPhone Mirroring on macOS | stage by default; ordinary chat live send only through managed-session/host-loop with explicit authorization, target-specific binding, exact OCR verification, and post-send evidence |
 
 未支持 app 不进入 `app_profiles/` 或 `supported_app_profiles`。Hinge
 以及其他主流 dating app 先作为 roadmap candidate 记录在
@@ -277,11 +277,14 @@ Tinder harness 可诊断 iPhone Mirroring、截图/OCR，并在当前不确定�
 profile wheel scroll/expand、chat tab、new-match carousel wheel、已有会话打开、
 未开聊匹配打开、thread-avatar profile opening 和退出 preview/full profile。
 `chat-read-match-profile` 只用于已有消息行；`new-match-open` 用于打开一个未开聊匹配并停在会话页，方便后续破冰发送；`new-match-read-profile` 用于读取未开聊匹配资料后回到当前会话。
-默认路径不会点击 Send。全托管发送只能走 `harness tinder send-message`，
-并且必须满足显式授权、`live_send: true`、安全开关未暂停、
-planner-backed 且 policy-checked action request、目标聊天绑定校验、staged text OCR 校验和
-发送后 outbound bubble 校验。它不会授权 like、super-like、unmatch、report 或
-profile edit。
+默认路径不会点击 Send。全托管发送的 agent-facing 主入口是 `managed-session`
+或 `dating-boost-host-loop` 搭配 `--send-mode live --managed-gui-send`。底层
+`harness tinder send-message --authorization --action-request` 仅为
+executor-internal 命令，只能消费系统生成的 work item 或确认流结果，不能手写
+action request。发送仍必须满足显式授权、`live_send: true`、安全开关未暂停、
+planner-backed 且 policy-checked action request、目标聊天绑定校验、staged text
+OCR 校验和发送后 outbound bubble 校验。它不会授权 like、super-like、unmatch、
+report 或 profile edit。
 
 The Tinder harness can diagnose iPhone Mirroring, screenshot/OCR the
 mirrored window, and force iPhone Mirroring back to Home Screen before opening
@@ -301,11 +304,14 @@ it dismisses the paywall and requires re-navigation to a verified conversation;
 subscription purchase or plan selection is never an agent action. If Tinder
 shows a feedback survey after send/navigation, `dismiss-feedback-survey` closes
 it through the ignore path and reports `rating_submitted: false`. Fully managed
-sending is available only through
-`harness tinder send-message` with explicit authorization, `live_send: true`,
-an active safety switch, a planner-backed and policy-checked action request,
-target-chat binding verification, staged-text OCR verification, and
-outbound-bubble post-action verification. It does not authorize like,
+sending uses `managed-session` or `dating-boost-host-loop` with `--send-mode
+live --managed-gui-send`. The direct `harness tinder send-message
+--authorization --action-request` command is executor-internal only and must
+consume a system-generated work item or confirmation-flow result; do not
+handcraft action requests. It still requires explicit authorization,
+`live_send: true`, an active safety switch, a planner-backed and policy-checked
+action request, target-chat binding verification, staged-text OCR verification,
+and outbound-bubble post-action verification. It does not authorize like,
 super-like, unmatch, report, or profile edit.
 
 ### Bumble via iPhone Mirroring
@@ -334,10 +340,14 @@ decide whether to enable/skip Opening Move or whether a male reply is good
 enough; it can observe or summarize and then ask the user to decide. For male
 users, the agent may draft an Opening Move reply for user review; Opening Move
 send still requires explicit user confirmation and is not eligible for
-autonomous Opening Move send. Ordinary Bumble chat managed send requires
-`harness bumble send-message` with explicit authorization, `live_send: true`,
-planner-backed and policy-checked action request, target-specific binding, staged-text OCR
-verification, and fresh post-send outbound-bubble evidence. Visual send-button
+autonomous Opening Move send. Ordinary Bumble chat managed send uses
+`managed-session` or `dating-boost-host-loop` with `--send-mode live
+--managed-gui-send`; the direct harness send command is executor-internal only
+and must consume a system-generated work item or confirmation-flow result, not a
+handcrafted action request. It requires explicit authorization, `live_send:
+true`, planner-backed and policy-checked action request, target-specific
+binding, staged-text OCR verification, and fresh post-send outbound-bubble
+evidence. Visual send-button
 or yellow-bubble evidence alone does not satisfy exact-text verification.
 
 ### TaShuo / 她说
@@ -364,10 +374,14 @@ gate or whether a male reply is good enough; it can observe or summarize and
 ask the user to decide. For male users, the agent may draft a question-gate
 reply for user review, but the current harness does not stage or send
 question-gate replies; the user must handle that path manually. Ordinary
-TaShuo chat managed send requires `harness tashuo send-message` with explicit
-authorization, `live_send: true`, planner-backed and policy-checked action request,
-target-specific binding, staged-text OCR verification, and fresh post-send
-outbound evidence. Visual-only evidence is not exact-text verification.
+TaShuo chat managed send uses `managed-session` or `dating-boost-host-loop`
+with `--send-mode live --managed-gui-send`; the direct harness send command is
+executor-internal only and must consume a system-generated work item or
+confirmation-flow result, not a handcrafted action request. It requires explicit
+authorization, `live_send: true`, planner-backed and policy-checked action
+request, target-specific binding, staged-text OCR verification, and fresh
+post-send outbound evidence. Visual-only evidence is not exact-text
+verification.
 
 ### macOS WeChat / 微信桌面端
 
@@ -381,21 +395,28 @@ dating-boost harness wechat send-message --text-file wechat-draft.txt --dry-run 
 
 WeChat harness 可激活微信桌面窗口、截图/OCR、返回已脱敏的布局提示，
 并通过剪贴板粘贴把草稿放入当前消息输入框。默认路径不会按 Enter、不会点击
-Send；全托管发送只能走 `harness wechat send-message`，并且必须满足显式授权、
-`live_send: true`、安全开关未暂停、planner-backed 且 policy-checked action request、目标聊天绑定校验、
-输入框文本精确匹配和发送后 outbound bubble 校验。它不会发起通话、不会处理支付、
-不会交换联系方式。优先使用 `--text-file`，避免私密草稿进入 shell history 或进程参数。
+Send；全托管发送的 agent-facing 主入口是 `managed-session` 或
+`dating-boost-host-loop` 搭配 `--send-mode live --managed-gui-send`。底层
+`harness wechat send-message --authorization --action-request` 仅为
+executor-internal 命令，只能消费系统生成的 work item 或确认流结果，不能手写
+action request。发送仍必须满足显式授权、`live_send: true`、安全开关未暂停、
+planner-backed 且 policy-checked action request、目标聊天绑定校验、输入框文本精确
+匹配和发送后 outbound bubble 校验。它不会发起通话、不会处理支付、不会交换联系
+方式。优先使用 `--text-file`，避免私密草稿进入 shell history 或进程参数。
 真实 staging/send 必须传 `--data-dir`，以便全局安全暂停能阻断 paste/send。
 
 The WeChat harness can activate the desktop WeChat window,
 screenshot/OCR it, return redacted layout hints, and paste a prepared draft into
 the current message input with the clipboard. The default path never presses
-Enter or clicks Send. Fully managed sending is available only through
-`harness wechat send-message` with explicit authorization, `live_send: true`,
-an active safety switch, a planner-backed and policy-checked action request,
-target-chat binding verification, exact input-text verification, and
-outbound-bubble post-action verification. It does not start calls, handle
-payments, or exchange contacts.
+Enter or clicks Send. Fully managed sending uses `managed-session` or
+`dating-boost-host-loop` with `--send-mode live --managed-gui-send`. The direct
+`harness wechat send-message --authorization --action-request` command is
+executor-internal only and must consume a system-generated work item or
+confirmation-flow result; do not handcraft action requests. It still requires
+explicit authorization, `live_send: true`, an active safety switch, a
+planner-backed and policy-checked action request, target-chat binding
+verification, exact input-text verification, and outbound-bubble post-action
+verification. It does not start calls, handle payments, or exchange contacts.
 Prefer `--text-file` so private drafts do not enter shell history or process
 args. Real staging/send must pass `--data-dir` so the global safety pause can
 block paste/send.

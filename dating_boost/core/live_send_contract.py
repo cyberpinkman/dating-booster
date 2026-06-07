@@ -9,6 +9,106 @@ from typing import Any
 from dating_boost.core.production_store import ProductionDataStore
 
 
+def managed_live_send_guidance(reason: str | None = None) -> dict[str, Any]:
+    """Machine-readable recovery contract for host agents handling live sends."""
+    next_host_action = live_send_next_host_action(reason)
+    return {
+        "schema_version": 1,
+        "next_host_action": next_host_action,
+        "primary_path": "managed_session",
+        "executor_path": "host_loop",
+        "direct_harness_scope": "executor_internal_only",
+        "allowed_action_request_sources": [
+            "operator next send_message work item",
+            "automation session step send_message work item",
+            "confirmed confirmation flow with confirmation_payload_hash and confirmation_precondition_hash",
+        ],
+        "forbidden_actions": [
+            "do_not_handcraft_action_request_json",
+            "do_not_copy_placeholder_action_request_json",
+            "do_not_add_confirmation_id_without_confirmation_hashes",
+            "do_not_call_direct_harness_send_as_managed_shortcut",
+            "do_not_prefer_stale_console_script_over_module_cli",
+        ],
+        "preferred_cli": "python3 -m dating_boost.cli",
+        "preferred_host_loop_cli": "python3 -m dating_boost.host_loop",
+        "canonical_commands": {
+            "capabilities": "python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost",
+            "readiness": "python3 -m dating_boost.cli user readiness --data-dir .local/dating-boost --mode autonomous --json",
+            "managed_start_live": (
+                "python3 -m dating_boost.cli managed-session start --app-id <app_id> --data-dir .local/dating-boost "
+                "--authorization auth.json --goal goal.json --availability availability.json "
+                "--send-mode live --managed-gui-send --json"
+            ),
+            "managed_run": "python3 -m dating_boost.cli managed-session run --data-dir .local/dating-boost --wait --json",
+            "host_loop_live": (
+                "python3 -m dating_boost.host_loop run --data-dir .local/dating-boost --authorization auth.json "
+                "--goal goal.json --availability availability.json --app-id <app_id> "
+                "--send-mode live --managed-gui-send --work-dir .local/dating-boost-host-loop --json"
+            ),
+            "host_loop_resume": (
+                "python3 -m dating_boost.host_loop resume --data-dir .local/dating-boost "
+                "--work-dir .local/dating-boost-host-loop --json"
+            ),
+            "operator_next": "python3 -m dating_boost.cli operator next --data-dir .local/dating-boost",
+            "automation_step": "python3 -m dating_boost.cli automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json",
+            "confirmation_validate": (
+                "python3 -m dating_boost.cli confirmation validate --data-dir .local/dating-boost "
+                "--confirmation-id <confirmation_id> --action send_message "
+                "--target-match-id <match_id> --payload-json payload.json --precondition-json precondition.json --json"
+            ),
+        },
+        "console_commands": {
+            "capabilities": "dating-boost capabilities --json --data-dir .local/dating-boost",
+            "managed_run": "dating-boost managed-session run --data-dir .local/dating-boost --wait --json",
+            "host_loop_live": (
+                "dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json "
+                "--goal goal.json --availability availability.json --app-id <app_id> "
+                "--send-mode live --managed-gui-send --work-dir .local/dating-boost-host-loop --json"
+            ),
+        },
+        "recovery_commands": _live_send_recovery_commands(next_host_action),
+    }
+
+
+def live_send_next_host_action(reason: str | None) -> str:
+    if reason is None:
+        return "ready"
+    if reason.startswith("authorization_") or reason == "live_send_authorization_required":
+        return "provide_explicit_live_send_authorization"
+    if reason == "confirmation_hashes_required":
+        return "use_confirmation_validate_hashes_or_operator_work_item"
+    if reason in {
+        "action_request_required_for_live_send",
+        "confirmation_contract_required",
+        "planner_evidence_missing",
+        "planner_alignment_not_ok",
+        "conversation_stage_required",
+        "conversation_move_required",
+    }:
+        return "use_operator_or_managed_session_work_item"
+    return "use_operator_or_managed_session_work_item"
+
+
+def _live_send_recovery_commands(next_host_action: str) -> list[str]:
+    if next_host_action == "provide_explicit_live_send_authorization":
+        return [
+            "create or update auth.json with live_send true, autonomous_send true, send_message allowed, and a valid expiry",
+            "rerun the python3 -m dating_boost.cli managed-session or python3 -m dating_boost.host_loop command with --authorization auth.json",
+        ]
+    if next_host_action == "use_confirmation_validate_hashes_or_operator_work_item":
+        return [
+            "prefer python3 -m dating_boost.cli managed-session run --data-dir .local/dating-boost --wait --json",
+            "or execute the send_message work item returned by python3 -m dating_boost.cli operator next",
+            "or run python3 -m dating_boost.cli confirmation validate and copy its payload_hash/precondition_hash into the existing confirmed request",
+        ]
+    return [
+        "prefer python3 -m dating_boost.cli managed-session run --data-dir .local/dating-boost --wait --json",
+        "or run python3 -m dating_boost.host_loop run/resume with --send-mode live --managed-gui-send",
+        "do not create action_request.json by hand",
+    ]
+
+
 def validate_live_send_contract(
     authorization: dict[str, Any],
     action_request: dict[str, Any],

@@ -58,6 +58,10 @@ Live send requires all of these:
 
 The action request must bind the send before any native harness executes:
 
+This is an executor-internal contract, not a host-agent template. Do not
+handcraft action requests; consume the request returned by `operator next`,
+`automation session step`, or a confirmed confirmation flow.
+
 - `payload_hash`: SHA-256 hex digest of the exact draft text file.
 - `match_id` or `target_match_id`: target match identity.
 - `target_binding.target_match_id`: must equal the target match identity.

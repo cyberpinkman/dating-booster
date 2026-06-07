@@ -115,6 +115,8 @@ class OpenClawAdapterTests(unittest.TestCase):
         self.assertEqual(payload["compatibility_target"], "openclaw")
         self.assertEqual(payload["adapter_package"], str(ADAPTER_PACKAGE.resolve()))
         self.assertEqual(payload["skill_doctor"]["status"], "ok")
+        self.assertEqual(payload["managed_live_send_guidance"]["direct_harness_scope"], "executor_internal_only")
+        self.assertIn("managed_start_live", payload["managed_live_send_guidance"]["canonical_commands"])
 
     def test_adapter_hermes_doctor_reports_openclaw_compatible_ok(self):
         with tempfile.TemporaryDirectory() as temp_dir:

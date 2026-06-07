@@ -65,6 +65,15 @@ manual operator processing, return to `managed-session run --wait`. Tinder
 sessions stop when iPhone Mirroring disappears; WeChat sessions pause while
 unreadable and continue until user stop.
 
+## Managed Live Send
+
+Agent-facing live sends must use `managed-session` or `dating-boost-host-loop`
+with `--send-mode live --managed-gui-send`. Direct
+`harness <app> send-message --authorization --action-request` is
+executor-internal only: it may consume only a `send_message` work item returned
+by `operator next` / `automation session step`, or a confirmed confirmation
+flow with hashes. Do not handcraft action requests.
+
 ## Conversation Targeting
 
 For existing Tinder conversations, prefer visible-name or target-binding

@@ -15,6 +15,7 @@ from dating_boost.core.production_store import (
 )
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.gui_harness import GUI_HARNESS_SCHEMA_VERSION
+from dating_boost.core.live_send_contract import managed_live_send_guidance
 from dating_boost.core.support import SUPPORT_EVIDENCE_SCHEMA_VERSION, SUPPORT_LOG_SCHEMA_VERSION
 
 
@@ -214,6 +215,7 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
         "git_commit": _git_commit(),
         "schema_versions": dict(SCHEMA_VERSIONS),
         "supported_commands": list(SUPPORTED_COMMANDS),
+        "managed_live_send_guidance": managed_live_send_guidance(),
         "data_dir": str(data_dir.resolve()) if data_dir is not None else None,
         "storage_capabilities": {
             "sqlite": True,
@@ -317,6 +319,7 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "stage_gui_harness": True,
             "managed_gui_send": True,
             "managed_gui_send_default": False,
+            "managed_live_send_guidance": managed_live_send_guidance(),
             "iphone_mirroring_harness": True,
             "tinder_gui_launch": "tinder" in supported_app_profiles,
             "tinder_gui_navigation": "tinder" in supported_app_profiles,

@@ -202,16 +202,23 @@ Before any live send, require all of these:
 - exact staged text verification
 - post-action verification
 
-For Tinder and WeChat, managed live-send must use:
+For Tinder and WeChat, the agent-facing managed live-send path is
+`managed-session` or `dating-boost-host-loop`; do not handcraft
+`action_request.json`.
 
 ```bash
-dating-boost harness tinder send-message --text-file tinder-draft.txt --data-dir .local/dating-boost --authorization auth.json --action-request action_request.json --json
-dating-boost harness wechat send-message --text-file wechat-draft.txt --data-dir .local/dating-boost --authorization auth.json --action-request action_request.json --json
+dating-boost managed-session start --app-id <app_id> --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode live --managed-gui-send --json
+dating-boost managed-session run --data-dir .local/dating-boost --wait --json
+dating-boost-host-loop run --adapter-package agent_adapters/openclaw/adapter-package.json --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id <app_id> --send-mode live --managed-gui-send --work-dir .local/dating-boost-host-loop --json
 ```
 
-If page identity, target binding, staged text, or post-send evidence is
-missing, block or return `needs_verification`. Do not manually click Send
-around the gate.
+The direct `harness <app> send-message --authorization --action-request` command
+is executor-internal only. It may consume only a `send_message` work item
+returned by `dating-boost operator next` or `dating-boost automation session
+step`, or a confirmed confirmation flow with hashes. Do not handcraft
+`action_request.json`. If page identity, target binding, staged text, or
+post-send evidence is missing, block or return `needs_verification`. Do not
+manually click Send around the gate.
 
 ## Session-scoped Managed Runner
 

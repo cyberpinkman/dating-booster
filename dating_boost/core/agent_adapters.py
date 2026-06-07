@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, ContextManager
 
 from dating_boost.core.capabilities import build_capabilities
+from dating_boost.core.live_send_contract import managed_live_send_guidance
 from dating_boost.core.skill_doctor import run_skill_doctor
 
 
@@ -40,6 +41,11 @@ def install_claude_code_adapter(*, scope: str, target: Path | None, dry_run: boo
             for source, destination in planned_files
         ],
         "next_action": "run dating-boost adapter claude-code doctor --data-dir .local/dating-boost --json",
+        "startup_commands": [
+            "python3 -m dating_boost.cli adapter claude-code doctor --data-dir .local/dating-boost --json",
+            "python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost",
+        ],
+        "managed_live_send_guidance": managed_live_send_guidance(),
     }
     if dry_run:
         return payload
@@ -81,6 +87,11 @@ def install_openclaw_adapter(
         "next_action": (
             f"run dating-boost adapter {target_host} doctor --data-dir .local/dating-boost --json"
         ),
+        "startup_commands": [
+            f"python3 -m dating_boost.cli adapter {target_host} doctor --data-dir .local/dating-boost --json",
+            "python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost",
+        ],
+        "managed_live_send_guidance": managed_live_send_guidance(),
     }
     if dry_run:
         return payload
@@ -111,6 +122,11 @@ def install_codex_adapter(*, scope: str, target: Path | None, dry_run: bool) -> 
             for source, destination in planned_files
         ],
         "next_action": "run dating-boost adapter codex doctor --data-dir .local/dating-boost --json",
+        "startup_commands": [
+            "python3 -m dating_boost.cli adapter codex doctor --data-dir .local/dating-boost --json",
+            "python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost",
+        ],
+        "managed_live_send_guidance": managed_live_send_guidance(),
     }
     if dry_run:
         return payload
@@ -167,6 +183,7 @@ def run_openclaw_adapter_doctor(data_dir: Path, *, target_host: str = "openclaw"
                 "hermes_openclaw_compatible_adapter"
             ),
         },
+        "managed_live_send_guidance": managed_live_send_guidance(),
         "next_action": "ready" if status == "ok" else "stop",
     }
 
@@ -205,6 +222,7 @@ def run_claude_code_adapter_doctor(data_dir: Path) -> dict[str, Any]:
             "supported_app_profiles": agent_caps.get("supported_app_profiles"),
             "claude_code_adapter": agent_caps.get("claude_code_adapter"),
         },
+        "managed_live_send_guidance": managed_live_send_guidance(),
         "next_action": "ready" if status == "ok" else "stop",
     }
 
@@ -243,6 +261,7 @@ def run_codex_adapter_doctor(data_dir: Path) -> dict[str, Any]:
             "supported_app_profiles": agent_caps.get("supported_app_profiles"),
             "codex_skill": agent_caps.get("codex_skill"),
         },
+        "managed_live_send_guidance": managed_live_send_guidance(),
         "next_action": "ready" if status == "ok" else "stop",
     }
 

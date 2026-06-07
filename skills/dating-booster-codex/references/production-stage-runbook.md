@@ -101,11 +101,13 @@ Managed live smoke is opt-in and should use a dedicated test contact.
 2. Use an authorization JSON with `app_id: wechat`, `live_send: true`,
    `autonomous_send: true`, `allowed_actions: ["send_message"]`, unexpired
    timestamps, and `requires_post_action_verification: true`.
-3. Run `dating-boost harness wechat send-message --text-file wechat-draft.txt
-   --data-dir .local/dating-boost --authorization wechat-auth.json
-   --action-request action-request.json --dry-run --json`.
-4. For a host-loop run, use `dating-boost-host-loop run ... --app-id wechat
-   --send-mode live --managed-gui-send`.
+3. Run `dating-boost-host-loop run --data-dir .local/dating-boost
+   --authorization wechat-auth.json --goal goal.json --availability
+   availability.json --app-id wechat --send-mode live --managed-gui-send
+   --work-dir .local/dating-boost-host-loop --json`.
+4. Direct `harness wechat send-message --authorization --action-request` is
+   executor-internal only. Use it only with a system-generated work item or
+   confirmed confirmation-flow hashes; do not handcraft action requests.
 5. Record `succeeded` only when the action request is policy-checked and
    hash-bound to the draft, the target chat is verified, the harness returns
    exact staged-text verification, the input is cleared after pressing Return,
@@ -120,11 +122,13 @@ is not the default public workflow.
 2. Use an authorization JSON with `app_id: tinder`, `live_send: true`,
    `autonomous_send: true`, `allowed_actions: ["send_message"]`, unexpired
    timestamps, and `requires_post_action_verification: true`.
-3. Run `dating-boost harness tinder send-message --text-file tinder-draft.txt
-   --data-dir .local/dating-boost --authorization tinder-auth.json
-   --action-request action-request.json --dry-run --json`.
-4. For a host-loop run, use `dating-boost-host-loop run ... --app-id tinder
-   --send-mode live --managed-gui-send`.
+3. Run `dating-boost-host-loop run --data-dir .local/dating-boost
+   --authorization tinder-auth.json --goal goal.json --availability
+   availability.json --app-id tinder --send-mode live --managed-gui-send
+   --work-dir .local/dating-boost-host-loop --json`.
+4. Direct `harness tinder send-message --authorization --action-request` is
+   executor-internal only. Use it only with a system-generated work item or
+   confirmed confirmation-flow hashes; do not handcraft action requests.
 5. Record `succeeded` only when the action request is policy-checked and
    hash-bound to the draft, the target chat is verified, the harness returns
    staged-text OCR verification, the outbound bubble is verified, and a

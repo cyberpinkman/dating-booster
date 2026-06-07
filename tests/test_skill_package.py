@@ -133,6 +133,45 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("plan selection is never an agent action", skill_text)
         self.assertNotIn("harness wechat stage-draft --text ", skill_text)
 
+    def test_agent_facing_docs_do_not_present_handcrafted_live_send_requests(self):
+        docs = [
+            Path("README.md"),
+            Path("skills/dating-booster-codex/SKILL.md"),
+            Path("skills/dating-booster-codex/INSTALL.md"),
+            Path("skills/dating-booster-codex/references/workflows.md"),
+            Path("skills/dating-booster-codex/references/host-loop.md"),
+            Path("skills/dating-booster-codex/references/production-stage-runbook.md"),
+            Path("agent_adapters/claude-code/skills/dating-booster/SKILL.md"),
+            Path("agent_adapters/openclaw/skills/dating-booster/SKILL.md"),
+            Path("agent_adapters/shared/references/workflows.md"),
+            Path("dating_boost/resources/agent_adapters/codex/dating-booster-codex/SKILL.md"),
+            Path("dating_boost/resources/agent_adapters/codex/dating-booster-codex/INSTALL.md"),
+            Path("dating_boost/resources/agent_adapters/codex/dating-booster-codex/references/workflows.md"),
+            Path("dating_boost/resources/agent_adapters/codex/dating-booster-codex/references/host-loop.md"),
+            Path("dating_boost/resources/agent_adapters/codex/dating-booster-codex/references/production-stage-runbook.md"),
+            Path("dating_boost/resources/agent_adapters/claude-code/skills/dating-booster/SKILL.md"),
+            Path("dating_boost/resources/agent_adapters/openclaw/skills/dating-booster/SKILL.md"),
+            Path("dating_boost/resources/agent_adapters/shared/references/workflows.md"),
+        ]
+        forbidden = (
+            "--action-request action_request.json",
+            "--action-request action-request.json",
+            "cat > /tmp",
+            "harness <app> send-message --text-file ... --data-dir ... --authorization ... --action-request",
+            "execute `send_message` only through\ngated app-specific `harness <app> send-message` paths",
+            "execute `send_message` only through gated app-specific `harness <app> send-message` paths",
+            "managed send requires `harness <app> send-message",
+            "fully managed sending also requires `--managed-gui-send` or the explicit `harness",
+        )
+
+        for path in docs:
+            text = path.read_text(encoding="utf-8").lower()
+            with self.subTest(path=str(path)):
+                self.assertIn("do not handcraft", text)
+                self.assertIn("executor-internal", text)
+                for phrase in forbidden:
+                    self.assertNotIn(phrase, text)
+
     def test_skill_reference_files_describe_reusable_workflows_and_contracts(self):
         workflows_text = (SKILL_DIR / "references" / "workflows.md").read_text(encoding="utf-8").lower()
         contracts_text = (SKILL_DIR / "references" / "contracts.md").read_text(encoding="utf-8").lower()

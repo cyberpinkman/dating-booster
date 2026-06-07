@@ -104,10 +104,10 @@ verification artifacts.
 - Diagnostics are local redacted bundles only; there is no network telemetry.
 - Live send is not the default. It requires `--send-mode live`, `live_send: true`
   in authorization, an unpaused safety switch, staged-text verification, and
-  post-action verification. Tinder/macOS WeChat fully managed sending also
-  requires `--managed-gui-send` or the explicit `harness <app> send-message
-  --text-file ... --action-request ...` path, plus policy-checked action
-  requests, target-chat binding, and outbound-bubble verification.
+  post-action verification. Agent-facing live sends must use `managed-session`
+  or `dating-boost-host-loop` with `--managed-gui-send`. The direct
+  `harness <app> send-message --authorization --action-request` command is
+  executor-internal only; do not handcraft action requests.
 
 ## First Real Manual Workflow
 

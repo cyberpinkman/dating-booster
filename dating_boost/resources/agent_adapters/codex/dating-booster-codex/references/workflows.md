@@ -45,11 +45,14 @@ data dir after support session start and before support bundle export.
 
 The native harness is stage/navigation-first. It may diagnose iPhone Mirroring,
 capture a screenshot/OCR artifact, navigate Tinder, Bumble, and TaShuo through
-bounded profile/chat reading chains, and execute `send_message` only through
-gated app-specific `harness <app> send-message` paths. Bumble and TaShuo
-ordinary chat managed send are supported with the same authorization,
-target-specific binding, staged-text OCR, and post-send evidence gates. Visual
-send-button or bubble evidence alone is not exact-text verification. Bumble
+bounded profile/chat reading chains, and stage dry-run send checks. Real
+managed sends must enter through `managed-session` or `dating-boost-host-loop`;
+direct `harness <app> send-message --authorization --action-request` is
+executor-internal only and must consume system-generated work items or
+confirmation-flow hashes. Do not handcraft action requests. Bumble and TaShuo
+ordinary chat managed sends require the same authorization, target-specific
+binding, staged-text OCR, and post-send evidence gates. Visual send-button or
+bubble evidence alone is not exact-text verification. Bumble
 must not like, pass, SuperSwipe, unmatch, report, edit profile data, or purchase
 Premium. TaShuo must not like, pass, start a 飞行 chat, unmatch, report, edit
 profile data, purchase Premium, or make question-gate decisions.
@@ -199,15 +202,18 @@ private draft text is not written into shell history or process arguments. Real
 staging must include `--data-dir` so the global safety pause can block paste.
 Use it only after the draft has passed `workflow draft` or `policy check-draft`.
 
-For explicitly authorized fully managed Tinder or macOS WeChat sends, use
-`harness <app> send-message --text-file ... --data-dir ... --authorization ...
---action-request ...` or `dating-boost-host-loop run --app-id <app>
---send-mode live --managed-gui-send ...`. The authorization must include
-`live_send: true` and `autonomous_send: true`; the action request must be
-policy-checked, hash-bound to the text file, and include target-chat binding.
-The harness must verify the target chat, verify the staged text exactly
-before clicking Send or pressing Return, and verify the outbound bubble from
-fresh post-action evidence before the result can be recorded as `succeeded`.
+For explicitly authorized fully managed sends, use `managed-session` or
+`dating-boost-host-loop run --app-id <app> --send-mode live
+--managed-gui-send ...`. Direct `harness <app> send-message --authorization
+--action-request` is executor-internal only: it may consume only a `send_message`
+work item returned by `operator next` / `automation session step`, or a
+confirmed confirmation flow with hashes. Do not handcraft action requests. The
+authorization must include `live_send: true` and `autonomous_send: true`; the
+action request must be policy-checked, hash-bound to the text file, and include
+target-chat binding. The harness must verify the target chat, verify the staged
+text exactly before clicking Send or pressing Return, and verify the outbound
+bubble from fresh post-action evidence before the result can be recorded as
+`succeeded`.
 
 The action `expand-visible-profile-section` is a bounded tap for a visibly
 folded profile section such as `查看所有...项信息`. Use it only after a fresh

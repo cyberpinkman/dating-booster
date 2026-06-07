@@ -2630,6 +2630,9 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(missing_auth_payload["reason"], "authorization_required_for_live_send")
         self.assertEqual(missing_action_exit, 2)
         self.assertEqual(missing_action_payload["reason"], "action_request_required_for_live_send")
+        self.assertEqual(missing_action_payload["next_host_action"], "use_operator_or_managed_session_work_item")
+        self.assertIn("managed_live_send_guidance", missing_action_payload)
+        self.assertIn("do_not_handcraft_action_request_json", missing_action_payload["forbidden_actions"])
         self.assertEqual(paused_exit, 2)
         self.assertEqual(paused_payload["reason"], "safety_paused")
         harness_class.assert_not_called()
@@ -2854,6 +2857,9 @@ class GuiHarnessTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 2)
         self.assertEqual(payload["reason"], "confirmation_contract_required")
+        self.assertEqual(payload["next_host_action"], "use_operator_or_managed_session_work_item")
+        self.assertIn("managed_live_send_guidance", payload)
+        self.assertIn("do_not_handcraft_action_request_json", payload["forbidden_actions"])
         harness_class.assert_not_called()
 
     def test_cli_tinder_real_send_blocks_target_binding_match_mismatch_before_native_execution(self):
@@ -2961,6 +2967,9 @@ class GuiHarnessTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 2)
         self.assertEqual(payload["reason"], "confirmation_hashes_required")
+        self.assertEqual(payload["next_host_action"], "use_confirmation_validate_hashes_or_operator_work_item")
+        self.assertIn("confirmation_validate", payload["managed_live_send_guidance"]["canonical_commands"])
+        self.assertIn("do_not_add_confirmation_id_without_confirmation_hashes", payload["forbidden_actions"])
         harness_class.assert_not_called()
 
     def test_cli_tinder_real_send_accepts_confirmed_confirmation_hash_binding(self):

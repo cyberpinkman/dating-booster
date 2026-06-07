@@ -107,8 +107,9 @@ paused, do not send, paste, stage, or continue a live host loop until the user
 explicitly resumes it. Live sends require `--send-mode live`, authorization with
 `live_send: true`, exact staged-text verification, and post-action verification.
 For Tinder, Bumble ordinary chat, TaShuo ordinary chat, or macOS WeChat fully
-managed sending, also require `--managed-gui-send` and the app-specific
-`harness <app> send-message --text-file ...` path.
+managed sending, use `managed-session` or `dating-boost-host-loop` with
+`--managed-gui-send`. Direct `harness <app> send-message --authorization
+--action-request` is executor-internal only; do not handcraft action requests.
 
 ## Default Draft Output
 
@@ -216,10 +217,11 @@ presence, `等你回应`, and visible profile expand controls without returning 
 OCR text. The native harness may diagnose the mirrored window, capture
 screenshots/OCR, launch Tinder, move through profile photo/read states, open
 chats, open visible conversations, open unopened matches, open profile previews
-from thread avatars, return from a thread to chats, and execute a fully managed
-`send_message` only through
-`harness tinder send-message --text-file ... --data-dir ... --authorization ...
---action-request ...`. Real Tinder sends require unexpired authorization with
+from thread avatars, and return from a thread to chats. Real Tinder managed
+sends must be driven by `managed-session` or `dating-boost-host-loop`; the
+direct harness send command is executor-internal only and must consume a
+system-generated work item, not a handcrafted action request. Real Tinder sends
+require unexpired authorization with
 `app_id: tinder`, `autonomous_send: true`, `live_send: true`, `send_message`
 allowed, an unpaused safety switch, a policy-checked/hash-bound action request,
 target-chat binding, staged-text OCR verification, outbound-bubble verification,
@@ -261,8 +263,9 @@ deadlines such as `轮到您了`/`小时后失效`, and Premium gates. Safe navi
 open bottom tabs, open visible chat rows, open match-circle Opening Move
 prompts, open a thread profile from the header name, vertically scroll profiles,
 and open an empty Opening Move reply composer. Ordinary chat send is allowed
-only through `harness bumble send-message --text-file ... --data-dir ...
---authorization ... --action-request ...`; it requires target-specific binding,
+only through managed-session/host-loop live execution; the direct harness send
+command is executor-internal only and must consume a system-generated work
+item, not a handcrafted action request. It requires target-specific binding,
 exact staged-text OCR verification, a fresh post-send observation, and
 outbound-bubble verification. Visual send-button or yellow-bubble evidence alone
 does not satisfy exact-text verification. It must not like, pass, SuperSwipe,
@@ -315,8 +318,9 @@ decide. For a male user's account, you may draft a question-gate reply for user
 review, but the current harness does not stage or send question-gate replies;
 the user must handle that path manually. Do not use a generic autonomous
 authorization to bypass this rule. Ordinary chat send is allowed only through
-`harness tashuo send-message --text-file ... --data-dir ... --authorization ...
---action-request ...`; it requires target-specific binding, exact staged-text
+managed-session/host-loop live execution; the direct harness send command is
+executor-internal only and must consume a system-generated work item, not a
+handcrafted action request. It requires target-specific binding, exact staged-text
 OCR verification, a fresh post-send observation, and outbound-message
 verification. Visual-only button or bubble evidence alone does not satisfy
 exact-text verification.
@@ -347,10 +351,11 @@ Prefer `--text-file` so private draft text is not written into shell history or
 process arguments. Real WeChat staging must include `--data-dir` so the global
 safety pause can block paste.
 
-Use `harness wechat send-message --text-file ...` only when the user has
-explicitly authorized fully managed macOS WeChat sending. Real execution must
-include `--data-dir`, `--authorization`, and `--action-request`; the
-authorization must be unexpired, match `app_id: wechat`, set
+Use managed-session/host-loop when the user has explicitly authorized fully
+managed macOS WeChat sending. The direct harness send command is
+executor-internal only and must consume a system-generated work item, not a
+handcrafted action request. The authorization must be unexpired, match
+`app_id: wechat`, set
 `autonomous_send: true`, set `live_send: true`, allow `send_message`, and
 require post-action verification. The action request must be policy-checked,
 hash-bound to the text file, and include target-chat binding evidence. The
@@ -426,8 +431,10 @@ duplicates, gates risky actions, and writes reports.
 9. After each send, perform post-action verification and call `dating-boost operator record-action-result --data-dir .local/dating-boost --input action_result.json`.
 10. If the work item is `handoff`, appointment details, contact exchange, or high-risk content, stop automation for that match and ask the user to take over.
 11. Continue calling `operator next` until the user stops the session or the operator returns `wait`.
-12. Stop with `dating-boost operator stop --data-dir .local/dating-boost` and show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
-13. On a later run, use `dating-boost operator report latest` and local state to continue without relying on host-agent memory.
+ 12. Stop with `dating-boost operator stop --data-dir .local/dating-boost` and show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
+ 13. After stopping, check the report for Memory Suggestions. If any pending items exist, present them to the user and ask for accept/reject decisions. Execute `dating-boost memory review decide --data-dir .local/dating-boost --accept <id1> --reject <id2>` with the user's choices. Only accepted items become long-term memory.
+ 14. On a later run, if `operator session start` or `managed-session start` returns `needs_memory_review`, first resolve pending memory suggestions before starting a new session. Use `dating-boost memory review list --data-dir .local/dating-boost --status pending` and `memory review decide` to process them.
+ 15. On a later run, use `dating-boost operator report latest` and local state to continue without relying on host-agent memory.
 
 For each opened thread, read `references/planner-authoring.md` and author
 `planner_assessment` before allowing autonomous send: include engagement,
@@ -532,8 +539,10 @@ the local state engine; it does not scan the screen or click the app.
 9. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
 10. Execute only allowed ordinary `send_message` action requests whose planner alignment is `ok`.
 11. After each send, perform post-action verification and call `dating-boost action record-result`.
-12. Stop with `dating-boost automation session stop --data-dir .local/dating-boost` and show `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
-13. On a later run, use `dating-boost automation report latest` and local state to continue without relying on host-agent memory.
+ 12. Stop with `dating-boost automation session stop --data-dir .local/dating-boost` and show `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
+ 13. After stopping, check the report for Memory Suggestions. If any pending items exist, present them to the user and ask for accept/reject decisions. Execute `dating-boost memory review decide --data-dir .local/dating-boost --accept <id1> --reject <id2>` with the user's choices.
+ 14. On a later run, if `automation session start` returns `needs_memory_review`, first resolve pending memory suggestions. Use `dating-boost memory review list --data-dir .local/dating-boost --status pending` and `memory review decide`.
+ 15. On a later run, use `dating-boost automation report latest` and local state to continue without relying on host-agent memory.
 
 If the step output contains `handoffs`, appointment details, contact exchange,
 or high-risk content, stop automation for that match and ask the user to take

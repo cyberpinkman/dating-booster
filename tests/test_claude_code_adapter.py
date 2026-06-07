@@ -48,6 +48,26 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         agent_caps = capabilities["agent_native_capabilities"]
         self.assertIn("claude_code", agent_caps["host_agent_adapters"])
         self.assertTrue(agent_caps["claude_code_adapter"])
+        self.assertEqual(
+            capabilities["managed_live_send_guidance"]["next_host_action"],
+            "ready",
+        )
+        self.assertIn("do_not_handcraft_action_request_json", capabilities["managed_live_send_guidance"]["forbidden_actions"])
+        self.assertIn(
+            "do_not_prefer_stale_console_script_over_module_cli",
+            capabilities["managed_live_send_guidance"]["forbidden_actions"],
+        )
+        self.assertEqual(agent_caps["managed_live_send_guidance"]["direct_harness_scope"], "executor_internal_only")
+        self.assertTrue(
+            capabilities["managed_live_send_guidance"]["canonical_commands"]["managed_run"].startswith(
+                "python3 -m dating_boost.cli"
+            )
+        )
+        self.assertTrue(
+            capabilities["managed_live_send_guidance"]["canonical_commands"]["host_loop_live"].startswith(
+                "python3 -m dating_boost.host_loop"
+            )
+        )
 
     def test_claude_code_adapter_source_and_packaged_resources_stay_in_sync(self):
         for relative_path in (
@@ -145,6 +165,8 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         self.assertEqual(payload["target_host"], "claude_code")
         self.assertEqual(payload["adapter_package"], str(ADAPTER_PACKAGE.resolve()))
         self.assertEqual(payload["skill_doctor"]["status"], "ok")
+        self.assertEqual(payload["managed_live_send_guidance"]["direct_harness_scope"], "executor_internal_only")
+        self.assertIn("managed_start_live", payload["managed_live_send_guidance"]["canonical_commands"])
 
     def test_adapter_claude_code_install_supports_dry_run_and_project_install(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -164,6 +186,13 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
             self.assertEqual(dry_exit, 0)
             self.assertEqual(dry_payload["status"], "dry_run")
             self.assertEqual(dry_payload["target_path"], str(target_path))
+            self.assertTrue(
+                any(
+                    command.startswith("python3 -m dating_boost.cli capabilities")
+                    for command in dry_payload["startup_commands"]
+                )
+            )
+            self.assertIn("do_not_handcraft_action_request_json", dry_payload["managed_live_send_guidance"]["forbidden_actions"])
             self.assertFalse(target_path.exists())
 
             install_exit, install_payload = self._run_cli([
