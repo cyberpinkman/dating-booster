@@ -332,6 +332,32 @@ can enter iOS edit mode.
 
 ## macOS WeChat Input
 
+WeChat is a continuation channel. When a user says they moved a dating app contact to WeChat, use `inherit_memory` to copy the dating app match's memory into the WeChat match before drafting. This is a one-way, user-authorized transfer; it does not delete the source match or create a shared identity.
+
+Before the first WeChat draft for a transferred contact:
+
+```bash
+dating-boost memory update-match --data-dir .local/dating-boost \
+  --match-id <wechat_match_id> --input inherit.json
+```
+
+Where `inherit.json` contains:
+
+```json
+{
+  "action": "inherit_memory",
+  "source_match_id": "<dating_app_match_id>",
+  "target_match_id": "<wechat_match_id>",
+  "direction": "dating_app_to_wechat",
+  "confirmed_by": "user",
+  "confirmation_token": "inherit_memory:<dating_app_match_id>:<wechat_match_id>"
+}
+```
+
+Do not use `merge_identity` for WeChat continuation; that is for true identity merges where the source match is absorbed. `inherit_memory` preserves both matches independently.
+
+After inheritance, use `memory rebuild` and `context build` normally for the WeChat match. The inherited profile hooks, conversation facts, and feedback preferences will appear in context.
+
 For real macOS WeChat work, use the desktop WeChat harness instead of iPhone
 Mirroring:
 

@@ -2119,6 +2119,8 @@ def _apply_memory_update(data_dir: Path, match_id: str, update: dict[str, Any]) 
     action = str(update.get("action") or "")
     if action == "merge_identity":
         return _apply_memory_identity_merge(data_dir, match_id, update)
+    if action == "inherit_memory":
+        return _apply_memory_inheritance(data_dir, match_id, update)
 
     memory_repo = MemoryRepository(data_dir)
     event = _memory_update_event(data_dir, match_id, update)
@@ -2350,6 +2352,139 @@ def _merged_memory_event(
             source_event_id=event.event_id,
             evidence_text="Source match memory event preserved during identity merge.",
             metadata={"source_match_id": source_match_id},
+        ),
+    )
+
+
+def _apply_memory_inheritance(data_dir: Path, match_id: str, update: dict[str, Any]) -> dict[str, Any]:
+    source_match_id = str(update.get("source_match_id") or "")
+    target_match_id = str(update.get("target_match_id") or "")
+    confirmation_token = str(update.get("confirmation_token") or "")
+    direction = str(update.get("direction") or "dating_app_to_wechat")
+    expected_token = f"inherit_memory:{source_match_id}:{target_match_id}"
+    if not source_match_id or not target_match_id:
+        raise ValueError("inherit_memory requires source_match_id and target_match_id")
+    if source_match_id == target_match_id:
+        raise ValueError("inherit_memory source_match_id and target_match_id must differ")
+    if target_match_id != match_id:
+        raise ValueError("inherit_memory target_match_id must match --match-id")
+    if confirmation_token != expected_token:
+        raise ValueError(f"inherit_memory requires confirmation_token {expected_token!r}")
+
+    memory_repo = MemoryRepository(data_dir)
+    source_events = memory_repo.load_events(source_match_id)
+    if not source_events:
+        raise ValueError(f"source match {source_match_id!r} has no memory events")
+    if memory_repo.load_projection(target_match_id) is None and not memory_repo.load_events(target_match_id):
+        raise ValueError(f"target match {target_match_id!r} does not exist")
+
+    target_events_before = memory_repo.load_events(target_match_id)
+    existing_inherited_ids = {
+        event.payload.get("original_event_id")
+        for event in target_events_before
+        if event.evidence is not None
+        and event.evidence.source_type == "memory_inheritance"
+        and event.payload.get("original_event_id")
+    }
+    _inheritable_types = {
+        MemoryEventType.PROFILE_FACT_OBSERVED,
+        MemoryEventType.CONVERSATION_FACT_OBSERVED,
+        MemoryEventType.INFERENCE_RECORDED,
+        MemoryEventType.FACT_CORRECTED,
+        MemoryEventType.FACT_REJECTED,
+        MemoryEventType.FACT_ARCHIVED,
+        MemoryEventType.COMMITMENT_CREATED,
+        MemoryEventType.COMMITMENT_RESOLVED,
+        MemoryEventType.FEEDBACK_RECORDED,
+    }
+    now = _now_iso()
+    inherited_count = 0
+    skipped_count = 0
+    skipped_type_count = 0
+    for source_event in source_events:
+        if source_event.event_type not in _inheritable_types:
+            skipped_type_count += 1
+            continue
+        if source_event.event_id in existing_inherited_ids:
+            skipped_count += 1
+            continue
+        inherited_event = _inherited_memory_event(
+            source_event,
+            source_match_id=source_match_id,
+            target_match_id=target_match_id,
+            direction=direction,
+            inherited_at=now,
+        )
+        memory_repo.append_event(target_match_id, inherited_event)
+        inherited_count += 1
+
+    summary_event = MemoryEvent(
+        event_id=_memory_event_id(
+            target_match_id,
+            "inherit_memory",
+            {"source_match_id": source_match_id, "target_match_id": target_match_id, "direction": direction},
+        ),
+        event_type=MemoryEventType.PROJECTION_REBUILT,
+        match_id=target_match_id,
+        scope=MemoryScope.MATCH_PROFILE,
+        created_at=now,
+        payload={
+            "action": "inherit_memory",
+            "source_match_id": source_match_id,
+            "target_match_id": target_match_id,
+            "direction": direction,
+            "confirmed_by": str(update.get("confirmed_by") or "user"),
+            "inherited_event_count": inherited_count,
+            "skipped_existing_event_count": skipped_count,
+            "skipped_non_inheritable_event_count": skipped_type_count,
+        },
+        evidence=_manual_evidence("memory_inheritance_summary", f"User authorized one-way memory inheritance from {source_match_id} to {target_match_id}."),
+    )
+    memory_repo.append_event(target_match_id, summary_event)
+    projection = memory_repo.rebuild_projection(target_match_id)
+    return {
+        "schema_version": 1,
+        "status": "ok",
+        "match_id": target_match_id,
+        "action": "inherit_memory",
+        "event_id": summary_event.event_id,
+        "source_match_id": source_match_id,
+        "target_match_id": target_match_id,
+        "inherited_event_count": inherited_count,
+        "skipped_existing_event_count": skipped_count,
+        "skipped_non_inheritable_event_count": skipped_type_count,
+        "projection_updated": True,
+        "identity_status": projection.identity_status.value,
+        "trusted_for_context": projection.trusted_for_context,
+        "trusted_for_managed_send": projection.trusted_for_managed_send,
+    }
+
+
+def _inherited_memory_event(
+    event: MemoryEvent,
+    *,
+    source_match_id: str,
+    target_match_id: str,
+    direction: str,
+    inherited_at: str,
+) -> MemoryEvent:
+    payload = dict(event.payload)
+    payload["inheritance_type"] = direction
+    payload["source_match_id"] = source_match_id
+    payload["original_event_id"] = event.event_id
+    payload["inherited_at"] = inherited_at
+    return MemoryEvent(
+        event_id=f"inherited_{_digest({'source': source_match_id, 'target': target_match_id, 'event_id': event.event_id, 'action': 'inherit_memory'})[:16]}",
+        event_type=event.event_type,
+        match_id=target_match_id,
+        scope=event.scope,
+        created_at=event.created_at,
+        payload=payload,
+        evidence=EvidenceRef(
+            source_type="memory_inheritance",
+            source_event_id=event.event_id,
+            evidence_text="Memory event inherited from source match via user-authorized one-way transfer.",
+            metadata={"source_match_id": source_match_id, "inheritance_type": direction},
         ),
     )
 

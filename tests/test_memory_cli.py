@@ -722,6 +722,342 @@ class MemoryUpdateMatchTests(unittest.TestCase):
             self.assertEqual(payload["status"], "error")
             self.assertIn("unsupported", payload["reason"])
 
+    def test_inherit_memory_requires_exact_confirmation_token(self):
+        source_observation = load_observation(FIXTURE_PATH)
+        target_payload = source_observation.to_dict()
+        target_payload["observation_id"] = "obs_wechat_001"
+        target_payload["match_identity_hints"] = {
+            **target_payload["match_identity_hints"],
+            "visible_name": "Alex WeChat",
+            "conversation_fingerprint": "alex-wechat-thread",
+        }
+        target_observation = type(source_observation).from_dict(target_payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            source_match_id = store_observation_with_memory(data_dir, source_observation)["match_id"]
+            target_match_id = store_observation_with_memory(data_dir, target_observation)["match_id"]
+            bad_input = self._write_json(data_dir, "inherit_bad.json", {
+                "action": "inherit_memory",
+                "source_match_id": source_match_id,
+                "target_match_id": target_match_id,
+                "confirmation_token": "inherit_memory:wrong",
+            })
+
+            bad_exit, bad_payload, _ = self._run([
+                "memory", "update-match", "--data-dir", str(data_dir),
+                "--match-id", target_match_id, "--input", str(bad_input),
+            ])
+
+            self.assertNotEqual(bad_exit, 0)
+            self.assertEqual(bad_payload["status"], "error")
+            self.assertIn("confirmation_token", bad_payload["reason"])
+
+    def test_inherit_memory_target_must_match_match_id(self):
+        source_observation = load_observation(FIXTURE_PATH)
+        target_payload = source_observation.to_dict()
+        target_payload["observation_id"] = "obs_wechat_002"
+        target_payload["match_identity_hints"] = {
+            **target_payload["match_identity_hints"],
+            "visible_name": "Alex WeChat",
+            "conversation_fingerprint": "alex-wechat-thread-2",
+        }
+        target_observation = type(source_observation).from_dict(target_payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            source_match_id = store_observation_with_memory(data_dir, source_observation)["match_id"]
+            target_match_id = store_observation_with_memory(data_dir, target_observation)["match_id"]
+            wrong_target_input = self._write_json(data_dir, "inherit_wrong_target.json", {
+                "action": "inherit_memory",
+                "source_match_id": source_match_id,
+                "target_match_id": target_match_id,
+                "confirmation_token": f"inherit_memory:{source_match_id}:{target_match_id}",
+            })
+
+            exit_code, payload, _ = self._run([
+                "memory", "update-match", "--data-dir", str(data_dir),
+                "--match-id", source_match_id, "--input", str(wrong_target_input),
+            ])
+
+            self.assertNotEqual(exit_code, 0)
+            self.assertIn("target_match_id must match", payload["reason"])
+
+    def test_inherit_memory_source_target_must_differ(self):
+        source_observation = load_observation(FIXTURE_PATH)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            match_id = store_observation_with_memory(data_dir, source_observation)["match_id"]
+            input_path = self._write_json(data_dir, "inherit_same.json", {
+                "action": "inherit_memory",
+                "source_match_id": match_id,
+                "target_match_id": match_id,
+                "confirmation_token": f"inherit_memory:{match_id}:{match_id}",
+            })
+
+            exit_code, payload, _ = self._run([
+                "memory", "update-match", "--data-dir", str(data_dir),
+                "--match-id", match_id, "--input", str(input_path),
+            ])
+
+            self.assertNotEqual(exit_code, 0)
+            self.assertIn("must differ", payload["reason"])
+
+    def test_inherit_memory_enriches_empty_target_with_source_facts(self):
+        source_observation = load_observation(FIXTURE_PATH)
+        target_payload = source_observation.to_dict()
+        target_payload["observation_id"] = "obs_wechat_minimal"
+        target_payload["app_id"] = "wechat"
+        target_payload["match_identity_hints"] = {
+            "visible_name": "Alex WeChat",
+            "conversation_fingerprint": "alex-wechat-thread-min",
+        }
+        target_payload["profile_observation"] = {
+            "profile_text": "",
+            "photo_cues": [],
+            "hook_candidates": [],
+        }
+        target_payload["conversation_observation"] = {
+            "visible_messages": [],
+            "input_state": "empty",
+            "thread_cues": [],
+        }
+        target_observation = type(source_observation).from_dict(target_payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            source_match_id = store_observation_with_memory(data_dir, source_observation)["match_id"]
+            target_match_id = store_observation_with_memory(data_dir, target_observation)["match_id"]
+
+            target_projection_before = MemoryRepository(data_dir).load_projection(target_match_id)
+            source_hooks_before = [
+                str(f.value)
+                for f in MemoryRepository(data_dir).load_projection(source_match_id).facts
+                if f.predicate in {"profile_cue", "hook_candidate"}
+            ]
+
+            inherit_input = self._write_json(data_dir, "inherit_enrich.json", {
+                "action": "inherit_memory",
+                "source_match_id": source_match_id,
+                "target_match_id": target_match_id,
+                "direction": "dating_app_to_wechat",
+                "confirmed_by": "user",
+                "confirmation_token": f"inherit_memory:{source_match_id}:{target_match_id}",
+            })
+
+            exit_code, payload, _ = self._run([
+                "memory", "update-match", "--data-dir", str(data_dir),
+                "--match-id", target_match_id, "--input", str(inherit_input),
+            ])
+
+            target_events = MemoryRepository(data_dir).load_events(target_match_id)
+            target_projection = MemoryRepository(data_dir).load_projection(target_match_id)
+            inherited_events = [
+                e for e in target_events
+                if e.evidence is not None and e.evidence.source_type == "memory_inheritance"
+            ]
+            target_hooks = [
+                str(f.value)
+                for f in target_projection.facts
+                if f.predicate in {"profile_cue", "hook_candidate"}
+            ]
+
+            self.assertEqual(exit_code, 0)
+            self.assertGreater(payload["inherited_event_count"], 0)
+            self.assertGreater(payload["skipped_non_inheritable_event_count"], 0)
+            self.assertEqual(len(inherited_events), payload["inherited_event_count"])
+            for event in inherited_events:
+                self.assertEqual(event.match_id, target_match_id)
+                self.assertEqual(event.payload.get("inheritance_type"), "dating_app_to_wechat")
+                self.assertNotIn(event.event_type.value, {
+                    "observation_ingested", "match_identity_assessed",
+                    "match_identity_confirmed", "match_identity_conflict",
+                    "projection_rebuilt",
+                })
+            self.assertTrue(target_projection.trusted_for_context)
+
+            for hook in source_hooks_before:
+                self.assertIn(hook, target_hooks, f"inherited hook '{hook}' should appear in target projection")
+
+    def test_inherit_memory_source_identity_conflict_does_not_pollute_target(self):
+        source_observation = load_observation(FIXTURE_PATH)
+        target_payload = source_observation.to_dict()
+        target_payload["observation_id"] = "obs_wechat_conflict_safe"
+        target_payload["app_id"] = "wechat"
+        target_payload["match_identity_hints"] = {
+            "visible_name": "Alex WeChat",
+            "conversation_fingerprint": "alex-wechat-thread-conflict",
+        }
+        target_payload["profile_observation"] = {
+            "profile_text": "",
+            "photo_cues": [],
+            "hook_candidates": [],
+        }
+        target_payload["conversation_observation"] = {
+            "visible_messages": [],
+            "input_state": "empty",
+            "thread_cues": [],
+        }
+        target_observation = type(source_observation).from_dict(target_payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            source_match_id = store_observation_with_memory(data_dir, source_observation)["match_id"]
+            target_match_id = store_observation_with_memory(data_dir, target_observation)["match_id"]
+
+            from dating_boost.core.memory.models import MemoryEvent, MemoryEventType, EvidenceRef, MemoryScope
+            conflict_event = MemoryEvent(
+                event_id="manual_conflict_001",
+                event_type=MemoryEventType.MATCH_IDENTITY_CONFLICT,
+                match_id=source_match_id,
+                scope=MemoryScope.MATCH_PROFILE,
+                created_at="2026-05-26T00:00:00Z",
+                payload={"reason": "synthetic conflict for test"},
+                evidence=EvidenceRef(source_type="test", evidence_text="synthetic"),
+            )
+            MemoryRepository(data_dir).append_event(source_match_id, conflict_event)
+            MemoryRepository(data_dir).rebuild_projection(source_match_id)
+
+            source_projection = MemoryRepository(data_dir).load_projection(source_match_id)
+            self.assertEqual(source_projection.identity_status.value, "conflicted")
+
+            target_projection_before = MemoryRepository(data_dir).load_projection(target_match_id)
+            self.assertTrue(target_projection_before.trusted_for_context)
+
+            inherit_input = self._write_json(data_dir, "inherit_no_pollute.json", {
+                "action": "inherit_memory",
+                "source_match_id": source_match_id,
+                "target_match_id": target_match_id,
+                "direction": "dating_app_to_wechat",
+                "confirmed_by": "user",
+                "confirmation_token": f"inherit_memory:{source_match_id}:{target_match_id}",
+            })
+
+            exit_code, payload, _ = self._run([
+                "memory", "update-match", "--data-dir", str(data_dir),
+                "--match-id", target_match_id, "--input", str(inherit_input),
+            ])
+
+            target_projection_after = MemoryRepository(data_dir).load_projection(target_match_id)
+            target_events = MemoryRepository(data_dir).load_events(target_match_id)
+
+            self.assertEqual(exit_code, 0)
+            inherited_identity_events = [
+                e for e in target_events
+                if e.evidence is not None
+                and e.evidence.source_type == "memory_inheritance"
+                and e.event_type in {
+                    MemoryEventType.MATCH_IDENTITY_ASSESSED,
+                    MemoryEventType.MATCH_IDENTITY_CONFLICT,
+                    MemoryEventType.MATCH_IDENTITY_CONFIRMED,
+                }
+            ]
+            self.assertEqual(len(inherited_identity_events), 0,
+                             "no identity events should be inherited to target")
+            self.assertTrue(target_projection_after.trusted_for_context,
+                            "target should remain trusted; source conflict must not pollute it")
+            self.assertNotEqual(target_projection_after.identity_status.value, "conflicted")
+
+    def test_inherit_memory_is_idempotent(self):
+        source_observation = load_observation(FIXTURE_PATH)
+        target_payload = source_observation.to_dict()
+        target_payload["observation_id"] = "obs_wechat_004"
+        target_payload["match_identity_hints"] = {
+            **target_payload["match_identity_hints"],
+            "visible_name": "Alex WeChat",
+            "conversation_fingerprint": "alex-wechat-thread-4",
+        }
+        target_observation = type(source_observation).from_dict(target_payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            source_match_id = store_observation_with_memory(data_dir, source_observation)["match_id"]
+            target_match_id = store_observation_with_memory(data_dir, target_observation)["match_id"]
+            inherit_input = self._write_json(data_dir, "inherit_idem.json", {
+                "action": "inherit_memory",
+                "source_match_id": source_match_id,
+                "target_match_id": target_match_id,
+                "confirmation_token": f"inherit_memory:{source_match_id}:{target_match_id}",
+            })
+
+            first_exit, first_payload, _ = self._run([
+                "memory", "update-match", "--data-dir", str(data_dir),
+                "--match-id", target_match_id, "--input", str(inherit_input),
+            ])
+            second_exit, second_payload, _ = self._run([
+                "memory", "update-match", "--data-dir", str(data_dir),
+                "--match-id", target_match_id, "--input", str(inherit_input),
+            ])
+            target_events = MemoryRepository(data_dir).load_events(target_match_id)
+            inherited_events = [
+                e for e in target_events
+                if e.evidence is not None and e.evidence.source_type == "memory_inheritance"
+            ]
+            event_ids = [e.event_id for e in inherited_events]
+
+            self.assertEqual(first_exit, 0)
+            self.assertEqual(second_exit, 0)
+            self.assertGreater(first_payload["inherited_event_count"], 0)
+            self.assertEqual(second_payload["inherited_event_count"], 0)
+            self.assertGreater(second_payload["skipped_existing_event_count"], 0)
+            self.assertEqual(len(event_ids), len(set(event_ids)))
+
+    def test_inherit_memory_survives_rebuild(self):
+        source_observation = load_observation(FIXTURE_PATH)
+        target_payload = source_observation.to_dict()
+        target_payload["observation_id"] = "obs_wechat_005"
+        target_payload["match_identity_hints"] = {
+            **target_payload["match_identity_hints"],
+            "visible_name": "Alex WeChat",
+            "conversation_fingerprint": "alex-wechat-thread-5",
+        }
+        target_observation = type(source_observation).from_dict(target_payload)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            source_match_id = store_observation_with_memory(data_dir, source_observation)["match_id"]
+            target_match_id = store_observation_with_memory(data_dir, target_observation)["match_id"]
+            inherit_input = self._write_json(data_dir, "inherit_rebuild.json", {
+                "action": "inherit_memory",
+                "source_match_id": source_match_id,
+                "target_match_id": target_match_id,
+                "confirmation_token": f"inherit_memory:{source_match_id}:{target_match_id}",
+            })
+
+            self._run([
+                "memory", "update-match", "--data-dir", str(data_dir),
+                "--match-id", target_match_id, "--input", str(inherit_input),
+            ])
+            rebuild_exit, rebuild_payload, _ = self._run([
+                "memory", "rebuild", "--data-dir", str(data_dir),
+                "--match-id", target_match_id,
+            ])
+            target_events = MemoryRepository(data_dir).load_events(target_match_id)
+            inherited_events = [
+                e for e in target_events
+                if e.evidence is not None and e.evidence.source_type == "memory_inheritance"
+            ]
+
+            self.assertEqual(rebuild_exit, 0)
+            self.assertEqual(rebuild_payload["status"], "ok")
+            self.assertTrue(len(inherited_events) > 0)
+
+            target_projection = MemoryRepository(data_dir).load_projection(target_match_id)
+            source_hooks = [
+                str(f.value)
+                for f in MemoryRepository(data_dir).load_projection(source_match_id).facts
+                if f.predicate in {"profile_cue", "hook_candidate"}
+            ]
+            target_hooks = [
+                str(f.value)
+                for f in target_projection.facts
+                if f.predicate in {"profile_cue", "hook_candidate"}
+            ]
+            for hook in source_hooks:
+                self.assertIn(hook, target_hooks,
+                              f"inherited hook '{hook}' should survive rebuild")
+
     def _write_json(self, directory: Path, name: str, payload: dict) -> Path:
         path = directory / name
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -988,6 +1324,19 @@ class MemoryPrivacyCliTests(unittest.TestCase):
             exit_code = main(argv)
         text = output.getvalue()
         return exit_code, json.loads(text), text
+
+
+class CodexSkillSyncTests(unittest.TestCase):
+    def test_codex_skill_resource_copy_contains_inherit_memory(self):
+        from pathlib import Path as P
+        root = P(__file__).resolve().parent.parent
+        source_skill = root / "skills" / "dating-booster-codex" / "SKILL.md"
+        resource_copy = root / "dating_boost" / "resources" / "agent_adapters" / "codex" / "dating-booster-codex" / "SKILL.md"
+        source_text = source_skill.read_text(encoding="utf-8")
+        resource_text = resource_copy.read_text(encoding="utf-8")
+        for marker in ["inherit_memory", "continuation channel"]:
+            self.assertIn(marker, source_text, f"source SKILL.md missing '{marker}'")
+            self.assertIn(marker, resource_text, f"resource SKILL.md missing '{marker}'")
 
 
 if __name__ == "__main__":
