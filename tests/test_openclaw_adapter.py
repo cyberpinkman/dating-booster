@@ -247,13 +247,13 @@ class OpenClawAdapterTests(unittest.TestCase):
         self.assertTrue(payload["release_capabilities"]["openclaw_adapter"])
         self.assertTrue(payload["release_capabilities"]["hermes_openclaw_compatible_adapter"])
 
-    def test_readme_documents_openclaw_and_hermes_quickstart(self):
-        readme = Path("README.md").read_text(encoding="utf-8")
+    def test_agents_doc_documents_openclaw_and_hermes_quickstart(self):
+        readme = Path("AGENTS.md").read_text(encoding="utf-8")
 
         self.assertIn("OpenClaw", readme)
         self.assertIn("Hermes", readme)
-        self.assertIn("dating-boost adapter openclaw install", readme)
-        self.assertIn("dating-boost adapter hermes doctor", readme)
+        self.assertIn("python3 -m dating_boost.cli adapter openclaw install", readme)
+        self.assertIn("python3 -m dating_boost.cli adapter hermes doctor", readme)
         self.assertIn(".openclaw/skills/dating-booster", readme)
 
     def _run_cli(self, args: list[str]) -> tuple[int, dict]:

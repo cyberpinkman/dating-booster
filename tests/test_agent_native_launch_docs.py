@@ -90,6 +90,7 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
         )
         for phrase in required_install_phrases:
             self.assertIn(phrase, install_text)
+        self.assertIn("AGENTS.md", readme_text.splitlines()[2])
         self.assertIn("skills/dating-booster-codex/INSTALL.md", readme_text)
 
     def test_architecture_docs_cover_future_expansion_axes(self):

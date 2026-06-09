@@ -273,11 +273,11 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
         self.assertIn("claude-code/adapter-package.json", payload["source_hashes"])
         self.assertTrue(payload["release_capabilities"]["claude_code_adapter"])
 
-    def test_readme_documents_claude_code_quickstart(self):
-        readme = Path("README.md").read_text(encoding="utf-8")
+    def test_agents_doc_documents_claude_code_quickstart(self):
+        readme = Path("AGENTS.md").read_text(encoding="utf-8")
 
         self.assertIn("Claude Code", readme)
-        self.assertIn("dating-boost adapter claude-code install", readme)
+        self.assertIn("python3 -m dating_boost.cli adapter claude-code install", readme)
         self.assertIn(".claude/skills/dating-booster", readme)
 
     def test_adapter_codex_install_supports_dry_run_and_project_install(self):
@@ -338,6 +338,7 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
 
     def test_docs_describe_agent_clone_install_path(self):
         docs = {
+            "agents": Path("AGENTS.md").read_text(encoding="utf-8"),
             "root_readme": Path("README.md").read_text(encoding="utf-8"),
             "docs_readme": Path("docs/README.md").read_text(encoding="utf-8"),
             "claude_install": Path("agent_adapters/claude-code/INSTALL.md").read_text(encoding="utf-8"),

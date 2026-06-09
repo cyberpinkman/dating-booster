@@ -134,8 +134,10 @@ four axes that should not be mixed in one-off patches:
    app-specific parameters。新增 app 不再给 argparse 加专属参数。
 6. Add deterministic fixtures and focused tests for classifier, actions,
    workflows, target binding, and send evidence。补 fixtures 和 focused tests。
-7. Update `README.md`, `app_profiles/README.md`, and Codex skill references。
-   同步顶层 README、profile 文档和 Codex skill。
+7. Update `AGENTS.md`, `app_profiles/README.md`, and relevant host adapter docs;
+   update `README.md` only when the human-facing summary changes。同步 agent
+   引导文档、profile 文档和相关 host adapter 文档；只有人类摘要变化时才同步顶层
+   README。
 8. Run targeted unit tests plus `dating-boost capabilities --json` before
    publishing。发布前跑 targeted tests 和 capabilities。
 

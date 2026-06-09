@@ -135,7 +135,7 @@ class SkillPackageTests(unittest.TestCase):
 
     def test_agent_facing_docs_do_not_present_handcrafted_live_send_requests(self):
         docs = [
-            Path("README.md"),
+            Path("AGENTS.md"),
             Path("skills/dating-booster-codex/SKILL.md"),
             Path("skills/dating-booster-codex/INSTALL.md"),
             Path("skills/dating-booster-codex/references/workflows.md"),
@@ -365,7 +365,7 @@ class SkillPackageTests(unittest.TestCase):
 
     def test_tinder_new_match_workflows_are_documented_for_agents(self):
         docs = {
-            "readme": Path("README.md").read_text(encoding="utf-8").lower(),
+            "agents": Path("AGENTS.md").read_text(encoding="utf-8").lower(),
             "skill": (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower(),
             "workflows": (SKILL_DIR / "references" / "workflows.md").read_text(encoding="utf-8").lower(),
             "host_loop": (SKILL_DIR / "references" / "host-loop.md").read_text(encoding="utf-8").lower(),
@@ -380,7 +380,7 @@ class SkillPackageTests(unittest.TestCase):
 
     def test_managed_session_docs_require_host_loop_resume_after_host_work(self):
         docs = {
-            "readme": Path("README.md").read_text(encoding="utf-8").lower(),
+            "agents": Path("AGENTS.md").read_text(encoding="utf-8").lower(),
             "codex_skill": (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower(),
             "codex_workflows": (SKILL_DIR / "references" / "workflows.md").read_text(encoding="utf-8").lower(),
             "claude_skill": Path("agent_adapters/claude-code/skills/dating-booster/SKILL.md").read_text(

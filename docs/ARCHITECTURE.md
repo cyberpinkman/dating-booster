@@ -197,8 +197,8 @@ For a new app:
    preflight.
 5. Let capabilities, CLI harness, managed session, and host loop consume the
    registry; do not add app-specific branches to those global layers.
-6. Update README, `docs/README.md`, `app_profiles/README.md`, and relevant host
-   adapter docs.
+6. Update `AGENTS.md`, `docs/README.md`, `app_profiles/README.md`, and relevant
+   host adapter docs. Update README only when the human-facing summary changes.
 
 For a new goal:
 
