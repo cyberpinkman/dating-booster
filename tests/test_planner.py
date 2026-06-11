@@ -14,6 +14,20 @@ NOW = "2026-05-31T16:00:00+08:00"
 
 
 class PlannerCoreTests(unittest.TestCase):
+    def test_profile_observation_defaults_review_status_from_visible_content(self):
+        observed = AppObservation.from_dict(_observation("obs_profile_observed").to_dict())
+        missing_payload = _observation("obs_profile_missing").to_dict()
+        missing_payload["profile_observation"] = {
+            "profile_text": "",
+            "photo_cues": [],
+            "hook_candidates": [],
+        }
+        missing = AppObservation.from_dict(missing_payload)
+
+        self.assertEqual(observed.profile_observation.review_status, "observed")
+        self.assertEqual(missing.profile_observation.review_status, "missing")
+        self.assertEqual(missing.to_dict()["profile_observation"]["review_status"], "missing")
+
     def test_update_creates_goal_plan_and_event_log(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir)
@@ -190,6 +204,66 @@ class PlannerCoreTests(unittest.TestCase):
             self.assertTrue(repair["auto_send_allowed"])
             self.assertEqual(repair["recommended_move"], "low_investment_repair")
             self.assertEqual(repair["low_investment_streak"], 2)
+
+    def test_tashuo_question_gate_skipped_prevents_hey_from_counting_as_low_investment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = PlannerRepository(Path(temp_dir))
+
+            payload = repo.update_plan(
+                match_id="match_tashuo",
+                goal_id="goal_meet",
+                observation=_observation(
+                    "obs_tashuo_skip_gate",
+                    app_id="tashuo",
+                    thread_cues=["tashuo_question_gate_skipped"],
+                    latest_inbound=[{"sender": "match", "text": "hey"}],
+                ),
+                assessment=_planner_assessment(
+                    recommended_move="take_the_lead",
+                    current_topic="opening",
+                    topic_state="active",
+                    topic_saturation=10,
+                    evidence="她跳过了问答考验，直接开放普通聊天；hey 文本短但不是低投入证据。",
+                ),
+                now=NOW,
+            )
+
+            self.assertEqual(payload["goal_plan"]["low_investment_streak"], 0)
+            self.assertEqual(payload["recommendation"]["low_investment_streak"], 0)
+            self.assertNotEqual(payload["recommendation"]["recommended_move"], "low_investment_repair")
+
+    def test_tashuo_permanent_chat_enabled_prevents_gate_context_from_counting_as_low_investment(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = PlannerRepository(Path(temp_dir))
+
+            payload = repo.update_plan(
+                match_id="match_tashuo",
+                goal_id="goal_meet",
+                observation=_observation(
+                    "obs_tashuo_permanent_chat",
+                    app_id="tashuo",
+                    thread_cues=["tashuo_permanent_chat_enabled"],
+                    latest_inbound=[{"sender": "match", "text": "Hi，我们可以聊天啦!"}],
+                ),
+                assessment=_planner_assessment(
+                    recommended_move="answer_or_riff",
+                    current_topic="inherited_question_gate_context",
+                    topic_state="active",
+                    topic_saturation=10,
+                    reciprocity={
+                        "last_user_question_count": 1,
+                        "last_match_answer_depth": "thin",
+                        "low_investment_streak": 2,
+                        "reciprocity_balance": -2,
+                    },
+                    evidence="她开启了永久聊天，问答上下文已继承到普通聊天线程。",
+                ),
+                now=NOW,
+            )
+
+            self.assertEqual(payload["goal_plan"]["low_investment_streak"], 0)
+            self.assertEqual(payload["recommendation"]["low_investment_streak"], 0)
+            self.assertNotEqual(payload["recommendation"]["recommended_move"], "low_investment_repair")
 
     def test_fallback_reciprocity_does_not_reset_debt_from_recommended_repair(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -397,12 +471,16 @@ class PlannerCoreTests(unittest.TestCase):
         return exit_code, json.loads(text), text
 
 
-def _observation(observation_id):
+def _observation(observation_id, *, app_id="wechat", thread_cues=None, latest_inbound=None):
+    latest_inbound_messages = latest_inbound or [
+        {"sender": "match", "text": "还好呀"},
+        {"sender": "match", "text": "都没什么脾气我家的猫"},
+    ]
     return AppObservation.from_dict(
         {
             "observation_id": observation_id,
             "source_type": "manual_fixture",
-            "app_id": "wechat",
+            "app_id": app_id,
             "adapter_id": "codex.manual.v1",
             "captured_at": NOW,
             "page_type": "chat_thread",
@@ -421,15 +499,11 @@ def _observation(observation_id):
             "conversation_observation": {
                 "visible_messages": [
                     {"sender": "user", "text": "它是最有脾气那个吗"},
-                    {"sender": "match", "text": "还好呀"},
-                    {"sender": "match", "text": "都没什么脾气我家的猫"},
+                    *latest_inbound_messages,
                 ],
-                "latest_inbound_messages": [
-                    {"sender": "match", "text": "还好呀"},
-                    {"sender": "match", "text": "都没什么脾气我家的猫"},
-                ],
+                "latest_inbound_messages": latest_inbound_messages,
                 "input_state": "empty",
-                "thread_cues": ["cat temperament answered"],
+                "thread_cues": thread_cues or ["cat temperament answered"],
             },
             "element_observations": [],
             "exception_state": "none",

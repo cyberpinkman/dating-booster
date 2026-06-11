@@ -185,6 +185,7 @@
     "harness tashuo observe",
     "harness tashuo action",
     "harness tashuo workflow",
+    "harness tashuo stage-draft",
     "harness tashuo send-message",
     "release doctor"
   ]

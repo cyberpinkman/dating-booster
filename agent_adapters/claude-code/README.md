@@ -74,8 +74,9 @@ the target path and files before writing.
 - Tinder iPhone Mirroring harness
 - Bumble iPhone Mirroring harness, including ordinary chat live-send and
   role-sensitive Opening Move handling
-- TaShuo iPhone Mirroring harness, including ordinary chat live-send and
-  role-sensitive question-gate handling
+- TaShuo iPhone Mirroring harness with ordinary chat live-send, plus
+  mac-ios-app launch/observe/stage runtime; mac-ios-app managed live-send is
+  currently blocked pending stable CJK staging verification
 - macOS WeChat harness
 - opt-in managed live-send with authorization, target binding, staged-text
   verification, planner evidence, and post-action verification

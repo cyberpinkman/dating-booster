@@ -189,12 +189,21 @@ def _registry_harness_commands() -> list[str]:
             commands.append(f"harness {app_id} action")
         if manifest.supported_workflows:
             commands.append(f"harness {app_id} workflow")
-        if "stage_draft" in manifest.supported_stage_actions:
+        if _manifest_supports_stage_draft(manifest):
             commands.append(f"harness {app_id} stage-draft")
         if "send_message" in manifest.supported_live_actions:
             commands.append(f"harness {app_id} send-message")
         commands.extend(f"harness {app_id} {alias_name}" for alias_name in manifest.cli_aliases)
     return commands
+
+
+def _manifest_supports_stage_draft(manifest: Any) -> bool:
+    if "stage_draft" in manifest.supported_stage_actions:
+        return True
+    for runtime in manifest.runtime_profiles.values():
+        if "stage_draft" in list(runtime.get("supported_stage_actions") or []):
+            return True
+    return False
 
 
 SUPPORTED_COMMANDS: list[str] = [
@@ -209,6 +218,7 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
     app_capabilities = capability_manifest()
     supported_app_profiles = list(app_capabilities["supported_app_profiles"])
     host_loop_app_profiles = list(app_capabilities["host_loop_app_profiles"])
+    tashuo_runtimes = dict(app_capabilities["apps"].get("tashuo", {}).get("alternate_runtimes") or {})
     return {
         "schema_version": CAPABILITIES_SCHEMA_VERSION,
         "tool_version": __version__,
@@ -342,6 +352,17 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "tashuo_gui_navigation": "tashuo" in supported_app_profiles,
             "tashuo_profile_read_harness": "tashuo" in supported_app_profiles,
             "tashuo_chat_navigation_harness": "tashuo" in supported_app_profiles,
+            "tashuo_mac_ios_app_runtime": "mac_ios_app" in tashuo_runtimes,
+            "tashuo_mac_ios_app_stage_harness": "stage_draft"
+            in list((tashuo_runtimes.get("mac_ios_app") or {}).get("supported_stage_actions") or []),
+            "tashuo_mac_ios_app_live_send_harness": "send_message"
+            in list((tashuo_runtimes.get("mac_ios_app") or {}).get("supported_live_actions") or []),
+            "tashuo_mac_ios_app_live_send_status": str(
+                (tashuo_runtimes.get("mac_ios_app") or {}).get("live_send_status") or "unsupported"
+            ),
+            "tashuo_mac_ios_app_live_send_block_reason": str(
+                (tashuo_runtimes.get("mac_ios_app") or {}).get("live_send_block_reason") or ""
+            ),
             "tashuo_question_gate_role_policy": "tashuo" in supported_app_profiles,
             "tashuo_question_gate_male_draft": "tashuo" in supported_app_profiles,
             "tashuo_question_gate_stage_harness": False,

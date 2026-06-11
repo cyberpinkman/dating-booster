@@ -552,6 +552,9 @@ class AutomationRepository:
             elif host_identity_confidence == "low":
                 state["state"] = "needs_reply"
                 warnings.append("low_identity_confidence")
+            elif draft_payload and not _target_profile_ready_for_send(observation):
+                state["state"] = "needs_target_profile"
+                warnings.append("target_profile_required")
             elif draft_payload and (
                 auth_block := _send_authorization_block_reason(
                     authorization,
@@ -947,6 +950,7 @@ class AutomationRepository:
                 "precondition_hash": precondition_hash,
                 "autonomous_audit_binding": autonomous_audit_binding,
                 "pre_action_observation_id": observation.observation_id,
+                "target_profile_observation": observation.profile_observation.to_dict(),
                 "requires_post_action_verification": True,
                 "policy": {
                     "allowed": policy.allowed,
@@ -1044,6 +1048,17 @@ def _disclosure_policy_error(
     if disclosure_source == "user_confirmed":
         return "user_confirmed_disclosure_requires_handoff"
     return "disclosure_source_required"
+
+
+def _target_profile_ready_for_send(observation: AppObservation) -> bool:
+    profile = observation.profile_observation
+    if profile.review_status != "observed":
+        return False
+    return bool(
+        profile.profile_text.strip()
+        or any(str(item).strip() for item in profile.photo_cues)
+        or any(str(item).strip() for item in profile.hook_candidates)
+    )
 
 
 def _draft_question_count(raw_draft: dict[str, Any], best_reply: str) -> int:

@@ -285,7 +285,7 @@ Launch search should type `Bumble` first and verify the English app search
 result by screenshot/OCR before tapping. Switch the macOS input source and retry
 only when the app result is not visible.
 
-## TaShuo iPhone Mirroring Input
+## TaShuo Harness Input
 
 TaShuo/她说 supports navigation plus opt-in managed ordinary chat send. Before
 real TaShuo observation or send, run:
@@ -298,10 +298,14 @@ dating-boost harness tashuo action open-chats --dry-run --json
 dating-boost harness tashuo workflow self-profile-read --dry-run --options-json tashuo-self-profile-options.json --json
 dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options-json tashuo-chat-profile-options.json --json
 dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
+dating-boost harness tashuo action prepare-message-page --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo stage-draft --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
 dating-boost harness tashuo send-message --text-file tashuo-draft.txt --dry-run --json
 ```
 
-Use `harness tashuo observe` before choosing a bounded navigation action. It
+If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. The mac-ios-app runtime currently supports launch/observe/prepare-message-page/stage-draft only. Managed live send is marked `experimental_blocked_cjk_stage_verification` and host-loop must block `--send-mode live --managed-gui-send --harness-runtime mac-ios-app` before attempting a real send. Direct harness live send remains executor-internal/experimental and must not be used as an agent workaround.
+
+For iPhone Mirroring, use `harness tashuo observe` before choosing a bounded navigation action. It
 returns redacted page/layout hints for the four top-level tabs (`推荐`, `飞行`,
 `消息`, `我的`), visible chat rows, conversation pages, thread profiles, and
 question-gate/`待回答` prompts. Safe navigation may open top-level tabs, open

@@ -176,6 +176,73 @@ class AutomationSessionTests(unittest.TestCase):
             self.assertEqual(post_result_repeat_payload["action_requests"], [])
             self.assertIn("duplicate_send_request_suppressed", post_result_repeat_payload["warnings"])
 
+    def test_session_step_blocks_send_when_target_profile_was_not_observed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "goal",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "goal_meet.json"),
+            ])
+            self._run([
+                "automation",
+                "availability",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "availability_weekend.json"),
+            ])
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            scan = json.loads((FIXTURE_DIR / "scan_batch_initial.json").read_text(encoding="utf-8"))
+            scan["scan_budget"] = 1
+            first_thread = scan["thread_observations"][0]
+            first_thread["observation"]["profile_observation"] = {
+                "profile_text": "",
+                "photo_cues": [],
+                "hook_candidates": [],
+                "review_status": "missing",
+                "evidence": "Profile was not opened before drafting.",
+            }
+            scan_path = root / "scan_missing_target_profile.json"
+            self._write_json(scan_path, scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+            self.assertEqual(step_exit, 0)
+            self.assertEqual(step_payload["action_requests"], [])
+            self.assertIn("target_profile_required", step_payload["warnings"])
+            states_exit, states_payload, _ = self._run([
+                "automation",
+                "get-state",
+                "--data-dir",
+                str(data_dir),
+            ])
+            self.assertEqual(states_exit, 0)
+            self.assertEqual(states_payload["states"][0]["state"], "needs_target_profile")
+
     def test_automation_context_uses_projection_plus_latest_observation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
@@ -976,6 +1043,64 @@ class AutomationSessionTests(unittest.TestCase):
         state = states_payload["states"][0]
         self.assertEqual(state["last_nudged_inbound_fingerprint"], "gia:in:absurd-comedy")
         self.assertEqual(state["nudge_count_since_inbound"], 1)
+
+    def test_due_nudge_blocks_when_target_profile_was_not_observed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(FIXTURE_DIR / "scan_batch_nudge.json"),
+            ])
+            due_scan = json.loads((FIXTURE_DIR / "scan_batch_nudge.json").read_text(encoding="utf-8"))
+            due_scan["captured_at"] = "2026-05-26T01:01:00Z"
+            due_scan["thread_observations"][0]["draft"] = _nudge_draft()
+            due_scan["thread_observations"][0]["observation"]["profile_observation"] = {
+                "profile_text": "",
+                "photo_cues": [],
+                "hook_candidates": [],
+                "review_status": "missing",
+                "evidence": "Profile was not opened before a due nudge.",
+            }
+            due_scan_path = Path(temp_dir) / "due_scan_missing_profile.json"
+            self._write_json(due_scan_path, due_scan)
+
+            with patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-05-26T01:00:00Z"}):
+                due_exit, due_payload, _ = self._run([
+                    "automation",
+                    "session",
+                    "step",
+                    "--data-dir",
+                    str(data_dir),
+                    "--scan-batch",
+                    str(due_scan_path),
+                ])
+                states_exit, states_payload, _ = self._run([
+                    "automation",
+                    "get-state",
+                    "--data-dir",
+                    str(data_dir),
+                ])
+
+        self.assertEqual(due_exit, 0)
+        self.assertEqual(due_payload["action_requests"], [])
+        self.assertIn("target_profile_required", due_payload["warnings"])
+        self.assertEqual(states_exit, 0)
+        self.assertEqual(states_payload["states"][0]["state"], "needs_target_profile")
 
     def _init_profile(self, data_dir):
         self._run([

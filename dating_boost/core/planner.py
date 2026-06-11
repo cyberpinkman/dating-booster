@@ -120,6 +120,7 @@ class PlannerRepository:
             assessment,
             existing=existing,
             scores=scores,
+            observation=observation,
         )
         handoff_reason = _handoff_reason(stage, move, assessment)
         if handoff_reason:
@@ -379,14 +380,17 @@ def _reciprocity_from_assessment(
     *,
     existing: dict[str, Any] | None,
     scores: dict[str, int],
+    observation: AppObservation,
 ) -> dict[str, Any]:
+    tashuo_positive_gate_opening = _tashuo_positive_gate_opening(observation)
     supplied = assessment.get("reciprocity")
     if isinstance(supplied, dict):
+        supplied_low_streak = _bounded_int(supplied.get("low_investment_streak"), 0, 99)
         return {
             "question_debt": _bounded_int(supplied.get("question_debt"), 0, 99),
             "self_disclosure_debt": _bounded_int(supplied.get("self_disclosure_debt"), 0, 99),
             "reciprocity_balance": str(supplied.get("reciprocity_balance") or "unknown"),
-            "low_investment_streak": _bounded_int(supplied.get("low_investment_streak"), 0, 99),
+            "low_investment_streak": 0 if tashuo_positive_gate_opening else supplied_low_streak,
             "match_curiosity_about_user": str(supplied.get("match_curiosity_about_user") or "unknown"),
             "topic_exit_pressure": str(supplied.get("topic_exit_pressure") or _topic_exit_pressure(scores)),
             "last_user_turn_type": str(supplied.get("last_user_turn_type") or "unknown"),
@@ -398,6 +402,8 @@ def _reciprocity_from_assessment(
         latest_turn_type in {"short_answer", "short_acknowledgement", "low_investment"}
         or (scores.get("engagement", 0) <= 30 and scores.get("curiosity", 0) <= 30)
     )
+    if tashuo_positive_gate_opening:
+        low_investment = False
     observed_last_user_turn_type = str(assessment.get("last_user_turn_type") or "")
     last_user_turn_type = str(observed_last_user_turn_type or existing_reciprocity.get("last_user_turn_type") or "unknown")
     prior_question_debt = int(existing_reciprocity.get("question_debt") or 0)
@@ -431,6 +437,13 @@ def _reciprocity_from_assessment(
         "topic_exit_pressure": _topic_exit_pressure(scores),
         "last_user_turn_type": last_user_turn_type,
     }
+
+
+def _tashuo_positive_gate_opening(observation: AppObservation) -> bool:
+    if observation.app_id != "tashuo":
+        return False
+    cues = {str(item) for item in observation.conversation_observation.thread_cues}
+    return bool(cues.intersection({"tashuo_question_gate_skipped", "tashuo_permanent_chat_enabled"}))
 
 
 def _topic_exit_pressure(scores: dict[str, int]) -> str:

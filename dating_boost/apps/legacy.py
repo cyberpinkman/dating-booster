@@ -22,17 +22,27 @@ class LegacyHarnessAdapter:
         platform: str | None = None,
         runner: Any | None = None,
         window_title: str | None = None,
+        runtime: str | None = None,
         session: Any | None = None,
     ):
         self.manifest = manifest
-        title = window_title or self.manifest.default_window_title or "iPhone Mirroring"
+        runtime_key = _normalize_runtime_name(runtime)
+        runtime_config = self.manifest.runtime_profiles.get(runtime_key, {}) if runtime_key is not None else {}
+        title = (
+            window_title
+            or str(runtime_config.get("process_name") or "")
+            or self.manifest.default_window_title
+            or "iPhone Mirroring"
+        )
         self.session = session or AppNativeGuiSession(
             app_id=self.manifest.app_id,
             platform=platform,
             runner=runner,
             window_title=title,
+            runtime=str(runtime_config.get("backend") or runtime_key or self.manifest.backend),
         )
-        self.session.harness_backend = self.manifest.backend
+        self.session.harness_backend = str(runtime_config.get("backend") or runtime_key or self.manifest.backend)
+        self.session.runtime_config = dict(runtime_config)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.session, name)
@@ -87,3 +97,10 @@ class LegacyHarnessAdapter:
 
     def required_send_evidence(self) -> tuple[str, ...]:
         return self.manifest.required_send_evidence
+
+
+def _normalize_runtime_name(runtime: str | None) -> str | None:
+    if runtime is None:
+        return None
+    normalized = runtime.strip().replace("-", "_")
+    return normalized or None

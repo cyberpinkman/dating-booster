@@ -62,6 +62,7 @@ from dating_boost.core.support import classify_text_topics
 
 GUI_HARNESS_SCHEMA_VERSION = 2
 IPHONE_MIRRORING_HARNESS_BACKEND = "iphone_mirroring_macos"
+MAC_IOS_APP_HARNESS_BACKEND = "mac_ios_app"
 WECHAT_HARNESS_BACKEND = "macos_wechat_desktop"
 HARNESS_BACKEND = IPHONE_MIRRORING_HARNESS_BACKEND
 
@@ -74,12 +75,14 @@ class NativeGuiHarness:
         platform: str | None = None,
         runner: Any | None = None,
         window_title: str = "iPhone Mirroring",
+        runtime: str | None = None,
     ):
         self.app_id = app_id
         self.platform = platform or sys.platform
         self.runner = runner or SubprocessRunner()
         self.window_title = window_title
-        self.harness_backend = IPHONE_MIRRORING_HARNESS_BACKEND
+        self.harness_backend = runtime or IPHONE_MIRRORING_HARNESS_BACKEND
+        self.runtime_config: dict[str, Any] = {}
 
     def doctor(self, *, capture: bool = True, output: Path | None = None) -> dict[str, Any]:
         payload = self._base_payload("ok")
@@ -100,11 +103,21 @@ class NativeGuiHarness:
         payload["activation"] = activate
         window = self._window_info()
         if window is None:
-            payload.update({"status": "blocked", "reason": "iphone_mirroring_window_not_found"})
+            reason = (
+                "mac_ios_app_window_not_found"
+                if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND
+                else "iphone_mirroring_window_not_found"
+            )
+            payload.update({"status": "blocked", "reason": reason})
             return payload
         payload["window"] = window.to_dict()
         if not window.frontmost:
-            payload.update({"status": "blocked", "reason": "iphone_mirroring_not_frontmost"})
+            reason = (
+                "mac_ios_app_not_frontmost"
+                if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND
+                else "iphone_mirroring_not_frontmost"
+            )
+            payload.update({"status": "blocked", "reason": reason})
             return payload
 
         if capture:
@@ -162,6 +175,18 @@ class NativeGuiHarness:
         }
 
     def _activate_window(self) -> dict[str, Any]:
+        if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND:
+            frontmost_result = self.runner.run(
+                [
+                    "osascript",
+                    "-e",
+                    f'tell application "System Events" to set frontmost of process "{self.window_title}" to true',
+                ]
+            )
+            return {
+                "status": "ok" if frontmost_result.returncode == 0 else "blocked",
+                "stderr": _short(frontmost_result.stderr),
+            }
         result = self.runner.run(["osascript", "-e", f'tell application "{self.window_title}" to activate'])
         frontmost_result = self.runner.run(
             [
@@ -185,7 +210,10 @@ class NativeGuiHarness:
             if result.returncode != 0:
                 continue
             window = _parse_window_info(result.stdout)
-            if window is not None and _looks_like_iphone_mirroring_window(window):
+            if window is not None and self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND:
+                if _looks_like_mac_ios_app_window(window):
+                    return window
+            elif window is not None and _looks_like_iphone_mirroring_window(window):
                 return window
         return None
 
@@ -613,3 +641,7 @@ def _text_fingerprint_fields(prefix: str, text: str) -> dict[str, Any]:
 
 def _looks_like_iphone_mirroring_window(window: WindowInfo) -> bool:
     return window.width >= 200 and window.height >= 400 and bool(window.name.strip())
+
+
+def _looks_like_mac_ios_app_window(window: WindowInfo) -> bool:
+    return window.width >= 160 and window.height >= 300

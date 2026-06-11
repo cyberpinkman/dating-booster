@@ -89,7 +89,7 @@ dating-boost support session start --data-dir .local/dating-boost --host codex -
 | --- | --- | --- |
 | Tinder | discovery app；profile/chat 观察、只读导航、草稿 workflow、可选托管发送 | macOS iPhone Mirroring |
 | Bumble | discovery app；profile/chat 观察、Opening Move 相关流程、可选托管发送 | macOS iPhone Mirroring |
-| 她说 / TaShuo | discovery app；profile/chat 观察、question-gate 相关流程、可选托管发送 | macOS iPhone Mirroring |
+| 她说 / TaShuo | discovery app；profile/chat 观察、question-gate 相关流程、可选托管发送 | macOS iPhone Mirroring；可选 mac-ios-app |
 | WeChat / 微信 | continuation channel；承接 dating app 转化后的聊天 | macOS 微信桌面端 |
 
 微信不是 discovery dating app。用户说“从 Tinder/Bumble/她说加到微信了”时，先让用户确认 source 和 target 是同一个现实对象，再使用一次性单向记忆继承：
@@ -168,6 +168,22 @@ dating-boost harness tashuo observe --output-dir .local/dating-boost-harness --j
 dating-boost harness tashuo action open-chats --dry-run --json
 dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options-json tashuo-chat-profile-options.json --json
 dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
+```
+
+Apple Silicon Mac 上如果用户已经安装并登录 Mac App Store 的她说 iOS app，可优先试验本地 `mac-ios-app` runtime。该 runtime 不占用真实手机，当前支持 launch/observe/prepare-message-page/stage-draft。`send-message --runtime mac-ios-app` 仅保留为 executor-internal 实验入口；由于中文 staging/exact verification 未稳定，mac-ios-app 托管 live send 当前由 capabilities 标记为 `experimental_blocked_cjk_stage_verification`，host-loop 会早期 block。question-gate staging/sending 仍不支持。
+
+```bash
+dating-boost harness doctor --app-id tashuo --runtime mac-ios-app --json
+dating-boost harness tashuo action prepare-message-page --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo stage-draft --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
+```
+
+`prepare-message-page` 会打开 TaShuo Mac iOS app，用底部 tab 的视觉高亮判断当前一级页；如果不在 `消息` 页，只点击底部 `消息` tab。进入消息页后停止固定坐标流程，返回 `next_host_action=visual_plan_message_list`，后续由 host agent 进行视觉分析和规划，不要先跑 OCR 再回退视觉，也不要用固定 row 坐标直接进入聊天线程。
+
+TaShuo mac-ios-app 托管 live send 当前不启用。下面命令应早期 block，原因是 `runtime_live_send_not_supported:tashuo:mac-ios-app`；需要 live send 时使用已声明支持的 runtime，或降级为 stage-only：
+
+```bash
+dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tashuo --send-mode live --managed-gui-send --harness-runtime mac-ios-app --work-dir .local/dating-boost-host-loop --json
 ```
 
 TaShuo 启动搜索使用 `tashu` 并通过截图/OCR 确认 `她说` 或 `TaShuo`。`飞行` screen-tap chat starts、recommendation likes、passes、question-gate decisions 都是 blocked actions。

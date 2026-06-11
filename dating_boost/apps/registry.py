@@ -76,6 +76,7 @@ def create_adapter(
     platform: str | None = None,
     runner: Any | None = None,
     window_title: str | None = None,
+    runtime: str | None = None,
 ):
     adapter_cls = _ADAPTER_CLASSES.get(app_id)
     if adapter_cls is None:
@@ -85,6 +86,7 @@ def create_adapter(
         platform=platform,
         runner=runner,
         window_title=window_title,
+        runtime=runtime,
     )
 
 
@@ -121,6 +123,11 @@ def capability_manifest() -> dict[str, Any]:
                 "supported_live_actions": list(profile.get("native_gui_harness", {}).get("supported_live_actions") or []),
                 "supported_actions": list((profile.get("capabilities") or {}).get("actions") or []),
                 "supported_workflows": list((profile.get("capabilities") or {}).get("workflows") or []),
+                "alternate_runtimes": dict(
+                    ((profile.get("native_gui_harness") or {}).get("alternate_runtimes") or {})
+                    if isinstance((profile.get("native_gui_harness") or {}).get("alternate_runtimes"), dict)
+                    else {}
+                ),
                 "target_binding": dict(profile.get("target_binding") or {}),
                 "live_send_requirements": dict(profile.get("live_send_requirements") or {}),
                 "cli_aliases": dict(profile.get("cli_aliases") or {}),

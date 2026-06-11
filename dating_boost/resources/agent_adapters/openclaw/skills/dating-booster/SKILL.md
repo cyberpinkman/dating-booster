@@ -202,7 +202,7 @@ Before any live send, require all of these:
 - exact staged text verification
 - post-action verification
 
-For Tinder and WeChat, the agent-facing managed live-send path is
+For Tinder, Bumble, TaShuo, and WeChat, the agent-facing managed live-send path is
 `managed-session` or `dating-boost-host-loop`; do not handcraft
 `action_request.json`.
 
@@ -211,6 +211,10 @@ dating-boost managed-session start --app-id <app_id> --data-dir .local/dating-bo
 dating-boost managed-session run --data-dir .local/dating-boost --wait --json
 dating-boost-host-loop run --adapter-package agent_adapters/openclaw/adapter-package.json --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id <app_id> --send-mode live --managed-gui-send --work-dir .local/dating-boost-host-loop --json
 ```
+
+TaShuo mac-ios-app is not currently a managed live-send runtime. If invoked with
+`--harness-runtime mac-ios-app`, host-loop must block with
+`runtime_live_send_not_supported:tashuo:mac-ios-app`.
 
 The direct `harness <app> send-message --authorization --action-request` command
 is executor-internal only. It may consume only a `send_message` work item

@@ -22,6 +22,7 @@ class AppManifest:
     target_binding_policy: dict[str, Any]
     managed_session_policy: dict[str, Any]
     cli_aliases: dict[str, dict[str, Any]]
+    runtime_profiles: dict[str, dict[str, Any]]
 
     @classmethod
     def from_profile(cls, profile: dict[str, Any]) -> "AppManifest":
@@ -35,6 +36,9 @@ class AppManifest:
         target_binding = profile.get("target_binding") if isinstance(profile.get("target_binding"), dict) else {}
         managed_session = profile.get("managed_session") if isinstance(profile.get("managed_session"), dict) else {}
         cli_aliases = profile.get("cli_aliases") if isinstance(profile.get("cli_aliases"), dict) else {}
+        alternate_runtimes = (
+            harness.get("alternate_runtimes") if isinstance(harness.get("alternate_runtimes"), dict) else {}
+        )
         actions = capabilities.get("actions") or harness.get("supported_actions") or harness.get("supported_stage_actions") or []
         workflows = capabilities.get("workflows") or harness.get("high_level_workflows") or []
         evidence = requirements.get("required_evidence") or harness.get("required_send_evidence") or [
@@ -59,6 +63,9 @@ class AppManifest:
             target_binding_policy=dict(target_binding),
             managed_session_policy=dict(managed_session),
             cli_aliases={str(name): dict(spec) for name, spec in cli_aliases.items() if isinstance(spec, dict)},
+            runtime_profiles={
+                str(name): dict(spec) for name, spec in alternate_runtimes.items() if isinstance(spec, dict)
+            },
         )
 
 

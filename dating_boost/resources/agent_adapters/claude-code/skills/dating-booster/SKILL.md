@@ -166,7 +166,7 @@ dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run 
 
 Bumble live send is limited to ordinary chat messages. Opening Move is role-sensitive: for women, the user decides whether to start, skip, or accept Opening Move; for men, Claude Code may draft a response for user confirmation, but must not autonomously send an Opening Move response.
 
-## TaShuo iPhone Mirroring Harness
+## TaShuo Harness
 
 Use the TaShuo harness for iPhone Mirroring work. Launch search should use `tashu` when Spotlight/Siri does not suggest the app for the full pinyin `tashuo`.
 
@@ -177,8 +177,12 @@ dating-boost harness tashuo observe --output-dir .local/dating-boost-harness --j
 dating-boost harness tashuo action open-chats --dry-run --json
 dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options-json tashuo-chat-profile-options.json --json
 dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
+dating-boost harness tashuo action prepare-message-page --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo stage-draft --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
 dating-boost harness tashuo send-message --text-file tashuo-draft.txt --dry-run --json
 ```
+
+If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. The mac-ios-app runtime currently supports launch/observe/prepare-message-page/stage-draft only. Managed live send is marked `experimental_blocked_cjk_stage_verification` and host-loop must block `--send-mode live --managed-gui-send --harness-runtime mac-ios-app` before attempting a real send. Direct harness live send remains executor-internal/experimental and must not be used as an agent workaround.
 
 TaShuo question-gate behaves like Bumble Opening Move: the user decides female-side question/skip/accept choices; male-side replies may be drafted for user confirmation, but autonomous question-gate sending is not supported.
 
@@ -206,6 +210,10 @@ dating-boost managed-session start --app-id <app_id> --data-dir .local/dating-bo
 dating-boost managed-session run --data-dir .local/dating-boost --wait --json
 dating-boost-host-loop run --adapter-package agent_adapters/claude-code/adapter-package.json --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id <app_id> --send-mode live --managed-gui-send --work-dir .local/dating-boost-host-loop --json
 ```
+
+TaShuo mac-ios-app is not currently a managed live-send runtime. If invoked with
+`--harness-runtime mac-ios-app`, host-loop must block with
+`runtime_live_send_not_supported:tashuo:mac-ios-app`.
 
 The direct `harness <app> send-message --authorization --action-request` command
 is executor-internal only. It may consume only a `send_message` work item

@@ -105,7 +105,7 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
 
         self.assertIn("bumble iphone mirroring harness", skill_text)
         self.assertIn("opening move", skill_text)
-        self.assertIn("tashuo iphone mirroring harness", skill_text)
+        self.assertIn("tashuo harness", skill_text)
         self.assertIn("question-gate", skill_text)
         self.assertIn(".dev", metadata["package_version"])
         self.assertEqual(metadata["source_ref"], "main")

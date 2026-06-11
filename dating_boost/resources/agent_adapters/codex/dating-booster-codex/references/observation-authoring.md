@@ -90,6 +90,10 @@ Fill `conversation_observation` from visible messages:
   `unknown`.
 - `thread_cues`: unresolved questions, open topics, commitments, or emotional
   tone visible in the thread.
+  For TaShuo, record `tashuo_question_gate_skipped` when the visible system
+  notice says `她跳过了问答考验`, and record `tashuo_permanent_chat_enabled`
+  when the visible system notice says `她开启了永久聊天`; inherited question/answer
+  text remains visible thread context, not low-investment evidence by itself.
 
 If message order is unclear, record only the messages whose order is visible and
 use `unknown` in evidence/provenance.

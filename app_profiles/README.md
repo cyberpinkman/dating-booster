@@ -64,6 +64,9 @@ profiles. Current backends:
 
 - `iphone_mirroring_macos`: macOS iPhone Mirroring harness used by Tinder,
   Bumble, and TaShuo.
+- `mac_ios_app`: Apple Silicon Mac local iOS-app runtime. TaShuo currently uses
+  it as an experimental alternate runtime for launch, observe,
+  prepare-message-page, stage-draft, and authorized live send.
 - `macos_wechat_desktop`: desktop WeChat window harness used by WeChat.
 
 Every native harness block should define:

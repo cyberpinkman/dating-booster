@@ -451,6 +451,17 @@ def _work_items_from_decision(decision: dict[str, Any], session_id: str) -> list
         work_items.append(scheduled)
     if work_items:
         return work_items
+    warnings = [str(item) for item in decision.get("warnings", [])]
+    if "target_profile_required" in warnings:
+        return [
+            {
+                "schema_version": 1,
+                "work_item_id": f"work_blocked_target_profile_required_{session_id}",
+                "work_item_type": "blocked",
+                "reason": "target_profile_required",
+                "warnings": warnings,
+            }
+        ]
     return [
         {
             "schema_version": 1,

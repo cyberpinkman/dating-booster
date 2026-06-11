@@ -314,6 +314,7 @@ def main(argv: list[str] | None = None) -> int:
     harness_doctor_parser.add_argument("--app-id", default="tinder")
     harness_doctor_parser.add_argument("--data-dir", type=Path)
     harness_doctor_parser.add_argument("--window-title")
+    harness_doctor_parser.add_argument("--runtime")
     harness_doctor_parser.add_argument("--no-capture", action="store_true")
     harness_doctor_parser.add_argument("--output", type=Path)
     harness_doctor_parser.add_argument("--json", action="store_true")
@@ -322,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     harness_screenshot_parser.add_argument("--app-id", default="tinder")
     harness_screenshot_parser.add_argument("--data-dir", type=Path)
     harness_screenshot_parser.add_argument("--window-title")
+    harness_screenshot_parser.add_argument("--runtime")
     harness_screenshot_parser.add_argument("--output", required=True, type=Path)
     harness_screenshot_parser.add_argument("--json", action="store_true")
     harness_screenshot_parser.set_defaults(handler=_handle_harness_screenshot)
@@ -845,7 +847,7 @@ def _add_harness_app_parsers(harness_subparsers: argparse._SubParsersAction) -> 
             workflow_parser.add_argument("--options-json", type=Path)
             workflow_parser.set_defaults(handler=_handle_harness_app_workflow, app_id=app_id)
 
-        if "stage_draft" in manifest.supported_stage_actions:
+        if _manifest_supports_stage_draft(manifest):
             stage_parser = app_subparsers.add_parser("stage-draft")
             _add_harness_common_args(stage_parser, include_dry_run=True)
             stage_parser.add_argument("--text-file", required=True, type=Path)
@@ -886,10 +888,20 @@ def _add_harness_app_parsers(harness_subparsers: argparse._SubParsersAction) -> 
 def _add_harness_common_args(parser: argparse.ArgumentParser, *, include_dry_run: bool = False) -> None:
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--window-title")
+    parser.add_argument("--runtime")
     parser.add_argument("--output-dir", type=Path)
     if include_dry_run:
         parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
+
+
+def _manifest_supports_stage_draft(manifest: Any) -> bool:
+    if "stage_draft" in manifest.supported_stage_actions:
+        return True
+    for runtime in manifest.runtime_profiles.values():
+        if "stage_draft" in list(runtime.get("supported_stage_actions") or []):
+            return True
+    return False
 
 
 def _run_authorization(argv: list[str]) -> int:
@@ -1208,7 +1220,7 @@ def _handle_harness_doctor(args: argparse.Namespace) -> int:
         _record_support_harness_result(args.data_dir, app_id=args.app_id, action="doctor", harness_payload=block_payload)
         _print_json(block_payload)
         return 2
-    adapter = _create_harness_adapter(args.app_id, args.window_title)
+    adapter = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None))
     payload = adapter.doctor(capture=not args.no_capture, output=args.output)
     _record_support_harness_result(args.data_dir, app_id=args.app_id, action="doctor", harness_payload=payload)
     _print_json(payload)
@@ -1221,7 +1233,11 @@ def _handle_harness_screenshot(args: argparse.Namespace) -> int:
         _record_support_harness_result(args.data_dir, app_id=args.app_id, action="screenshot", harness_payload=block_payload)
         _print_json(block_payload)
         return 2
-    payload = _create_harness_adapter(args.app_id, args.window_title).session.capture_window(output=args.output)
+    payload = _create_harness_adapter(
+        args.app_id,
+        args.window_title,
+        runtime=getattr(args, "runtime", None),
+    ).session.capture_window(output=args.output)
     payload.pop("text", None)
     _record_support_harness_result(args.data_dir, app_id=args.app_id, action="screenshot", harness_payload=payload)
     _print_json(payload)
@@ -1240,8 +1256,8 @@ def _unsupported_native_harness_payload(app_id: str) -> dict[str, object] | None
     }
 
 
-def _create_harness_adapter(app_id: str, window_title: str | None):
-    return create_adapter(app_id, window_title=_harness_window_title(app_id, window_title))
+def _create_harness_adapter(app_id: str, window_title: str | None, *, runtime: str | None = None):
+    return create_adapter(app_id, window_title=_harness_window_title(app_id, window_title, runtime), runtime=runtime)
 
 
 def _options_from_json(path: Path | None) -> dict[str, Any]:
@@ -1251,7 +1267,7 @@ def _options_from_json(path: Path | None) -> dict[str, Any]:
 
 
 def _handle_harness_app_launch(args: argparse.Namespace) -> int:
-    payload = _create_harness_adapter(args.app_id, args.window_title).launch(
+    payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).launch(
         dry_run=args.dry_run,
         output_dir=args.output_dir,
     )
@@ -1261,7 +1277,7 @@ def _handle_harness_app_launch(args: argparse.Namespace) -> int:
 
 
 def _handle_harness_app_alias(args: argparse.Namespace) -> int:
-    adapter = _create_harness_adapter(args.app_id, args.window_title)
+    adapter = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None))
     alias_spec = getattr(args, "harness_alias_spec", {})
     operation = str(alias_spec.get("operation") or "")
     if not operation or not hasattr(adapter, operation):
@@ -1291,7 +1307,7 @@ def _handle_harness_app_alias(args: argparse.Namespace) -> int:
 
 
 def _handle_harness_app_observe(args: argparse.Namespace) -> int:
-    payload = _create_harness_adapter(args.app_id, args.window_title).observe(
+    payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).observe(
         output_dir=args.output_dir,
     )
     _record_support_harness_result(args.data_dir, app_id=args.app_id, action="observe", harness_payload=payload)
@@ -1301,7 +1317,7 @@ def _handle_harness_app_observe(args: argparse.Namespace) -> int:
 
 def _handle_harness_app_action(args: argparse.Namespace) -> int:
     options = _options_from_json(getattr(args, "options_json", None))
-    payload = _create_harness_adapter(args.app_id, args.window_title).run_action(
+    payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).run_action(
         args.action,
         dry_run=args.dry_run,
         output_dir=args.output_dir,
@@ -1319,7 +1335,7 @@ def _handle_harness_app_action(args: argparse.Namespace) -> int:
 
 def _handle_harness_app_workflow(args: argparse.Namespace) -> int:
     options = _options_from_json(getattr(args, "options_json", None))
-    payload = _create_harness_adapter(args.app_id, args.window_title).run_workflow(
+    payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).run_workflow(
         args.workflow,
         dry_run=args.dry_run,
         output_dir=args.output_dir,
@@ -1362,7 +1378,7 @@ def _handle_harness_app_stage_draft(args: argparse.Namespace) -> int:
             )
             return 2
     draft_text = args.text_file.read_text(encoding="utf-8")
-    payload = _create_harness_adapter(args.app_id, args.window_title).stage_draft(
+    payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).stage_draft(
         draft_text,
         dry_run=args.dry_run,
         output_dir=args.output_dir,
@@ -1396,7 +1412,7 @@ def _handle_harness_app_send_message(args: argparse.Namespace) -> int:
             _print_json(block_payload)
             return 2
         action_request = _read_json_object(args.action_request)
-    payload = _create_harness_adapter(args.app_id, args.window_title).send_message(
+    payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).send_message(
         draft_text,
         dry_run=args.dry_run,
         output_dir=args.output_dir,
@@ -1506,9 +1522,11 @@ def _live_send_next_host_action(reason: str) -> str:
     return live_send_next_host_action(reason)
 
 
-def _harness_window_title(app_id: str, explicit: str | None) -> str:
+def _harness_window_title(app_id: str, explicit: str | None, runtime: str | None = None) -> str:
     if explicit:
         return explicit
+    if app_id == "tashuo" and runtime and runtime.strip().replace("-", "_") == "mac_ios_app":
+        return "tashuo"
     try:
         default_title = manifest_for_app(app_id).default_window_title
     except KeyError:

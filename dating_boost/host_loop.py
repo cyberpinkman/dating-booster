@@ -13,11 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.apps.registry import host_loop_app_ids, manifest_for_app, supported_app_ids
-from dating_boost.core.live_send_contract import validate_live_send_contract
+from dating_boost.core.live_send_contract import target_binding_structural_evidence_present, validate_live_send_contract
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.support import SupportLogRepository
+from dating_boost.perception.observations import ProfileObservation
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +113,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--app-id", default="tinder")
     parser.add_argument("--send-mode", choices=["stage", "live"], default="stage")
     parser.add_argument("--managed-gui-send", action="store_true")
+    parser.add_argument("--harness-runtime")
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--once", action="store_true")
@@ -490,6 +492,26 @@ class HostLoopSupervisor:
         try:
             self._bootstrap_fixture_profile()
             self._preflight()
+            if resume:
+                resumed_current = self._read_current_work_item_or_none()
+                if isinstance(resumed_current, dict) and resumed_current.get("work_item_type") == "send_message":
+                    self._write_current_work_item(resumed_current)
+                    self._append_timeline("work_item", resumed_current, {"resumed_from_work_dir": True})
+                    self.steps.append(
+                        {
+                            "work_item_type": "send_message",
+                            "work_item_id": resumed_current.get("work_item_id"),
+                            "candidate_key": resumed_current.get("candidate_key"),
+                        }
+                    )
+                    status = self._handle_send_message(resumed_current)
+                    if status is not None:
+                        return status, 0
+                    return self._finish(
+                        "step_completed",
+                        "resumed_current_send_work_item_completed",
+                        current=resumed_current,
+                    ), 0
             if not resume or self._operator_session_status() != "active":
                 start = self._run_cli_json(
                     "operator",
@@ -645,6 +667,18 @@ class HostLoopSupervisor:
     def _handle_send_message(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
         if self.args.send_mode == "live" and getattr(self.args, "managed_gui_send", False):
             return self._handle_managed_gui_send(work_item)
+        if self.args.send_mode == "live":
+            runtime_block = self._runtime_live_send_block_reason()
+            if runtime_block is not None:
+                return self._finish("blocked", runtime_block, current=work_item)
+        target_profile_block = self._target_profile_block_reason(work_item)
+        if target_profile_block is not None:
+            return self._finish(
+                "blocked",
+                target_profile_block,
+                current=work_item,
+                extra={"next_host_action": "open_target_profile_and_ingest_memory"},
+            )
         staged_path = self._work_file(work_item, "staged_verification")
         if self.fixture_host is not None and not staged_path.exists():
             _write_json(staged_path, _staged_verification(work_item, result_status="succeeded"))
@@ -695,6 +729,17 @@ class HostLoopSupervisor:
     def _handle_managed_gui_send(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
         if self.args.app_id not in set(host_loop_app_ids()):
             return self._finish("blocked", f"managed_gui_send_not_supported_for_app:{self.args.app_id}", current=work_item)
+        runtime_block = self._runtime_live_send_block_reason()
+        if runtime_block is not None:
+            return self._finish("blocked", runtime_block, current=work_item)
+        target_profile_block = self._target_profile_block_reason(work_item)
+        if target_profile_block is not None:
+            return self._finish(
+                "blocked",
+                target_profile_block,
+                current=work_item,
+                extra={"next_host_action": "open_target_profile_and_ingest_memory"},
+            )
         if SafetyRepository(self.data_dir).is_paused():
             return self._finish("blocked", "safety_paused", current=work_item)
         authorization_path = self._authorization_path()
@@ -714,22 +759,28 @@ class HostLoopSupervisor:
             return self._finish("blocked", contract_reason, current=work_item)
         draft_path.write_text(str(work_item.get("payload_text") or ""), encoding="utf-8")
         _write_json(action_request_path, action_request)
+        command_args = [
+            "harness",
+            self.args.app_id,
+            "send-message",
+            "--data-dir",
+            str(self.data_dir),
+            "--authorization",
+            str(authorization_path),
+            "--text-file",
+            str(draft_path),
+            "--action-request",
+            str(action_request_path),
+            "--output-dir",
+            str(self.work_dir / "harness"),
+            "--json",
+        ]
+        harness_runtime = str(getattr(self.args, "harness_runtime", "") or "").strip()
+        if harness_runtime:
+            command_args[3:3] = ["--runtime", harness_runtime]
         try:
             harness_payload = self._run_cli_json(
-                "harness",
-                self.args.app_id,
-                "send-message",
-                "--data-dir",
-                str(self.data_dir),
-                "--authorization",
-                str(authorization_path),
-                "--text-file",
-                str(draft_path),
-                "--action-request",
-                str(action_request_path),
-                "--output-dir",
-                str(self.work_dir / "harness"),
-                "--json",
+                *command_args,
                 allow_error=True,
             )
         finally:
@@ -794,6 +845,13 @@ class HostLoopSupervisor:
         return None
 
     def _live_send_contract_block_reason(self, work_item: dict[str, Any], authorization: dict[str, Any]) -> str | None:
+        if self._requires_tashuo_mac_ios_structural_binding():
+            scan_batch = self._target_binding_scan_batch_or_none(work_item)
+            target_binding = _target_binding_for_work_item(work_item, scan_batch)
+            if not target_binding_structural_evidence_present("tashuo", target_binding):
+                if not isinstance(work_item.get("target_binding"), dict) and _thread_observation_for_work_item(work_item, scan_batch) is None:
+                    return "target_binding_lost_current_thread"
+                return "target_binding_structural_evidence_required"
         return validate_live_send_contract(
             authorization,
             self._live_send_action_request(work_item),
@@ -806,8 +864,28 @@ class HostLoopSupervisor:
         action_request = dict(work_item)
         action_request.setdefault("action", "send_message")
         action_request.setdefault("app_id", self.args.app_id)
-        action_request["target_binding"] = _target_binding_for_work_item(work_item, self._pending_scan_batch_or_none())
+        action_request["target_binding"] = _target_binding_for_work_item(
+            work_item,
+            self._target_binding_scan_batch_or_none(work_item),
+        )
         return action_request
+
+    def _runtime_live_send_block_reason(self) -> str | None:
+        runtime = _normalized_harness_runtime(str(getattr(self.args, "harness_runtime", "") or ""))
+        if not runtime:
+            return None
+        native = self.app_profile.get("native_gui_harness")
+        runtimes = native.get("alternate_runtimes") if isinstance(native, dict) else {}
+        runtime_profile = runtimes.get(runtime) if isinstance(runtimes, dict) else None
+        supported = runtime_profile.get("supported_live_actions") if isinstance(runtime_profile, dict) else []
+        if "send_message" not in list(supported or []):
+            return f"runtime_live_send_not_supported:{self.args.app_id}:{runtime.replace('_', '-')}"
+        return None
+
+    def _requires_tashuo_mac_ios_structural_binding(self) -> bool:
+        return self.args.app_id == "tashuo" and _normalized_harness_runtime(
+            str(getattr(self.args, "harness_runtime", "") or "")
+        ) == "mac_ios_app"
 
     def _bootstrap_fixture_profile(self) -> None:
         if self.fixture_host is None:
@@ -836,6 +914,17 @@ class HostLoopSupervisor:
             return _read_json(path)
         except HostLoopError:
             return None
+
+    def _target_binding_scan_batch_or_none(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
+        pending = self._pending_scan_batch_or_none()
+        if pending is not None:
+            return pending
+        return _scan_batch_from_consumed_observations(self.work_dir, work_item)
+
+    def _target_profile_block_reason(self, work_item: dict[str, Any]) -> str | None:
+        if _target_profile_ready_for_work_item(work_item, self._target_binding_scan_batch_or_none(work_item)):
+            return None
+        return "target_profile_required"
 
     def _fixture_file(self, filename: str) -> Path | None:
         if self.fixture_host is None:
@@ -919,7 +1008,7 @@ class HostLoopSupervisor:
             "steps": list(self.steps),
             "staged_verifications": list(self.staged_verifications),
             "action_results_recorded": list(self.action_results_recorded),
-            "next_host_action": _next_host_action(status, current, self.args.send_mode),
+            "next_host_action": _next_host_action(status, current, self.args.send_mode, reason=reason),
         }
         if current is not None:
             payload["current_work_item"] = current
@@ -1409,6 +1498,72 @@ def _target_binding_for_work_item(work_item: dict[str, Any], pending_scan_batch:
     return binding
 
 
+def _target_profile_ready_for_work_item(work_item: dict[str, Any], pending_scan_batch: dict[str, Any] | None) -> bool:
+    profile_payload = _target_profile_payload_for_work_item(work_item, pending_scan_batch)
+    if not isinstance(profile_payload, dict):
+        return False
+    profile = ProfileObservation.from_dict(profile_payload)
+    return bool(
+        profile.review_status == "observed"
+        and (
+            profile.profile_text.strip()
+            or any(str(item).strip() for item in profile.photo_cues)
+            or any(str(item).strip() for item in profile.hook_candidates)
+        )
+    )
+
+
+def _target_profile_payload_for_work_item(
+    work_item: dict[str, Any],
+    pending_scan_batch: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    embedded = work_item.get("target_profile_observation")
+    if isinstance(embedded, dict):
+        return embedded
+    legacy = work_item.get("profile_observation")
+    if isinstance(legacy, dict):
+        return legacy
+    thread = _thread_observation_for_work_item(work_item, pending_scan_batch)
+    observation = thread.get("observation") if isinstance(thread, dict) else None
+    profile = observation.get("profile_observation") if isinstance(observation, dict) else None
+    return profile if isinstance(profile, dict) else None
+
+
+def _scan_batch_from_consumed_observations(work_dir: Path, work_item: dict[str, Any]) -> dict[str, Any] | None:
+    consumed_dir = work_dir / "consumed"
+    if not consumed_dir.exists():
+        return None
+    candidate_key = str(work_item.get("candidate_key") or "")
+    entry: dict[str, Any] | None = None
+    thread: dict[str, Any] | None = None
+    for path in sorted(consumed_dir.glob("*.json"), reverse=True):
+        try:
+            payload = _read_json(path)
+        except HostLoopError:
+            continue
+        observation_type = str(payload.get("observation_type") or "")
+        if observation_type == "thread" and thread is None and str(payload.get("candidate_key") or "") == candidate_key:
+            thread = payload
+            continue
+        if observation_type != "message_list" or entry is not None:
+            continue
+        snapshot = payload.get("message_list_snapshot")
+        entries = snapshot.get("entries", []) if isinstance(snapshot, dict) else []
+        for item in entries:
+            if isinstance(item, dict) and str(item.get("candidate_key") or "") == candidate_key:
+                entry = item
+                break
+        if entry is not None and thread is not None:
+            break
+    if entry is None and thread is None:
+        return None
+    return {
+        "schema_version": 1,
+        "message_list_snapshot": {"entries": [entry] if entry is not None else []},
+        "thread_observations": [thread] if thread is not None else [],
+    }
+
+
 def _thread_observation_for_work_item(
     work_item: dict[str, Any],
     pending_scan_batch: dict[str, Any] | None,
@@ -1529,7 +1684,14 @@ def _native_backend(profile: dict[str, Any]) -> str:
     return str(backend) if backend is not None else ""
 
 
-def _next_host_action(status: str, work_item: dict[str, Any] | None, send_mode: str) -> str:
+def _normalized_harness_runtime(value: str) -> str:
+    return value.strip().replace("-", "_")
+
+
+def _next_host_action(status: str, work_item: dict[str, Any] | None, send_mode: str, *, reason: str | None = None) -> str:
+    reason_action = _next_host_action_for_block_reason(reason)
+    if reason_action is not None:
+        return reason_action
     if not isinstance(work_item, dict):
         if status in {"blocked", "error"}:
             return "inspect_error_and_fix_configuration"
@@ -1550,6 +1712,18 @@ def _next_host_action(status: str, work_item: dict[str, Any] | None, send_mode: 
     if work_type in {"wait", "scheduled_wait"}:
         return "wait_or_resume_later"
     return "inspect_current_work_item"
+
+
+def _next_host_action_for_block_reason(reason: str | None) -> str | None:
+    if reason == "target_profile_required":
+        return "open_target_profile_and_ingest_memory"
+    if reason == "target_binding_structural_evidence_required":
+        return "provide_structural_target_binding_evidence"
+    if reason == "target_binding_lost_current_thread":
+        return "stop_do_not_send_recover_current_thread_binding"
+    if isinstance(reason, str) and reason.startswith("runtime_live_send_not_supported:"):
+        return "choose_supported_runtime_or_stage_only"
+    return None
 
 
 def _unique_strings(values: list[str]) -> list[str]:

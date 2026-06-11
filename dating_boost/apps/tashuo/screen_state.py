@@ -134,6 +134,7 @@ def tashuo_top_level_bottom_nav_present(screen: dict[str, Any]) -> bool:
 def tashuo_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
     state = str(screen.get("state") or "unknown")
     normalized = normalize_text(str(screen.get("text") or ""))
+    thread_cues = tashuo_thread_cues_from_text(normalized) if state == "tashuo_conversation" else []
     page = {
         "tashuo_recommend": "recommend",
         "tashuo_flight": "flight",
@@ -162,12 +163,26 @@ def tashuo_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
         or any(marker in normalized for marker in ("编辑资料", "我的认证")),
         "profile_present": state == "tashuo_profile",
         "message_input_marker_present": _tashuo_message_input_marker_present(normalized),
+        "thread_cues": thread_cues,
         "question_gate_reply_requires_user_confirmation": state == "tashuo_question_gate",
         "draft_staging_supported": state == "tashuo_conversation",
         "live_send_supported": state == "tashuo_conversation",
+        "managed_live_send_supported": state == "tashuo_conversation",
+        "live_send_status": "supported" if state == "tashuo_conversation" else "not_applicable",
+        "live_send_block_reason": "",
         "dangerous_actions_blocked": ["like", "pass", "super_like", "flight_start_chat", "question_gate_send"],
         "visual_only_exact_verification_allowed": False,
     }
+
+
+def tashuo_thread_cues_from_text(text: str) -> list[str]:
+    normalized = normalize_text(text)
+    cues: list[str] = []
+    if "跳过了问答考验" in normalized:
+        cues.append("tashuo_question_gate_skipped")
+    if "开启了永久聊天" in normalized:
+        cues.append("tashuo_permanent_chat_enabled")
+    return cues
 
 
 def _tashuo_top_level_nav_text_present(normalized_text: str) -> bool:
@@ -201,8 +216,7 @@ def _classify_tashuo_top_level_header_text(normalized_text: str) -> str | None:
 def _looks_like_tashuo_question_gate_text(normalized_text: str) -> bool:
     if _tashuo_top_level_nav_text_present(normalized_text):
         return False
-    strong_question_markers = ("待回答", "提了一个问题", "回答后", "问答")
-    if any(marker in normalized_text for marker in strong_question_markers):
+    if "提了一个问题" in normalized_text:
         return True
     question_markers = any(marker in normalized_text for marker in ("问题", "回答"))
     input_markers = _tashuo_message_input_marker_present(normalized_text)
@@ -253,8 +267,8 @@ def _tashuo_bottom_active_tab_hint(state: str) -> str:
 
 
 def _tashuo_bottom_nav_hint(pixels: dict[str, Any]) -> dict[str, Any]:
-    container = _region_stats(pixels, 0.04, 0.88, 0.96, 0.98)
-    if container["bright_ratio"] < 0.68:
+    container = _region_stats(pixels, 0.04, 0.90, 0.96, 0.995)
+    if container["bright_ratio"] < 0.70:
         return {"present": False, "active_tab": "unknown"}
     slots = (
         ("recommend", 0.06, 0.24),
@@ -264,19 +278,22 @@ def _tashuo_bottom_nav_hint(pixels: dict[str, Any]) -> dict[str, Any]:
     )
     slot_results: list[dict[str, Any]] = []
     for name, x1, x2 in slots:
-        icon_label = _region_stats(pixels, x1, 0.895, x2, 0.975)
+        icon_label = _region_stats(pixels, x1, 0.925, x2, 0.995)
         slot_signal = icon_label["dark_ratio"] + icon_label["mid_ratio"] + icon_label["color_ratio"]
         slot_results.append(
             {
                 "name": name,
                 "slot_signal": slot_signal,
-                "active_signal": icon_label["color_ratio"] + icon_label["dark_ratio"] * 0.35,
+                "active_signal": icon_label["color_ratio"],
             }
         )
-    present = sum(1 for slot in slot_results if slot["slot_signal"] > 0.018) >= 4
+    present = (
+        sum(1 for slot in slot_results if slot["slot_signal"] > 0.0015) >= 4
+        and max(slot["active_signal"] for slot in slot_results) > 0.035
+    )
     if not present:
         return {"present": False, "active_tab": "unknown"}
-    active_slots = [slot for slot in slot_results if slot["active_signal"] > 0.040]
+    active_slots = [slot for slot in slot_results if slot["active_signal"] > 0.035]
     if not active_slots:
         return {"present": True, "active_tab": "unknown"}
     active = max(active_slots, key=lambda slot: slot["active_signal"])
@@ -284,23 +301,23 @@ def _tashuo_bottom_nav_hint(pixels: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tashuo_conversation_toolbar_hint(pixels: dict[str, Any]) -> dict[str, Any]:
-    input_pill_signal = _region_nonwhite_ratio(pixels, 0.06, 0.845, 0.94, 0.902, threshold=245)
+    input_pill_signal = _region_nonwhite_ratio(pixels, 0.03, 0.855, 0.97, 0.930, threshold=248)
     slots = (
-        ("voice", 0.08, 0.20),
-        ("image", 0.32, 0.44),
-        ("emoji", 0.56, 0.68),
-        ("extras", 0.80, 0.92),
+        ("voice", 0.07, 0.20),
+        ("image", 0.30, 0.43),
+        ("emoji", 0.54, 0.67),
+        ("extras", 0.78, 0.93),
     )
     slot_results = [
         {
             "name": name,
-            "signal": _region_nonwhite_ratio(pixels, x1, 0.912, x2, 0.955, threshold=235),
+            "signal": _region_nonwhite_ratio(pixels, x1, 0.935, x2, 0.990, threshold=245),
         }
         for name, x1, x2 in slots
     ]
-    visible_slots = sum(1 for slot in slot_results if slot["signal"] > 0.10)
+    visible_slots = sum(1 for slot in slot_results if slot["signal"] > 0.08)
     return {
-        "present": input_pill_signal > 0.55 and visible_slots >= 4,
+        "present": input_pill_signal > 0.50 and visible_slots >= 4,
         "input_pill_signal": input_pill_signal,
         "visible_toolbar_slots": visible_slots,
     }

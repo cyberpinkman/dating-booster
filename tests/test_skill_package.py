@@ -254,6 +254,8 @@ class SkillPackageTests(unittest.TestCase):
             "harness bumble observe",
             "harness bumble action",
             "harness bumble workflow",
+            "harness tashuo stage-draft",
+            "harness tashuo send-message",
             "harness wechat launch",
             "harness wechat observe",
             "harness wechat stage-draft",

@@ -32,16 +32,30 @@ class ProfileObservation:
     profile_text: str
     photo_cues: list[str]
     hook_candidates: list[str]
+    review_status: str
+    evidence: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ProfileObservation":
+        profile_text = data.get("profile_text", "")
+        photo_cues = list(data.get("photo_cues", []))
+        hook_candidates = list(data.get("hook_candidates", []))
+        review_status = str(data.get("review_status") or "").strip()
+        if not review_status:
+            review_status = "observed" if _profile_observation_has_visible_content(
+                profile_text,
+                photo_cues,
+                hook_candidates,
+            ) else "missing"
         return cls(
-            profile_text=data.get("profile_text", ""),
-            photo_cues=list(data.get("photo_cues", [])),
-            hook_candidates=list(data.get("hook_candidates", [])),
+            profile_text=profile_text,
+            photo_cues=photo_cues,
+            hook_candidates=hook_candidates,
+            review_status=review_status,
+            evidence=str(data.get("evidence") or ""),
         )
 
 
@@ -142,6 +156,8 @@ class AppObservation:
                 profile_text="",
                 photo_cues=[],
                 hook_candidates=[],
+                review_status="missing",
+                evidence="",
             ),
             conversation_observation=ConversationObservation(
                 visible_messages=[],
@@ -166,3 +182,15 @@ def _derive_latest_inbound_messages(visible_messages: list[dict[str, str]]) -> l
         for message in visible_messages[latest_user_index + 1 :]
         if message.get("sender") == "match"
     ]
+
+
+def _profile_observation_has_visible_content(
+    profile_text: str,
+    photo_cues: list[str],
+    hook_candidates: list[str],
+) -> bool:
+    return bool(
+        str(profile_text).strip()
+        or any(str(item).strip() for item in photo_cues)
+        or any(str(item).strip() for item in hook_candidates)
+    )

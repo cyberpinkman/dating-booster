@@ -66,6 +66,14 @@ class TaShuoAdapter(LegacyHarnessAdapter):
             target_binding=target_binding,
         )
 
+    def stage_draft(self, draft_text: str, *, dry_run: bool = False, output_dir: Path | None = None) -> dict[str, Any]:
+        return tashuo_native.stage_tashuo_draft(
+            self.session,
+            draft_text,
+            dry_run=dry_run,
+            output_dir=output_dir,
+        )
+
     def target_binding_policy(self) -> dict[str, Any]:
         return {
             **super().target_binding_policy(),
@@ -76,4 +84,5 @@ class TaShuoAdapter(LegacyHarnessAdapter):
     observe_tashuo_screen = observe
     run_tashuo_action = run_action
     run_tashuo_workflow = run_workflow
+    stage_tashuo_draft = stage_draft
     send_tashuo_message = send_message

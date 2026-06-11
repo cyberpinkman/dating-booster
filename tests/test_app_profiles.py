@@ -186,6 +186,21 @@ class AppProfileContractTests(unittest.TestCase):
             }.issubset(blocked)
         )
 
+    def test_tashuo_mac_ios_app_stage_is_alternate_runtime_and_live_send_is_blocked(self):
+        profile = json.loads((PROFILE_DIR / "tashuo.json").read_text(encoding="utf-8"))
+
+        self.assertNotIn("stage_draft", profile["native_gui_harness"]["supported_stage_actions"])
+        self.assertNotIn("prepare_message_page", profile["native_gui_harness"]["supported_stage_actions"])
+        self.assertNotIn("stage_draft", profile["capabilities"]["stage_actions"])
+        self.assertNotIn("prepare_message_page", profile["capabilities"]["stage_actions"])
+        mac_runtime = profile["native_gui_harness"]["alternate_runtimes"]["mac_ios_app"]
+        self.assertEqual(mac_runtime["backend"], "mac_ios_app")
+        self.assertIn("stage_draft", mac_runtime["supported_stage_actions"])
+        self.assertIn("prepare_message_page", mac_runtime["supported_stage_actions"])
+        self.assertEqual(mac_runtime["supported_live_actions"], [])
+        self.assertEqual(mac_runtime["live_send_status"], "experimental_blocked_cjk_stage_verification")
+        self.assertEqual(mac_runtime["live_send_block_reason"], "cjk_stage_verification_not_stable")
+
     def test_iphone_dating_apps_allow_row_to_thread_binding_for_non_ocr_nicknames(self):
         for app_id in ("tinder", "bumble", "tashuo"):
             with self.subTest(app_id=app_id):

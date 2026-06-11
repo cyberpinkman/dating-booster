@@ -1,8 +1,8 @@
 # App Host Loop
 
 Use this workflow when the user wants Codex to run a real Tinder, Bumble, or
-TaShuo host loop with iPhone Mirroring. `dating-boost-host-loop` drives the
-operator state machine.
+TaShuo host loop with iPhone Mirroring, or the TaShuo mac-ios-app runtime.
+`dating-boost-host-loop` drives the operator state machine.
 The Tinder host loop remains the baseline reference path; Bumble and TaShuo use
 the same supervisor contract for ordinary chat sends.
 `dating-boost harness ...` provides the native stage/navigation harness for
@@ -32,6 +32,8 @@ dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run 
 dating-boost harness tashuo observe --output-dir .local/dating-boost-harness --json
 dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options-json tashuo-chat-profile-options.json --json
 dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
+dating-boost harness tashuo action prepare-message-page --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo stage-draft --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
 dating-boost harness tashuo send-message --text-file tashuo-draft.txt --dry-run --json
 dating-boost-host-loop doctor \
   --data-dir .local/dating-boost \
@@ -56,7 +58,10 @@ managed send additionally require target-specific binding and exact OCR payload 
 visual-only button or bubble evidence is not enough. Bumble managed send applies
 to ordinary chat sends; autonomous Opening Move send is not supported. TaShuo
 managed send applies to ordinary chat sends; current harness question-gate
-staging/sending is not supported. The harness never authorizes like,
+staging/sending is not supported. TaShuo mac-ios-app managed live send is
+currently blocked as `experimental_blocked_cjk_stage_verification`; host-loop
+must return `runtime_live_send_not_supported:tashuo:mac-ios-app` for that runtime. The
+harness never authorizes like,
 super-like, SuperSwipe, pass, unmatch, report, premium purchase, profile edit,
 TaShuo 飞行 start-chat, or question-gate decision actions.
 
@@ -83,6 +88,25 @@ dating-boost-host-loop run \
   --work-dir .local/dating-boost-host-loop \
   --json
 ```
+
+TaShuo mac-ios-app managed live send is currently a negative-path check:
+
+```bash
+dating-boost-host-loop run \
+  --data-dir .local/dating-boost \
+  --authorization auth.json \
+  --goal goal.json \
+  --availability availability.json \
+  --app-id tashuo \
+  --send-mode live \
+  --managed-gui-send \
+  --harness-runtime mac-ios-app \
+  --work-dir .local/dating-boost-host-loop \
+  --json
+```
+
+The command above must block before any real send attempt until capabilities
+declare managed live-send support for the mac-ios-app runtime.
 
 When running from a cloned repository, `python3 scripts/operator_host_loop.py`
 is a compatibility wrapper around the same command.
