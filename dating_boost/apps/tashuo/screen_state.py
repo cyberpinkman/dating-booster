@@ -229,7 +229,7 @@ def _looks_like_tashuo_conversation_text(normalized_text: str) -> bool:
     if _looks_like_tashuo_question_gate_text(normalized_text):
         return False
     input_marker = _tashuo_message_input_marker_present(normalized_text)
-    thread_marker = any(marker in normalized_text for marker in ("永久聊天", "可以聊天啦", "点击此处输入文字", "发送"))
+    thread_marker = any(marker in normalized_text for marker in ("永久聊天", "可以聊天啦", "点击此处输入文字"))
     visible_name_marker = bool(re.search(r"\b[a-z][a-z0-9_ .'-]{1,30}\b", normalized_text))
     if input_marker and (thread_marker or visible_name_marker):
         return True
@@ -252,7 +252,7 @@ def _looks_like_tashuo_profile_text(normalized_text: str) -> bool:
 
 def _tashuo_message_input_marker_present(normalized_text: str) -> bool:
     english_input = bool(re.search(r"\bsend\b", normalized_text))
-    chinese_input = any(marker in normalized_text for marker in ("点击此处输入文字", "输入文字", "发送", "发消息"))
+    chinese_input = any(marker in normalized_text for marker in ("点击此处输入文字", "输入文字", "发消息"))
     return english_input or chinese_input
 
 

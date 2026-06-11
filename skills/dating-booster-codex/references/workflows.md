@@ -51,11 +51,13 @@ direct `harness <app> send-message --authorization --action-request` is
 executor-internal only and must consume system-generated work items or
 confirmation-flow hashes. Do not handcraft action requests. Bumble and TaShuo
 ordinary chat managed sends require the same authorization, target-specific
-binding, staged-text OCR, and post-send evidence gates. Visual send-button or
+binding, staged-text OCR, and post-send evidence gates. Visual UI-affordance or
 bubble evidence alone is not exact-text verification. Bumble
 must not like, pass, SuperSwipe, unmatch, report, edit profile data, or purchase
 Premium. TaShuo must not like, pass, start a 飞行 chat, unmatch, report, edit
-profile data, purchase Premium, or make question-gate decisions.
+profile data, purchase Premium, or make question-gate decisions. TaShuo ordinary
+chat sends with Return after exact staged-text verification; do not click or plan
+a Send-button action for TaShuo.
 
 Bumble Opening Move is role-sensitive. On a female user's account, observe or
 summarize the prompt/reply and ask the user whether to enable Opening Move,
@@ -216,9 +218,9 @@ confirmed confirmation flow with hashes. Do not handcraft action requests. The
 authorization must include `live_send: true` and `autonomous_send: true`; the
 action request must be policy-checked, hash-bound to the text file, and include
 target-chat binding. The harness must verify the target chat, verify the staged
-text exactly before clicking Send or pressing Return, and verify the outbound
+text exactly before the app-specific submit action, and verify the outbound
 bubble from fresh post-action evidence before the result can be recorded as
-`succeeded`.
+`succeeded`. TaShuo's app-specific submit action is Return.
 
 The action `expand-visible-profile-section` is a bounded tap for a visibly
 folded profile section such as `查看所有...项信息`. Use it only after a fresh
@@ -356,7 +358,8 @@ Preferred execution path:
 5. Verify staged text in the input box before sending.
 6. Do not send if the staged text is missing, truncated, garbled, or materially
    different from `action_request.payload_text`.
-7. Tap Send only after the staged text matches.
+7. Use only the app-specific submit action after the staged text matches
+   (TaShuo: press Return; button-based apps: tap Send).
 8. After sending, take a fresh observation and compare the outbound bubble with
    the requested payload.
 

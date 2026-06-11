@@ -86,6 +86,9 @@ TASHUO_QUESTION_GATE_POLICY: dict[str, Any] = {
         ],
     },
 }
+TASHUO_MESSAGE_INPUT_UNFOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.91}
+TASHUO_MESSAGE_INPUT_FOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.91}
+TASHUO_MAC_IOS_APP_MESSAGE_INPUT_FOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.85}
 
 
 def install_tashuo_session_hooks(session: Any) -> None:
@@ -266,6 +269,34 @@ def _is_mac_ios_app_session(session: Any) -> bool:
 
 def _tashuo_capture_prefix(session: Any) -> str:
     return "mac_ios_app.tashuo" if _is_mac_ios_app_session(session) else "iphone_mirroring.tashuo"
+
+
+def _copy_tap_ratio(ratio: dict[str, float]) -> dict[str, float]:
+    return {"x": float(ratio["x"]), "y": float(ratio["y"])}
+
+
+def _tashuo_message_input_tap_ratio(session: Any, *, focused: bool) -> dict[str, float]:
+    if focused and _is_mac_ios_app_session(session):
+        return _copy_tap_ratio(TASHUO_MAC_IOS_APP_MESSAGE_INPUT_FOCUSED_TAP_RATIO)
+    if focused:
+        return _copy_tap_ratio(TASHUO_MESSAGE_INPUT_FOCUSED_TAP_RATIO)
+    return _copy_tap_ratio(TASHUO_MESSAGE_INPUT_UNFOCUSED_TAP_RATIO)
+
+
+def _tashuo_input_coordinate_model(session: Any) -> dict[str, Any]:
+    if _is_mac_ios_app_session(session):
+        return {
+            "runtime": "mac_ios_app",
+            "coordinate_shift_after_focus": True,
+            "unfocused_input_tap_ratio": _tashuo_message_input_tap_ratio(session, focused=False),
+            "focused_input_tap_ratio": _tashuo_message_input_tap_ratio(session, focused=True),
+        }
+    return {
+        "runtime": "iphone_mirroring",
+        "coordinate_shift_after_focus": False,
+        "unfocused_input_tap_ratio": _tashuo_message_input_tap_ratio(session, focused=False),
+        "focused_input_tap_ratio": _tashuo_message_input_tap_ratio(session, focused=True),
+    }
 
 
 def run_tashuo_action(
@@ -537,7 +568,9 @@ def stage_tashuo_draft(
     planned_steps = [
         {
             "intent": "tap_tashuo_message_input",
-            "tap_ratio": {"x": 0.32, "y": 0.91},
+            "tap_ratio": _tashuo_message_input_tap_ratio(session, focused=False),
+            "focus_state": "unfocused",
+            "post_focus_input_tap_ratio": _tashuo_message_input_tap_ratio(session, focused=True),
             "risk": "draft_staging_only",
             "does_not_send": True,
             "requires_verified_tashuo_thread": True,
@@ -562,6 +595,7 @@ def stage_tashuo_draft(
         "draft_fingerprint": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
         "draft_character_count": len(draft_text),
         **platform._text_fingerprint_fields("draft_clipboard", draft_text),
+        "input_coordinate_model": _tashuo_input_coordinate_model(session),
         **tashuo_guardrails_payload(),
         "requires_user_confirmation_before_send": True,
     }
@@ -638,7 +672,16 @@ def send_tashuo_message(
 ) -> dict[str, Any]:
     input_step = {
         "intent": "tap_tashuo_message_input",
-        "tap_ratio": {"x": 0.32, "y": 0.91},
+        "tap_ratio": _tashuo_message_input_tap_ratio(session, focused=False),
+        "focus_state": "unfocused",
+        "post_focus_input_tap_ratio": _tashuo_message_input_tap_ratio(session, focused=True),
+        "risk": "live_send_precondition",
+        "requires_verified_tashuo_thread": True,
+    }
+    focused_input_step = {
+        "intent": "tap_tashuo_message_input_after_focus",
+        "tap_ratio": _tashuo_message_input_tap_ratio(session, focused=True),
+        "focus_state": "focused",
         "risk": "live_send_precondition",
         "requires_verified_tashuo_thread": True,
     }
@@ -662,11 +705,12 @@ def send_tashuo_message(
         "requires_exact_text_verification_after_commit": True,
     }
     send_step = {
-        "intent": "tap_tashuo_send_button",
-        "tap_ratio": {"x": 0.91, "y": 0.88},
+        "intent": "press_return_to_send_tashuo_message",
+        "focus_state": "focused",
         "risk": "live_send",
         "requires_explicit_authorization": True,
         "visual_only_exact_verification_allowed": False,
+        "requires_exact_text_verification_before_return": True,
     }
     payload = {
         **session._base_payload("ok"),
@@ -679,6 +723,7 @@ def send_tashuo_message(
         **platform._text_fingerprint_fields("draft_clipboard", draft_text),
         "blocked_actions": list(TASHUO_SEND_BLOCKED_GUI_ACTIONS),
         "question_gate_policy": copy.deepcopy(TASHUO_QUESTION_GATE_POLICY),
+        "input_coordinate_model": _tashuo_input_coordinate_model(session),
         "live_send": True,
         "requires_explicit_authorization": True,
     }
@@ -771,18 +816,17 @@ def send_tashuo_message(
             baseline_screen=baseline_screen,
         )
         staged_text = str(staged_screen.get("text") or "")
-        staged_send_marker_visible = _tashuo_send_marker_visible(staged_text)
         staged_input_placeholder_visible = _tashuo_input_placeholder_visible(staged_text)
         direct_type_fallback_candidate = (
             staged_verification.get("status") != "ok"
             and platform._direct_type_fallback_allowed(draft_text)
-            and (staged_input_placeholder_visible or not staged_send_marker_visible)
+            and staged_input_placeholder_visible
         )
         if direct_type_fallback_candidate and _contains_cjk(draft_text):
             cleanup_result = _cleanup_failed_tashuo_stage(
                 session,
                 window,
-                input_step,
+                focused_input_step,
                 expected_text=draft_text,
                 output_dir=output_dir,
             )
@@ -844,7 +888,7 @@ def send_tashuo_message(
             cleanup_result = _cleanup_failed_tashuo_stage(
                 session,
                 window,
-                input_step,
+                focused_input_step,
                 expected_text=draft_text,
                 output_dir=output_dir,
             )
@@ -870,7 +914,7 @@ def send_tashuo_message(
         })
         return payload
 
-    send_result = session._click_ratio(window, send_step["tap_ratio"])
+    send_result = session._press_return_key()
     executed_steps.append({**send_step, "result": send_result})
     payload["executed_steps"] = executed_steps
     if send_result["status"] != "ok":
@@ -1118,7 +1162,6 @@ def _verify_staged_tashuo_message(
     observed_stats = platform._expected_text_observation_stats(observed_text, expected_text)
     baseline_text = str(baseline_screen.get("text") or "") if isinstance(baseline_screen, dict) else ""
     baseline_stats = platform._expected_text_observation_stats(baseline_text, expected_text) if baseline_text else None
-    active_send_button_visible = _tashuo_active_send_button_visual_visible(screen)
     result = {
         "verification_method": "tashuo_staged_message_ocr_payload_text",
         "expected_payload_hash": platform._hash_text(expected_text),
@@ -1128,7 +1171,7 @@ def _verify_staged_tashuo_message(
         "observed_expected_text_occurrences": observed_stats["expected_text_occurrences"],
         "baseline_expected_text_occurrences": baseline_stats["expected_text_occurrences"] if baseline_stats else None,
         "baseline_text_hash": baseline_stats["text_hash"] if baseline_stats else None,
-        "active_send_button_visual_visible": active_send_button_visible,
+        "send_action": "press_return",
         "exact_text_ocr_verified": platform._message_text_matches(observed_text, expected_text),
         "visual_only_exact_verification_allowed": False,
         "screen": platform._redacted_screen(screen),
@@ -1146,8 +1189,6 @@ def _verify_staged_tashuo_message(
         return {**result, "status": "needs_verification", "reason": "staged_text_not_verified"}
     if baseline_stats and observed_stats["expected_text_occurrences"] <= baseline_stats["expected_text_occurrences"]:
         return {**result, "status": "needs_verification", "reason": "staged_text_not_newly_visible"}
-    if not _tashuo_send_marker_visible(observed_text) and not active_send_button_visible:
-        return {**result, "status": "needs_verification", "reason": "tashuo_send_button_not_verified_after_staging"}
     return {**result, "status": "ok"}
 
 
@@ -1172,10 +1213,10 @@ def _verify_tashuo_outbound_message(
         "observed_expected_text_occurrences": observed_stats["expected_text_occurrences"],
         "staged_expected_text_occurrences": staged_stats["expected_text_occurrences"] if staged_stats else None,
         "staged_text_hash": staged_stats["text_hash"] if staged_stats else None,
-        "input_cleared_after_send": not _tashuo_send_marker_visible(observed_text)
-        and not _tashuo_active_send_button_visual_visible(screen),
+        "input_cleared_after_send": _tashuo_input_placeholder_visible(observed_text),
         "outgoing_bubble_visual_visible": outgoing_bubble_visible,
         "staged_outgoing_bubble_visual_visible": staged_outgoing_bubble_visible,
+        "send_action": "press_return",
         "exact_text_ocr_verified": result.get("status") == "ok",
         "visual_only_exact_verification_allowed": False,
     }
@@ -1186,14 +1227,6 @@ def _verify_tashuo_outbound_message(
     if extra["input_cleared_after_send"] is not True:
         return {**result, **extra, "status": "needs_verification", "reason": "outbound_message_not_verified"}
     return {**result, **extra, "status": "ok"}
-
-
-def _tashuo_send_marker_visible(text: str) -> bool:
-    for line in text.splitlines():
-        stripped = line.strip().lower()
-        if stripped in {"send", "发送"}:
-            return True
-    return False
 
 
 def _tashuo_input_placeholder_visible(text: str) -> bool:
@@ -1214,12 +1247,21 @@ def _cleanup_failed_tashuo_stage(
     output_dir: Path | None = None,
 ) -> dict[str, Any]:
     attempts: list[dict[str, Any]] = []
+    input_tap_ratio = _copy_tap_ratio(input_step["tap_ratio"])
+    input_focus_state = str(input_step.get("focus_state") or "unknown")
     click_result = session._click_ratio(window, input_step["tap_ratio"])
-    attempts.append({"intent": "refocus_tashuo_message_input_for_failed_stage_cleanup", "result": click_result})
+    attempts.append({
+        "intent": "refocus_tashuo_message_input_for_failed_stage_cleanup",
+        "tap_ratio": input_tap_ratio,
+        "focus_state": input_focus_state,
+        "result": click_result,
+    })
     if click_result.get("status") != "ok":
         return {
             "status": "blocked",
             "reason": click_result.get("reason") or "failed_stage_cleanup_refocus_failed",
+            "input_tap_ratio": input_tap_ratio,
+            "input_focus_state": input_focus_state,
             "attempts": attempts,
         }
 
@@ -1244,26 +1286,21 @@ def _cleanup_failed_tashuo_stage(
     screen = session.capture_window(output=output, window=window)
     observed_text = str(screen.get("text") or "")
     expected_still_visible = platform._message_text_matches(observed_text, expected_text)
-    active_send_button_visible = _tashuo_active_send_button_visual_visible(screen)
+    input_placeholder_visible = _tashuo_input_placeholder_visible(observed_text)
     result = {
         "attempts": attempts,
+        "input_tap_ratio": input_tap_ratio,
+        "input_focus_state": input_focus_state,
         "screen": platform._redacted_screen(screen),
         "expected_payload_hash": platform._hash_text(expected_text),
         "expected_text_still_visible": expected_still_visible,
-        "active_send_button_visual_visible": active_send_button_visible,
+        "input_placeholder_visible": input_placeholder_visible,
     }
     if screen.get("status") != "ok":
         return {**result, "status": "needs_verification", "reason": "failed_stage_cleanup_screen_not_captured"}
-    if expected_still_visible or active_send_button_visible:
+    if expected_still_visible or not input_placeholder_visible:
         return {**result, "status": "needs_verification", "reason": "failed_stage_cleanup_not_verified"}
     return {**result, "status": "ok"}
-
-
-def _tashuo_active_send_button_visual_visible(screen: dict[str, Any]) -> bool:
-    stats = platform._screen_region_stats(screen, 0.82, 0.84, 0.96, 0.92)
-    if stats is None:
-        return False
-    return stats["color_ratio"] > 0.08 and stats["bright_ratio"] > 0.45
 
 
 def _tashuo_outgoing_bubble_visual_visible(screen: dict[str, Any] | None) -> bool:

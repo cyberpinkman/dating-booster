@@ -60,8 +60,9 @@
   "stage_send_verification": [
     "Managed TaShuo draft staging is supported only inside harness tashuo send-message.",
     "Paste the draft into a verified TaShuo ordinary conversation input first; direct typing is only a no-newline fallback when paste does not stage, and IME space commit follows direct typing before final verification.",
-    "After paste, direct typing, or IME space commit, OCR must verify staged text exactly equals payload_text before clicking Send.",
-    "Visual send-button or bubble evidence alone is not exact-text verification.",
+    "After paste, direct typing, or IME space commit, OCR must verify staged text exactly equals payload_text before pressing Return.",
+    "TaShuo ordinary chat sends with Return; there is no Send button to click.",
+    "Visual bubble evidence alone is not exact-text verification.",
     "Question-gate replies may be drafted for user review, but current harness question-gate staging/sending is not supported."
   ],
   "native_gui_harness": {
@@ -233,7 +234,7 @@
   },
   "post_send_verification": [
     "Record succeeded only after a fresh TaShuo screenshot shows the exact sent text in the thread.",
-    "The input must no longer show an active Send marker after clicking Send.",
+    "After pressing Return, the input placeholder must reappear and a fresh TaShuo screenshot must show the exact sent text in the thread.",
     "If exact text or input-cleared evidence is not verifiable, record unknown or block managed send."
   ],
   "known_gui_pitfalls": [
@@ -249,7 +250,8 @@
     "Emoji or otherwise non-OCR nicknames are valid targets in any message-list row; bind the intended row with chat_list_row_to_thread evidence instead of switching to an OCR-friendly conversation.",
     "Ordinary conversation classification can use the persistent bottom input toolbar and four tool buttons as page-structure evidence; exact payload verification still requires OCR/text evidence, while target binding may use allowed row-to-thread structure.",
     "For mac-ios-app task startup, use prepare-message-page: determine the top-level page from the visual bottom-tab highlight, tap the messages tab if needed, then hand off to visual message-list planning without OCR-first fallback or fixed row-coordinate thread entry.",
-    "Visual send-button or bubble evidence can support diagnosis but cannot replace exact OCR verification of the payload text.",
+    "TaShuo ordinary chat sends with Return; do not plan or execute a Send-button click.",
+    "Visible bubble evidence can support diagnosis but cannot replace exact OCR verification of the payload text.",
     "Non-ABC input sources can leave app names in the iOS Spotlight candidate bar; verify the app result after typing before tapping."
   ],
   "unsupported_actions": [

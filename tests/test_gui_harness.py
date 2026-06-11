@@ -949,6 +949,17 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(all(step.get("risk") == "draft_staging_only" for step in payload["planned_steps"]))
         self.assertTrue(all(step.get("does_not_send", True) for step in payload["planned_steps"]))
         self.assertIn("send", payload["blocked_actions"])
+        self.assertEqual(
+            payload["input_coordinate_model"],
+            {
+                "runtime": "mac_ios_app",
+                "coordinate_shift_after_focus": True,
+                "unfocused_input_tap_ratio": {"x": 0.32, "y": 0.91},
+                "focused_input_tap_ratio": {"x": 0.32, "y": 0.85},
+            },
+        )
+        self.assertEqual(payload["planned_steps"][0]["focus_state"], "unfocused")
+        self.assertEqual(payload["planned_steps"][0]["tap_ratio"], {"x": 0.32, "y": 0.91})
 
     def test_tashuo_mac_ios_app_send_message_dry_run_is_authorized_live_send_plan(self):
         runner = FakeRunner(ocr_text="Yasmine\n点击此处输入文字\n", window_name="她说")
@@ -961,8 +972,14 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["action"], "send_message")
         self.assertTrue(payload["live_send"])
         self.assertTrue(payload["requires_explicit_authorization"])
-        self.assertTrue(any(step.get("risk") == "live_send" for step in payload["planned_steps"]))
-        self.assertTrue(any(step.get("requires_explicit_authorization") for step in payload["planned_steps"]))
+        self.assertIn(
+            "press_return_to_send_tashuo_message",
+            [step["intent"] for step in payload["planned_steps"]],
+        )
+        self.assertNotIn("tap_tashuo_send_button", [step["intent"] for step in payload["planned_steps"]])
+        return_step = next(step for step in payload["planned_steps"] if step["intent"] == "press_return_to_send_tashuo_message")
+        self.assertEqual(return_step["risk"], "live_send")
+        self.assertTrue(return_step["requires_explicit_authorization"])
 
     def test_tashuo_mac_ios_app_send_message_requires_structural_binding_not_header_ocr(self):
         runner = FakeRunner(
@@ -1173,7 +1190,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Yasmine\n不理解\n点击此处输入文字\n",
                 "Yasmine\n不理解\n点击此处输入文字\n",
                 "Yasmine\n不理解\n点击此处输入文字\n",
-                "Yasmine\n不理解\n今晚可以聊十分钟吗？\n发送\n",
+                "Yasmine\n不理解\n今晚可以聊十分钟吗？\n",
                 "Yasmine\n不理解\n今晚可以聊十分钟吗？\n点击此处输入文字\n",
             ],
         )
@@ -1192,6 +1209,10 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["evidence"]["input_cleared_after_send"])
         self.assertTrue(payload["evidence"]["outbound_message_verified"])
         self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+        intents = [step["intent"] for step in payload["executed_steps"]]
+        self.assertIn("press_return_to_send_tashuo_message", intents)
+        self.assertNotIn("tap_tashuo_send_button", intents)
+        self.assertTrue(any("key code 36" in " ".join(command) for command in runner.commands))
 
     def test_tashuo_send_message_accepts_chat_list_row_structural_binding_for_emoji_nickname(self):
         runner = FakeRunner(
@@ -1199,14 +1220,14 @@ class GuiHarnessTests(unittest.TestCase):
                 "点击此处输入文字\n",
                 "点击此处输入文字\n",
                 "点击此处输入文字\n",
-                "你好\n发送\n",
+                "你好\n",
                 "你好\n点击此处输入文字\n",
             ],
             screenshot_bytes=[
                 _tashuo_conversation_toolbar_png(),
                 _tashuo_conversation_toolbar_png(),
                 _tashuo_conversation_toolbar_png(),
-                _tashuo_conversation_toolbar_png(active_send_button=True),
+                _tashuo_conversation_toolbar_png(),
                 _tashuo_conversation_toolbar_png(),
             ],
         )
@@ -1333,6 +1354,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertNotIn("type_tashuo_message_input_if_paste_did_not_stage", intents)
         self.assertNotIn("commit_tashuo_message_input_ime_candidate_if_needed", intents)
         self.assertNotIn("tap_tashuo_send_button", intents)
+        self.assertNotIn("press_return_to_send_tashuo_message", intents)
 
     def test_tashuo_send_message_cleans_failed_paste_without_sending(self):
         runner = FakeRunner(
@@ -1347,7 +1369,7 @@ class GuiHarnessTests(unittest.TestCase):
                 _tashuo_conversation_toolbar_png(),
                 _tashuo_conversation_toolbar_png(),
                 _tashuo_conversation_toolbar_png(),
-                _tashuo_conversation_toolbar_png(active_send_button=True),
+                _tashuo_conversation_toolbar_png(),
                 _tashuo_conversation_toolbar_png(),
             ],
         )
@@ -1365,9 +1387,48 @@ class GuiHarnessTests(unittest.TestCase):
         intents = [step["intent"] for step in payload["executed_steps"]]
         self.assertNotIn("type_tashuo_message_input_if_paste_did_not_stage", intents)
         self.assertNotIn("tap_tashuo_send_button", intents)
+        self.assertNotIn("press_return_to_send_tashuo_message", intents)
         joined_commands = [" ".join(command) for command in runner.commands]
         self.assertTrue(any("key code 53" in command for command in joined_commands))
         self.assertTrue(any("ASCII character 8" in command for command in joined_commands))
+
+    def test_tashuo_mac_ios_app_failed_stage_cleanup_refocuses_shifted_input(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\nv\n发送\n",
+                "Yasmine\n不理解\n点击此处输入文字\n",
+            ],
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.send_message(
+            "你好",
+            dry_run=False,
+            target_binding={
+                "binding_type": "chat_list_row_to_thread",
+                "target_match_id": "match_tashuo",
+                "candidate_key": "tashuo_row_1",
+                "selection_evidence": {
+                    "source_state": "tashuo_chat_list",
+                    "opened_state": "tashuo_conversation",
+                    "row_index": 1,
+                    "target_scope": "ordinary_conversation",
+                    "open_action": "open-conversation",
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "staged_text_not_verified")
+        cleanup = payload["failed_stage_cleanup"]
+        self.assertEqual(cleanup["status"], "ok")
+        self.assertEqual(cleanup["input_focus_state"], "focused")
+        self.assertEqual(cleanup["input_tap_ratio"], {"x": 0.32, "y": 0.85})
+        self.assertEqual(cleanup["attempts"][0]["tap_ratio"], {"x": 0.32, "y": 0.85})
 
     def test_classifies_tashuo_screens_and_question_gate(self):
         self.assertEqual(
@@ -4041,7 +4102,7 @@ def _bumble_conversation_png(*, active_send_button: bool = False, outgoing_bubbl
     return _png_from_pixels(pixels, width, height)
 
 
-def _tashuo_conversation_toolbar_png(*, active_send_button: bool = False) -> bytes:
+def _tashuo_conversation_toolbar_png() -> bytes:
     width, height = 200, 400
     pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
 
@@ -4051,8 +4112,6 @@ def _tashuo_conversation_toolbar_png(*, active_send_button: bool = False) -> byt
                 pixels[y][x] = color
 
     fill(0.06, 0.845, 0.94, 0.902, (240, 240, 246, 255))
-    if active_send_button:
-        fill(0.84, 0.850, 0.92, 0.895, (110, 82, 245, 255))
     for center in (0.14, 0.38, 0.62, 0.86):
         fill(center - 0.035, 0.920, center + 0.035, 0.945, (222, 222, 230, 255))
     return _png_from_pixels(pixels, width, height)

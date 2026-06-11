@@ -327,7 +327,8 @@ executor-internal only and must consume a system-generated work item, not a
 handcrafted action request. It requires target-specific binding, exact staged-text
 OCR verification, a fresh post-send observation, and outbound-message
 verification. Visual-only button or bubble evidence alone does not satisfy
-exact-text verification.
+exact-text verification. TaShuo ordinary chat sends by pressing Return after
+exact staged-text verification; do not click or plan a Send-button action.
 
 Launch search should type `tashu`, not full `tashuo`, and verify the `她说` or
 `TaShuo` app result by screenshot/OCR before tapping. If moving Home Screen or
