@@ -62,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
             "work_dir": str(work_dir),
             "steps": [],
             "staged_verifications": [],
+            "stage_results_recorded": [],
             "action_results_recorded": [],
             "next_host_action": "choose_supported_host_loop_app",
         }
@@ -114,6 +115,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--send-mode", choices=["stage", "live"], default="stage")
     parser.add_argument("--managed-gui-send", action="store_true")
     parser.add_argument("--harness-runtime")
+    parser.add_argument("--initial-surface", choices=["auto", "message-list", "current-thread"], default="auto")
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--once", action="store_true")
@@ -195,6 +197,7 @@ class HostLoopSupervisor:
         self.work_dir = (getattr(args, "work_dir", None) or self.data_dir / "host-loop").resolve()
         self.steps: list[dict[str, Any]] = []
         self.staged_verifications: list[dict[str, Any]] = []
+        self.stage_results_recorded: list[dict[str, Any]] = []
         self.action_results_recorded: list[dict[str, Any]] = []
         self.operator_session_active = False
         self.skill_package_path = self._resolve_skill_package_path(_explicit_adapter_package(args))
@@ -477,6 +480,7 @@ class HostLoopSupervisor:
                 "work_dir": str(self.work_dir),
                 "steps": list(self.steps),
                 "staged_verifications": list(self.staged_verifications),
+                "stage_results_recorded": list(self.stage_results_recorded),
                 "action_results_recorded": list(self.action_results_recorded),
                 "next_host_action": "resume_after_lock_expires",
                 "lock": lock_result.lock,
@@ -513,6 +517,7 @@ class HostLoopSupervisor:
                         current=resumed_current,
                     ), 0
             if not resume or self._operator_session_status() != "active":
+                initial_surface = self._initial_surface()
                 start = self._run_cli_json(
                     "operator",
                     "session",
@@ -521,6 +526,8 @@ class HostLoopSupervisor:
                     str(self.data_dir),
                     "--authorization",
                     str(self._authorization_path()),
+                    "--initial-surface",
+                    initial_surface,
                 )
                 if start.get("status") != "active":
                     return self._finish("blocked", "operator_session_not_active", extra={"start": start}), 0
@@ -544,6 +551,8 @@ class HostLoopSupervisor:
 
                 if work_type == "scan_message_list":
                     status = self._handle_scan_message_list(work_item)
+                elif work_type == "observe_current_thread":
+                    status = self._handle_current_thread(work_item)
                 elif work_type == "open_thread":
                     status = self._handle_open_thread(work_item)
                 elif work_type == "send_message":
@@ -621,6 +630,25 @@ class HostLoopSupervisor:
         if not (self.data_dir / "automation" / "availability.json").exists():
             raise HostLoopError("missing availability; pass --availability or configure availability first")
 
+    def _initial_surface(self) -> str:
+        requested = str(getattr(self.args, "initial_surface", "auto") or "auto")
+        if requested in {"message-list", "current-thread"}:
+            return requested
+        if self.fixture_host is not None and (self.fixture_host / "current_thread_observation.json").exists():
+            return "current-thread"
+        command = ["harness", self.args.app_id, "observe", "--json"]
+        harness_runtime = str(getattr(self.args, "harness_runtime", "") or "").strip()
+        if harness_runtime:
+            command.extend(["--runtime", harness_runtime])
+        try:
+            observed = self._run_cli_json(*command)
+        except (HostLoopCommandError, HostLoopError):
+            return "message-list"
+        hints = observed.get("layout_hints") if isinstance(observed, dict) else {}
+        if isinstance(hints, dict) and hints.get("conversation_present") is True:
+            return "current-thread"
+        return "message-list"
+
     def _handle_scan_message_list(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
         path = self._work_file(work_item, "message_list_observation")
         if self.fixture_host is not None and not path.exists():
@@ -647,6 +675,27 @@ class HostLoopSupervisor:
         path = self._work_file(work_item, "thread_observation")
         if self.fixture_host is not None and not path.exists():
             fixture = self.fixture_host / "threads" / f"{candidate_key}.json"
+            if fixture.exists():
+                shutil.copyfile(fixture, path)
+        if not path.exists():
+            _write_json(_template_path(path), _thread_template(work_item, self.app_profile))
+            waiting = self._waiting("thread_observation", path, work_item)
+            if waiting.get("status") != "host_input_ready":
+                return waiting
+        validation = self._run_cli_json("observation", "validate", "--input", str(path), "--json")
+        if validation.get("status") != "ok":
+            return self._finish("blocked", "thread_observation_invalid", current=work_item, extra={"validation": validation})
+        ingest = self._run_cli_json("operator", "ingest-observation", "--data-dir", str(self.data_dir), "--input", str(path))
+        self._append_timeline("observation", work_item, {"observation_type": "thread", "path": str(path), "ingest": ingest})
+        self._consume(path)
+        if ingest.get("status") != "ok":
+            return self._finish("blocked", str(ingest.get("reason") or "thread_ingest_failed"), current=work_item)
+        return None
+
+    def _handle_current_thread(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
+        path = self._work_file(work_item, "thread_observation")
+        if self.fixture_host is not None and not path.exists():
+            fixture = self.fixture_host / "current_thread_observation.json"
             if fixture.exists():
                 shutil.copyfile(fixture, path)
         if not path.exists():
@@ -695,11 +744,17 @@ class HostLoopSupervisor:
         if verification["status"] != "ok":
             return self._finish("blocked", verification["reason"], current=work_item)
         if self.args.send_mode == "stage":
+            stage_result_path = self._work_file(work_item, "stage_result")
+            _write_json(stage_result_path, _stage_result_from_verification(work_item, verification))
+            recorded = self._run_cli_json("operator", "record-stage-result", "--data-dir", str(self.data_dir), "--input", str(stage_result_path))
+            self.stage_results_recorded.append(recorded)
+            self._append_timeline("stage_result", work_item, {"path": str(stage_result_path), "recorded": recorded})
+            self._consume(stage_result_path)
             return self._finish(
                 "staged_waiting_user_confirmation",
-                "stage mode does not record action result or click send",
+                "stage mode recorded staged draft without recording send result or clicking send",
                 current=work_item,
-                extra={"next_host_action": "review_staged_text_and_confirm_or_cancel"},
+                extra={"next_host_action": "review_staged_text_and_confirm_or_cancel", "stage_result": recorded},
             )
         if SafetyRepository(self.data_dir).is_paused():
             return self._finish("blocked", "safety_paused", current=work_item)
@@ -1007,6 +1062,7 @@ class HostLoopSupervisor:
             "work_dir": str(self.work_dir),
             "steps": list(self.steps),
             "staged_verifications": list(self.staged_verifications),
+            "stage_results_recorded": list(self.stage_results_recorded),
             "action_results_recorded": list(self.action_results_recorded),
             "next_host_action": _next_host_action(status, current, self.args.send_mode, reason=reason),
         }
@@ -1030,7 +1086,7 @@ class HostLoopSupervisor:
         _write_json(self.work_dir / "current_work_item.json", work_item)
 
     def _clear_host_work_item(self, work_item: dict[str, Any], *, consume: bool = False) -> None:
-        for kind in ("message_list_observation", "thread_observation", "staged_verification", "action_result"):
+        for kind in ("message_list_observation", "thread_observation", "staged_verification", "stage_result", "action_result"):
             path = self._work_file(work_item, kind)
             template = _template_path(path)
             if path.exists():
@@ -1074,7 +1130,7 @@ class HostLoopSupervisor:
         work_type = str(work_item.get("work_item_type") or "")
         if work_type == "scan_message_list":
             return self._work_file(work_item, "message_list_observation")
-        if work_type == "open_thread":
+        if work_type in {"open_thread", "observe_current_thread"}:
             return self._work_file(work_item, "thread_observation")
         if work_type == "send_message":
             staged = self._work_file(work_item, "staged_verification")
@@ -1266,7 +1322,7 @@ def _thread_template(work_item: dict[str, Any], profile: dict[str, Any]) -> dict
         },
         "observation": {
             "observation_id": f"obs_{_safe_name(candidate_key)}_TODO",
-            "source_type": "manual_host_loop",
+            "source_type": "live_screenshot",
             "app_id": app_id,
             "captured_at": "TODO_ISO_TIMESTAMP",
             "page_type": "chat_thread",
@@ -1324,6 +1380,25 @@ def _staged_verification(work_item: dict[str, Any], *, result_status: str, stage
         "evidence": {
             "verification": "Input box text was checked before send.",
             "input_method": "paste",
+        },
+    }
+
+
+def _stage_result_from_verification(work_item: dict[str, Any], verification: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "action_request_id": work_item.get("action_request_id"),
+        "target_match_id": work_item.get("match_id"),
+        "payload_hash": work_item.get("payload_hash"),
+        "precondition_hash": work_item.get("precondition_hash"),
+        "autonomous_audit_binding": work_item.get("autonomous_audit_binding"),
+        "pre_action_observation_id": work_item.get("pre_action_observation_id"),
+        "result_status": "succeeded",
+        "staged_text_verified": True,
+        "staged_text_verification": verification,
+        "evidence": {
+            "verification": "Stage mode verified the payload text in the input box and did not send.",
+            "sent": False,
         },
     }
 
@@ -1628,6 +1703,7 @@ def _load_app_profile(app_id: str) -> dict[str, Any]:
 def _host_instructions(profile: dict[str, Any], work_item_type: str) -> dict[str, Any]:
     key = {
         "scan_message_list": "message_list_observation",
+        "observe_current_thread": "thread_observation",
         "open_thread": "thread_observation",
         "send_message": "stage_send_verification",
     }.get(work_item_type, "known_gui_pitfalls")

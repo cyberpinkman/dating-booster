@@ -14,7 +14,7 @@ from dating_boost.core.memory.ingest import store_observation_with_memory
 from dating_boost.core.memory.proposals import extract_proposals
 from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.core.memory.retrieval import build_memory_context
-from dating_boost.core.memory.review_queue import ReviewQueueRepository
+from dating_boost.core.memory.review_queue import ReviewQueueRepository, review_item_display
 from dating_boost.core.models import Divergence, ReplyMode
 from dating_boost.core.planner import PlannerRepository, planner_context_items
 from dating_boost.core.production_store import payload_digest
@@ -196,8 +196,16 @@ class AutomationRepository:
     def latest_report(self) -> dict[str, Any]:
         path = self._latest_machine_report_path()
         if path is None:
+            session = self._load_session_or_none()
+            if session and session.get("status") == "active":
+                return {
+                    "schema_version": 1,
+                    "status": "ok",
+                    "machine_report_path": None,
+                    "machine_report": self._active_machine_report(session),
+                }
             return {"schema_version": 1, "status": "not_found"}
-        report = self._storage.read_json(path, expected_schema_version=1)
+        report = _report_with_memory_display(self._storage.read_json(path, expected_schema_version=1))
         return {
             "schema_version": 1,
             "status": "ok",
@@ -206,11 +214,39 @@ class AutomationRepository:
         }
 
     def latest_human_report(self) -> str:
-        path = Path("automation") / "reports" / "human_latest.md"
-        absolute = (self._storage.root / path).resolve()
-        if not absolute.exists():
-            raise FileNotFoundError(path)
-        return absolute.read_text(encoding="utf-8").rstrip()
+        latest = self.latest_report()
+        if latest.get("status") == "ok" and isinstance(latest.get("machine_report"), dict):
+            return _human_report(latest["machine_report"]).rstrip()
+        raise FileNotFoundError(Path("automation") / "reports" / "machine_latest.json")
+
+    def _active_machine_report(self, session: dict[str, Any]) -> dict[str, Any]:
+        states = self.load_states()
+        ledger = self.load_ledger()
+        user_readiness = UserDisclosureRepository(self.root).readiness(mode="autonomous")
+        review_repo = ReviewQueueRepository(self.root)
+        pending_items = review_repo.load_items(session_id=session["session_id"], status="pending")
+        memory_review = {
+            "required": len(pending_items) > 0,
+            "pending_count": len(pending_items),
+            "items": [item.to_dict() for item in pending_items],
+            "accept_command_template": "memory review decide --data-dir DIR --accept {review_item_id}",
+            "reject_command_template": "memory review decide --data-dir DIR --reject {review_item_id}",
+        }
+        return {
+            "schema_version": 1,
+            "session_id": session["session_id"],
+            "authorization_id": session.get("authorization_id"),
+            "started_at": session.get("started_at"),
+            "stopped_at": None,
+            "report_status": "active",
+            "summary": _build_summary(states, ledger, user_readiness),
+            "user_profile_readiness": user_readiness,
+            "memory_review": memory_review,
+            "states": states,
+            "conversation_plans": self._planner_plans(states),
+            "appointment_ledger": ledger,
+            "next_priority_queue": _next_priority_queue(states),
+        }
 
     def load_states(self) -> list[dict[str, Any]]:
         return list(self._load_collection(Path("automation") / "states.json", "states")["states"])
@@ -308,6 +344,36 @@ class AutomationRepository:
                 state["state"] = "sent_waiting"
             elif event.get("result_status") == "failed":
                 state["state"] = "draft_ready"
+            state["updated_at"] = event.get("created_at", now)
+            changed = True
+        if changed:
+            self.save_states(states)
+
+    def apply_stage_result(self, event: dict[str, Any]) -> None:
+        action_request_id = event.get("action_request_id")
+        if not action_request_id:
+            return
+        now = self._now()
+        states = self.load_states()
+        changed = False
+        for state in states:
+            if state.get("last_action_request_id") != action_request_id:
+                continue
+            mismatch = _stage_result_mismatch(event, state)
+            if mismatch:
+                state["last_stage_result_event_id"] = event["event_id"]
+                state["last_stage_result_error"] = mismatch
+                state["updated_at"] = event.get("created_at", now)
+                changed = True
+                continue
+            state["last_stage_result_event_id"] = event["event_id"]
+            state.pop("last_stage_result_error", None)
+            if event.get("result_status") == "succeeded":
+                state["state"] = "staged_pending_user"
+            elif event.get("result_status") == "failed":
+                state["state"] = "draft_ready"
+            else:
+                state["state"] = "stage_needs_verification"
             state["updated_at"] = event.get("created_at", now)
             changed = True
         if changed:
@@ -1270,6 +1336,16 @@ def _action_result_mismatch(event: dict[str, Any], state: dict[str, Any]) -> str
     return None
 
 
+def _stage_result_mismatch(event: dict[str, Any], state: dict[str, Any]) -> str | None:
+    if event.get("target_match_id") != state.get("match_id"):
+        return "target_match_id_mismatch"
+    if event.get("payload_hash") != state.get("last_outbound_payload_hash"):
+        return "payload_hash_mismatch"
+    if event.get("pre_action_observation_id") != state.get("last_pre_action_observation_id"):
+        return "pre_action_observation_id_mismatch"
+    return None
+
+
 def _prioritize_entries(
     entries: list[dict[str, Any]],
     *,
@@ -1436,6 +1512,7 @@ def _build_summary(
         "match_count": len(states),
         "new_match_count": sum(1 for state in states if state.get("candidate_type") == "new_match_candidate"),
         "action_request_count": sum(1 for state in states if state.get("state") == "send_requested"),
+        "staged_pending_user_count": sum(1 for state in states if state.get("state") == "staged_pending_user"),
         "waiting_count": sum(1 for state in states if state.get("state") in {"sent_waiting", "waiting_for_match"}),
         "nudge_count": sum(1 for state in states if state.get("state") == "nudge_scheduled"),
         "handoff_count": sum(1 for state in states if state.get("state") == "appointment_handoff"),
@@ -1459,6 +1536,7 @@ def _next_priority_queue(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "needs_reply": 1,
         "needs_thread_scan": 2,
         "nudge_scheduled": 3,
+        "staged_pending_user": 4,
         "sent_waiting": 4,
     }
     items = [
@@ -1474,7 +1552,27 @@ def _next_priority_queue(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: (item["priority"], str(item["match_id"])))
 
 
+def _report_with_memory_display(report: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(report)
+    memory_review = normalized.get("memory_review")
+    if not isinstance(memory_review, dict):
+        return normalized
+    review = dict(memory_review)
+    items: list[dict[str, Any]] = []
+    for item in review.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        enriched = dict(item)
+        if not isinstance(enriched.get("display"), dict):
+            enriched["display"] = review_item_display(enriched)
+        items.append(enriched)
+    review["items"] = items
+    normalized["memory_review"] = review
+    return normalized
+
+
 def _human_report(report: dict[str, Any]) -> str:
+    report = _report_with_memory_display(report)
     summary = report["summary"]
     states = list(report.get("states", []))
     plans = list(report.get("conversation_plans", []))
@@ -1491,6 +1589,7 @@ def _human_report(report: dict[str, Any]) -> str:
         f"- Matches tracked: {summary['match_count']}",
         f"- New matches: {summary['new_match_count']}",
         f"- Send requests pending: {summary['action_request_count']}",
+        f"- Staged drafts pending user: {summary.get('staged_pending_user_count', 0)}",
         f"- Waiting: {summary['waiting_count']}",
         f"- Nudge scheduled: {summary['nudge_count']}",
         f"- Handoffs: {summary['handoff_count']}",
@@ -1591,19 +1690,16 @@ def _human_report(report: dict[str, Any]) -> str:
     lines.extend(["", "## Memory Suggestions", ""])
     if pending_items:
         for item in pending_items:
-            proposal = item.get("proposal", {})
+            display = item.get("display") if isinstance(item.get("display"), dict) else {}
             lines.append(
-                f"- id={item.get('review_item_id')} "
-                f"match={item.get('match_id')} "
-                f"predicate={proposal.get('predicate')} "
-                f"value={proposal.get('value')} "
-                f"source={item.get('source')} "
-                f"risk={item.get('risk')} "
-                f"confidence={proposal.get('confidence')}"
+                f"- id={item.get('review_item_id')} | "
+                f"{display.get('summary') or '可能要记住一条新的聊天线索。'} "
+                f"({display.get('accept_label') or '接受'} / {display.get('reject_label') or '拒绝'})"
             )
         lines.append("")
-        lines.append("To accept: memory review decide --data-dir DIR --accept <id>")
-        lines.append("To reject: memory review decide --data-dir DIR --reject <id>")
+        lines.append("接受或拒绝时仍使用上面的 id。")
+        lines.append("To accept: memory review decide --data-dir DIR --accept <id> --confirm memory-review:<session_id>")
+        lines.append("To reject: memory review decide --data-dir DIR --reject <id> --confirm memory-review:<session_id>")
     else:
         lines.append("- none")
     lines.append("")
@@ -1618,6 +1714,10 @@ def _state_next_host_action(state: dict[str, Any]) -> str:
         return "author_or_review_draft"
     if state_name == "send_requested":
         return "verify_or_record_pending_send"
+    if state_name == "staged_pending_user":
+        return "wait_for_user_send_confirmation"
+    if state_name == "stage_needs_verification":
+        return "verify_staged_text"
     if state_name == "appointment_handoff":
         return "user_takeover"
     if state_name == "nudge_scheduled":

@@ -6,9 +6,9 @@ policy, and audit tools. They do not replace the repository specs.
 ## Startup
 
 1. Choose a data directory, usually `.local/dating-boost`.
-2. Run `python3 scripts/doctor.py --json --data-dir .local/dating-boost`.
-3. If doctor returns `needs_bootstrap`, run `python3 scripts/bootstrap_cli.py`, then run doctor again.
-4. Run `dating-boost skill doctor --package skill-package.json --data-dir .local/dating-boost --json` when debugging package compatibility from the CLI.
+2. Run `dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json`.
+3. If doctor returns `needs_bootstrap` and you are running from the installed skill directory, run the package-relative `python3 scripts/bootstrap_cli.py`, then run doctor again.
+4. Run the same `dating-boost skill doctor` command when debugging package compatibility from the CLI.
 5. Run `dating-boost data doctor --data-dir .local/dating-boost --json`.
 6. If the data doctor reports `needs_migration`, run `dating-boost data migrate --data-dir .local/dating-boost --json`.
 7. Run `dating-boost capabilities --json --data-dir .local/dating-boost`.
@@ -207,7 +207,7 @@ the draft to the macOS clipboard and sends `Cmd+V` to the current WeChat input
 focus. Stage mode does not press Enter or click Send. Prefer `--text-file` so
 private draft text is not written into shell history or process arguments. Real
 staging must include `--data-dir` so the global safety pause can block paste.
-Use it only after the draft has passed `workflow draft` or `policy check-draft`.
+Use it only after the draft has passed `policy check-draft`.
 
 For explicitly authorized fully managed sends, use `managed-session` or
 `dating-boost-host-loop run --app-id <app> --send-mode live
@@ -264,21 +264,7 @@ questions.
 
 Use this when the user wants a reply suggestion for a known match.
 
-Preferred runner path:
-
-1. Convert visible profile/chat context into the observation contract.
-   Use `observation-authoring.md` when converting screen content to JSON.
-2. Read `drafting-framework.md` and choose the conversation move.
-3. Generate the draft in the host agent using the expanded draft contract.
-4. Apply `naturalness-checklist.md` as an internal QA step; revise AI-sounding Chinese before using the draft.
-5. Save the observation JSON and draft JSON locally.
-6. Run `dating-boost workflow draft --data-dir .local/dating-boost --observation observation.json --draft draft.json --mode adaptive`.
-7. Add `--feedback-label accepted --draft-id DRAFT_ID` only when the user has accepted or rated the draft.
-8. If the workflow returns `blocked`, do not show or paste the blocked draft.
-9. If the workflow returns `ok`, show only the final draft to the user or paste it when the user requested paste.
-   Do not list checklist results unless the user explicitly asks for explanation, critique, review, or debug output.
-
-Lower-level fallback path:
+Required path:
 
 1. Convert visible profile/chat context into the observation contract.
    Use `observation-authoring.md` when converting screen content to JSON.
@@ -336,6 +322,9 @@ high-risk experiment.
 6. Take a fresh post-action observation.
 7. Record the action with `dating-boost action record-result --data-dir .local/dating-boost --input action_result.json`.
 8. Use `result_status: "unknown"` when post-action verification is inconclusive.
+9. If an action or stage audit event was wrong, append a correction with
+   `dating-boost action record-correction --data-dir .local/dating-boost --input correction.json`;
+   never rewrite audit history in place.
 
 ### iPhone Mirroring Send Execution
 

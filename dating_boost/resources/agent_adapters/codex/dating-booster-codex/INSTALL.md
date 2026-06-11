@@ -81,9 +81,9 @@ so the generated artifacts remain inspectable after the script exits.
 
 The smoke test runs capability discovery, profile initialization, observation
 ingest, match lookup, context build, host-draft policy check, skill-package
-compatibility checks, data doctor/migration/export, action-result audit, and feedback recording. The preferred
-manual workflow uses `dating-boost workflow draft` to combine observation
-ingest, context build, host-draft policy check, and optional feedback recording.
+compatibility checks, data doctor/migration/export, action-result audit, and feedback recording. The manual
+workflow keeps observation ingest, context build, host-draft policy check, and
+optional feedback recording as explicit CLI steps.
 It does not open Tinder, use iPhone Mirroring, send messages, or call an LLM.
 
 For real Tinder stage-mode private smoke, read
@@ -115,7 +115,9 @@ verification artifacts.
 2. Ask the user to confirm that Codex may process visible dating app content.
 3. Convert visible profile/chat content into the observation contract in
    `references/observation-authoring.md`.
-4. Draft in the host agent and save the draft JSON.
-5. Run `dating-boost workflow draft --data-dir .local/dating-boost --observation observation.json --draft draft.json --mode adaptive`.
-6. Paste or send only according to the user's chosen experiment mode.
-7. Record post-action evidence with `dating-boost action record-result`.
+4. Run `dating-boost memory ingest-observation --data-dir .local/dating-boost --input observation.json`.
+5. Run `dating-boost context build --data-dir .local/dating-boost --match-id MATCH_ID --mode adaptive` and save the context JSON.
+6. Draft in the host agent and save the draft JSON.
+7. Run `dating-boost policy check-draft --input draft.json --context context.json`.
+8. Paste or send only according to the user's chosen experiment mode.
+9. Record stage-only evidence with `dating-boost operator record-stage-result`, or live-send post-action evidence with `dating-boost action record-result`.

@@ -47,8 +47,7 @@ so stale visible bubbles do not become the primary reply hook.
 
 ## Doctor Output
 
-Use this shape from `python3 scripts/doctor.py --json --data-dir .local/dating-boost`
-or `dating-boost skill doctor`.
+Use this shape from `dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json`.
 
 ```json
 {
@@ -158,43 +157,37 @@ Use this shape with `dating-boost policy check-draft`.
 }
 ```
 
-## Workflow Draft Output
+## Stage Result Input
 
-Use this shape from `dating-boost workflow draft` as the preferred host-agent
-result contract. The command returns `status: "blocked"` and omits `draft` when
-policy blocks the draft.
+Use this shape with `dating-boost operator record-stage-result` when a draft was
+placed into the app input box but not sent. Stage-only audit is separate from
+live-send action audit and must not be written through `action record-result`.
 
 ```json
 {
-  "schema_version": 1,
-  "workflow": "draft",
-  "status": "ok",
-  "match_id": "match_alex",
-  "observation_id": "obs_chat_001",
-  "mode": "adaptive",
-  "steps": {
-    "capabilities": "ok",
-    "ingest_observation": "ok",
-    "context_build": "ok",
-    "policy_check_draft": "ok",
-    "feedback_record": "skipped"
+  "action_request_id": "action_request_match_alex_123",
+  "target_match_id": "match_alex",
+  "payload_hash": "sha256:example",
+  "pre_action_observation_id": "obs_before_stage",
+  "result_status": "succeeded",
+  "stage_attempt_status": "completed",
+  "staged_text_verification": {
+    "status": "needs_user_verification",
+    "evidence": {
+      "placeholder_disappeared": true,
+      "character_count": 18
+    }
   },
-  "context_pack": {
-    "reply_mode": "adaptive",
-    "items": []
-  },
-  "policy": {
-    "allowed": true,
-    "severity": "low",
-    "reason": "Draft content passed MVP policy checks.",
-    "requires_user_confirmation": false
-  },
-  "draft": {
-    "best_reply": "That sounds fun."
-  },
-  "feedback": null
+  "evidence": {
+    "stage_mode": true,
+    "user_must_review_before_send": true
+  }
 }
 ```
+
+Allowed `result_status` values are `succeeded`, `failed`, and `unknown`. For
+stage-only, `succeeded` means the staging operation completed and the draft is
+pending user review; it does not mean the message was sent.
 
 ## Action Result Input
 
@@ -217,6 +210,24 @@ Use this shape with `dating-boost action record-result`.
 
 Allowed `result_status` values are `succeeded`, `failed`, and `unknown`. Only use
 `succeeded` when post-action evidence confirms the expected state.
+
+## Action Correction Input
+
+Use this shape with `dating-boost action record-correction` to append a
+correction for a previously recorded action or stage event. Never rewrite audit
+history in place.
+
+```json
+{
+  "corrects_event_id": "action_result_123",
+  "corrected_status": "unknown",
+  "reason": "Earlier audit treated a staged draft as a sent message.",
+  "evidence": {
+    "source": "fresh review",
+    "replacement_event": "stage_result_456"
+  }
+}
+```
 
 ## Automation Scan Batch Input
 

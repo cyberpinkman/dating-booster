@@ -45,6 +45,41 @@ class ReviewItemSerializationTests(unittest.TestCase):
         self.assertEqual(original.source, restored.source)
         self.assertEqual(original.risk, restored.risk)
 
+    def test_to_dict_adds_user_readable_display_for_known_thread_cues(self):
+        cases = {
+            "tashuo_permanent_chat_enabled": "她说已开启永久聊天，之后可以继续正常聊天。",
+            "match_latest_reply_low_investment": "对方最近回复信息量低，后续适合先轻松承接，不要马上推进邀约。",
+            "early_thread": "这段对话还在开场早期，适合先建立自然来回。",
+            "question gate skipped": "对方已跳过她说问答考验，可以直接正常开场聊天。",
+            "notification banner visible but not blocking input": "她说通知提示没有挡住输入框，可以继续正常回复。",
+            "bottom input toolbar present": "当前聊天输入区可用，可以继续起草回复。",
+            "ordinary conversation page": "当前是普通聊天页，不是飞行页或问答决策页。",
+        }
+
+        for value, summary in cases.items():
+            with self.subTest(value=value):
+                item = _make_item(proposal={"predicate": "thread_cue", "value": value})
+                display = item.to_dict()["display"]
+                self.assertEqual(display["summary"], summary)
+                self.assertEqual(display["accept_label"], "记住这条")
+                self.assertEqual(display["reject_label"], "不要记住")
+                self.assertNotIn("thread_cue", display["summary"])
+
+    def test_to_dict_unknown_display_fallback_does_not_expose_predicate_value_pair(self):
+        item = _make_item(
+            proposal={
+                "predicate": "custom_internal_predicate",
+                "subject": "Ada",
+                "value": "likes late coffee",
+            }
+        )
+        display = item.to_dict()["display"]
+
+        self.assertEqual(display["title"], "是否记入长期记忆：Ada")
+        self.assertIn("Ada", display["summary"])
+        self.assertIn("likes late coffee", display["summary"])
+        self.assertNotIn("custom_internal_predicate=likes late coffee", display["summary"])
+
     def test_from_dict_handles_none_fields(self):
         data = _make_item().to_dict()
         data["observation_id"] = None

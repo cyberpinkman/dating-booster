@@ -33,7 +33,9 @@ class ReviewItem:
         self.proposal = dict(self.proposal)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["display"] = review_item_display(data)
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ReviewItem:
@@ -134,3 +136,39 @@ class ReviewQueueRepository:
     def reject_dedupe_key_exists(self, dedupe_key: str) -> bool:
         items = self.load_items(status="rejected")
         return any(item.dedupe_key == dedupe_key for item in items)
+
+
+def review_item_display(item: dict[str, Any]) -> dict[str, str]:
+    proposal = item.get("proposal") if isinstance(item.get("proposal"), dict) else {}
+    predicate = str(proposal.get("predicate") or "")
+    value = str(proposal.get("value") or "")
+    subject = str(proposal.get("subject") or item.get("match_id") or "对方")
+    confidence = str(proposal.get("confidence") or "medium")
+    known_summaries = {
+        ("thread_cue", "tashuo_permanent_chat_enabled"): "她说已开启永久聊天，之后可以继续正常聊天。",
+        ("thread_cue", "match_latest_reply_low_investment"): "对方最近回复信息量低，后续适合先轻松承接，不要马上推进邀约。",
+        ("thread_cue", "early_thread"): "这段对话还在开场早期，适合先建立自然来回。",
+        ("thread_cue", "question gate skipped"): "对方已跳过她说问答考验，可以直接正常开场聊天。",
+        ("thread_cue", "bottom input toolbar present"): "当前聊天输入区可用，可以继续起草回复。",
+        ("thread_cue", "ordinary conversation page"): "当前是普通聊天页，不是飞行页或问答决策页。",
+        (
+            "thread_cue",
+            "notification banner visible but not blocking input",
+        ): "她说通知提示没有挡住输入框，可以继续正常回复。",
+    }
+    summary = known_summaries.get((predicate, value))
+    if summary is None:
+        readable_value = value.strip() or "一条线索"
+        summary = f"可能要记住：关于 {subject} 的一条线索：{readable_value}"
+    confidence_text = {
+        "high": "高",
+        "medium": "中",
+        "low": "低",
+    }.get(confidence, confidence)
+    return {
+        "title": f"是否记入长期记忆：{subject}",
+        "summary": summary,
+        "recommendation": f"如果这条信息符合你对 {subject} 的理解，就接受；如果不准确或不值得长期记住，就拒绝。置信度：{confidence_text}。",
+        "accept_label": "记住这条",
+        "reject_label": "不要记住",
+    }

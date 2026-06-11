@@ -11,7 +11,8 @@ from pathlib import Path
 import shutil
 
 from dating_boost.cli import main
-from dating_boost.host_loop import HostLoopCommandError, HostLoopSupervisor, _target_binding_for_work_item
+from dating_boost.host_loop import HostLoopCommandError, HostLoopSupervisor, _target_binding_for_work_item, _thread_template
+from dating_boost.perception.observations import AppObservation
 
 
 FIXTURE_DIR = Path("tests/fixtures/host_loop/tinder")
@@ -61,6 +62,50 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(payload["status"], "ok")
             self.assertEqual(auth_template["app_id"], "wechat")
             self.assertTrue((work_dir / "current_work_item.json").exists())
+
+    def test_thread_observation_template_uses_valid_source_type(self):
+        template = _thread_template(
+            {"candidate_key": "row_ada"},
+            {"app_id": "tashuo", "display_name": "她说", "native_gui_harness": {"backend": "mac_ios_app"}},
+        )
+        observation = template["observation"]
+        observation["observation_id"] = "obs_template_001"
+        observation["captured_at"] = "2026-06-11T12:00:00Z"
+        observation["page_confidence"] = "high"
+        observation["match_identity_hints"]["visible_name"] = "Ada"
+        observation["match_identity_hints"]["conversation_fingerprint"] = "ada-latest"
+        observation["conversation_observation"]["visible_messages"] = [
+            {"sender": "match", "text": "你好"}
+        ]
+
+        parsed = AppObservation.from_dict(observation)
+
+        self.assertEqual(parsed.source_type.value, "live_screenshot")
+
+    def test_cli_thread_observation_template_uses_valid_source_type(self):
+        exit_code, payload = self._run_cli([
+            "observation",
+            "template",
+            "--type",
+            "thread",
+            "--app-id",
+            "tashuo",
+            "--json",
+        ])
+        observation = payload["observation"]
+        observation["observation_id"] = "obs_template_cli_001"
+        observation["captured_at"] = "2026-06-11T12:00:00Z"
+        observation["page_confidence"] = "high"
+        observation["match_identity_hints"]["visible_name"] = "Ada"
+        observation["match_identity_hints"]["conversation_fingerprint"] = "ada-latest"
+        observation["conversation_observation"]["visible_messages"] = [
+            {"sender": "match", "text": "你好"}
+        ]
+
+        parsed = AppObservation.from_dict(observation)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(parsed.source_type.value, "live_screenshot")
 
     def test_unsupported_app_blocks_host_loop_doctor(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -186,8 +231,50 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertTrue((work_dir / "current_work_item.json").exists())
             work_item_id = payload["current_work_item"]["work_item_id"]
             self.assertTrue((work_dir / f"staged_verification.{work_item_id}.json").exists())
+            self.assertTrue((data_dir / "audit" / "stage_results.jsonl").exists())
             self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
-            self.assertIn("stage mode does not record action result", payload["stop_reason"])
+            self.assertTrue(payload["stage_results_recorded"])
+            stage_events = [
+                json.loads(line)
+                for line in (data_dir / "audit" / "stage_results.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(stage_events[0]["result_status"], "succeeded")
+            self.assertIn("without recording send result", payload["stop_reason"])
+
+    def test_fixture_host_loop_current_thread_start_does_not_return_to_message_list_before_staging(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            work_dir = root / "work"
+            fixture_dir = root / "fixture"
+            shutil.copytree(FIXTURE_DIR, fixture_dir)
+            shutil.copyfile(
+                fixture_dir / "threads" / "ada_1_preview_ada.json",
+                fixture_dir / "current_thread_observation.json",
+            )
+
+            payload = self._run_script(
+                "--fixture-host",
+                str(fixture_dir),
+                "--data-dir",
+                str(data_dir),
+                "--work-dir",
+                str(work_dir),
+                "--send-mode",
+                "stage",
+                "--max-steps",
+                "8",
+                "--json",
+            )
+
+            step_types = [step["work_item_type"] for step in payload["steps"]]
+            self.assertEqual(payload["status"], "staged_waiting_user_confirmation")
+            self.assertEqual(step_types[0], "observe_current_thread")
+            self.assertNotIn("scan_message_list", step_types)
+            self.assertNotIn("open_thread", step_types)
+            self.assertIn("send_message", step_types)
+            self.assertTrue((data_dir / "audit" / "stage_results.jsonl").exists())
+            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
 
     def test_fixture_host_loop_blocks_with_target_profile_required_when_thread_profile_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:

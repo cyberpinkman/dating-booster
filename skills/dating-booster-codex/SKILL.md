@@ -12,16 +12,17 @@ Use this skill when the user asks Codex to assist with dating-app workflows thro
 Before observing any dating app screen, screenshots, profile text, or conversation text, choose a local data directory for this workflow. Prefer `.local/dating-boost` unless the user gives another path. Then run this package's doctor:
 
 ```bash
-python3 scripts/doctor.py --json --data-dir .local/dating-boost
+dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json
 ```
 
-If doctor returns `needs_bootstrap`, run:
+If doctor returns `needs_bootstrap` and you are running from the installed skill
+directory, run the package-relative bootstrap script:
 
 ```bash
 python3 scripts/bootstrap_cli.py
 ```
 
-Then run `python3 scripts/doctor.py --json --data-dir .local/dating-boost` again. Continue only when doctor returns `status: ok`.
+Then run `dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json` again. Continue only when doctor returns `status: ok`.
 
 Finally run:
 
@@ -86,7 +87,7 @@ Allowed by default:
 
 - Observe visible screen content after the capability check and user intent are clear.
 - Summarize profile or conversation context.
-- Run `dating-boost workflow draft` after the host agent has authored an observation JSON and draft JSON.
+- Run `dating-boost memory ingest-observation`, `dating-boost context build`, and `dating-boost policy check-draft` after the host agent has authored an observation JSON and draft JSON.
 - Run `dating-boost automation session` commands after the user has explicitly authorized a host-orchestrated automation session.
 - Build context with `dating-boost context build` when debugging or using lower-level commands.
 - Draft replies inside the host agent.
@@ -164,20 +165,22 @@ reason to hand off.
 
 ## Workflow
 
-1. Run `python3 scripts/doctor.py --json --data-dir .local/dating-boost`; bootstrap with `python3 scripts/bootstrap_cli.py` only if doctor says `needs_bootstrap`.
+1. Run `dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json`; bootstrap with the package-relative `python3 scripts/bootstrap_cli.py` only if doctor says `needs_bootstrap`.
 2. Run `dating-boost capabilities --json --data-dir .local/dating-boost` and verify compatibility against `skill-package.json`.
 3. For managed/autonomous work, run `dating-boost user readiness --data-dir .local/dating-boost --mode autonomous --json`; stop if it returns `needs_user_profile`.
 4. Convert visible screen content to an observation JSON using `references/observation-authoring.md`.
 5. When working toward a long-term goal, author a `planner_assessment` and run `dating-boost planner update`.
 6. Read `references/drafting-framework.md`, then generate the draft JSON in Codex using the visible profile/chat context and planner recommendation.
 7. Before using the draft, silently apply `references/naturalness-checklist.md` and revise anything that reads like AI-written Chinese.
-8. Run `dating-boost workflow draft --data-dir .local/dating-boost --observation observation.json --draft draft.json --mode adaptive`.
-9. If the workflow returns `blocked`, do not show or paste the blocked draft.
-10. If the workflow returns `ok`, show only the final draft or paste it when the user requested paste.
-11. For any high-risk action, run `dating-boost policy check-action` and ask for explicit confirmation.
-12. After the host executes an action, perform post-action verification from a fresh observation.
-13. Record the result with `dating-boost action record-result`.
-14. Record user feedback with `dating-boost feedback record` when useful.
+8. Run `dating-boost memory ingest-observation --data-dir .local/dating-boost --input observation.json`.
+9. Run `dating-boost context build --data-dir .local/dating-boost --match-id MATCH_ID --mode adaptive` and save the returned context JSON.
+10. Run `dating-boost policy check-draft --input draft.json --context context.json`.
+11. If policy returns `blocked`, do not show or paste the blocked draft.
+12. If policy returns `allowed`, show only the final draft or paste it when the user requested paste.
+13. For any high-risk action, run `dating-boost policy check-action` and ask for explicit confirmation.
+14. After the host executes a live action, perform post-action verification from a fresh observation.
+15. Record live-send results with `dating-boost action record-result`; record stage-only results with `dating-boost operator record-stage-result`.
+16. Record user feedback with `dating-boost feedback record` when useful.
 
 ## iPhone Mirroring Input
 

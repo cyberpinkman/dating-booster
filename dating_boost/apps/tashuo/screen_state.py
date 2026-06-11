@@ -18,6 +18,7 @@ TASHUO_FOREGROUND_STATES = {
     "tashuo_flight",
     "tashuo_chat_list",
     "tashuo_activity",
+    "tashuo_search",
     "tashuo_conversation",
     "tashuo_question_gate",
     "tashuo_profile",
@@ -42,6 +43,10 @@ def classify_tashuo_screen_text(text: str) -> str:
     top_level_state = _classify_tashuo_top_level_text(normalized)
     if top_level_state is not None:
         return top_level_state
+    if _looks_like_tashuo_flight_text(normalized):
+        return "tashuo_flight"
+    if _looks_like_tashuo_search_text(normalized):
+        return "tashuo_search"
     if _looks_like_tashuo_question_gate_text(normalized):
         return "tashuo_question_gate"
     if _looks_like_tashuo_conversation_text(normalized):
@@ -90,16 +95,17 @@ def combine_tashuo_screen_states(
     if text_state not in {"unknown", "tashuo_unknown"}:
         return text_state
     normalized = normalize_text(text)
+    if _looks_like_tashuo_flight_text(normalized):
+        return "tashuo_flight"
+    if (
+        visual_state in {"tashuo_recommend", "tashuo_flight", "tashuo_chat_list", "tashuo_self_profile"}
+        and visual_bottom_nav_present
+    ):
+        return visual_state
     if visual_bottom_nav_present:
         top_level_state = _classify_tashuo_top_level_header_text(normalized)
         if top_level_state is not None:
             return top_level_state
-    if (
-        visual_state in {"tashuo_recommend", "tashuo_flight", "tashuo_chat_list", "tashuo_self_profile"}
-        and visual_bottom_nav_present
-        and _tashuo_top_level_nav_text_present(normalized)
-    ):
-        return visual_state
     if visual_state == "tashuo_conversation" and text_state in {"unknown", "tashuo_unknown"}:
         return "tashuo_conversation"
     return text_state
@@ -140,6 +146,7 @@ def tashuo_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
         "tashuo_flight": "flight",
         "tashuo_chat_list": "messages",
         "tashuo_activity": "activity",
+        "tashuo_search": "search",
         "tashuo_conversation": "conversation",
         "tashuo_question_gate": "question_gate",
         "tashuo_profile": "profile",
@@ -223,8 +230,20 @@ def _looks_like_tashuo_question_gate_text(normalized_text: str) -> bool:
     return question_markers and input_markers and "开启聊天" in normalized_text
 
 
+def _looks_like_tashuo_flight_text(normalized_text: str) -> bool:
+    return any(marker in normalized_text for marker in ("背上行囊", "偶遇新的朋友", "轻触屏幕", "马上开聊"))
+
+
+def _looks_like_tashuo_search_text(normalized_text: str) -> bool:
+    if "搜索" not in normalized_text:
+        return False
+    return any(marker in normalized_text for marker in ("取消", "上次聊天", "旧金山", "大学", "人喜欢"))
+
+
 def _looks_like_tashuo_conversation_text(normalized_text: str) -> bool:
     if _tashuo_top_level_nav_text_present(normalized_text) or _looks_like_tashuo_profile_text(normalized_text):
+        return False
+    if _looks_like_tashuo_flight_text(normalized_text):
         return False
     if _looks_like_tashuo_question_gate_text(normalized_text):
         return False
@@ -252,7 +271,7 @@ def _looks_like_tashuo_profile_text(normalized_text: str) -> bool:
 
 def _tashuo_message_input_marker_present(normalized_text: str) -> bool:
     english_input = bool(re.search(r"\bsend\b", normalized_text))
-    chinese_input = any(marker in normalized_text for marker in ("点击此处输入文字", "输入文字", "发消息"))
+    chinese_input = any(marker in normalized_text for marker in ("点击此处输入文字", "输入文字", "发消息", "发送"))
     return english_input or chinese_input
 
 

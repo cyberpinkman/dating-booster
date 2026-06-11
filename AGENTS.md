@@ -120,7 +120,6 @@ Host agent 起草，Dating Booster 做本地记忆、上下文和策略检查。
 ```bash
 dating-boost memory ingest-observation --data-dir .local/dating-boost --input observation.json
 dating-boost context build --data-dir .local/dating-boost --match-id <match_id> --mode adaptive > context.json
-dating-boost workflow draft --data-dir .local/dating-boost --observation observation.json --draft draft.json --mode adaptive
 dating-boost policy check-draft --input draft.json --context context.json
 ```
 

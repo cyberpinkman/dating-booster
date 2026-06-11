@@ -293,7 +293,9 @@ def main(argv: list[str] | None = None) -> int:
     support_record_parser.add_argument("--data-dir", required=True, type=Path)
     support_record_parser.add_argument("--session-id", required=True)
     support_record_parser.add_argument("--event-type", required=True)
-    support_record_parser.add_argument("--payload", required=True, type=Path)
+    support_payload_group = support_record_parser.add_mutually_exclusive_group(required=True)
+    support_payload_group.add_argument("--payload", type=Path, help="Path to a JSON payload file.")
+    support_payload_group.add_argument("--payload-json", help="Inline JSON object payload.")
     support_record_parser.add_argument("--sensitive", type=Path)
     support_record_parser.add_argument("--sensitive-kind")
     support_record_parser.add_argument("--json", action="store_true")
@@ -492,6 +494,7 @@ def main(argv: list[str] | None = None) -> int:
     memory_review_list_parser.add_argument("--status", default="pending")
     memory_review_list_parser.add_argument("--match-id", default=None)
     memory_review_list_parser.add_argument("--session-id", default=None)
+    memory_review_list_parser.add_argument("--json", action="store_true")
     memory_review_list_parser.set_defaults(handler=_handle_memory_review_list)
     memory_review_decide_parser = memory_review_subparsers.add_parser(
         "decide",
@@ -565,6 +568,13 @@ def main(argv: list[str] | None = None) -> int:
     action_record_parser.add_argument("--data-dir", required=True, type=Path)
     action_record_parser.add_argument("--input", required=True, type=Path)
     action_record_parser.set_defaults(handler=_handle_action_record_result)
+    action_correction_parser = action_subparsers.add_parser(
+        "record-correction",
+        help="Append a correction for a previous action or stage audit event.",
+    )
+    action_correction_parser.add_argument("--data-dir", required=True, type=Path)
+    action_correction_parser.add_argument("--input", required=True, type=Path)
+    action_correction_parser.set_defaults(handler=_handle_action_record_correction)
 
     feedback_parser = subparsers.add_parser("feedback", help="Append local feedback for a draft.")
     feedback_parser.add_argument("feedback_action", nargs="?", choices=["record"])
@@ -594,20 +604,6 @@ def main(argv: list[str] | None = None) -> int:
     replay_latest_parser.add_argument("--data-dir", required=True, type=Path)
     replay_latest_parser.add_argument("--format", choices=["json", "md"], default="json")
     replay_latest_parser.set_defaults(handler=_handle_replay_latest)
-
-    workflow_parser = subparsers.add_parser("workflow", help="Agent-native workflow runners.")
-    workflow_subparsers = workflow_parser.add_subparsers(dest="workflow_command", required=True)
-    workflow_draft_parser = workflow_subparsers.add_parser(
-        "draft",
-        help="Run the host-agent draft workflow without calling an LLM.",
-    )
-    workflow_draft_parser.add_argument("--data-dir", required=True, type=Path)
-    workflow_draft_parser.add_argument("--observation", required=True, type=Path)
-    workflow_draft_parser.add_argument("--draft", required=True, type=Path)
-    workflow_draft_parser.add_argument("--mode", required=True, choices=[mode.value for mode in ReplyMode])
-    workflow_draft_parser.add_argument("--feedback-label")
-    workflow_draft_parser.add_argument("--draft-id")
-    workflow_draft_parser.set_defaults(handler=_handle_workflow_draft)
 
     planner_parser = subparsers.add_parser("planner", help="Goal-oriented conversation planning commands.")
     planner_subparsers = planner_parser.add_subparsers(dest="planner_command", required=True)
@@ -782,6 +778,11 @@ def main(argv: list[str] | None = None) -> int:
     operator_session_start_parser = operator_session_subparsers.add_parser("start")
     operator_session_start_parser.add_argument("--data-dir", required=True, type=Path)
     operator_session_start_parser.add_argument("--authorization", required=True, type=Path)
+    operator_session_start_parser.add_argument(
+        "--initial-surface",
+        choices=["message-list", "current-thread"],
+        default="message-list",
+    )
     operator_session_start_parser.set_defaults(handler=_handle_operator_session_start)
 
     operator_next_parser = operator_subparsers.add_parser("next")
@@ -798,6 +799,11 @@ def main(argv: list[str] | None = None) -> int:
     operator_record_result_parser.add_argument("--input", required=True, type=Path)
     operator_record_result_parser.set_defaults(handler=_handle_operator_record_action_result)
 
+    operator_record_stage_parser = operator_subparsers.add_parser("record-stage-result")
+    operator_record_stage_parser.add_argument("--data-dir", required=True, type=Path)
+    operator_record_stage_parser.add_argument("--input", required=True, type=Path)
+    operator_record_stage_parser.set_defaults(handler=_handle_operator_record_stage_result)
+
     operator_stop_parser = operator_subparsers.add_parser("stop")
     operator_stop_parser.add_argument("--data-dir", required=True, type=Path)
     operator_stop_parser.set_defaults(handler=_handle_operator_stop)
@@ -810,6 +816,7 @@ def main(argv: list[str] | None = None) -> int:
     operator_report_latest_parser = operator_report_subparsers.add_parser("latest")
     operator_report_latest_parser.add_argument("--data-dir", required=True, type=Path)
     operator_report_latest_parser.add_argument("--format", choices=["json", "md"], default="json")
+    operator_report_latest_parser.add_argument("--json", action="store_const", const="json", dest="format")
     operator_report_latest_parser.set_defaults(handler=_handle_operator_report_latest)
 
     operator_get_state_parser = operator_subparsers.add_parser("get-state")
@@ -1190,10 +1197,13 @@ def _handle_support_session_stop(args: argparse.Namespace) -> int:
 
 def _handle_support_record_event(args: argparse.Namespace) -> int:
     sensitive = _read_json_object(args.sensitive) if args.sensitive is not None else None
+    event_payload = json.loads(args.payload_json) if args.payload_json is not None else _read_json_object(args.payload)
+    if not isinstance(event_payload, dict):
+        raise ValueError("--payload-json must decode to a JSON object")
     payload = SupportLogRepository(args.data_dir).record_event(
         session_id=args.session_id,
         event_type=args.event_type,
-        payload=_read_json_object(args.payload),
+        payload=event_payload,
         sensitive=sensitive,
         sensitive_kind=args.sensitive_kind,
     )
@@ -1659,7 +1669,16 @@ def _handle_user_readiness(args: argparse.Namespace) -> int:
 
 
 def _handle_import_observation(args: argparse.Namespace) -> int:
-    observation = load_observation(args.input)
+    try:
+        observation = load_observation(args.input)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        _print_json({
+            "schema_version": 1,
+            "status": "error",
+            "reason": "invalid_observation",
+            "message": str(exc),
+        })
+        return 2
     return _persist_observation(args.data_dir, observation)
 
 
@@ -2626,67 +2645,6 @@ def _handle_policy_check_draft(args: argparse.Namespace) -> int:
     return 0 if policy.allowed else 2
 
 
-def _handle_workflow_draft(args: argparse.Namespace) -> int:
-    reply_mode = ReplyMode(args.mode)
-    steps: dict[str, str] = {
-        "capabilities": "ok",
-    }
-    capabilities = build_capabilities(args.data_dir)
-
-    observation = load_observation(args.observation)
-    ingest = _store_observation(args.data_dir, observation)
-    steps["ingest_observation"] = "ok"
-
-    match_id = str(ingest["match_id"])
-    profile = JsonMemoryRepository(args.data_dir).load_user_profile()
-    latest_observation = ObservationRepository(args.data_dir).load_latest_observation(match_id)
-    context_pack = _build_mvp_context_pack(profile, match_id, reply_mode, latest_observation, args.data_dir)
-    steps["context_build"] = "ok"
-
-    draft = _draft_from_dict(_read_json_object(args.draft))
-    policy = evaluate_draft_content(draft, context_pack)
-    steps["policy_check_draft"] = "ok" if policy.allowed else "blocked"
-
-    payload: dict[str, Any] = {
-        "schema_version": 1,
-        "workflow": "draft",
-        "status": "ok" if policy.allowed else "blocked",
-        "data_dir": str(args.data_dir.resolve()),
-        "tool_version": capabilities["tool_version"],
-        "steps": steps,
-        "match_id": match_id,
-        "observation_id": observation.observation_id,
-        "identity_confidence": ingest["confidence"],
-        "requires_user_confirmation": ingest["requires_user_confirmation"],
-        "mode": reply_mode.value,
-        "context_pack": context_pack,
-        "policy": _policy_to_dict(policy),
-    }
-
-    if not policy.allowed:
-        payload["feedback"] = None
-        _print_json(payload)
-        return 2
-
-    payload["draft"] = _draft_to_dict(draft)
-    if args.feedback_label:
-        draft_id = args.draft_id or args.draft.stem
-        payload["feedback"] = _record_feedback(
-            data_dir=args.data_dir,
-            match_id=match_id,
-            draft_id=draft_id,
-            mode=reply_mode,
-            label=args.feedback_label,
-        )
-        steps["feedback_record"] = "ok"
-    else:
-        payload["feedback"] = None
-        steps["feedback_record"] = "skipped"
-
-    _print_json(payload)
-    return 0
-
-
 def _handle_planner_update(args: argparse.Namespace) -> int:
     observation = load_observation(args.observation)
     assessment = _read_json_object(args.assessment)
@@ -2750,6 +2708,35 @@ def _handle_action_record_result(args: argparse.Namespace) -> int:
             "action_request_id": event.get("action_request_id"),
             "result_status": event["result_status"],
             "path": "audit/action_results.jsonl",
+        }
+    )
+    return 0
+
+
+def _handle_action_record_correction(args: argparse.Namespace) -> int:
+    payload = _read_json_object(args.input)
+    try:
+        event = ActionAuditRepository(args.data_dir).append_correction(
+            payload,
+            created_at=MVP_TIMESTAMP,
+        )
+    except ValueError as exc:
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "error",
+                "reason": str(exc),
+            }
+        )
+        return 2
+
+    _print_json(
+        {
+            "schema_version": 1,
+            "status": "ok",
+            "event_id": event["event_id"],
+            "corrects_event_id": event.get("corrects_event_id"),
+            "path": "audit/action_corrections.jsonl",
         }
     )
     return 0
@@ -2975,7 +2962,14 @@ def _handle_managed_session_stop(args: argparse.Namespace) -> int:
 
 
 def _handle_operator_session_start(args: argparse.Namespace) -> int:
-    payload = OperatorRepository(args.data_dir).start_session(_read_json_object(args.authorization))
+    try:
+        payload = OperatorRepository(args.data_dir).start_session(
+            _read_json_object(args.authorization),
+            initial_surface=args.initial_surface,
+        )
+    except ValueError as exc:
+        _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})
+        return 2
     _print_json(payload)
     return 0 if payload.get("status") == "active" else 2
 
@@ -3024,6 +3018,16 @@ def _handle_operator_ingest_observation(args: argparse.Namespace) -> int:
 def _handle_operator_record_action_result(args: argparse.Namespace) -> int:
     try:
         payload = OperatorRepository(args.data_dir).record_action_result(_read_json_object(args.input))
+    except ValueError as exc:
+        _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})
+        return 2
+    _print_json(payload)
+    return 0
+
+
+def _handle_operator_record_stage_result(args: argparse.Namespace) -> int:
+    try:
+        payload = OperatorRepository(args.data_dir).record_stage_result(_read_json_object(args.input))
     except ValueError as exc:
         _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})
         return 2

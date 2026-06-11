@@ -39,8 +39,9 @@ class AgentNativeCliTests(unittest.TestCase):
             self.assertIsInstance(payload["git_commit"], str)
             self.assertEqual(payload["data_dir"], str(data_dir.resolve()))
             self.assertEqual(payload["schema_versions"]["action_result"], 1)
+            self.assertEqual(payload["schema_versions"]["stage_result"], 1)
+            self.assertEqual(payload["schema_versions"]["action_correction"], 1)
             self.assertEqual(payload["schema_versions"]["reply_draft"], 2)
-            self.assertEqual(payload["schema_versions"]["workflow_result"], 1)
             self.assertEqual(payload["schema_versions"]["user_disclosure_profile"], 1)
             self.assertEqual(payload["schema_versions"]["user_readiness"], 1)
             self.assertEqual(payload["schema_versions"]["planner_assessment"], 1)
@@ -64,7 +65,9 @@ class AgentNativeCliTests(unittest.TestCase):
             self.assertIn("confirmation validate", payload["supported_commands"])
             self.assertIn("support session start", payload["supported_commands"])
             self.assertIn("support bundle", payload["supported_commands"])
-            self.assertIn("workflow draft", payload["supported_commands"])
+            self.assertIn("action record-correction", payload["supported_commands"])
+            self.assertIn("operator record-stage-result", payload["supported_commands"])
+            self.assertNotIn("workflow draft", payload["supported_commands"])
             self.assertIn("planner update", payload["supported_commands"])
             self.assertIn("planner get", payload["supported_commands"])
             self.assertIn("planner recommend", payload["supported_commands"])
@@ -90,6 +93,8 @@ class AgentNativeCliTests(unittest.TestCase):
             self.assertTrue(payload["agent_native_capabilities"]["topic_lifecycle"])
             self.assertTrue(payload["agent_native_capabilities"]["soft_invite_probe"])
             self.assertTrue(payload["agent_native_capabilities"]["planner_report"])
+            self.assertTrue(payload["agent_native_capabilities"]["stage_only_audit"])
+            self.assertTrue(payload["agent_native_capabilities"]["action_correction_audit"])
             self.assertTrue(payload["agent_native_capabilities"]["self_disclosure_profile"])
             self.assertTrue(payload["agent_native_capabilities"]["low_investment_repair"])
             self.assertTrue(payload["agent_native_capabilities"]["tinder_profile_read_harness"])
@@ -353,6 +358,60 @@ class AgentNativeCliTests(unittest.TestCase):
                     self.assertEqual(exit_code, 2)
                     self.assertEqual(error_payload["status"], "error")
                     self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+
+    def test_action_record_correction_appends_without_rewriting_history(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            result_path = data_dir / "result.json"
+            correction_path = data_dir / "correction.json"
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "action_request_id": "action_request_stage_misrecorded",
+                        "action": "send_message",
+                        "target_match_id": "match_alex",
+                        "payload_hash": "sha256:stage-only",
+                        "pre_action_observation_id": "obs_before",
+                        "post_action_observation_id": "obs_after",
+                        "result_status": "succeeded",
+                        "evidence": {"verification": "legacy mistaken send audit"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self._run(["action", "record-result", "--data-dir", str(data_dir), "--input", str(result_path)])
+            original_events = (data_dir / "audit" / "action_results.jsonl").read_text(encoding="utf-8").splitlines()
+            correction_path.write_text(
+                json.dumps(
+                    {
+                        "corrects_event_id": "action_result_manual_001",
+                        "corrected_status": "unknown",
+                        "reason": "This was only staged, not sent.",
+                        "evidence": {"review": "fresh audit split stage-only from send"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code, payload, _ = self._run([
+                "action",
+                "record-correction",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(correction_path),
+            ])
+            current_events = (data_dir / "audit" / "action_results.jsonl").read_text(encoding="utf-8").splitlines()
+            corrections = [
+                json.loads(line)
+                for line in (data_dir / "audit" / "action_corrections.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(current_events, original_events)
+            self.assertEqual(corrections[0]["corrected_status"], "unknown")
+            self.assertEqual(corrections[0]["corrects_event_id"], "action_result_manual_001")
 
     def _run(self, argv):
         output = StringIO()

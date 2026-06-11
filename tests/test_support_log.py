@@ -210,6 +210,53 @@ class SupportLogTests(unittest.TestCase):
         self.assertIn("AI内测项目".encode("utf-8"), sensitive_joined)
         self.assertIn("公司项目排期".encode("utf-8"), sensitive_joined)
 
+    def test_support_record_event_accepts_inline_payload_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            start_exit, start_payload = self._run([
+                "support",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--host",
+                "codex",
+                "--app-id",
+                "tashuo",
+                "--json",
+            ])
+            session_id = start_payload["session_id"]
+
+            record_exit, record_payload = self._run([
+                "support",
+                "record-event",
+                "--data-dir",
+                str(data_dir),
+                "--session-id",
+                session_id,
+                "--event-type",
+                "operator_checkpoint",
+                "--payload-json",
+                '{"surface":"current-thread","status":"stage_pending"}',
+                "--json",
+            ])
+
+            self.assertEqual(start_exit, 0)
+            self.assertEqual(record_exit, 0)
+            self.assertEqual(record_payload["status"], "ok")
+            events = ProductionDataStore(data_dir).list_audit_events(
+                stream=f"support/{session_id}/events.jsonl"
+            )
+            checkpoint = [
+                event["payload"]
+                for event in events
+                if event["payload"]["event_type"] == "operator_checkpoint"
+            ][0]
+            self.assertEqual(checkpoint["payload"]["status"], "stage_pending")
+            self.assertEqual(checkpoint["payload"]["surface_character_count"], len("current-thread"))
+            self.assertIn("surface_hash", checkpoint["payload"])
+            self.assertNotIn("surface", checkpoint["payload"])
+
     def test_active_support_session_auto_logs_cli_command_boundaries(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

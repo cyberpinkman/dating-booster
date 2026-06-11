@@ -139,9 +139,10 @@ pollute a resumed run.
 - `send_message`: paste `payload_text`, verify it, and write
   `staged_verification.<work_item_id>.json`.
 
-In `stage` mode, do not click send after `staged_verification.<work_item_id>.json`; stop and
-ask the user whether to send. In `live` mode, click send only after staged text
-verification succeeds, then observe the sent bubble and write
+In `stage` mode, do not click send after `staged_verification.<work_item_id>.json`;
+record the stage-only audit with `dating-boost operator record-stage-result`,
+then stop and ask the user whether to send. In `live` mode, click send only
+after staged text verification succeeds, then observe the sent bubble and write
 `action_result.<work_item_id>.json`.
 
 For compatibility with older examples, the unscoped names

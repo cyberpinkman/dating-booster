@@ -106,6 +106,33 @@ class MemoryObservationExtractionTests(unittest.TestCase):
             self.assertFalse((data_dir / "matches" / "identity_confirmations.jsonl").exists())
             self.assertFalse((data_dir / "matches").exists())
 
+    def test_memory_ingest_observation_reports_invalid_source_type_as_json_error(self):
+        payload = load_observation(FIXTURE_PATH).to_dict()
+        payload["source_type"] = "manual_host_loop"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            observation_path = Path(temp_dir) / "bad_source.json"
+            observation_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = main([
+                    "memory",
+                    "ingest-observation",
+                    "--data-dir",
+                    str(data_dir),
+                    "--input",
+                    str(observation_path),
+                ])
+
+            result = json.loads(output.getvalue())
+
+            self.assertNotEqual(exit_code, 0)
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["reason"], "invalid_observation")
+            self.assertIn("manual_host_loop", result["message"])
+
     def test_shared_ingest_rejects_invalid_resolved_match_id_before_memory_writes(self):
         observation = load_observation(FIXTURE_PATH)
 
@@ -1072,6 +1099,50 @@ class MemoryUpdateMatchTests(unittest.TestCase):
 
 
 class MemoryReviewCliTests(unittest.TestCase):
+    def test_review_list_includes_display_without_breaking_machine_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            item = ReviewItem(
+                review_item_id="rev_tashuo_permanent_001",
+                session_id="session_tashuo",
+                match_id="match_tashuo",
+                observation_id="obs_tashuo_001",
+                proposal={
+                    "predicate": "thread_cue",
+                    "value": "tashuo_permanent_chat_enabled",
+                    "scope": "conversation",
+                    "fact_type": "inference",
+                    "confidence": "medium",
+                    "evidence_text": "Visible thread cue.",
+                    "subject": "她说对话",
+                },
+                status="pending",
+                created_at="2026-06-07T00:00:00Z",
+                reported_at=None,
+                reviewed_at=None,
+                dedupe_key="dedupe_tashuo_permanent_001",
+                source="deterministic",
+                risk="low",
+            )
+            ReviewQueueRepository(data_dir).enqueue(item)
+
+            exit_code, payload, text = self._run([
+                "memory",
+                "review",
+                "list",
+                "--data-dir",
+                str(data_dir),
+                "--json",
+            ])
+            listed = payload["items"][0]
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(listed["review_item_id"], "rev_tashuo_permanent_001")
+            self.assertEqual(listed["proposal"]["predicate"], "thread_cue")
+            self.assertEqual(listed["proposal"]["value"], "tashuo_permanent_chat_enabled")
+            self.assertEqual(listed["display"]["summary"], "她说已开启永久聊天，之后可以继续正常聊天。")
+            self.assertIn("display", text)
+
     def test_review_decide_requires_manual_confirm_for_legacy_blank_session_item(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir)

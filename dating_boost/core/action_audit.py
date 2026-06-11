@@ -10,8 +10,13 @@ from dating_boost.policy import Action
 
 
 ACTION_RESULT_SCHEMA_VERSION = 1
+ACTION_CORRECTION_SCHEMA_VERSION = 1
+STAGE_RESULT_SCHEMA_VERSION = 1
 ACTION_RESULTS_PATH = Path("audit") / "action_results.jsonl"
+ACTION_CORRECTIONS_PATH = Path("audit") / "action_corrections.jsonl"
+STAGE_RESULTS_PATH = Path("audit") / "stage_results.jsonl"
 RESULT_STATUSES = {"succeeded", "failed", "unknown"}
+STAGE_RESULT_STATUSES = {"succeeded", "failed", "unknown"}
 REQUIRED_ACTION_RESULT_FIELDS = (
     "action",
     "target_match_id",
@@ -36,6 +41,22 @@ class ActionAuditRepository:
         self._storage.append_jsonl(ACTION_RESULTS_PATH, event)
         return event
 
+    def append_stage_result(self, payload: dict[str, Any], *, created_at: str) -> dict[str, Any]:
+        event = validate_stage_result(payload, created_at=created_at)
+        duplicate = self._find_duplicate_stage_result(event)
+        if duplicate is not None:
+            return {**duplicate, "duplicate": True}
+        self._storage.append_jsonl(STAGE_RESULTS_PATH, event)
+        return event
+
+    def append_correction(self, payload: dict[str, Any], *, created_at: str) -> dict[str, Any]:
+        event = validate_action_correction(payload, created_at=created_at)
+        duplicate = self._find_duplicate_correction(event)
+        if duplicate is not None:
+            return {**duplicate, "duplicate": True}
+        self._storage.append_jsonl(ACTION_CORRECTIONS_PATH, event)
+        return event
+
     def _find_duplicate_action_result(self, event: dict[str, Any]) -> dict[str, Any] | None:
         for existing in self._storage.read_jsonl(ACTION_RESULTS_PATH):
             if (
@@ -44,6 +65,27 @@ class ActionAuditRepository:
                 and existing.get("target_match_id") == event.get("target_match_id")
                 and existing.get("payload_hash") == event.get("payload_hash")
                 and existing.get("result_status") == event.get("result_status")
+            ):
+                return existing
+        return None
+
+    def _find_duplicate_stage_result(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        for existing in self._storage.read_jsonl(STAGE_RESULTS_PATH):
+            if (
+                existing.get("action_request_id") == event.get("action_request_id")
+                and existing.get("target_match_id") == event.get("target_match_id")
+                and existing.get("payload_hash") == event.get("payload_hash")
+                and existing.get("result_status") == event.get("result_status")
+            ):
+                return existing
+        return None
+
+    def _find_duplicate_correction(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        for existing in self._storage.read_jsonl(ACTION_CORRECTIONS_PATH):
+            if (
+                existing.get("corrects_event_id") == event.get("corrects_event_id")
+                and existing.get("corrected_status") == event.get("corrected_status")
+                and existing.get("reason") == event.get("reason")
             ):
                 return existing
         return None
@@ -99,6 +141,82 @@ def validate_action_result(payload: dict[str, Any], *, created_at: str) -> dict[
     }
 
 
+def validate_stage_result(payload: dict[str, Any], *, created_at: str) -> dict[str, Any]:
+    required = (
+        "action_request_id",
+        "target_match_id",
+        "payload_hash",
+        "pre_action_observation_id",
+        "result_status",
+        "evidence",
+    )
+    missing = [field for field in required if field not in payload]
+    if missing:
+        raise ValueError(f"stage result missing required field(s): {', '.join(missing)}")
+
+    action_request_id = _require_non_empty_string(payload["action_request_id"], "action_request_id")
+    target_match_id = _require_non_empty_string(payload["target_match_id"], "target_match_id")
+    payload_hash = _require_non_empty_string(payload["payload_hash"], "payload_hash")
+    pre_observation_id = _require_nullable_string(
+        payload["pre_action_observation_id"],
+        "pre_action_observation_id",
+    )
+    result_status = _require_stage_result_status(payload["result_status"])
+    evidence = _require_evidence(payload["evidence"])
+    base_event = {
+        "schema_version": STAGE_RESULT_SCHEMA_VERSION,
+        "event_type": "stage_result",
+        "action_request_id": action_request_id,
+        "target_match_id": target_match_id,
+        "payload_hash": payload_hash,
+        "pre_action_observation_id": pre_observation_id,
+        "result_status": result_status,
+        "evidence": evidence,
+        "created_at": created_at,
+    }
+    for optional_field in (
+        "precondition_hash",
+        "autonomous_audit_binding",
+        "staged_text_verified",
+        "staged_text_verification",
+        "stage_attempt_status",
+        "screenshot_ref",
+    ):
+        if optional_field in payload:
+            base_event[optional_field] = payload[optional_field]
+    return {
+        "event_id": f"stage_result_{_event_digest(base_event)}",
+        **base_event,
+    }
+
+
+def validate_action_correction(payload: dict[str, Any], *, created_at: str) -> dict[str, Any]:
+    required = ("corrects_event_id", "corrected_status", "reason", "evidence")
+    missing = [field for field in required if field not in payload]
+    if missing:
+        raise ValueError(f"action correction missing required field(s): {', '.join(missing)}")
+    corrects_event_id = _require_non_empty_string(payload["corrects_event_id"], "corrects_event_id")
+    corrected_status = _require_non_empty_string(payload["corrected_status"], "corrected_status")
+    reason = _require_non_empty_string(payload["reason"], "reason")
+    evidence = _require_evidence(payload["evidence"])
+    base_event = {
+        "schema_version": ACTION_CORRECTION_SCHEMA_VERSION,
+        "event_type": "action_correction",
+        "corrects_event_id": corrects_event_id,
+        "corrected_status": corrected_status,
+        "reason": reason,
+        "evidence": evidence,
+        "created_at": created_at,
+    }
+    for optional_field in ("action_request_id", "target_match_id", "payload_hash", "source_event_path"):
+        if optional_field in payload:
+            base_event[optional_field] = payload[optional_field]
+    return {
+        "event_id": f"action_correction_{_event_digest(base_event)}",
+        **base_event,
+    }
+
+
 def _require_action(value: Any) -> str:
     action = _require_non_empty_string(value, "action")
     try:
@@ -111,6 +229,13 @@ def _require_action(value: Any) -> str:
 def _require_result_status(value: Any) -> str:
     status = _require_non_empty_string(value, "result_status")
     if status not in RESULT_STATUSES:
+        raise ValueError("result_status must be one of: succeeded, failed, unknown")
+    return status
+
+
+def _require_stage_result_status(value: Any) -> str:
+    status = _require_non_empty_string(value, "result_status")
+    if status not in STAGE_RESULT_STATUSES:
         raise ValueError("result_status must be one of: succeeded, failed, unknown")
     return status
 

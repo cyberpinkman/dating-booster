@@ -1183,6 +1183,24 @@ class ProductionDataStore:
         return {"status": "ok", "storage_backend": "sqlite"}
 
     def _blocked_doctor(self, reason: str) -> dict[str, Any]:
+        encryption = self._cipher.status_without_creating_key()
+        remediation = None
+        if reason == "payload_decryption_failed":
+            remediation = {
+                "summary": "Encrypted payloads exist but could not be decrypted with the current local key.",
+                "likely_causes": [
+                    "missing_keychain_key",
+                    "key_id_mismatch",
+                    "wrong_recovery_passphrase_or_unrestored_backup",
+                    "corrupted_encrypted_payload",
+                ],
+                "next_steps": [
+                    "Run data unlock with the correct recovery passphrase if this data came from backup.",
+                    "Verify this data directory belongs to the current macOS user/keychain.",
+                    "If the key was rotated, restore or rekey from a valid backup.",
+                    "Do not run migration or delete commands until the key issue is resolved.",
+                ],
+            }
         return {
             "schema_version": DATA_STORE_SCHEMA_VERSION,
             "status": "blocked",
@@ -1191,12 +1209,13 @@ class ProductionDataStore:
             "db_path": str(self.db_path),
             "schema_versions": _schema_versions(),
             "encryption": {
-                "status": "unknown",
-                "provider": self._cipher.provider.provider_name,
-                "key_id": None,
+                "status": "ok" if encryption.enabled else "missing_key",
+                "provider": encryption.provider,
+                "key_id": encryption.key_id,
                 "encrypted_payload_schema_version": ENCRYPTED_PAYLOAD_SCHEMA_VERSION,
                 "keychain_binding_schema_version": KEYCHAIN_BINDING_SCHEMA_VERSION,
             },
+            "remediation": remediation,
             "checks": {
                 "sqlite_db_exists": self.db_path.exists(),
                 "schema_ok": False,

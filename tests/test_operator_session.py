@@ -38,8 +38,10 @@ class OperatorSessionTests(unittest.TestCase):
             self.assertIn("operator next", payload["supported_commands"])
             self.assertIn("operator ingest-observation", payload["supported_commands"])
             self.assertIn("operator record-action-result", payload["supported_commands"])
+            self.assertIn("operator record-stage-result", payload["supported_commands"])
             self.assertTrue(payload["agent_native_capabilities"]["operator_session"])
             self.assertTrue(payload["agent_native_capabilities"]["goal_oriented_operator"])
+            self.assertTrue(payload["agent_native_capabilities"]["stage_only_audit"])
 
     def test_operator_guides_host_from_list_scan_to_verified_send(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -166,6 +168,178 @@ class OperatorSessionTests(unittest.TestCase):
             ])
             self.assertEqual(next_after_result_exit, 0)
             self.assertEqual(next_after_result["work_item"]["work_item_type"], "scan_message_list")
+
+    def test_current_thread_session_ingests_thread_without_message_list_and_records_stage_result(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            start_exit, start_payload, _ = self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+                "--initial-surface",
+                "current-thread",
+            ])
+            first_next_exit, first_next, _ = self._run([
+                "operator",
+                "next",
+                "--data-dir",
+                str(data_dir),
+            ])
+            thread_path = Path(temp_dir) / "current_thread.json"
+            thread_payload = _thread_observation("row_ada")
+            thread_payload.pop("candidate_key")
+            self._write_json(thread_path, thread_payload)
+            ingest_exit, ingest_payload, _ = self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(thread_path),
+            ])
+            send_exit, send_payload, _ = self._run([
+                "operator",
+                "next",
+                "--data-dir",
+                str(data_dir),
+            ])
+            repeat_exit, repeat_payload, _ = self._run([
+                "operator",
+                "next",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+            self.assertEqual(start_exit, 0)
+            self.assertEqual(start_payload["initial_surface"], "current-thread")
+            self.assertEqual(first_next_exit, 0)
+            self.assertEqual(first_next["work_item"]["work_item_type"], "observe_current_thread")
+            self.assertEqual(ingest_exit, 0)
+            self.assertEqual(ingest_payload["status"], "ok")
+            self.assertTrue(ingest_payload["candidate_key"].startswith("current_thread_"))
+            self.assertEqual(send_exit, 0)
+            self.assertEqual(send_payload["work_item"]["work_item_type"], "send_message")
+            self.assertNotEqual(send_payload["work_item"].get("candidate_key"), "row_ada")
+            self.assertEqual(repeat_exit, 0)
+            self.assertEqual(repeat_payload["work_item"]["work_item_type"], "send_message")
+
+            work_item = send_payload["work_item"]
+            stage_result_path = Path(temp_dir) / "stage_result.json"
+            self._write_json(
+                stage_result_path,
+                {
+                    "action_request_id": work_item["action_request_id"],
+                    "target_match_id": work_item["match_id"],
+                    "payload_hash": work_item["payload_hash"],
+                    "pre_action_observation_id": work_item["pre_action_observation_id"],
+                    "result_status": "succeeded",
+                    "stage_attempt_status": "completed",
+                    "staged_text_verification": {
+                        "status": "verified",
+                        "evidence": {"method": "fixture staged text exact match"},
+                    },
+                    "evidence": {"stage_mode": True, "user_must_review_before_send": True},
+                },
+            )
+            stage_exit, stage_payload, _ = self._run([
+                "operator",
+                "record-stage-result",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(stage_result_path),
+            ])
+            states_exit, states_payload, _ = self._run([
+                "operator",
+                "get-state",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+            self.assertEqual(stage_exit, 0)
+            self.assertEqual(stage_payload["status"], "ok")
+            self.assertEqual(stage_payload["path"], "audit/stage_results.jsonl")
+            self.assertTrue((data_dir / "audit" / "stage_results.jsonl").exists())
+            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+            self.assertEqual(states_exit, 0)
+            states = states_payload["automation"]["states"]
+            self.assertEqual(states[0]["state"], "staged_pending_user")
+            self.assertEqual(states[0]["last_stage_result_event_id"], stage_payload["event_id"])
+
+    def test_current_thread_target_profile_supplement_does_not_require_message_list(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+                "--initial-surface",
+                "current-thread",
+            ])
+            self._run(["operator", "next", "--data-dir", str(data_dir)])
+            missing_profile = _thread_observation("row_ada")
+            missing_profile["candidate_key"] = "current_ada"
+            missing_profile["observation"]["profile_observation"] = {
+                "profile_text": "",
+                "photo_cues": [],
+                "hook_candidates": [],
+                "review_status": "missing",
+                "evidence": "Profile was not opened before drafting.",
+            }
+            missing_path = Path(temp_dir) / "missing_profile_thread.json"
+            self._write_json(missing_path, missing_profile)
+            self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(missing_path),
+            ])
+
+            blocked_exit, blocked_payload, _ = self._run([
+                "operator",
+                "next",
+                "--data-dir",
+                str(data_dir),
+            ])
+            supplemented = _thread_observation("row_ada")
+            supplemented["candidate_key"] = "current_ada"
+            supplement_path = Path(temp_dir) / "supplemented_thread.json"
+            self._write_json(supplement_path, supplemented)
+            ingest_exit, ingest_payload, _ = self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(supplement_path),
+            ])
+            send_exit, send_payload, _ = self._run([
+                "operator",
+                "next",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+            self.assertEqual(blocked_exit, 0)
+            self.assertEqual(blocked_payload["work_item"]["work_item_type"], "blocked")
+            self.assertEqual(blocked_payload["work_item"]["reason"], "target_profile_required")
+            self.assertEqual(ingest_exit, 0)
+            self.assertEqual(ingest_payload["status"], "ok")
+            self.assertEqual(send_exit, 0)
+            self.assertEqual(send_payload["work_item"]["work_item_type"], "send_message")
+            self.assertEqual(send_payload["work_item"]["candidate_key"], "current_ada")
 
     def test_operator_drains_multiple_send_requests_from_work_queue(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -375,6 +549,194 @@ class OperatorSessionTests(unittest.TestCase):
             self.assertEqual(report_exit, 0)
             self.assertEqual(report_payload["status"], "ok")
             self.assertEqual(report_payload["operator_session"]["status"], "stopped")
+
+    def test_operator_report_latest_works_for_active_session_before_stop(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+                "--initial-surface",
+                "current-thread",
+            ])
+
+            report_exit, report_payload, _ = self._run([
+                "operator",
+                "report",
+                "latest",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+            self.assertEqual(report_exit, 0)
+            self.assertEqual(report_payload["status"], "ok")
+            self.assertEqual(report_payload["operator_session"]["status"], "active")
+            self.assertEqual(report_payload["automation_report"]["report_status"], "active")
+
+    def test_operator_human_report_renders_memory_suggestions_for_users(self):
+        from dating_boost.core.memory.review_queue import ReviewItem, ReviewQueueRepository
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            start_exit, start_payload, _ = self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            self.assertEqual(start_exit, 0)
+            ReviewQueueRepository(data_dir).enqueue(
+                ReviewItem(
+                    review_item_id="rev_low_investment_001",
+                    session_id=start_payload["session_id"],
+                    match_id="match_ada",
+                    observation_id="obs_ada",
+                    proposal={
+                        "predicate": "thread_cue",
+                        "value": "match_latest_reply_low_investment",
+                        "subject": "Ada",
+                        "scope": "conversation",
+                        "fact_type": "inference",
+                        "confidence": "medium",
+                        "evidence_text": "Latest reply was short.",
+                    },
+                    status="pending",
+                    created_at="2026-06-07T00:00:00Z",
+                    reported_at=None,
+                    reviewed_at=None,
+                    dedupe_key="dedupe_low_investment_001",
+                    source="deterministic",
+                    risk="low",
+                )
+            )
+
+            output = StringIO()
+            with redirect_stdout(output):
+                exit_code = main([
+                    "operator",
+                    "report",
+                    "latest",
+                    "--data-dir",
+                    str(data_dir),
+                    "--format",
+                    "md",
+                ])
+            report_text = output.getvalue()
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn("对方最近回复信息量低", report_text)
+            self.assertIn("rev_low_investment_001", report_text)
+            self.assertIn("记住这条", report_text)
+            self.assertNotIn("match_latest_reply_low_investment", report_text)
+            self.assertNotIn("predicate", report_text)
+
+    def test_operator_report_latest_json_flag_and_md_regenerate_legacy_memory_display(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            report_dir = data_dir / "automation" / "reports"
+            report_dir.mkdir(parents=True)
+            machine_report = {
+                "schema_version": 1,
+                "session_id": "session_legacy",
+                "authorization_id": "auth_legacy",
+                "started_at": "2026-06-07T00:00:00Z",
+                "stopped_at": "2026-06-07T00:10:00Z",
+                "summary": {
+                    "match_count": 0,
+                    "new_match_count": 0,
+                    "action_request_count": 0,
+                    "waiting_count": 0,
+                    "nudge_count": 0,
+                    "handoff_count": 0,
+                    "slot_conflict_count": 0,
+                    "slot_count": 0,
+                    "user_profile_ready": True,
+                    "disclosure_usage_count": 0,
+                    "low_investment_repair_count": 0,
+                    "paused_due_to_low_reciprocity": 0,
+                },
+                "user_profile_readiness": {},
+                "memory_review": {
+                    "required": True,
+                    "pending_count": 1,
+                    "items": [
+                        {
+                            "review_item_id": "rev_legacy_ui_cue",
+                            "session_id": "session_legacy",
+                            "match_id": "match_ada",
+                            "observation_id": "obs_ada",
+                            "proposal": {
+                                "predicate": "thread_cue",
+                                "value": "ordinary conversation page",
+                                "subject": "Ada",
+                                "scope": "conversation",
+                                "fact_type": "visible_fact",
+                                "confidence": "medium",
+                                "evidence_text": "Legacy report item.",
+                            },
+                            "status": "pending",
+                            "created_at": "2026-06-07T00:00:00Z",
+                            "reported_at": None,
+                            "reviewed_at": None,
+                            "dedupe_key": "legacy_ui_cue",
+                            "source": "deterministic",
+                            "risk": "low",
+                        }
+                    ],
+                    "accept_command_template": "memory review decide --data-dir DIR --accept {review_item_id}",
+                    "reject_command_template": "memory review decide --data-dir DIR --reject {review_item_id}",
+                },
+                "states": [],
+                "conversation_plans": [],
+                "appointment_ledger": [],
+                "next_priority_queue": [],
+            }
+            (report_dir / "machine_latest.json").write_text(json.dumps(machine_report), encoding="utf-8")
+            (report_dir / "human_latest.md").write_text(
+                "## Memory Suggestions\n- id=rev_legacy_ui_cue predicate=thread_cue value=ordinary conversation page\n",
+                encoding="utf-8",
+            )
+
+            json_exit, json_payload, _ = self._run([
+                "operator",
+                "report",
+                "latest",
+                "--data-dir",
+                str(data_dir),
+                "--json",
+            ])
+            output = StringIO()
+            with redirect_stdout(output):
+                md_exit = main([
+                    "operator",
+                    "report",
+                    "latest",
+                    "--data-dir",
+                    str(data_dir),
+                    "--format",
+                    "md",
+                ])
+            md_text = output.getvalue()
+
+            self.assertEqual(json_exit, 0)
+            item = json_payload["automation_report"]["memory_review"]["items"][0]
+            self.assertIn("display", item)
+            self.assertEqual(item["display"]["summary"], "当前是普通聊天页，不是飞行页或问答决策页。")
+            self.assertEqual(md_exit, 0)
+            self.assertIn("当前是普通聊天页", md_text)
+            self.assertIn("rev_legacy_ui_cue", md_text)
+            self.assertNotIn("predicate=thread_cue", md_text)
+            self.assertNotIn("ordinary conversation page", md_text)
 
     def test_operator_start_clears_stale_pending_scan(self):
         with tempfile.TemporaryDirectory() as temp_dir:

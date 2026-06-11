@@ -178,6 +178,18 @@ class PublicProductionTests(unittest.TestCase):
             self.assertEqual(doctor_payload["status"], "blocked")
             self.assertEqual(doctor_payload["reason"], "payload_decryption_failed")
             self.assertFalse(doctor_payload["checks"]["encryption_ok"])
+            self.assertEqual(
+                doctor_payload["remediation"]["summary"],
+                "Encrypted payloads exist but could not be decrypted with the current local key.",
+            )
+            self.assertIn("missing_keychain_key", doctor_payload["remediation"]["likely_causes"])
+            self.assertIn("key_id_mismatch", doctor_payload["remediation"]["likely_causes"])
+            self.assertIn(
+                "wrong_recovery_passphrase_or_unrestored_backup",
+                doctor_payload["remediation"]["likely_causes"],
+            )
+            self.assertIn("corrupted_encrypted_payload", doctor_payload["remediation"]["likely_causes"])
+            self.assertTrue(doctor_payload["remediation"]["next_steps"])
             self.assertEqual(export_exit, 2)
             self.assertEqual(export_payload["status"], "blocked")
             self.assertEqual(export_payload["reason"], "payload_decryption_failed")

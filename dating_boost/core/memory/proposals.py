@@ -212,7 +212,7 @@ def _extract_conversation_proposals(
     }
     for cue in observation.conversation_observation.thread_cues:
         cue_text = str(cue).strip()
-        if not cue_text:
+        if not cue_text or _is_ui_only_thread_cue(cue_text):
             continue
         predicate = "thread_cue"
         n_key = normalized_fact_key(visible_name, predicate, {"app_id": app_id})
@@ -248,6 +248,14 @@ def _extract_conversation_proposals(
             )
         )
     return proposals
+
+
+def _is_ui_only_thread_cue(value: str) -> bool:
+    return value.strip().casefold() in {
+        "ordinary conversation page",
+        "bottom input toolbar present",
+        "notification banner visible but not blocking input",
+    }
 
 
 def _extract_inference_proposals(

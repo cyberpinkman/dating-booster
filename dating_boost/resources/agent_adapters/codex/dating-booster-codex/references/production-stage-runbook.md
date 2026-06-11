@@ -83,7 +83,8 @@ expose unrelated personal content, so keep the test boundary explicit.
    launch only if the plan is expected.
 3. Run `dating-boost harness wechat observe --output-dir .local/dating-boost-harness --json`.
 4. Convert visible post-boundary chat content to an observation JSON and run
-   `dating-boost workflow draft`.
+   `dating-boost memory ingest-observation`, `dating-boost context build`, and
+   `dating-boost policy check-draft`.
 5. If the draft passes policy, write the approved draft to a local text file
    and run `dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json`.
 6. Execute `stage-draft` only after confirming the active WeChat chat input is

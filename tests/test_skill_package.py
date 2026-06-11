@@ -45,7 +45,8 @@ class SkillPackageTests(unittest.TestCase):
         self.assertEqual(metadata["required_schema_versions"]["reply_draft"], 2)
         self.assertEqual(metadata["required_schema_versions"]["user_disclosure_profile"], 1)
         self.assertEqual(metadata["required_schema_versions"]["user_readiness"], 1)
-        self.assertEqual(metadata["required_schema_versions"]["workflow_result"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["stage_result"], 1)
+        self.assertEqual(metadata["required_schema_versions"]["action_correction"], 1)
         self.assertEqual(metadata["required_schema_versions"]["automation_session"], 1)
         self.assertEqual(metadata["required_schema_versions"]["appointment_ledger"], 1)
         self.assertEqual(metadata["required_schema_versions"]["progress_report"], 1)
@@ -109,9 +110,10 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("automation session", skill_text)
         self.assertIn("planner_assessment", skill_text)
         self.assertIn("goal-oriented", skill_text)
-        self.assertIn("doctor.py", skill_text)
+        self.assertIn("dating-boost skill doctor", skill_text)
+        self.assertNotIn("python3 scripts/doctor.py", skill_text)
         self.assertIn("bootstrap_cli.py", skill_text)
-        self.assertLess(skill_text.index("doctor.py"), skill_text.index("visible dating app content"))
+        self.assertLess(skill_text.index("dating-boost skill doctor"), skill_text.index("visible dating app content"))
         self.assertIn("host agent", skill_text)
         self.assertIn("drafting-framework.md", skill_text)
         self.assertIn("naturalness-checklist.md", skill_text)
@@ -204,13 +206,13 @@ class SkillPackageTests(unittest.TestCase):
             "policy check-draft",
             "policy check-action",
             "action record-result",
+            "action record-correction",
             "feedback record",
             "user interview template",
             "user ingest-profile",
             "user ingest-interview",
             "user disclosure-profile",
             "user readiness",
-            "workflow draft",
             "automation session start",
             "automation session step",
             "automation session stop",
@@ -226,6 +228,7 @@ class SkillPackageTests(unittest.TestCase):
             "operator next",
             "operator ingest-observation",
             "operator record-action-result",
+            "operator record-stage-result",
             "operator stop",
             "operator report latest",
             "dating-boost-host-loop",

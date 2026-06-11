@@ -89,6 +89,7 @@ TASHUO_QUESTION_GATE_POLICY: dict[str, Any] = {
 TASHUO_MESSAGE_INPUT_UNFOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.91}
 TASHUO_MESSAGE_INPUT_FOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.91}
 TASHUO_MAC_IOS_APP_MESSAGE_INPUT_FOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.85}
+TASHUO_MESSAGES_TAB_TAP_RATIO = {"x": 0.67, "y": 0.96}
 
 
 def install_tashuo_session_hooks(session: Any) -> None:
@@ -360,8 +361,15 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
             "ocr_used": False,
         },
         {
-            "intent": "tap_tashuo_messages_tab",
-            "tap_ratio": {"x": 0.62, "y": 0.92},
+            "intent": "click_tashuo_messages_tab_accessibility",
+            "radio_button_index": 3,
+            "risk": "navigation_only",
+            "conditional_on_active_tab_not": "messages",
+            "wait_after_seconds": 0.4,
+        },
+        {
+            "intent": "tap_tashuo_messages_tab_fallback",
+            "tap_ratio": _copy_tap_ratio(TASHUO_MESSAGES_TAB_TAP_RATIO),
             "risk": "navigation_only",
             "conditional_on_active_tab_not": "messages",
             "wait_after_seconds": 0.4,
@@ -449,18 +457,21 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
         })
         return payload
 
-    tap_result = session._click_ratio(window, planned_steps[3]["tap_ratio"])
-    executed_steps.append({**planned_steps[3], "result": tap_result})
-    if tap_result["status"] != "ok":
-        payload.update({"status": "blocked", "reason": tap_result.get("reason"), "executed_steps": executed_steps})
-        return payload
+    ax_result = _click_tashuo_messages_radio_button(session)
+    executed_steps.append({**planned_steps[3], "result": ax_result})
+    if ax_result["status"] != "ok":
+        tap_result = session._click_ratio(window, planned_steps[4]["tap_ratio"])
+        executed_steps.append({**planned_steps[4], "result": tap_result})
+        if tap_result["status"] != "ok":
+            payload.update({"status": "blocked", "reason": tap_result.get("reason"), "executed_steps": executed_steps})
+            return payload
     time.sleep(float(planned_steps[3]["wait_after_seconds"]))
 
     final_output = output_dir / "mac_ios_app.tashuo.prepare_message_page.messages.png" if output_dir is not None else None
     final_screen = _capture_tashuo_visual_screen(session, window, output=final_output)
     payload["screen"] = platform._redacted_screen(final_screen)
     payload["screen_state"] = final_screen.get("state", "unknown")
-    executed_steps.append({**planned_steps[4], "result": {"status": final_screen.get("status", "blocked")}})
+    executed_steps.append({**planned_steps[5], "result": {"status": final_screen.get("status", "blocked")}})
     payload["executed_steps"] = executed_steps
     if final_screen.get("status") != "ok":
         payload.update({"status": "blocked", "reason": final_screen.get("reason") or "tashuo_visual_capture_failed"})
@@ -643,8 +654,21 @@ def stage_tashuo_draft(
         if paste_result["status"] != "ok":
             payload.update({"status": "blocked", "reason": paste_result["reason"]})
             return payload
+        time.sleep(0.35)
         after = output_dir / "mac_ios_app.tashuo.after_stage_draft.png" if output_dir is not None else None
-        payload["verification"] = platform._redacted_screen(session.capture_window(output=after, window=window))
+        after_screen = session.capture_window(output=after, window=window)
+        time.sleep(0.45)
+        delayed_after = output_dir / "mac_ios_app.tashuo.after_stage_draft.delayed.png" if output_dir is not None else None
+        delayed_screen = session.capture_window(output=delayed_after, window=window)
+        payload["verification"] = platform._redacted_screen(delayed_screen)
+        payload["stage_attempt_status"] = "completed"
+        payload["staged_text_verification"] = _stage_only_tashuo_verification(
+            delayed_screen,
+            draft_text,
+            baseline_screen=doctor.get("screen") if isinstance(doctor.get("screen"), dict) else None,
+            first_screen=after_screen,
+        )
+        payload["staged_text_verified"] = payload["staged_text_verification"]["status"] == "verified"
         payload["next_host_action"] = "verify_staged_text_before_send"
     finally:
         payload["executed_steps"] = executed_steps
@@ -660,6 +684,23 @@ def stage_tashuo_draft(
                 "next_host_action": "verify_staged_text_and_clear_clipboard",
             })
     return payload
+
+
+def _click_tashuo_messages_radio_button(session: Any) -> dict[str, Any]:
+    process_name = str(getattr(session, "window_title", "") or "她说").replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        f'tell application "System Events" to tell process "{process_name}" '
+        'to click radio button 3 of window 1'
+    )
+    result = session.runner.run(["osascript", "-e", script])
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "tashuo_messages_radio_button_click_failed",
+            "stderr": platform._short(result.stderr),
+            "input_backend": "macos_accessibility",
+        }
+    return {"status": "ok", "input_backend": "macos_accessibility", "radio_button_index": 3}
 
 
 def send_tashuo_message(
@@ -1192,6 +1233,48 @@ def _verify_staged_tashuo_message(
     return {**result, "status": "ok"}
 
 
+def _stage_only_tashuo_verification(
+    screen: dict[str, Any],
+    expected_text: str,
+    *,
+    baseline_screen: dict[str, Any] | None = None,
+    first_screen: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    low_level = _verify_staged_tashuo_message(screen, expected_text, baseline_screen=baseline_screen)
+    observed_text = str(screen.get("text") or "")
+    baseline_text = str(baseline_screen.get("text") or "") if isinstance(baseline_screen, dict) else ""
+    first_text = str(first_screen.get("text") or "") if isinstance(first_screen, dict) else ""
+    placeholder_visible = _tashuo_input_placeholder_visible(observed_text)
+    baseline_placeholder_visible = _tashuo_input_placeholder_visible(baseline_text)
+    first_placeholder_visible = _tashuo_input_placeholder_visible(first_text)
+    evidence = {
+        **low_level,
+        "placeholder_visible": placeholder_visible,
+        "baseline_placeholder_visible": baseline_placeholder_visible,
+        "first_capture_placeholder_visible": first_placeholder_visible,
+        "screen_text_character_count": len(observed_text),
+        "baseline_text_character_count": len(baseline_text),
+        "first_screen_text_character_count": len(first_text),
+    }
+    if low_level.get("status") == "ok":
+        return {**evidence, "status": "verified"}
+    if low_level.get("status") == "blocked":
+        return {**evidence, "status": "failed"}
+    if placeholder_visible:
+        return {**evidence, "status": "failed", "reason": low_level.get("reason") or "staged_text_not_visible"}
+    if len(observed_text) > len(baseline_text) or (baseline_placeholder_visible and not placeholder_visible):
+        return {
+            **evidence,
+            "status": "needs_user_verification",
+            "reason": low_level.get("reason") or "cjk_exact_text_not_automatically_verified",
+        }
+    return {
+        **evidence,
+        "status": "needs_user_verification",
+        "reason": low_level.get("reason") or "stage_result_ambiguous",
+    }
+
+
 def _verify_tashuo_outbound_message(
     screen: dict[str, Any],
     expected_text: str,
@@ -1485,7 +1568,12 @@ def _tashuo_action_steps(action: str, **options: Any) -> list[dict[str, Any]]:
             _tashuo_bottom_tab_step("tap_tashuo_flight_tab", x=0.38, y=0.92, expected_state="tashuo_flight")
         ],
         "open-chats": [
-            _tashuo_bottom_tab_step("tap_tashuo_messages_tab", x=0.62, y=0.92, expected_state="tashuo_chat_list")
+            _tashuo_bottom_tab_step(
+                "tap_tashuo_messages_tab",
+                x=TASHUO_MESSAGES_TAB_TAP_RATIO["x"],
+                y=TASHUO_MESSAGES_TAB_TAP_RATIO["y"],
+                expected_state="tashuo_chat_list",
+            )
         ],
         "open-profile-tab": [
             _tashuo_bottom_tab_step("tap_tashuo_mine_tab", x=0.86, y=0.92, expected_state="tashuo_self_profile")

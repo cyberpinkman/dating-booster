@@ -59,7 +59,7 @@ def observation_template(observation_type: str = "thread", app_id: str = "tinder
             "planner_assessment": None,
             "observation": {
                 "observation_id": "TODO_OBSERVATION_ID",
-                "source_type": "manual_host_loop",
+                "source_type": "live_screenshot",
                 "app_id": app_id,
                 "captured_at": "TODO_ISO_TIMESTAMP",
                 "page_type": "chat_thread",

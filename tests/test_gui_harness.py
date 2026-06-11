@@ -19,6 +19,7 @@ from dating_boost.core.gui_harness import (
 from dating_boost.apps.tashuo.screen_state import (
     classify_tashuo_screen_image,
     classify_tashuo_screen_text,
+    combine_tashuo_screen_states,
     tashuo_layout_hints,
     tashuo_thread_cues_from_text,
 )
@@ -1041,6 +1042,7 @@ class GuiHarnessTests(unittest.TestCase):
             ocr_text=[
                 "Yasmine\n你好\n点击此处输入文字\n发送\n",
                 "Yasmine\n你好\n今晚聊得挺舒服的。\n发送\n",
+                "Yasmine\n你好\n今晚聊得挺舒服的。\n发送\n",
             ],
             window_name="她说",
         )
@@ -1050,6 +1052,9 @@ class GuiHarnessTests(unittest.TestCase):
 
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["harness_backend"], "mac_ios_app")
+        self.assertEqual(payload["stage_attempt_status"], "completed")
+        self.assertEqual(payload["staged_text_verification"]["status"], "verified")
+        self.assertTrue(payload["staged_text_verified"])
         self.assertEqual(payload["next_host_action"], "verify_staged_text_before_send")
         self.assertTrue(payload["clipboard_restored"])
         self.assertEqual(runner.clipboard_text, "previous clipboard")
@@ -1057,7 +1062,27 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(any(command[:2] == ["xcrun", "swift"] for command in runner.commands))
         self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
 
-    def test_tashuo_mac_ios_prepare_message_page_uses_visual_bottom_tab_without_ocr(self):
+    def test_tashuo_mac_ios_app_stage_draft_cjk_ambiguous_ocr_needs_user_verification_not_failed(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Yasmine\n你好\n点击此处输入文字\n发送\n",
+                "Yasmine\n你好\n发送\n",
+                "Yasmine\n你好\n发送\n",
+            ],
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.stage_draft("今晚聊得挺舒服的。", dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["stage_attempt_status"], "completed")
+        self.assertEqual(payload["staged_text_verification"]["status"], "needs_user_verification")
+        self.assertEqual(payload["staged_text_verification"]["reason"], "staged_text_not_verified")
+        self.assertFalse(payload["staged_text_verified"])
+        self.assertNotEqual(payload["staged_text_verification"]["status"], "failed")
+
+    def test_tashuo_mac_ios_prepare_message_page_uses_ax_radio_button_before_tap_fallback_without_ocr(self):
         runner = FakeRunner(
             ocr_text="OCR should not be used",
             window_name="她说",
@@ -1079,8 +1104,55 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["next_host_action"], "visual_plan_message_list")
         self.assertFalse(payload["ocr_used"])
         self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
-        self.assertIn("tap_tashuo_messages_tab", [step["intent"] for step in payload["executed_steps"]])
+        self.assertIn("click_tashuo_messages_tab_accessibility", [step["intent"] for step in payload["executed_steps"]])
+        self.assertNotIn("tap_tashuo_messages_tab_fallback", [step["intent"] for step in payload["executed_steps"]])
+        self.assertTrue(any("radio button 3" in " ".join(command) for command in runner.commands))
         self.assertNotIn("tap_tashuo_conversation_row", [step["intent"] for step in payload["executed_steps"]])
+
+    def test_tashuo_mac_ios_prepare_message_page_fallback_taps_real_messages_tab_when_ax_missing(self):
+        class AxMissingRunner(FakeRunner):
+            def run(self, command, *, input=None):
+                if command and command[0] == "osascript" and any("radio button" in item for item in command):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stderr='System Events got an error: Can’t get radio button 3.', returncode=1)
+                return super().run(command, input=input)
+
+        runner = AxMissingRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_recommend_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("prepare-message-page", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        fallback = next(step for step in payload["executed_steps"] if step["intent"] == "tap_tashuo_messages_tab_fallback")
+        self.assertAlmostEqual(fallback["tap_ratio"]["x"], 0.67)
+        self.assertAlmostEqual(fallback["tap_ratio"]["y"], 0.96)
+        self.assertEqual(payload["screen_state"], "tashuo_chat_list")
+
+    def test_tashuo_open_chats_accepts_visual_top_level_state_when_ocr_is_unknown(self):
+        runner = FakeRunner(
+            ocr_text="她说\n谁喜欢了我\n",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_recommend_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.run_action("open-chats", dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["executed_steps"][-1]["postcondition"]["screen_state"], "tashuo_chat_list")
+        self.assertIn("tap_tashuo_messages_tab", [step["intent"] for step in payload["executed_steps"]])
 
     def test_tashuo_launch_accepts_chinese_app_result_for_tashu_query(self):
         runner = FakeRunner(
@@ -1440,6 +1512,10 @@ class GuiHarnessTests(unittest.TestCase):
             "tashuo_flight",
         )
         self.assertEqual(
+            classify_tashuo_screen_text("搜索\n取消\n小药丸儿\n上次聊天\n旧金山\n大学"),
+            "tashuo_search",
+        )
+        self.assertEqual(
             classify_tashuo_screen_text("消息\n待回答 (0)\n全部消息\nYasmine\n不理解\n推荐\n飞行\n消息\n我的"),
             "tashuo_chat_list",
         )
@@ -1455,7 +1531,15 @@ class GuiHarnessTests(unittest.TestCase):
             "tashuo_self_profile",
         )
         self.assertEqual(
+            classify_tashuo_screen_text("小药丸儿 25\n资料\n关于我\n星座\n家乡\n我的日常"),
+            "tashuo_profile",
+        )
+        self.assertEqual(
             classify_tashuo_screen_text("Yasmine\n不理解\n点击此处输入文字\n"),
+            "tashuo_conversation",
+        )
+        self.assertEqual(
+            classify_tashuo_screen_text("Yasmine\n不理解\n今晚聊得挺舒服的。\n发送\n"),
             "tashuo_conversation",
         )
         self.assertEqual(
@@ -1482,6 +1566,19 @@ class GuiHarnessTests(unittest.TestCase):
             classify_tashuo_screen_text("Yasmine\n回答后\n点击此处输入文字\n发送\n"),
             "tashuo_conversation",
         )
+        self.assertEqual(
+            combine_tashuo_screen_states(
+                "unknown",
+                "tashuo_conversation",
+                "飞行\n背上行囊 偶遇新的朋友\n轻触屏幕 马上开聊\n",
+            ),
+            "tashuo_flight",
+        )
+        flight_hints = tashuo_layout_hints(
+            {"state": "tashuo_flight", "text": "飞行\n背上行囊 偶遇新的朋友\n马上开聊"}
+        )
+        self.assertFalse(flight_hints["conversation_present"])
+        self.assertFalse(flight_hints["draft_staging_supported"])
 
     def test_tashuo_thread_cues_capture_question_gate_skip_and_permanent_chat(self):
         skipped_text = "仿生人会爱上锅包肉吗\n她跳过了问答考验，快和她聊聊吧\nhey\n点击此处输入文字"

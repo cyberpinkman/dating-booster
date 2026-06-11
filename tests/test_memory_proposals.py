@@ -15,6 +15,7 @@ from dating_boost.core.memory.models import (
 from dating_boost.core.memory.proposals import classify_risk, extract_proposals
 from dating_boost.core.memory.review_queue import ReviewQueueRepository
 from dating_boost.perception.fixture_loader import load_observation
+from dating_boost.perception.observations import AppObservation
 
 FIXTURE_PATH = Path("tests/fixtures/intelligence/app_observation_chat.json")
 
@@ -113,6 +114,28 @@ class ExtractProposalsTests(unittest.TestCase):
         self.assertGreater(len(profile_proposals), 0)
         for item in profile_proposals:
             self.assertEqual(item.risk, "low")
+
+    def test_ui_only_thread_cues_are_not_memory_suggestions(self):
+        payload = self.observation.to_dict()
+        payload["conversation_observation"]["thread_cues"] = [
+            "ordinary conversation page",
+            "bottom input toolbar present",
+            "notification banner visible but not blocking input",
+            "question gate skipped",
+        ]
+        observation = AppObservation.from_dict(payload)
+
+        proposals = extract_proposals("match_alex", observation, self.projection)
+        thread_cues = [
+            item.proposal.get("value")
+            for item in proposals
+            if item.proposal.get("predicate") == "thread_cue"
+        ]
+
+        self.assertNotIn("ordinary conversation page", thread_cues)
+        self.assertNotIn("bottom input toolbar present", thread_cues)
+        self.assertNotIn("notification banner visible but not blocking input", thread_cues)
+        self.assertIn("question gate skipped", thread_cues)
 
     def test_dedupe_key_prevents_reenqueue(self):
         with tempfile.TemporaryDirectory() as tmpdir:

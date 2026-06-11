@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,8 @@ from dating_boost.core.scan_authoring import validate_scan_batch
 from dating_boost.core.storage import JsonStorage
 
 
-STICKY_WORK_ITEM_TYPES = {"scan_message_list", "open_thread", "send_message"}
+STICKY_WORK_ITEM_TYPES = {"scan_message_list", "observe_current_thread", "open_thread", "send_message"}
+INITIAL_SURFACES = {"message-list", "current-thread"}
 
 
 class OperatorRepository:
@@ -19,7 +21,9 @@ class OperatorRepository:
         self._storage = JsonStorage(root)
         self._automation = AutomationRepository(root, nudge_delay_minutes=nudge_delay_minutes)
 
-    def start_session(self, authorization: dict[str, Any]) -> dict[str, Any]:
+    def start_session(self, authorization: dict[str, Any], *, initial_surface: str = "message-list") -> dict[str, Any]:
+        if initial_surface not in INITIAL_SURFACES:
+            raise ValueError("initial_surface must be message-list or current-thread")
         automation_session = self._automation.start_session(authorization)
         if automation_session.get("status") != "active":
             return {
@@ -39,6 +43,8 @@ class OperatorRepository:
             "stopped_at": None,
             "current_work_item": None,
             "last_decision": None,
+            "initial_surface": initial_surface,
+            "initial_surface_consumed": False,
         }
         self._write_session(session)
         self._clear_current_work_file()
@@ -49,6 +55,7 @@ class OperatorRepository:
             "status": "active",
             "session_id": session["session_id"],
             "authorization_id": session["authorization_id"],
+            "initial_surface": initial_surface,
             "resumed_from_report": automation_session.get("resumed_from_report"),
         }
 
@@ -72,6 +79,17 @@ class OperatorRepository:
 
         scan_batch = self._load_pending_scan_batch()
         if scan_batch is None:
+            if session.get("initial_surface") == "current-thread" and not session.get("initial_surface_consumed"):
+                work_item = {
+                    "schema_version": 1,
+                    "work_item_id": f"work_observe_current_thread_{session['session_id']}",
+                    "work_item_type": "observe_current_thread",
+                    "reason": "operator_starts_from_current_thread",
+                    "instructions": "Observe the currently open dating app thread and ingest a thread observation without returning to the message list.",
+                }
+                session["initial_surface_consumed"] = True
+                self._set_current_work_item(session, work_item)
+                return self._work_payload(work_item)
             work_item = {
                 "schema_version": 1,
                 "work_item_id": f"work_scan_message_list_{session['session_id']}",
@@ -127,11 +145,12 @@ class OperatorRepository:
             }
 
         if observation_type == "thread":
-            candidate_key = _non_empty(payload.get("candidate_key"), "candidate_key")
+            candidate_key = _candidate_key_from_thread_payload(payload)
             scan_batch = self._load_pending_scan_batch()
             if scan_batch is None:
-                raise ValueError("message_list observation is required before thread observation")
+                scan_batch = _scan_batch_from_current_thread_payload(payload, session_id=session["session_id"], candidate_key=candidate_key)
             thread = {key: value for key, value in payload.items() if key not in {"schema_version", "observation_type"}}
+            thread["candidate_key"] = candidate_key
             existing = [
                 item
                 for item in scan_batch.get("thread_observations", [])
@@ -146,6 +165,10 @@ class OperatorRepository:
                 session,
                 expected_type="open_thread",
                 expected_candidate_key=candidate_key,
+            )
+            self._clear_current_work_item(
+                session,
+                expected_type="observe_current_thread",
             )
             return {
                 "schema_version": 1,
@@ -176,6 +199,26 @@ class OperatorRepository:
             "action_request_id": event.get("action_request_id"),
             "result_status": event["result_status"],
             "path": "audit/action_results.jsonl",
+        }
+
+    def record_stage_result(self, payload: dict[str, Any]) -> dict[str, Any]:
+        event = ActionAuditRepository(self.root).append_stage_result(payload, created_at=_now_iso())
+        self._automation.apply_stage_result(event)
+        session = self._load_session()
+        self._clear_current_work_item(
+            session,
+            expected_type="send_message",
+            expected_action_request_id=event.get("action_request_id"),
+        )
+        if not self._load_work_queue():
+            self._clear_pending_scan_file()
+        return {
+            "schema_version": 1,
+            "status": "ok",
+            "event_id": event["event_id"],
+            "action_request_id": event.get("action_request_id"),
+            "result_status": event["result_status"],
+            "path": "audit/stage_results.jsonl",
         }
 
     def _validate_confirmation_contract(self, payload: dict[str, Any]) -> None:
@@ -318,7 +361,13 @@ class OperatorRepository:
         self._write_work_queue(queue)
         if work_item.get("work_item_type") in STICKY_WORK_ITEM_TYPES:
             self._set_current_work_item(session, work_item)
-        elif not queue:
+        elif (
+            not queue
+            and not (
+                work_item.get("work_item_type") == "blocked"
+                and work_item.get("reason") == "target_profile_required"
+            )
+        ):
             self._clear_pending_scan_file()
         return work_item
 
@@ -470,6 +519,74 @@ def _work_items_from_decision(decision: dict[str, Any], session_id: str) -> list
             "reason": "no_eligible_operator_work",
         }
     ]
+
+
+def _candidate_key_from_thread_payload(payload: dict[str, Any]) -> str:
+    value = payload.get("candidate_key")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
+    hints = observation.get("match_identity_hints") if isinstance(observation.get("match_identity_hints"), dict) else {}
+    assessment = payload.get("assessment") if isinstance(payload.get("assessment"), dict) else {}
+    visible_name = str(hints.get("visible_name") or "current_thread").strip() or "current_thread"
+    fingerprint = str(
+        assessment.get("latest_inbound_fingerprint")
+        or hints.get("conversation_fingerprint")
+        or observation.get("observation_id")
+        or ""
+    ).strip()
+    raw = "|".join([visible_name, fingerprint])
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return f"current_thread_{digest}"
+
+
+def _scan_batch_from_current_thread_payload(
+    payload: dict[str, Any],
+    *,
+    session_id: str,
+    candidate_key: str,
+) -> dict[str, Any]:
+    observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
+    hints = observation.get("match_identity_hints") if isinstance(observation.get("match_identity_hints"), dict) else {}
+    assessment = payload.get("assessment") if isinstance(payload.get("assessment"), dict) else {}
+    visible_name = str(hints.get("visible_name") or candidate_key)
+    latest_preview = str(assessment.get("latest_match_message") or assessment.get("latest_user_message") or "")
+    scan_batch = {
+        "schema_version": 1,
+        "session_id": payload.get("session_id") or session_id,
+        "app_id": observation.get("app_id") or payload.get("app_id") or "unknown",
+        "captured_at": observation.get("captured_at") or payload.get("captured_at") or _now_iso(),
+        "scan_cursor": "current_thread",
+        "scan_budget": 1,
+        "provenance": payload.get("provenance") or {
+            "author": "host_agent",
+            "evidence": "Operator started from the already-open current thread.",
+        },
+        "message_list_snapshot": {
+            "entries": [
+                {
+                    "candidate_key": candidate_key,
+                    "visible_name": visible_name,
+                    "latest_preview": latest_preview,
+                    "latest_preview_hash": f"sha256:{hashlib.sha256(latest_preview.encode('utf-8')).hexdigest()}",
+                    "timestamp_cue": payload.get("timestamp_cue") or "current_thread",
+                    "unread_cue": payload.get("unread_cue") or "unknown",
+                    "position": 1,
+                    "identity_confidence": payload.get("identity_confidence") or "medium",
+                    "identity_evidence": payload.get("identity_evidence") or "Current thread observation.",
+                    "match_identity_hints": {
+                        "visible_name": visible_name,
+                        "profile_cues": list(hints.get("profile_cues") or []) if isinstance(hints.get("profile_cues"), list) else [],
+                        "conversation_fingerprint": hints.get("conversation_fingerprint") or assessment.get("latest_inbound_fingerprint") or "",
+                    },
+                    "evidence": "Synthetic single-entry scan batch from current thread.",
+                }
+            ]
+        },
+        "thread_observations": [],
+    }
+    _validate_or_raise(scan_batch)
+    return scan_batch
 
 
 def _validate_or_raise(scan_batch: dict[str, Any]) -> None:

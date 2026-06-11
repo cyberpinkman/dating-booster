@@ -105,7 +105,7 @@ export sensitive evidence; never use it as the default.
 2. Confirm the app id is listed in `supported_app_profiles`.
 3. For autonomous or managed work, run `dating-boost user readiness --data-dir .local/dating-boost --mode autonomous --json`; stop if it returns `needs_user_profile`.
 4. Convert visible screen content into an observation JSON with `dating-boost observation template`, `dating-boost observation validate`, and `dating-boost observation normalize`.
-5. Build context with `dating-boost context build` or run `dating-boost workflow draft` after the host agent authors the observation and draft JSON.
+5. Run `dating-boost memory ingest-observation`, build context with `dating-boost context build`, then check the authored draft with `dating-boost policy check-draft`.
 6. Check every draft through `dating-boost policy check-draft`.
 7. Check high-risk actions through `dating-boost policy check-action`.
 8. After any host action, verify from fresh screen evidence and record the result with `dating-boost action record-result`.
