@@ -17,9 +17,10 @@ every `app_profiles/*.json` file against the same required contract shape.
 - `bumble.json`: Bumble iPhone Mirroring launch, observation, profile/chat
   navigation, role-sensitive Opening Move observation/drafting policy, and
   explicitly authorized managed ordinary-chat live-send contract.
-- `tashuo.json`: TaShuo/她说 iPhone Mirroring launch, observation,
-  profile/chat navigation, role-sensitive question-gate observation/drafting
-  policy, and explicitly authorized managed ordinary-chat live-send contract.
+- `tashuo.json`: TaShuo/她说 iPhone Mirroring launch/observation,
+  mac-ios-app launch/observe/stage, profile/chat navigation, role-sensitive
+  question-gate observation/drafting policy, and explicitly authorized managed
+  ordinary-chat live-send contract.
 
 ## Required Fields
 

@@ -182,7 +182,7 @@ Bumble live send is limited to ordinary chat messages. Opening Move is role-sens
 
 ## TaShuo Harness
 
-Use the TaShuo harness for iPhone Mirroring work. Launch search should use `tashu` when Spotlight/Siri does not suggest the app for the full pinyin `tashuo`.
+Use the TaShuo harness for iPhone Mirroring work and the optional mac-ios-app runtime on Apple Silicon Macs. Launch search should use `tashu` when Spotlight/Siri does not suggest the app for the full pinyin `tashuo`.
 
 ```bash
 dating-boost harness doctor --app-id tashuo --json
@@ -193,10 +193,9 @@ dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options
 dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
 dating-boost harness tashuo action prepare-message-page --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
 dating-boost harness tashuo stage-draft --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
-dating-boost harness tashuo send-message --text-file tashuo-draft.txt --dry-run --json
 ```
 
-If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. The mac-ios-app runtime supports launch/observe/prepare-message-page/stage-draft and ordinary-chat managed live send. Live send must be executed by host-loop with `--managed-gui-send --harness-runtime mac-ios-app` or by a managed-session wait point resumed through that host-loop runtime, with structural target binding, exact staged-text verification, and post-send exact-text/input-cleared verification. Direct harness live send remains executor-internal and must not be used as an agent workaround.
+If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. If already in a thread, bind that thread with `current_thread_visual_identity` and a fresh visual anchor hash from the conversation screenshot; do not use message-list row position or header OCR as target-binding evidence. The mac-ios-app runtime supports launch/observe/prepare-message-page/stage-draft and ordinary-chat managed live send. Live send must be executed by host-loop with `--managed-gui-send --harness-runtime mac-ios-app` or by a managed-session wait point resumed through that host-loop runtime, with `current_thread_visual_identity` target binding, exact staged-text verification, and post-send exact-text/input-cleared verification. Direct harness live send remains executor-internal and must not be used as an agent workaround.
 
 TaShuo question-gate behaves like Bumble Opening Move: the user decides female-side question/skip/accept choices; male-side replies may be drafted for user confirmation, but autonomous question-gate sending is not supported.
 

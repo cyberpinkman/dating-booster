@@ -66,13 +66,16 @@ Rules:
 ## App Support Profile Axis
 
 Runtime app profiles are only for apps Dating Booster can actually support.
-Bumble and TaShuo have graduated to iPhone Mirroring navigation plus opt-in
+Bumble has graduated to iPhone Mirroring navigation plus opt-in managed
+ordinary chat send. TaShuo supports the iPhone Mirroring path and, on Apple
+Silicon Macs, the optional mac-ios-app runtime for launch/observe/stage plus
 managed ordinary chat send. Roadmap candidates such as Hinge and other
 mainstream dating apps stay in planning docs until the path is testable.
 
-runtime app profile 只用于已经可支持的 app。Bumble 和她说已进入 iPhone
-Mirroring 导航和授权托管普通聊天发送支持；Hinge 以及其他主流 dating app 在测试路径
-明确前只作为 roadmap candidate，不进入 capabilities。
+runtime app profile 只用于已经可支持的 app。Bumble 已进入 iPhone Mirroring
+导航和授权托管普通聊天发送支持；她说支持 iPhone Mirroring 路径，并在 Apple
+Silicon Mac 上支持可选 mac-ios-app runtime 的 launch/observe/stage 和托管普通聊天发送；
+Hinge 以及其他主流 dating app 在测试路径明确前只作为 roadmap candidate，不进入 capabilities。
 
 Support levels:
 
@@ -82,7 +85,8 @@ Support levels:
   verification.
 - `managed_live_send`: send is still blocked by default and only allowed through
   explicit authorization, policy-checked action request, target-specific
-  binding, exact staged-text OCR verification, and post-action verification.
+  binding, runtime-supported exact staged-text verification, and post-action
+  verification.
 
 Implementation rules:
 

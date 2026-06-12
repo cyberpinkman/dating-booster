@@ -116,7 +116,6 @@ dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options
 dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
 dating-boost harness tashuo action prepare-message-page --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
 dating-boost harness tashuo stage-draft --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
-dating-boost harness tashuo send-message --text-file tashuo-draft.txt --dry-run --json
 dating-boost harness doctor --app-id wechat --window-title WeChat --json
 dating-boost harness screenshot --app-id wechat --window-title WeChat --output wechat.png --json
 dating-boost harness wechat launch --dry-run --json

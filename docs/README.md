@@ -75,7 +75,7 @@ host adapter。新增 host 时新增自己的 adapter，不修改已有 Claude C
 | Tinder | Host-loop, profile/chat navigation, observation, draft workflow, opt-in managed live send | iPhone Mirroring on macOS | Stage by default; managed send only with explicit authorization and verification |
 | WeChat / 微信 | App profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | Stage by default; managed send only with explicit authorization and verification |
 | Bumble | Host-loop, iPhone Mirroring launch/observation, profile/chat navigation, role-sensitive Opening Move observation/drafting policy, opt-in managed live send | iPhone Mirroring on macOS | Stage by default; managed ordinary chat send only with explicit authorization, target-specific binding, exact OCR verification, and post-send evidence |
-| TaShuo / 她说 | Host-loop, iPhone Mirroring launch/observation, profile/chat navigation, role-sensitive question-gate observation/drafting policy, opt-in managed live send | iPhone Mirroring on macOS | Stage by default; managed ordinary chat send only with explicit authorization, target-specific binding, exact OCR verification, and post-send evidence |
+| TaShuo / 她说 | Host-loop, iPhone Mirroring launch/observation, profile/chat navigation, role-sensitive question-gate observation/drafting policy, mac-ios-app launch/observe/stage, opt-in managed live send | iPhone Mirroring on macOS; optional mac-ios-app on Apple Silicon Mac | Stage by default; managed ordinary chat send only with explicit authorization, target-specific binding, runtime-supported exact staged-text verification, and post-send evidence |
 
 `supported_app_profiles` 只列 runtime-supported app。未支持 app 不创建 placeholder
 profile，也不进入 capabilities。
