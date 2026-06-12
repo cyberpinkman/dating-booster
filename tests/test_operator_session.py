@@ -43,6 +43,55 @@ class OperatorSessionTests(unittest.TestCase):
             self.assertTrue(payload["agent_native_capabilities"]["goal_oriented_operator"])
             self.assertTrue(payload["agent_native_capabilities"]["stage_only_audit"])
 
+    def test_operator_start_warns_for_old_memory_review_without_blocking(self):
+        from dating_boost.core.memory.review_queue import ReviewItem, ReviewQueueRepository
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            ReviewQueueRepository(data_dir).enqueue(
+                ReviewItem(
+                    review_item_id="rev_old_session",
+                    session_id="session_old",
+                    match_id="match_old",
+                    observation_id="obs_old",
+                    proposal={
+                        "predicate": "thread_cue",
+                        "value": "ordinary conversation page",
+                        "subject": "Old Match",
+                        "scope": "conversation",
+                        "fact_type": "visible_fact",
+                        "confidence": "medium",
+                        "evidence_text": "Old session suggestion.",
+                    },
+                    status="pending",
+                    created_at="2026-05-25T00:00:00Z",
+                    reported_at=None,
+                    reviewed_at=None,
+                    dedupe_key="old_session_ui_cue",
+                    source="deterministic",
+                    risk="low",
+                )
+            )
+
+            start_exit, start_payload, _ = self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+                "--initial-surface",
+                "current-thread",
+            ])
+
+            self.assertEqual(start_exit, 0)
+            self.assertEqual(start_payload["status"], "active")
+            self.assertIn("pending_memory_suggestions_require_review", start_payload["warnings"])
+            self.assertEqual(start_payload["memory_review"]["pending_count"], 1)
+            self.assertEqual(start_payload["initial_surface"], "current-thread")
+
     def test_operator_guides_host_from_list_scan_to_verified_send(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
@@ -227,6 +276,10 @@ class OperatorSessionTests(unittest.TestCase):
             self.assertNotEqual(send_payload["work_item"].get("candidate_key"), "row_ada")
             self.assertEqual(repeat_exit, 0)
             self.assertEqual(repeat_payload["work_item"]["work_item_type"], "send_message")
+            scan_batch = json.loads((data_dir / "operator" / "pending_scan_batch.json").read_text(encoding="utf-8"))
+            current_entry = scan_batch["message_list_snapshot"]["entries"][0]
+            self.assertEqual(current_entry["timestamp_cue"], "current_thread")
+            self.assertNotIn("position", current_entry)
 
             work_item = send_payload["work_item"]
             stage_result_path = Path(temp_dir) / "stage_result.json"

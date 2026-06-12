@@ -776,6 +776,143 @@ class OperatorHostLoopTests(unittest.TestCase):
         self.assertFalse(any(path.name.startswith("managed_action_request.") for path in work_dir.glob("*.json")))
         self.assertTrue(any(args[:3] == ("harness", "wechat", "send-message") for args in captured_commands))
 
+    def test_managed_wechat_live_send_sends_message_sequence_as_separate_harness_calls(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            work_dir = root / "work"
+            auth_path = root / "wechat_auth.json"
+            messages = [
+                "慢热联盟可以成立",
+                "狼人杀这种局我一般也先观察一会儿",
+                "熟了再开麦会比较自然",
+            ]
+            payload_text = "\n".join(messages)
+            payload_hash = hashlib.sha256(
+                json.dumps(
+                    {"payload_format": "message_sequence", "messages": messages},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            self._write_json(auth_path, {
+                "schema_version": 1,
+                "authorization_id": "auth_wechat_live",
+                "scope": "send_chat_messages",
+                "app_id": "wechat",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "allowed_actions": ["send_message"],
+                "autonomous_send": True,
+                "live_send": True,
+                "requires_post_action_verification": True,
+                "revoked_at": None,
+            })
+            supervisor = HostLoopSupervisor(
+                argparse.Namespace(
+                    data_dir=data_dir,
+                    authorization=auth_path,
+                    goal=None,
+                    availability=None,
+                    app_id="wechat",
+                    send_mode="live",
+                    managed_gui_send=True,
+                    work_dir=work_dir,
+                    max_steps=1,
+                    once=False,
+                    json=True,
+                    fixture_host=None,
+                    wait_timeout=None,
+                    poll_interval=1.0,
+                    skill_package=None,
+                )
+            )
+            work_dir.mkdir(parents=True, exist_ok=True)
+            work_item = {
+                "schema_version": 1,
+                "work_item_id": "work_wechat_send_sequence",
+                "work_item_type": "send_message",
+                "action_request_id": "act_wechat_send_sequence",
+                "match_id": "match_wechat",
+                "candidate_key": "wechat_ada",
+                "payload_text": payload_text,
+                "payload_hash": payload_hash,
+                "payload_format": "message_sequence",
+                "payload_messages": [
+                    {
+                        "index": index,
+                        "text": text,
+                        "message_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                        "character_count": len(text),
+                    }
+                    for index, text in enumerate(messages, start=1)
+                ],
+                "precondition_hash": "pre_hash",
+                "autonomous_audit_binding": _audit_binding(
+                    authorization_id="auth_wechat_live",
+                    target_match_id="match_wechat",
+                    payload_hash=payload_hash,
+                ),
+                "pre_action_observation_id": "obs_before",
+                "policy": {"allowed": True},
+                "planner_alignment": "ok",
+                "conversation_stage": "warmup",
+                "conversation_move": "low_investment_repair",
+                "target_profile_observation": {
+                    "review_status": "observed",
+                    "profile_text": "喜欢狼人杀。",
+                    "photo_cues": [],
+                    "hook_candidates": ["狼人杀"],
+                    "evidence": "Profile was reviewed before drafting.",
+                },
+                "requires_post_action_verification": True,
+                "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_wechat"},
+            }
+            sent_texts: list[str] = []
+            recorded_result: dict[str, object] = {}
+
+            def fake_run_cli_json(*args: str, allow_error: bool = False) -> dict[str, object]:
+                if args[:3] == ("harness", "wechat", "send-message"):
+                    text_path = Path(args[args.index("--text-file") + 1])
+                    action_path = Path(args[args.index("--action-request") + 1])
+                    message_text = text_path.read_text(encoding="utf-8")
+                    sent_texts.append(message_text)
+                    action_request = json.loads(action_path.read_text(encoding="utf-8"))
+                    self.assertEqual(action_request["payload_text"], message_text)
+                    self.assertEqual(action_request["payload_hash"], hashlib.sha256(message_text.encode("utf-8")).hexdigest())
+                    self.assertNotEqual(action_request["payload_hash"], payload_hash)
+                    return {
+                        "schema_version": 1,
+                        "status": "ok",
+                        "app_id": "wechat",
+                        "action": "send_message",
+                        "draft_fingerprint": action_request["payload_hash"],
+                        "draft_character_count": len(message_text),
+                        "post_action_observation_id": f"gui_post_send_{len(sent_texts)}",
+                        "evidence": {
+                            "staged_text_verified": True,
+                            "staged_exact_text_ocr_verified": True,
+                            "input_cleared_after_send": True,
+                            "post_action_screen_captured": True,
+                            "outbound_message_verified": True,
+                            "outbound_exact_text_ocr_verified": True,
+                        },
+                    }
+                if args[:2] == ("operator", "record-action-result"):
+                    result_path = Path(args[args.index("--input") + 1])
+                    recorded_result.update(json.loads(result_path.read_text(encoding="utf-8")))
+                    return {"schema_version": 1, "status": "ok", "recorded": True}
+                raise AssertionError(args)
+
+            with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                result = supervisor._handle_managed_gui_send(work_item)
+
+        self.assertIsNone(result)
+        self.assertEqual(sent_texts, messages)
+        self.assertEqual(recorded_result["payload_hash"], payload_hash)
+        self.assertEqual(recorded_result["message_count"], 3)
+        self.assertEqual(recorded_result["post_action_observation_id"], "gui_post_send_3")
+
     def test_managed_wechat_live_send_derives_target_binding_from_pending_thread_observation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1177,7 +1314,7 @@ class OperatorHostLoopTests(unittest.TestCase):
         self.assertTrue(recorded_result["evidence"]["managed_gui_send"])
         self.assertTrue(recorded_result["evidence"]["outbound_message_verified"])
 
-    def test_managed_tashuo_live_send_blocks_mac_ios_runtime_until_stage_verification_stable(self):
+    def test_managed_tashuo_live_send_uses_mac_ios_runtime_when_structural_binding_and_evidence_pass(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             data_dir = root / "data"
@@ -1228,35 +1365,164 @@ class OperatorHostLoopTests(unittest.TestCase):
                 payload_hash=payload_hash,
             )
             work_item["target_binding"] = {
-                "binding_type": "chat_list_row_to_thread",
+                "binding_type": "current_thread_visual_identity",
                 "target_match_id": "match_tashuo",
                 "candidate_key": "tashuo_ada",
-                "selection_evidence": {
-                    "source_state": "tashuo_chat_list",
-                    "opened_state": "tashuo_conversation",
-                    "row_index": 2,
-                    "target_scope": "ordinary_conversation",
-                    "open_action": "open-conversation",
+                "visible_name": "Ada",
+                "conversation_fingerprint": "ada-latest",
+                "thread_evidence": {
+                    "observation_id": "obs_before",
+                    "screen_state": "tashuo_conversation",
+                    "latest_inbound_fingerprint": "ada:in:latest",
+                    "visual_anchor_hash": "0123456789abcdef",
                 },
             }
-            harness_called = False
+            recorded_result: dict[str, object] = {}
 
             def fake_run_cli_json(*args: str, allow_error: bool = False) -> dict[str, object]:
                 if len(args) >= 3 and args[0] == "harness" and args[1] == "tashuo" and "send-message" in args:
-                    nonlocal harness_called
-                    harness_called = True
-                    raise AssertionError("mac-ios-app live send must block before direct harness execution")
+                    self.assertIn("--runtime", args)
+                    self.assertEqual(args[args.index("--runtime") + 1], "mac-ios-app")
+                    self.assertIn("--action-request", args)
+                    action_path = Path(args[args.index("--action-request") + 1])
+                    action_request = json.loads(action_path.read_text(encoding="utf-8"))
+                    self.assertEqual(action_request["app_id"], "tashuo")
+                    self.assertEqual(action_request["target_binding"]["binding_type"], "current_thread_visual_identity")
+                    return {
+                        "schema_version": 2,
+                        "status": "ok",
+                        "app_id": "tashuo",
+                        "harness_backend": "mac_ios_app",
+                        "action": "send_message",
+                        "post_action_observation_id": "gui_post_send_tashuo_mac_1234",
+                        "evidence": {
+                            "staged_text_verified": True,
+                            "staged_exact_text_ocr_verified": True,
+                            "input_cleared_after_send": True,
+                            "post_action_screen_captured": True,
+                            "outbound_message_verified": True,
+                            "outbound_exact_text_ocr_verified": True,
+                        },
+                    }
                 if args[:2] == ("operator", "record-action-result"):
-                    raise AssertionError("blocked mac-ios-app live send must not record an action result")
+                    result_path = Path(args[args.index("--input") + 1])
+                    recorded_result.update(json.loads(result_path.read_text(encoding="utf-8")))
+                    return {"schema_version": 1, "status": "ok", "recorded": True}
                 raise AssertionError(args)
 
             with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
                 result = supervisor._handle_managed_gui_send(work_item)
 
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["reason"], "runtime_live_send_not_supported:tashuo:mac-ios-app")
-        self.assertFalse(harness_called)
-        self.assertEqual(result["action_results_recorded"], [])
+        self.assertIsNone(result)
+        self.assertEqual(recorded_result["result_status"], "succeeded")
+        self.assertEqual(recorded_result["post_action_observation_id"], "gui_post_send_tashuo_mac_1234")
+        self.assertTrue(recorded_result["evidence"]["managed_gui_send"])
+        self.assertTrue(recorded_result["evidence"]["outbound_message_verified"])
+
+    def test_managed_tashuo_live_send_waits_for_host_visual_verification_before_return_key(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            work_dir = root / "work"
+            auth_path = root / "tashuo_auth.json"
+            payload_text = "那我们俩算慢热同盟了，我也是刚开始话少一点，熟了会自然很多"
+            payload_hash = hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
+            self._write_json(auth_path, {
+                "schema_version": 1,
+                "authorization_id": "auth_tashuo_live",
+                "scope": "send_chat_messages",
+                "app_id": "tashuo",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "allowed_actions": ["send_message"],
+                "autonomous_send": True,
+                "live_send": True,
+                "requires_post_action_verification": True,
+                "revoked_at": None,
+            })
+            supervisor = HostLoopSupervisor(
+                argparse.Namespace(
+                    data_dir=data_dir,
+                    authorization=auth_path,
+                    goal=None,
+                    availability=None,
+                    app_id="tashuo",
+                    send_mode="live",
+                    managed_gui_send=True,
+                    harness_runtime="mac-ios-app",
+                    work_dir=work_dir,
+                    max_steps=1,
+                    once=False,
+                    json=True,
+                    fixture_host=None,
+                    wait_timeout=None,
+                    poll_interval=1.0,
+                    adapter_package=None,
+                    skill_package=None,
+                )
+            )
+            work_dir.mkdir(parents=True, exist_ok=True)
+            work_item = _wechat_managed_work_item(payload_text, payload_hash)
+            work_item["match_id"] = "match_tashuo"
+            work_item["candidate_key"] = "tashuo_ada"
+            work_item["autonomous_audit_binding"] = _audit_binding(
+                authorization_id="auth_tashuo_live",
+                target_match_id="match_tashuo",
+                payload_hash=payload_hash,
+            )
+            work_item["target_binding"] = {
+                "binding_type": "current_thread_visual_identity",
+                "target_match_id": "match_tashuo",
+                "candidate_key": "tashuo_ada",
+                "visible_name": "Ada",
+                "conversation_fingerprint": "ada-latest",
+                "thread_evidence": {
+                    "observation_id": "obs_before",
+                    "screen_state": "tashuo_conversation",
+                    "latest_inbound_fingerprint": "ada:in:latest",
+                    "visual_anchor_hash": "0123456789abcdef",
+                },
+            }
+
+            def fake_run_cli_json(*args: str, allow_error: bool = False) -> dict[str, object]:
+                if len(args) >= 3 and args[0] == "harness" and args[1] == "tashuo" and "send-message" in args:
+                    return {
+                        "schema_version": 2,
+                        "status": "needs_host_visual_verification",
+                        "reason": "staged_text_requires_visual_verification",
+                        "app_id": "tashuo",
+                        "harness_backend": "mac_ios_app",
+                        "action": "send_message",
+                        "draft_fingerprint": payload_hash,
+                        "draft_character_count": len(payload_text),
+                        "staged_text_verification": {
+                            "status": "needs_verification",
+                            "reason": "staged_text_not_verified",
+                            "expected_payload_hash": payload_hash,
+                        },
+                        "visual_verification_request": {
+                            "schema_version": 1,
+                            "verification_type": "staged_text_visual",
+                            "expected_payload_hash": payload_hash,
+                            "screen_path": "harness/mac_ios_app.tashuo.after_stage_message.png",
+                            "input_crop_path": "harness/mac_ios_app.tashuo.after_stage_message.input_crop.png",
+                            "next_host_action": "visually_verify_staged_text_before_live_send",
+                        },
+                    }
+                if args[:2] == ("operator", "record-action-result"):
+                    raise AssertionError("visual verification wait must not record a send result")
+                raise AssertionError(args)
+
+            with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                result = supervisor._handle_managed_gui_send(work_item)
+
+        self.assertEqual(result["status"], "waiting_for_host")
+        self.assertEqual(result["stop_reason"], "staged_text_requires_visual_verification")
+        self.assertEqual(result["next_host_action"], "visually_verify_staged_text_before_live_send")
+        self.assertFalse(supervisor.action_results_recorded)
+        self.assertEqual(
+            result["managed_gui_send"]["visual_verification_request"]["expected_payload_hash"],
+            payload_hash,
+        )
 
     def test_tashuo_mac_ios_live_send_work_item_without_structural_binding_blocks(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1317,7 +1583,7 @@ class OperatorHostLoopTests(unittest.TestCase):
 
         self.assertEqual(result, "target_binding_structural_evidence_required")
 
-    def test_tashuo_mac_ios_unmanaged_live_send_blocks_before_action_result_wait(self):
+    def test_tashuo_mac_ios_unmanaged_live_send_waits_for_action_result_after_verified_stage(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             data_dir = root / "data"
@@ -1368,15 +1634,16 @@ class OperatorHostLoopTests(unittest.TestCase):
                 payload_hash=payload_hash,
             )
             work_item["target_binding"] = {
-                "binding_type": "chat_list_row_to_thread",
+                "binding_type": "current_thread_visual_identity",
                 "target_match_id": "match_tashuo",
                 "candidate_key": "tashuo_ada",
-                "selection_evidence": {
-                    "source_state": "tashuo_chat_list",
-                    "opened_state": "tashuo_conversation",
-                    "row_index": 1,
-                    "target_scope": "ordinary_conversation",
-                    "open_action": "open-conversation",
+                "visible_name": "Ada",
+                "conversation_fingerprint": "ada-latest",
+                "thread_evidence": {
+                    "observation_id": "obs_before",
+                    "screen_state": "tashuo_conversation",
+                    "latest_inbound_fingerprint": "ada:in:latest",
+                    "visual_anchor_hash": "0123456789abcdef",
                 },
             }
             staged_path = supervisor._work_file(work_item, "staged_verification")
@@ -1395,9 +1662,9 @@ class OperatorHostLoopTests(unittest.TestCase):
 
             payload = supervisor._handle_send_message(work_item)
 
-        self.assertEqual(payload["status"], "blocked")
-        self.assertEqual(payload["stop_reason"], "runtime_live_send_not_supported:tashuo:mac-ios-app")
-        self.assertEqual(payload["next_host_action"], "choose_supported_runtime_or_stage_only")
+        self.assertEqual(payload["status"], "waiting_for_host")
+        self.assertEqual(payload["stop_reason"], "waiting_for_action_result")
+        self.assertEqual(payload["next_host_action"], "paste_verify_send_then_record_action_result")
 
     def test_tashuo_mac_ios_live_send_work_item_lost_current_thread_binding_blocks(self):
         with tempfile.TemporaryDirectory() as temp_dir:

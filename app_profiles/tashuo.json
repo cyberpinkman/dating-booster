@@ -79,9 +79,10 @@
           "prepare_message_page",
           "stage_draft"
         ],
-        "supported_live_actions": [],
-        "live_send_status": "experimental_blocked_cjk_stage_verification",
-        "live_send_block_reason": "cjk_stage_verification_not_stable"
+        "supported_live_actions": [
+          "send_message"
+        ],
+        "live_send_status": "supported"
       }
     },
     "supported_stage_actions": [
@@ -246,9 +247,9 @@
     "Question-gate replies require user confirmation and are not eligible for autonomous question-gate send.",
     "macOS pbcopy alone may not update iPhone Universal Clipboard; do not treat clipboard state as TaShuo staging evidence.",
     "If Cmd+V or paste produces a literal shortcut key such as v, an IME candidate, or any wrong text, cancel/refocus/backspace-clean it, verify the input is empty or safe, and block instead of continuing.",
-    "TaShuo live send requires either a target-specific text marker such as the visible match name or allowed structural row-to-thread evidence; generic UI text like 点击此处输入文字, 发送, 待回答, or 全部消息 is not enough.",
+    "TaShuo live send requires target-specific binding evidence. For mac-ios-app current-thread send, use current_thread_visual_identity with a fresh visual_anchor_hash; do not use message-list row position or header OCR as the binding evidence. For iPhone Mirroring row-open paths, row-to-thread structural evidence remains allowed.",
     "Emoji or otherwise non-OCR nicknames are valid targets in any message-list row; bind the intended row with chat_list_row_to_thread evidence instead of switching to an OCR-friendly conversation.",
-    "Ordinary conversation classification can use the persistent bottom input toolbar and four tool buttons as page-structure evidence; exact payload verification still requires OCR/text evidence, while target binding may use allowed row-to-thread structure.",
+    "Ordinary conversation classification can use the persistent bottom input toolbar and four tool buttons as page-structure evidence; exact payload verification still requires OCR/text evidence, while mac-ios-app current-thread target binding must use a visual anchor hash.",
     "For mac-ios-app task startup, use prepare-message-page: determine the top-level page from the visual bottom-tab highlight, tap the messages tab if needed, then hand off to visual message-list planning without OCR-first fallback or fixed row-coordinate thread entry.",
     "TaShuo ordinary chat sends with Return; do not plan or execute a Send-button click.",
     "Visible bubble evidence can support diagnosis but cannot replace exact OCR verification of the payload text.",
@@ -439,7 +440,8 @@
     "requires_target_binding": true,
     "requires_target_specific_marker": true,
     "allowed_structural_binding_types": [
-      "chat_list_row_to_thread"
+      "chat_list_row_to_thread",
+      "current_thread_visual_identity"
     ],
     "generic_marker_blacklist": [
       "hi",

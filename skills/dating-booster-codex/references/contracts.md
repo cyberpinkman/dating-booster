@@ -152,8 +152,31 @@ Use this shape with `dating-boost policy check-draft`.
   "risk_flags": [],
   "missing_info": [],
   "mode_notes": "Adaptive mode.",
+  "selected_hook": "live music",
+  "strategic_delta": "Moves from generic weekend talk to a concrete music handle.",
+  "meeting_path": "If they engage, later bridge to a low-pressure show or cafe nearby.",
+  "why_not_ask_question": "",
+  "why_not_invite_now": "Logistics readiness is still low.",
   "persona_divergence": "low",
   "stance_divergence": "low"
+}
+```
+
+When one reply is more natural as several chat bubbles, include
+`message_sequence`. `best_reply` should be the same content joined with newlines;
+Dating Booster binds the whole sequence as one payload and host-loop sends each
+ordinary chat message in order.
+
+```json
+{
+  "best_reply": "慢热联盟可以成立\n狼人杀这种局我一般也先观察一会儿\n熟了再开麦会比较自然",
+  "message_sequence": [
+    "慢热联盟可以成立",
+    "狼人杀这种局我一般也先观察一会儿",
+    "熟了再开麦会比较自然"
+  ],
+  "strategic_delta": "从慢热共识切到狼人杀局内观察场景，给下一轮自然接点。",
+  "selected_hook": "狼人杀"
 }
 ```
 
@@ -389,6 +412,8 @@ The assembled `scan_batch` shape is:
         "risk_flags": [],
         "missing_info": [],
         "mode_notes": "Adaptive mode.",
+        "strategic_delta": "Takes the lead without asking them to decide again.",
+        "selected_hook": "latest_message",
         "disclosure_source": "none",
         "used_user_material_ids": [],
         "question_count": 0,

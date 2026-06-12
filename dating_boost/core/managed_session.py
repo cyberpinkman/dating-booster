@@ -10,7 +10,6 @@ from typing import Any, Callable
 
 from dating_boost.apps.registry import create_adapter, managed_session_policy, supported_app_ids
 from dating_boost.core.automation import AutomationRepository
-from dating_boost.core.memory.review_queue import ReviewQueueRepository
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.storage import JsonStorage
@@ -49,16 +48,7 @@ class ManagedSessionRepository:
         nudge_delay_minutes: int = DEFAULT_NUDGE_DELAY_MINUTES,
     ) -> dict[str, Any]:
         app_id = _validate_app_id(app_id)
-        review_repo = ReviewQueueRepository(self.root)
-        if review_repo.has_pending():
-            automation_review = self._automation.needs_memory_review()
-            return _payload(
-                "needs_memory_review",
-                reason="pending_memory_suggestions_require_review",
-                app_id=app_id,
-                pending_count=review_repo.pending_count(),
-                report_path=automation_review.get("report_path"),
-            )
+        memory_review = self._automation.needs_memory_review()
         if send_mode == "live":
             block_reason = _live_send_start_block_reason(authorization, managed_gui_send=managed_gui_send, app_id=app_id)
             if block_reason:
@@ -123,6 +113,10 @@ class ManagedSessionRepository:
             **_payload(initial_status, reason=stop_reason, app_id=app_id, session=session, app_precheck=app_check),
             "operator_session": operator_start,
             "operator_stop": stopped_operator,
+            "memory_review": memory_review if memory_review.get("needs_memory_review") else None,
+            "warnings": ["pending_memory_suggestions_require_review"]
+            if memory_review.get("needs_memory_review")
+            else [],
             "next_host_action": next_host_action,
         }
 

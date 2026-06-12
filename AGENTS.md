@@ -169,7 +169,7 @@ dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options
 dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
 ```
 
-Apple Silicon Mac 上如果用户已经安装并登录 Mac App Store 的她说 iOS app，可优先试验本地 `mac-ios-app` runtime。该 runtime 不占用真实手机，当前支持 launch/observe/prepare-message-page/stage-draft。`send-message --runtime mac-ios-app` 仅保留为 executor-internal 实验入口；由于中文 staging/exact verification 未稳定，mac-ios-app 托管 live send 当前由 capabilities 标记为 `experimental_blocked_cjk_stage_verification`，host-loop 会早期 block。question-gate staging/sending 仍不支持。
+Apple Silicon Mac 上如果用户已经安装并登录 Mac App Store 的她说 iOS app，可优先试验本地 `mac-ios-app` runtime。该 runtime 不占用真实手机，当前支持 launch/observe/prepare-message-page/stage-draft，以及受托管 live-send gate 保护的普通聊天 `send-message`。`send-message --runtime mac-ios-app` 仍是 executor-internal 路径，只能消费系统生成的 action request 或确认流结果；发送前必须有结构化目标绑定、exact staged-text verification，发送后必须有 input-cleared 和 outbound exact-text verification。question-gate staging/sending 仍不支持。
 
 ```bash
 dating-boost harness doctor --app-id tashuo --runtime mac-ios-app --json
@@ -179,7 +179,7 @@ dating-boost harness tashuo stage-draft --runtime mac-ios-app --text-file tashuo
 
 `prepare-message-page` 会打开 TaShuo Mac iOS app，用底部 tab 的视觉高亮判断当前一级页；如果不在 `消息` 页，只点击底部 `消息` tab。进入消息页后停止固定坐标流程，返回 `next_host_action=visual_plan_message_list`，后续由 host agent 进行视觉分析和规划，不要先跑 OCR 再回退视觉，也不要用固定 row 坐标直接进入聊天线程。
 
-TaShuo mac-ios-app 托管 live send 当前不启用。下面命令应早期 block，原因是 `runtime_live_send_not_supported:tashuo:mac-ios-app`；需要 live send 时使用已声明支持的 runtime，或降级为 stage-only：
+TaShuo mac-ios-app 托管 live send 支持普通聊天消息，但只能走 host-loop/managed-session 的受控执行路径；不要手工拼 action request，也不要绕过结构绑定、staged-text、post-send verification：
 
 ```bash
 dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tashuo --send-mode live --managed-gui-send --harness-runtime mac-ios-app --work-dir .local/dating-boost-host-loop --json

@@ -292,14 +292,14 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["agent_native_capabilities"]["tashuo_chat_navigation_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["tashuo_mac_ios_app_runtime"])
         self.assertTrue(payload["agent_native_capabilities"]["tashuo_mac_ios_app_stage_harness"])
-        self.assertFalse(payload["agent_native_capabilities"]["tashuo_mac_ios_app_live_send_harness"])
+        self.assertTrue(payload["agent_native_capabilities"]["tashuo_mac_ios_app_live_send_harness"])
         self.assertEqual(
             payload["agent_native_capabilities"]["tashuo_mac_ios_app_live_send_status"],
-            "experimental_blocked_cjk_stage_verification",
+            "supported",
         )
         self.assertEqual(
             payload["agent_native_capabilities"]["tashuo_mac_ios_app_live_send_block_reason"],
-            "cjk_stage_verification_not_stable",
+            "",
         )
         self.assertTrue(payload["agent_native_capabilities"]["tashuo_question_gate_role_policy"])
         self.assertTrue(payload["agent_native_capabilities"]["tashuo_question_gate_male_draft"])
@@ -917,7 +917,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["screen_state"], "tashuo_chat_list")
         self.assertTrue(payload["screen"]["path"].endswith("mac_ios_app.tashuo.observe.png"))
 
-    def test_tashuo_mac_ios_app_observe_marks_managed_live_send_blocked_in_layout_hints(self):
+    def test_tashuo_mac_ios_app_observe_marks_managed_live_send_supported_in_layout_hints(self):
         runner = FakeRunner(
             ocr_text="Yasmine\n你好\n点击此处输入文字\n",
             window_name="她说",
@@ -929,12 +929,9 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["harness_backend"], "mac_ios_app")
         self.assertEqual(payload["screen_state"], "tashuo_conversation")
-        self.assertFalse(payload["layout_hints"]["managed_live_send_supported"])
-        self.assertFalse(payload["layout_hints"]["live_send_supported"])
-        self.assertEqual(
-            payload["layout_hints"]["live_send_status"],
-            "experimental_blocked_cjk_stage_verification",
-        )
+        self.assertTrue(payload["layout_hints"]["managed_live_send_supported"])
+        self.assertTrue(payload["layout_hints"]["live_send_supported"])
+        self.assertEqual(payload["layout_hints"]["live_send_status"], "supported")
 
     def test_tashuo_mac_ios_app_stage_draft_dry_run_is_stage_only(self):
         runner = FakeRunner(ocr_text="Yasmine\n点击此处输入文字\n", window_name="她说")
@@ -1036,6 +1033,152 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["reason"], "target_binding_structural_evidence_required")
         self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_send_message_accepts_current_thread_visual_identity_without_row_index_or_header_ocr(self):
+        conversation_png = _tashuo_mac_ios_app_conversation_with_messages_png()
+        visual_region = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.84}
+        visual_hash = _png_average_hash(conversation_png, region=visual_region)
+        runner = FakeRunner(
+            ocr_text=[
+                "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
+                "另一个人\n别的消息\n点击此处输入文字\n",
+                "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
+                "小药丸儿\n我也比较慢热\n那我们俩算慢热同盟了\n",
+                "小药丸儿\n我也比较慢热\n那我们俩算慢热同盟了\n点击此处输入文字\n",
+            ],
+            screenshot_bytes=[
+                conversation_png,
+                conversation_png,
+                conversation_png,
+                conversation_png,
+                conversation_png,
+            ],
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.send_message(
+            "那我们俩算慢热同盟了",
+            dry_run=False,
+            target_binding={
+                "binding_type": "current_thread_visual_identity",
+                "target_match_id": "match_xiaoyaowan",
+                "candidate_key": "xiaoyaowan_current_thread",
+                "visible_name": "小药丸儿",
+                "conversation_fingerprint": "xiaoyaowan-slow-warm-20260611",
+                "thread_evidence": {
+                    "observation_id": "obs_xiaoyaowan_current_thread",
+                    "screen_state": "tashuo_conversation",
+                    "latest_inbound_fingerprint": "xiaoyaowan:in:slow-warm",
+                    "visual_anchor_hash": visual_hash,
+                    "visual_anchor_region": visual_region,
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+        self.assertEqual(
+            payload["target_binding_verification"]["verification_method"],
+            "tashuo_current_thread_visual_identity",
+        )
+        self.assertTrue(payload["staged_text_verified"])
+        self.assertEqual(payload["target_binding_verification"]["visual_anchor_hamming_distance"], 0)
+        self.assertNotIn("matched_marker_hashes", payload["target_binding_verification"])
+
+    def test_tashuo_mac_ios_app_send_message_blocks_current_thread_visual_identity_mismatch_before_staging(self):
+        conversation_png = _tashuo_mac_ios_app_conversation_with_messages_png()
+        visual_region = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.84}
+        runner = FakeRunner(
+            ocr_text=[
+                "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
+                "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
+            ],
+            screenshot_bytes=[conversation_png, conversation_png],
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.send_message(
+            "那我们俩算慢热同盟了",
+            dry_run=False,
+            target_binding={
+                "binding_type": "current_thread_visual_identity",
+                "target_match_id": "match_xiaoyaowan",
+                "candidate_key": "xiaoyaowan_current_thread",
+                "conversation_fingerprint": "xiaoyaowan-slow-warm-20260611",
+                "thread_evidence": {
+                    "observation_id": "obs_xiaoyaowan_current_thread",
+                    "screen_state": "tashuo_conversation",
+                    "latest_inbound_fingerprint": "xiaoyaowan:in:slow-warm",
+                    "visual_anchor_hash": "0000000000000000",
+                    "visual_anchor_region": visual_region,
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "target_binding_visual_anchor_mismatch")
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_send_message_uses_input_crop_ocr_for_staged_text_verification(self):
+        draft = "那我们俩算慢热同盟了，我也是刚开始话少一点，熟了会自然很多"
+        runner = FakeRunner(
+            ocr_text=[
+                "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
+                "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
+                "那我们俩算慢热同盟了，我也是刚开始话少一\nR, RT SERRE\n",
+                f"{draft}\n",
+                f"小药丸儿\n我也比较慢热\n{draft}\n点击此处输入文字\n",
+            ],
+            screenshot_bytes=[
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+            ],
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.send_message(draft, dry_run=False, output_dir=Path(tempfile.mkdtemp()))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["staged_text_verified"])
+        crop_ocr = payload["staged_text_verification"]["input_crop_ocr"]
+        self.assertTrue(crop_ocr["exact_text_ocr_verified"])
+        self.assertIn("text_hash", crop_ocr)
+        self.assertNotIn("text", crop_ocr)
+        self.assertTrue(any(command and command[0] == "sips" for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_send_message_waits_for_host_visual_verification_when_text_ocr_is_inconclusive(self):
+        draft = "那我们俩算慢热同盟了，我也是刚开始话少一点，熟了会自然很多"
+        runner = FakeRunner(
+            ocr_text=[
+                "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
+                "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
+                "小药丸儿\n我也比较慢热\n乱码\n",
+                "乱码\n",
+            ],
+            screenshot_bytes=[
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+            ],
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.send_message(draft, dry_run=False, output_dir=Path(tempfile.mkdtemp()))
+
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "staged_text_requires_visual_verification")
+        self.assertEqual(payload["next_host_action"], "visually_verify_staged_text_before_live_send")
+        self.assertFalse(payload["staged_text_verified"])
+        self.assertEqual(payload["visual_verification_request"]["expected_payload_hash"], payload["draft_fingerprint"])
+        self.assertNotIn("expected_text", payload["visual_verification_request"])
+        self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
+        self.assertNotIn("failed_stage_cleanup", payload)
 
     def test_tashuo_mac_ios_app_stage_draft_executes_without_return_key_and_restores_clipboard(self):
         runner = FakeRunner(
@@ -4229,6 +4372,31 @@ def _tashuo_mac_ios_app_conversation_toolbar_png() -> bytes:
     return _png_from_pixels(pixels, width, height)
 
 
+def _tashuo_mac_ios_app_conversation_with_messages_png(
+    *,
+    accent: tuple[int, int, int, int] = (92, 168, 126, 255),
+) -> bytes:
+    width, height = 288, 541
+    pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.04, 0.095, 0.095, 0.135, (35, 35, 35, 255))
+    fill(0.42, 0.105, 0.58, 0.128, (25, 25, 25, 255))
+    fill(0.07, 0.23, 0.49, 0.30, (246, 246, 250, 255))
+    fill(0.72, 0.36, 0.93, 0.42, (248, 211, 59, 255))
+    fill(0.07, 0.50, 0.56, 0.58, (246, 246, 250, 255))
+    fill(0.10, 0.515, 0.42, 0.535, accent)
+    fill(0.10, 0.545, 0.30, 0.560, accent)
+    fill(0.03, 0.855, 0.97, 0.930, (246, 246, 250, 255))
+    for x1, x2 in ((0.07, 0.20), (0.30, 0.43), (0.54, 0.67), (0.78, 0.93)):
+        fill(x1 + 0.035, 0.944, x2 - 0.035, 0.979, (238, 238, 246, 255))
+    return _png_from_pixels(pixels, width, height)
+
+
 def _tashuo_recommend_bottom_nav_png() -> bytes:
     return _tashuo_top_level_bottom_nav_png("recommend")
 
@@ -4314,6 +4482,77 @@ def _png_from_pixels(pixels: list[list[tuple[int, int, int, int]]], width: int, 
 def _png_chunk(kind: bytes, data: bytes) -> bytes:
     checksum = zlib.crc32(kind + data) & 0xFFFFFFFF
     return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", checksum)
+
+
+def _png_average_hash(png: bytes, *, region: dict[str, float], grid_size: int = 8) -> str:
+    width, height, rows = _read_test_png_pixels(png)
+    x1 = max(0, min(width - 1, int(float(region["x1"]) * width)))
+    x2 = max(x1 + 1, min(width, int(float(region["x2"]) * width)))
+    y1 = max(0, min(height - 1, int(float(region["y1"]) * height)))
+    y2 = max(y1 + 1, min(height, int(float(region["y2"]) * height)))
+    values: list[float] = []
+    for cell_y in range(grid_size):
+        start_y = y1 + int((y2 - y1) * cell_y / grid_size)
+        end_y = y1 + int((y2 - y1) * (cell_y + 1) / grid_size)
+        for cell_x in range(grid_size):
+            start_x = x1 + int((x2 - x1) * cell_x / grid_size)
+            end_x = x1 + int((x2 - x1) * (cell_x + 1) / grid_size)
+            total = 0.0
+            count = 0
+            for y in range(start_y, max(start_y + 1, end_y)):
+                for x in range(start_x, max(start_x + 1, end_x)):
+                    r, g, b, _a = rows[y][x]
+                    total += (0.299 * r) + (0.587 * g) + (0.114 * b)
+                    count += 1
+            values.append(total / max(1, count))
+    average = sum(values) / len(values)
+    bits = "".join("1" if value >= average else "0" for value in values)
+    return f"{int(bits, 2):0{grid_size * grid_size // 4}x}"
+
+
+def _read_test_png_pixels(png: bytes) -> tuple[int, int, list[list[tuple[int, int, int, int]]]]:
+    if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("not a png")
+    pos = 8
+    width = height = channels = None
+    raw = b""
+    while pos < len(png):
+        length = struct.unpack(">I", png[pos : pos + 4])[0]
+        pos += 4
+        chunk_type = png[pos : pos + 4]
+        pos += 4
+        chunk = png[pos : pos + length]
+        pos += length + 4
+        if chunk_type == b"IHDR":
+            width, height, bit_depth, color_type, compression, filter_method, interlace = struct.unpack(
+                ">IIBBBBB",
+                chunk,
+            )
+            if bit_depth != 8 or color_type != 6 or compression != 0 or filter_method != 0 or interlace != 0:
+                raise ValueError("unsupported png")
+            channels = 4
+        elif chunk_type == b"IDAT":
+            raw += chunk
+        elif chunk_type == b"IEND":
+            break
+    if width is None or height is None or channels is None:
+        raise ValueError("missing png header")
+    scanlines = zlib.decompress(raw)
+    rows: list[list[tuple[int, int, int, int]]] = []
+    index = 0
+    for _ in range(height):
+        filter_type = scanlines[index]
+        index += 1
+        if filter_type != 0:
+            raise ValueError("unsupported png filter")
+        row_bytes = scanlines[index : index + width * channels]
+        index += width * channels
+        row = [
+            tuple(row_bytes[column : column + channels])  # type: ignore[misc]
+            for column in range(0, len(row_bytes), channels)
+        ]
+        rows.append(row)
+    return width, height, rows
 
 
 if __name__ == "__main__":

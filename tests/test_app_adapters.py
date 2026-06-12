@@ -238,6 +238,81 @@ class AppAdapterArchitectureTests(unittest.TestCase):
             )
         )
 
+    def test_live_send_contract_accepts_message_sequence_payload_hash(self):
+        messages = [
+            "慢热联盟可以成立",
+            "狼人杀这种局我一般也先观察一会儿",
+            "熟了再开麦会比较自然",
+        ]
+        draft_text = "\n".join(messages)
+        payload_hash = hashlib.sha256(
+            json.dumps(
+                {"payload_format": "message_sequence", "messages": messages},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        action_request = {
+            "schema_version": 1,
+            "action_request_id": "act_bumble_send_sequence",
+            "action": "send_message",
+            "app_id": "bumble",
+            "match_id": "match_bumble",
+            "candidate_key": "bumble_ada",
+            "payload_text": draft_text,
+            "payload_hash": payload_hash,
+            "payload_format": "message_sequence",
+            "payload_messages": [
+                {
+                    "index": index,
+                    "text": text,
+                    "message_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                    "character_count": len(text),
+                }
+                for index, text in enumerate(messages, start=1)
+            ],
+            "precondition_hash": "pre_hash",
+            "planner_alignment": "ok",
+            "conversation_stage": "warmup",
+            "conversation_move": "low_investment_repair",
+            "autonomous_audit_binding": {
+                "binding_type": "autonomous_authorization",
+                "authorization_id": "auth_bumble_live",
+                "action": "send_message",
+                "target_match_id": "match_bumble",
+                "payload_hash": payload_hash,
+                "precondition_hash": "pre_hash",
+            },
+            "requires_post_action_verification": True,
+            "policy": {"allowed": True},
+            "target_binding": {
+                "required_visible_text": ["Ada"],
+                "target_match_id": "match_bumble",
+                "candidate_key": "bumble_ada",
+            },
+        }
+        authorization = {
+            "authorization_id": "auth_bumble_live",
+            "scope": "send_chat_messages",
+            "app_id": "bumble",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "allowed_actions": ["send_message"],
+            "autonomous_send": True,
+            "live_send": True,
+            "requires_post_action_verification": True,
+        }
+
+        self.assertIsNone(
+            live_send_action_request_block_reason(
+                action_request,
+                draft_text,
+                authorization=authorization,
+                app_id="bumble",
+                data_dir=None,
+            )
+        )
+
     def test_host_loop_required_send_evidence_comes_from_adapter_manifest(self):
         from dating_boost.apps.registry import manifest_for_app
         from dating_boost.host_loop import _managed_gui_send_required_evidence

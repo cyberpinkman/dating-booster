@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from dating_boost.cli import main
 from dating_boost.core.production_store import ProductionDataStore
+from dating_boost.core.support import SupportLogRepository
 
 
 @contextmanager
@@ -256,6 +257,37 @@ class SupportLogTests(unittest.TestCase):
             self.assertEqual(checkpoint["payload"]["surface_character_count"], len("current-thread"))
             self.assertIn("surface_hash", checkpoint["payload"])
             self.assertNotIn("surface", checkpoint["payload"])
+
+    def test_support_record_event_uses_lightweight_active_session_path_for_redacted_events(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _, start_payload = self._run([
+                "support",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--host",
+                "codex",
+                "--app-id",
+                "tashuo",
+                "--json",
+            ])
+            session_id = start_payload["session_id"]
+            repository = SupportLogRepository(data_dir)
+
+            with patch.object(repository.store, "doctor", side_effect=AssertionError("doctor should not run")):
+                payload = repository.record_event(
+                    session_id=session_id,
+                    event_type="host_loop_checkpoint",
+                    payload={"status": "waiting_for_host", "app_id": "tashuo"},
+                )
+
+            self.assertEqual(payload["status"], "ok")
+            events = ProductionDataStore(data_dir).list_audit_events(
+                stream=f"support/{session_id}/events.jsonl"
+            )
+            self.assertTrue(any(event["payload"]["event_type"] == "host_loop_checkpoint" for event in events))
 
     def test_active_support_session_auto_logs_cli_command_boundaries(self):
         with tempfile.TemporaryDirectory() as temp_dir:

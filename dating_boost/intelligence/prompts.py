@@ -39,5 +39,11 @@ REPLY_SCHEMA = {
         "mode_notes": {"type": "string"},
         "persona_divergence": {"type": "string", "enum": DIVERGENCE_VALUES},
         "stance_divergence": {"type": "string", "enum": DIVERGENCE_VALUES},
+        "message_sequence": {"type": "array", "items": {"type": "string"}},
+        "strategic_delta": {"type": "string"},
+        "selected_hook": {"type": "string"},
+        "meeting_path": {"type": "string"},
+        "why_not_ask_question": {"type": "string"},
+        "why_not_invite_now": {"type": "string"},
     },
 }

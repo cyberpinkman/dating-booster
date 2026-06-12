@@ -314,28 +314,38 @@ class AutomationPlannerTests(unittest.TestCase):
                 str(self._auth_for_app(temp_dir)),
             ])
             scan_path = Path(temp_dir) / "low_repair.json"
-            self._write_json(
-                scan_path,
-                _planner_scan(
-                    planner_move="low_investment_repair",
-                    draft_move="low_investment_repair",
-                    reciprocity={
-                        "question_debt": 2,
-                        "self_disclosure_debt": 3,
-                        "reciprocity_balance": "user_over_asking",
-                        "low_investment_streak": 2,
-                        "match_curiosity_about_user": "no",
-                        "topic_exit_pressure": "high",
-                        "last_user_turn_type": "question",
-                    },
-                    draft_overrides={
-                        "best_reply": "感觉你家已经很会享受安静了，我有时候也是在家憋久了才突然想出去透口气",
-                        "conversation_move": "low_investment_repair",
-                        "disclosure_source": "user_material",
-                        "used_user_material_ids": ["mat_home_rhythm"],
-                    },
-                ),
+            scan_payload = _planner_scan(
+                planner_move="low_investment_repair",
+                draft_move="low_investment_repair",
+                reciprocity={
+                    "question_debt": 2,
+                    "self_disclosure_debt": 3,
+                    "reciprocity_balance": "user_over_asking",
+                    "low_investment_streak": 2,
+                    "match_curiosity_about_user": "no",
+                    "topic_exit_pressure": "high",
+                    "last_user_turn_type": "question",
+                },
+                draft_overrides={
+                    "best_reply": "感觉你家已经很会享受安静了，我有时候也是在家憋久了才突然想出去透口气",
+                    "conversation_move": "low_investment_repair",
+                    "disclosure_source": "user_material",
+                    "used_user_material_ids": ["mat_home_rhythm"],
+                },
             )
+            scan_payload["thread_observations"][0]["target_binding"] = {
+                "binding_type": "current_thread_visual_identity",
+                "candidate_key": "xiaoqing",
+                "visible_name": "小青",
+                "conversation_fingerprint": "xiaoqing_cats",
+                "thread_evidence": {
+                    "observation_id": "obs_xiaoqing_cats_001",
+                    "screen_state": "tashuo_conversation",
+                    "latest_inbound_fingerprint": "xiaoqing:in:cats",
+                    "visual_anchor_hash": "0123456789abcdef",
+                },
+            }
+            self._write_json(scan_path, scan_payload)
 
             step_exit, step_payload, _ = self._run([
                 "automation",
@@ -354,6 +364,148 @@ class AutomationPlannerTests(unittest.TestCase):
             self.assertEqual(request["disclosure_source"], "user_material")
             self.assertEqual(request["used_user_material_ids"], ["mat_home_rhythm"])
             self.assertTrue(request["low_investment_repair_applied"])
+            self.assertEqual(request["target_binding"]["binding_type"], "current_thread_visual_identity")
+            self.assertEqual(request["target_binding"]["thread_evidence"]["screen_state"], "tashuo_conversation")
+
+    def test_strategy_gate_blocks_saturated_low_investment_paraphrase(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(self._auth_for_app(temp_dir)),
+            ])
+            scan = _planner_scan(
+                visible_name="小药丸儿",
+                conversation_fingerprint="xiaoyaowan-slow-warm-20260611",
+                planner_move="low_investment_repair",
+                draft_move="low_investment_repair",
+                reciprocity={
+                    "question_debt": 0,
+                    "self_disclosure_debt": 0,
+                    "reciprocity_balance": "balanced",
+                    "low_investment_streak": 2,
+                    "match_curiosity_about_user": "no",
+                    "topic_exit_pressure": "medium",
+                    "last_user_turn_type": "disclosure",
+                },
+                draft_overrides={
+                    "best_reply": "那我们俩算慢热同盟了，我也是刚开始话少一点，熟了会自然很多",
+                    "safer_reply": "那我们俩算慢热同盟了，我也是刚开始话少一点，熟了会自然很多",
+                    "bolder_reply": "那我们俩算慢热同盟了，刚开始慢一点也挺好，熟了会自然很多",
+                    "why_this_works": "It mirrors her slow-warm disclosure and repairs low investment without adding another question.",
+                    "hook_source": "latest_message",
+                    "question_count": 0,
+                    "reply_shape": "statement",
+                },
+            )
+            thread = scan["thread_observations"][0]
+            thread["planner_assessment"]["topic"] = {
+                "current_topic": "慢热",
+                "topic_state": "saturating",
+                "new_information": ["对方说自己也比较慢热"],
+                "stale_hooks": ["继续围绕慢热追问会显得面试"],
+            }
+            thread["observation"]["profile_observation"]["hook_candidates"] = ["慢热", "狼人杀", "旧金山艺术大学"]
+            scan_path = Path(temp_dir) / "slow_warm_paraphrase.json"
+            self._write_json(scan_path, scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+            self.assertEqual(step_exit, 0)
+            self.assertEqual(step_payload["action_requests"], [])
+            self.assertIn("draft_strategy_no_delta", step_payload["warnings"])
+            self.assertEqual(step_payload["state_updates"][0]["state"], "needs_reply")
+
+    def test_action_request_preserves_multi_message_sequence_and_strategy_evidence(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(self._auth_for_app(temp_dir)),
+            ])
+            scan = _planner_scan(
+                visible_name="小药丸儿",
+                conversation_fingerprint="xiaoyaowan-slow-warm-20260611",
+                planner_move="low_investment_repair",
+                draft_move="low_investment_repair",
+                reciprocity={
+                    "question_debt": 0,
+                    "self_disclosure_debt": 0,
+                    "reciprocity_balance": "balanced",
+                    "low_investment_streak": 2,
+                    "match_curiosity_about_user": "no",
+                    "topic_exit_pressure": "medium",
+                    "last_user_turn_type": "disclosure",
+                },
+                draft_overrides={
+                    "best_reply": "慢热联盟可以成立\n狼人杀这种局我一般也先观察一会儿\n熟了再开麦会比较自然",
+                    "message_sequence": [
+                        "慢热联盟可以成立",
+                        "狼人杀这种局我一般也先观察一会儿",
+                        "熟了再开麦会比较自然",
+                    ],
+                    "why_this_works": "It acknowledges slow-warm, then bridges into the profile hook 狼人杀 with a concrete scene.",
+                    "hook_source": "profile_unknown_detail",
+                    "strategic_delta": "从慢热共识切到狼人杀局内观察场景，给下一轮自然接点。",
+                    "selected_hook": "狼人杀",
+                    "meeting_path": "先建立轻活动共同感，后续可转线下桌游或轻松活动。",
+                    "question_count": 0,
+                    "reply_shape": "statement",
+                },
+            )
+            thread = scan["thread_observations"][0]
+            thread["planner_assessment"]["topic"] = {
+                "current_topic": "慢热",
+                "topic_state": "saturating",
+                "new_information": ["对方说自己也比较慢热"],
+                "stale_hooks": ["继续围绕慢热追问会显得面试"],
+            }
+            thread["observation"]["profile_observation"]["hook_candidates"] = ["慢热", "狼人杀", "旧金山艺术大学"]
+            scan_path = Path(temp_dir) / "multi_message_strategy.json"
+            self._write_json(scan_path, scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+            self.assertEqual(step_exit, 0)
+            self.assertEqual(len(step_payload["action_requests"]), 1)
+            request = step_payload["action_requests"][0]
+            self.assertEqual(request["payload_format"], "message_sequence")
+            self.assertEqual([item["text"] for item in request["payload_messages"]], [
+                "慢热联盟可以成立",
+                "狼人杀这种局我一般也先观察一会儿",
+                "熟了再开麦会比较自然",
+            ])
+            self.assertEqual(request["message_count"], 3)
+            self.assertEqual(request["draft_strategy_evidence"]["selected_hook"], "狼人杀")
+            self.assertIn("狼人杀", request["draft_strategy_evidence"]["strategic_delta"])
 
     def test_material_only_policy_blocks_simulated_self_disclosure(self):
         with tempfile.TemporaryDirectory() as temp_dir:

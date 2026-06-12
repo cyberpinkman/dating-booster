@@ -163,6 +163,22 @@ is `user_confirmed_only`, stop for user confirmation. For low-investment repair,
 set `question_count: 0` or `reply_shape: "statement"` unless there is a strong
 reason to hand off.
 
+Before live send, the draft must also have strategic delta. `policy.allowed`
+only means the content is safe enough; it does not mean the reply advances the
+goal. When `topic_state` is `saturating` or `low_investment_streak >= 2`, do
+not send a draft that merely paraphrases the current topic. Add a concrete new
+handle, usually via `selected_hook` and `strategic_delta`, or stop and revise.
+For example, after both sides say they are slow to warm up, repeating what
+slow-warm means is not enough; bridge to a usable hook or small scene.
+
+When one reply naturally has two jobs, such as acknowledging the previous topic
+and opening a new hook, prefer `message_sequence` with several short messages
+instead of one dense paragraph. Split near commas or sentence boundaries. Each
+message should stand alone as a normal chat bubble. The operator/host-loop will
+bind the whole sequence with one payload hash and send each ordinary chat
+message through the managed GUI path; do not handcraft per-message action
+requests.
+
 ## Workflow
 
 1. Run `dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json`; bootstrap with the package-relative `python3 scripts/bootstrap_cli.py` only if doctor says `needs_bootstrap`.
@@ -306,7 +322,7 @@ dating-boost harness tashuo stage-draft --runtime mac-ios-app --text-file tashuo
 dating-boost harness tashuo send-message --text-file tashuo-draft.txt --dry-run --json
 ```
 
-If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. The mac-ios-app runtime currently supports launch/observe/prepare-message-page/stage-draft only. Managed live send is marked `experimental_blocked_cjk_stage_verification` and host-loop must block `--send-mode live --managed-gui-send --harness-runtime mac-ios-app` before attempting a real send. Direct harness live send remains executor-internal/experimental and must not be used as an agent workaround.
+If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. If already in a thread, bind that thread with `current_thread_visual_identity` and a fresh visual anchor hash from the conversation screenshot; do not use message-list row position or header OCR as target-binding evidence. The mac-ios-app runtime supports launch/observe/prepare-message-page/stage-draft and ordinary-chat managed live send. Live send must be executed by host-loop with `--managed-gui-send --harness-runtime mac-ios-app` or by a managed-session wait point resumed through that host-loop runtime, with structural target binding, exact staged-text verification, and post-send exact-text/input-cleared verification. Direct harness live send remains executor-internal and must not be used as an agent workaround.
 
 For iPhone Mirroring, use `harness tashuo observe` before choosing a bounded navigation action. It
 returns redacted page/layout hints for the four top-level tabs (`推荐`, `飞行`,
@@ -440,8 +456,10 @@ only after verification. A trailing space can commit Pinyin candidates such as
 
 Target binding is not interchangeable with target selection. If the requested
 target has an emoji or otherwise non-OCR nickname, keep the same target and
-collect app-specific structural evidence, such as message-list row index/bounds
-plus the `open-conversation` transition into an ordinary thread. Blocking is
+collect app-specific structural evidence. For mac-ios-app current-thread sends,
+use `current_thread_visual_identity` with a visual anchor hash from the opened
+conversation; for iPhone Mirroring row-open paths, row/bounds plus the
+`open-conversation` transition into an ordinary thread may be used. Blocking is
 only a fail-safe when same-target evidence cannot be collected or verified
 before any send attempt; never choose another OCR-friendly conversation.
 
@@ -467,7 +485,7 @@ duplicates, gates risky actions, and writes reports.
 11. Continue calling `operator next` until the user stops the session or the operator returns `wait`.
  12. Stop with `dating-boost operator stop --data-dir .local/dating-boost` and show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
  13. After stopping, check the report for Memory Suggestions. If any pending items exist, present them to the user and ask for accept/reject decisions. Execute `dating-boost memory review decide --data-dir .local/dating-boost --accept <id1> --reject <id2>` with the user's choices. Only accepted items become long-term memory.
- 14. On a later run, if `operator session start` or `managed-session start` returns `needs_memory_review`, first resolve pending memory suggestions before starting a new session. Use `dating-boost memory review list --data-dir .local/dating-boost --status pending` and `memory review decide` to process them.
+ 14. On a later run, if `operator session start` or `managed-session start` reports pending memory suggestions, keep them as non-blocking review warnings unless the CLI explicitly returns a blocking status. Do not accept or reject suggestions without user choices; present them after the bounded session and use `dating-boost memory review list --data-dir .local/dating-boost --status pending` plus `memory review decide` to process them.
  15. On a later run, use `dating-boost operator report latest` and local state to continue without relying on host-agent memory.
 
 For each opened thread, read `references/planner-authoring.md` and author
@@ -571,11 +589,11 @@ the local state engine; it does not scan the screen or click the app.
 7. For each opened thread, author `planner_assessment` before the draft: include engagement, warmth, curiosity, comfort, momentum, topic_saturation, logistics_readiness, risk, recommended stage, recommended move, next milestone, avoid_next, soft_invite_allowed, and reciprocity state.
 8. Run `dating-boost automation scan validate --input scan_batch.json --json` before every session step.
 9. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
-10. Execute only allowed ordinary `send_message` action requests whose planner alignment is `ok`.
-11. After each send, perform post-action verification and call `dating-boost action record-result`.
+10. Execute only allowed ordinary `send_message` action requests whose planner alignment is `ok` and whose draft has strategic delta. If the request contains `payload_messages`, treat it as one planned sequence and let host-loop send the messages in order.
+11. After each send or completed message sequence, perform post-action verification and call `dating-boost action record-result`.
  12. Stop with `dating-boost automation session stop --data-dir .local/dating-boost` and show `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
  13. After stopping, check the report for Memory Suggestions. If any pending items exist, present them to the user and ask for accept/reject decisions. Execute `dating-boost memory review decide --data-dir .local/dating-boost --accept <id1> --reject <id2>` with the user's choices.
- 14. On a later run, if `automation session start` returns `needs_memory_review`, first resolve pending memory suggestions. Use `dating-boost memory review list --data-dir .local/dating-boost --status pending` and `memory review decide`.
+ 14. On a later run, if `automation session start` reports pending memory suggestions, keep them as non-blocking review warnings unless the CLI explicitly returns a blocking status. Do not accept or reject suggestions without user choices; present them after the bounded session and use `dating-boost memory review list --data-dir .local/dating-boost --status pending` plus `memory review decide`.
  15. On a later run, use `dating-boost automation report latest` and local state to continue without relying on host-agent memory.
 
 If the step output contains `handoffs`, appointment details, contact exchange,

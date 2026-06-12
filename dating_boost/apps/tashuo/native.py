@@ -19,6 +19,7 @@ from dating_boost.core.live_send_contract import (
     target_binding_specific_marker_present,
     target_binding_structural_evidence_present,
 )
+from dating_boost.harness.screen_state import _read_png_pixels
 
 
 TASHUO_BLOCKED_GUI_ACTIONS = [
@@ -90,6 +91,9 @@ TASHUO_MESSAGE_INPUT_UNFOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.91}
 TASHUO_MESSAGE_INPUT_FOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.91}
 TASHUO_MAC_IOS_APP_MESSAGE_INPUT_FOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.85}
 TASHUO_MESSAGES_TAB_TAP_RATIO = {"x": 0.67, "y": 0.96}
+TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.84}
+TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_MAX_DISTANCE = 6
+TASHUO_MAC_IOS_APP_INPUT_OCR_REGION = {"x1": 0.035, "y1": 0.772, "x2": 0.905, "y2": 0.906}
 
 
 def install_tashuo_session_hooks(session: Any) -> None:
@@ -129,17 +133,7 @@ def observe_tashuo_screen(session: Any, *, output_dir: Path | None = None) -> di
     screen = session.capture_window(output=output, window=window)
     payload["screen"] = platform._redacted_screen(screen)
     payload["screen_state"] = screen.get("state", "unknown")
-    layout_hints = tashuo_layout_hints(screen)
-    if _is_mac_ios_app_session(session):
-        layout_hints.update(
-            {
-                "live_send_supported": False,
-                "managed_live_send_supported": False,
-                "live_send_status": "experimental_blocked_cjk_stage_verification",
-                "live_send_block_reason": "cjk_stage_verification_not_stable",
-            }
-        )
-    payload["layout_hints"] = layout_hints
+    payload["layout_hints"] = tashuo_layout_hints(screen)
     if screen.get("status") != "ok":
         payload.update({"status": "blocked", "reason": screen.get("reason")})
     elif screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
@@ -851,10 +845,13 @@ def send_tashuo_message(
 
         staged_output = output_dir / f"{capture_prefix}.after_stage_message.png" if output_dir is not None else None
         staged_screen = session.capture_window(output=staged_output, window=window)
-        staged_verification = _verify_staged_tashuo_message(
+        staged_verification = _verify_staged_tashuo_message_with_crop_ocr(
+            session,
             staged_screen,
             draft_text,
             baseline_screen=baseline_screen,
+            output_dir=output_dir,
+            label=f"{capture_prefix}.after_stage_message.input_crop",
         )
         staged_text = str(staged_screen.get("text") or "")
         staged_input_placeholder_visible = _tashuo_input_placeholder_visible(staged_text)
@@ -893,11 +890,14 @@ def send_tashuo_message(
             time.sleep(0.3)
             staged_output = output_dir / f"{capture_prefix}.after_type_message.png" if output_dir is not None else None
             staged_screen = session.capture_window(output=staged_output, window=window)
-            staged_verification = _verify_staged_tashuo_message(
+            staged_verification = _verify_staged_tashuo_message_with_crop_ocr(
+                session,
                 staged_screen,
                 draft_text,
                 baseline_screen=baseline_screen,
                 trusted_direct_input=True,
+                output_dir=output_dir,
+                label=f"{capture_prefix}.after_type_message.input_crop",
             )
             direct_type_verification = staged_verification
             ime_commit_result = session._press_space_key()
@@ -912,11 +912,14 @@ def send_tashuo_message(
             time.sleep(0.3)
             staged_output = output_dir / f"{capture_prefix}.after_ime_commit_message.png" if output_dir is not None else None
             staged_screen = session.capture_window(output=staged_output, window=window)
-            committed_verification = _verify_staged_tashuo_message(
+            committed_verification = _verify_staged_tashuo_message_with_crop_ocr(
+                session,
                 staged_screen,
                 draft_text,
                 baseline_screen=baseline_screen,
                 trusted_direct_input=True,
+                output_dir=output_dir,
+                label=f"{capture_prefix}.after_ime_commit_message.input_crop",
             )
             payload["direct_type_text_verification"] = direct_type_verification
             payload["ime_commit_text_verification"] = committed_verification
@@ -926,6 +929,19 @@ def send_tashuo_message(
         payload["staged_text_verification"] = staged_verification
         payload["staged_text_verified"] = staged_verification.get("status") == "ok"
         if staged_verification.get("status") != "ok":
+            if _tashuo_host_visual_staged_verification_available(staged_screen, staged_verification, draft_text):
+                payload["visual_verification_request"] = _tashuo_visual_staged_verification_request(
+                    staged_screen,
+                    staged_verification,
+                    draft_text,
+                )
+                payload.update({
+                    "status": "needs_host_visual_verification",
+                    "reason": "staged_text_requires_visual_verification",
+                    "next_host_action": "visually_verify_staged_text_before_live_send",
+                    "executed_steps": executed_steps,
+                })
+                return payload
             cleanup_result = _cleanup_failed_tashuo_stage(
                 session,
                 window,
@@ -1007,6 +1023,8 @@ def _verify_tashuo_target_binding(
 ) -> dict[str, Any]:
     if target_binding.get("binding_type") == "chat_list_row_to_thread":
         return _verify_tashuo_chat_list_row_target_binding(session, target_binding, output_dir=output_dir)
+    if target_binding.get("binding_type") == "current_thread_visual_identity":
+        return _verify_tashuo_current_thread_visual_identity(session, target_binding, output_dir=output_dir)
     if _is_mac_ios_app_session(session):
         return {
             "verification_method": "tashuo_mac_ios_app_structural_binding_required",
@@ -1063,6 +1081,168 @@ def _verify_tashuo_target_binding(
     if not header_matched:
         return {**result, "status": "blocked", "reason": "target_binding_header_mismatch"}
     return {**result, "status": "ok"}
+
+
+def _verify_tashuo_current_thread_visual_identity(
+    session: Any,
+    target_binding: dict[str, Any],
+    *,
+    output_dir: Path | None = None,
+) -> dict[str, Any]:
+    thread_evidence = (
+        target_binding.get("thread_evidence") if isinstance(target_binding.get("thread_evidence"), dict) else {}
+    )
+    expected_visual_hash = str(thread_evidence.get("visual_anchor_hash") or "").strip()
+    visual_region = _tashuo_visual_anchor_region(thread_evidence)
+    max_distance = _tashuo_visual_anchor_max_distance(thread_evidence)
+    base = {
+        "verification_method": "tashuo_current_thread_visual_identity",
+        "binding_type": target_binding.get("binding_type"),
+        "target_match_id": target_binding.get("target_match_id"),
+        "candidate_key": target_binding.get("candidate_key"),
+        "conversation_fingerprint_hash": platform._hash_text(str(target_binding.get("conversation_fingerprint") or "")),
+        "pre_action_observation_id": thread_evidence.get("observation_id"),
+        "latest_inbound_fingerprint_hash": platform._hash_text(str(thread_evidence.get("latest_inbound_fingerprint") or "")),
+        "expected_visual_anchor_hash": expected_visual_hash or None,
+        "visual_anchor_region": visual_region,
+        "visual_anchor_max_hamming_distance": max_distance,
+        "requires_visual_anchor": True,
+        "requires_header_marker": False,
+        "requires_fresh_conversation_screen": True,
+        "uses_header_ocr": False,
+        "visual_only_exact_verification_allowed": False,
+    }
+    if not target_binding_structural_evidence_present("tashuo", target_binding):
+        return {**base, "status": "blocked", "reason": "target_binding_structural_evidence_required"}
+    window = session._window_info()
+    if window is None:
+        reason = "mac_ios_app_window_not_found" if _is_mac_ios_app_session(session) else "iphone_mirroring_window_not_found"
+        return {**base, "status": "blocked", "reason": reason}
+    output = output_dir / f"{_tashuo_capture_prefix(session)}.target_binding.png" if output_dir is not None else None
+    screen = session.capture_window(output=output, window=window)
+    screen_path = str(screen.get("path") or "")
+    visual_hash_result = _tashuo_visual_anchor_hash_for_path(Path(screen_path), region=visual_region) if screen_path else {
+        "status": "blocked",
+        "reason": "target_binding_screen_path_missing",
+    }
+    observed_visual_hash = str(visual_hash_result.get("visual_anchor_hash") or "")
+    visual_distance = (
+        _visual_anchor_hamming_distance(expected_visual_hash, observed_visual_hash)
+        if expected_visual_hash and observed_visual_hash
+        else None
+    )
+    result = {
+        **base,
+        "screen": platform._redacted_screen(screen),
+        "screen_state": screen.get("state", "unknown"),
+        "visual_state": screen.get("visual_state", "unknown"),
+        "visual_anchor_hash_status": visual_hash_result.get("status"),
+        "observed_visual_anchor_hash": observed_visual_hash or None,
+        "visual_anchor_hamming_distance": visual_distance,
+    }
+    if screen.get("status") != "ok":
+        return {**result, "status": "blocked", "reason": "target_binding_screen_capture_failed"}
+    if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
+        return {**result, "status": "blocked", "reason": screen.get("state")}
+    if screen.get("state") == "tashuo_question_gate":
+        return {**result, "status": "blocked", "reason": "tashuo_question_gate_requires_user_confirmation"}
+    if screen.get("state") != "tashuo_conversation":
+        return {**result, "status": "blocked", "reason": "target_binding_chat_not_verified"}
+    if visual_hash_result.get("status") != "ok":
+        return {
+            **result,
+            "status": "blocked",
+            "reason": visual_hash_result.get("reason") or "target_binding_visual_anchor_unavailable",
+        }
+    if visual_distance is None or visual_distance > max_distance:
+        return {**result, "status": "blocked", "reason": "target_binding_visual_anchor_mismatch"}
+    return {**result, "status": "ok"}
+
+
+def _tashuo_visual_anchor_region(thread_evidence: dict[str, Any]) -> dict[str, float]:
+    raw = thread_evidence.get("visual_anchor_region")
+    if not isinstance(raw, dict):
+        return dict(TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION)
+    region: dict[str, float] = {}
+    for key, fallback in TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION.items():
+        value = raw.get(key)
+        try:
+            region[key] = float(value)
+        except (TypeError, ValueError):
+            region[key] = fallback
+    if region["x2"] <= region["x1"] or region["y2"] <= region["y1"]:
+        return dict(TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION)
+    return {
+        "x1": max(0.0, min(0.99, region["x1"])),
+        "y1": max(0.0, min(0.99, region["y1"])),
+        "x2": max(0.01, min(1.0, region["x2"])),
+        "y2": max(0.01, min(1.0, region["y2"])),
+    }
+
+
+def _tashuo_visual_anchor_max_distance(thread_evidence: dict[str, Any]) -> int:
+    try:
+        value = int(thread_evidence.get("visual_anchor_max_hamming_distance"))
+    except (TypeError, ValueError):
+        return TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_MAX_DISTANCE
+    return max(0, min(16, value))
+
+
+def _tashuo_visual_anchor_hash_for_path(
+    path: Path,
+    *,
+    region: dict[str, float] | None = None,
+    grid_size: int = 8,
+) -> dict[str, Any]:
+    try:
+        pixels = _read_png_pixels(path)
+    except Exception as exc:
+        return {"status": "blocked", "reason": "target_binding_visual_anchor_read_failed", "error": str(exc)[:80]}
+    try:
+        width = int(pixels["width"])
+        height = int(pixels["height"])
+        channels = int(pixels["channels"])
+        rows = pixels["rows"]
+        anchor_region = region or TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION
+        x1 = max(0, min(width - 1, int(float(anchor_region["x1"]) * width)))
+        x2 = max(x1 + 1, min(width, int(float(anchor_region["x2"]) * width)))
+        y1 = max(0, min(height - 1, int(float(anchor_region["y1"]) * height)))
+        y2 = max(y1 + 1, min(height, int(float(anchor_region["y2"]) * height)))
+        values: list[float] = []
+        for cell_y in range(grid_size):
+            start_y = y1 + int((y2 - y1) * cell_y / grid_size)
+            end_y = y1 + int((y2 - y1) * (cell_y + 1) / grid_size)
+            for cell_x in range(grid_size):
+                start_x = x1 + int((x2 - x1) * cell_x / grid_size)
+                end_x = x1 + int((x2 - x1) * (cell_x + 1) / grid_size)
+                total = 0.0
+                count = 0
+                for y in range(start_y, max(start_y + 1, end_y)):
+                    row = rows[y]
+                    for x in range(start_x, max(start_x + 1, end_x)):
+                        offset = x * channels
+                        r, g, b = row[offset : offset + 3]
+                        total += (0.299 * int(r)) + (0.587 * int(g)) + (0.114 * int(b))
+                        count += 1
+                values.append(total / max(1, count))
+        average = sum(values) / len(values)
+        bits = "".join("1" if value >= average else "0" for value in values)
+        return {
+            "status": "ok",
+            "visual_anchor_hash": f"{int(bits, 2):0{grid_size * grid_size // 4}x}",
+            "grid_size": grid_size,
+        }
+    except Exception as exc:
+        return {"status": "blocked", "reason": "target_binding_visual_anchor_hash_failed", "error": str(exc)[:80]}
+
+
+def _visual_anchor_hamming_distance(left: str, right: str) -> int:
+    if len(left) != len(right):
+        return max(len(left), len(right)) * 4
+    try:
+        return (int(left, 16) ^ int(right, 16)).bit_count()
+    except ValueError:
+        return max(len(left), len(right)) * 4
 
 
 def _verify_tashuo_chat_list_row_target_binding(
@@ -1192,17 +1372,60 @@ def _bounded_edit_distance(left: str, right: str, limit: int) -> int:
     return previous[-1]
 
 
+def _verify_staged_tashuo_message_with_crop_ocr(
+    session: Any,
+    screen: dict[str, Any],
+    expected_text: str,
+    *,
+    baseline_screen: dict[str, Any] | None = None,
+    trusted_direct_input: bool = False,
+    output_dir: Path | None = None,
+    label: str = "tashuo.input_crop",
+) -> dict[str, Any]:
+    result = _verify_staged_tashuo_message(
+        screen,
+        expected_text,
+        baseline_screen=baseline_screen,
+        trusted_direct_input=trusted_direct_input,
+    )
+    if result.get("status") == "ok" or screen.get("status") != "ok":
+        return result
+    crop_ocr = _tashuo_input_crop_ocr(
+        session,
+        screen,
+        expected_text=expected_text,
+        output_dir=output_dir,
+        label=label,
+    )
+    return _verify_staged_tashuo_message(
+        screen,
+        expected_text,
+        baseline_screen=baseline_screen,
+        trusted_direct_input=trusted_direct_input,
+        input_crop_ocr=crop_ocr,
+    )
+
+
 def _verify_staged_tashuo_message(
     screen: dict[str, Any],
     expected_text: str,
     *,
     baseline_screen: dict[str, Any] | None = None,
     trusted_direct_input: bool = False,
+    input_crop_ocr: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     observed_text = str(screen.get("text") or "")
-    observed_stats = platform._expected_text_observation_stats(observed_text, expected_text)
+    crop_text = (
+        str(input_crop_ocr.get("text") or "")
+        if isinstance(input_crop_ocr, dict) and input_crop_ocr.get("status") == "ok"
+        else ""
+    )
+    combined_text = "\n".join(item for item in (observed_text, crop_text) if item)
+    observed_stats = platform._expected_text_observation_stats(combined_text or observed_text, expected_text)
     baseline_text = str(baseline_screen.get("text") or "") if isinstance(baseline_screen, dict) else ""
     baseline_stats = platform._expected_text_observation_stats(baseline_text, expected_text) if baseline_text else None
+    screen_exact = platform._message_text_matches(observed_text, expected_text)
+    crop_exact = bool(crop_text) and platform._message_text_matches(crop_text, expected_text)
     result = {
         "verification_method": "tashuo_staged_message_ocr_payload_text",
         "expected_payload_hash": platform._hash_text(expected_text),
@@ -1213,10 +1436,14 @@ def _verify_staged_tashuo_message(
         "baseline_expected_text_occurrences": baseline_stats["expected_text_occurrences"] if baseline_stats else None,
         "baseline_text_hash": baseline_stats["text_hash"] if baseline_stats else None,
         "send_action": "press_return",
-        "exact_text_ocr_verified": platform._message_text_matches(observed_text, expected_text),
+        "exact_text_ocr_verified": screen_exact or crop_exact,
+        "screen_exact_text_ocr_verified": screen_exact,
+        "input_crop_exact_text_ocr_verified": crop_exact,
         "visual_only_exact_verification_allowed": False,
         "screen": platform._redacted_screen(screen),
     }
+    if input_crop_ocr is not None:
+        result["input_crop_ocr"] = _redacted_tashuo_input_crop_ocr(input_crop_ocr, expected_text)
     if screen.get("status") != "ok":
         return {**result, "status": "blocked", "reason": screen.get("reason") or "stage_screen_not_captured"}
     if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
@@ -1226,11 +1453,172 @@ def _verify_staged_tashuo_message(
     baseline_state = baseline_screen.get("state") if isinstance(baseline_screen, dict) else None
     if screen.get("state") != "tashuo_conversation" and baseline_state != "tashuo_conversation":
         return {**result, "status": "blocked", "reason": "tashuo_conversation_not_verified"}
-    if not platform._message_text_matches(observed_text, expected_text):
+    if not result["exact_text_ocr_verified"]:
         return {**result, "status": "needs_verification", "reason": "staged_text_not_verified"}
     if baseline_stats and observed_stats["expected_text_occurrences"] <= baseline_stats["expected_text_occurrences"]:
         return {**result, "status": "needs_verification", "reason": "staged_text_not_newly_visible"}
     return {**result, "status": "ok"}
+
+
+def _tashuo_input_crop_ocr(
+    session: Any,
+    screen: dict[str, Any],
+    *,
+    expected_text: str,
+    output_dir: Path | None,
+    label: str,
+) -> dict[str, Any]:
+    screen_path = str(screen.get("path") or "")
+    if not screen_path:
+        return {"status": "blocked", "reason": "input_crop_screen_path_missing"}
+    source = Path(screen_path)
+    try:
+        pixels = _read_png_pixels(source)
+        width = int(pixels["width"])
+        height = int(pixels["height"])
+    except Exception as exc:
+        return {"status": "blocked", "reason": "input_crop_dimensions_unavailable", "error": str(exc)[:80]}
+    region = dict(TASHUO_MAC_IOS_APP_INPUT_OCR_REGION)
+    x = max(0, min(width - 1, int(region["x1"] * width)))
+    y = max(0, min(height - 1, int(region["y1"] * height)))
+    crop_width = max(1, min(width - x, int((region["x2"] - region["x1"]) * width)))
+    crop_height = max(1, min(height - y, int((region["y2"] - region["y1"]) * height)))
+    base_dir = output_dir if output_dir is not None else source.parent
+    base_dir.mkdir(parents=True, exist_ok=True)
+    crop_path = base_dir / f"{label}.png"
+    resized_path = base_dir / f"{label}.2x.png"
+    crop = session.runner.run(
+        [
+            "sips",
+            "--cropToHeightWidth",
+            str(crop_height),
+            str(crop_width),
+            "--cropOffset",
+            str(y),
+            str(x),
+            str(source),
+            "--out",
+            str(crop_path),
+        ]
+    )
+    if crop.returncode != 0:
+        return {"status": "blocked", "reason": "input_crop_failed", "stderr": platform._short(crop.stderr)}
+    resize = session.runner.run(
+        [
+            "sips",
+            "--resampleWidth",
+            str(crop_width * 2),
+            str(crop_path),
+            "--out",
+            str(resized_path),
+        ]
+    )
+    if resize.returncode != 0:
+        return {"status": "blocked", "reason": "input_crop_resize_failed", "stderr": platform._short(resize.stderr)}
+    best: dict[str, Any] | None = None
+    for psm in ("6", "11"):
+        ocr = session.runner.run(
+            [
+                "tesseract",
+                str(resized_path),
+                "stdout",
+                "-l",
+                "chi_sim+eng",
+                "--psm",
+                psm,
+            ]
+        )
+        item = {
+            "status": "ok" if ocr.returncode == 0 else "blocked",
+            "reason": None if ocr.returncode == 0 else "input_crop_ocr_failed",
+            "text": ocr.stdout if ocr.returncode == 0 else "",
+            "stderr": platform._short(ocr.stderr) if ocr.returncode != 0 else None,
+            "psm": psm,
+            "path": str(crop_path),
+            "resized_path": str(resized_path),
+            "region": region,
+        }
+        best = item
+        if item["status"] == "ok" and platform._message_text_matches(str(item.get("text") or ""), expected_text):
+            return item
+    return best or {"status": "blocked", "reason": "input_crop_ocr_not_run"}
+
+
+def _redacted_tashuo_input_crop_ocr(payload: dict[str, Any], expected_text: str) -> dict[str, Any]:
+    text = str(payload.get("text") or "")
+    stats = platform._expected_text_observation_stats(text, expected_text) if text else {}
+    return {
+        "status": payload.get("status"),
+        "reason": payload.get("reason"),
+        "psm": payload.get("psm"),
+        "path": payload.get("path"),
+        "resized_path": payload.get("resized_path"),
+        "region": payload.get("region"),
+        "text_hash": stats.get("text_hash"),
+        "text_character_count": stats.get("text_character_count"),
+        "expected_text_occurrences": stats.get("expected_text_occurrences", 0),
+        "exact_text_ocr_verified": bool(text) and platform._message_text_matches(text, expected_text),
+        "stderr": payload.get("stderr"),
+    }
+
+
+def _tashuo_host_visual_staged_verification_available(
+    screen: dict[str, Any],
+    staged_verification: dict[str, Any],
+    expected_text: str,
+) -> bool:
+    if len(expected_text) < 8:
+        return False
+    if screen.get("status") != "ok" or not screen.get("path"):
+        return False
+    if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt", "tashuo_question_gate"}:
+        return False
+    observed_text = str(screen.get("text") or "")
+    if _tashuo_input_placeholder_visible(observed_text):
+        return False
+    if _tashuo_obvious_wrong_staged_text_visible(observed_text, expected_text):
+        return False
+    crop_ocr = staged_verification.get("input_crop_ocr")
+    return not isinstance(crop_ocr, dict) or crop_ocr.get("status") in {None, "ok", "blocked"}
+
+
+def _tashuo_obvious_wrong_staged_text_visible(observed_text: str, expected_text: str) -> bool:
+    if platform._message_text_matches(observed_text, expected_text):
+        return False
+    normalized_lines = [line.strip().lower() for line in observed_text.splitlines() if line.strip()]
+    if any(line in {"v", "发送v", "v发送"} for line in normalized_lines):
+        return True
+    comparable = platform._message_text_comparable(observed_text)
+    expected = platform._message_text_comparable(expected_text)
+    if expected and expected in comparable:
+        return False
+    return comparable.endswith("v发送") or comparable.endswith("vsend")
+
+
+def _tashuo_visual_staged_verification_request(
+    screen: dict[str, Any],
+    staged_verification: dict[str, Any],
+    expected_text: str,
+) -> dict[str, Any]:
+    crop_ocr = staged_verification.get("input_crop_ocr")
+    crop = crop_ocr if isinstance(crop_ocr, dict) else {}
+    return {
+        "schema_version": 1,
+        "verification_type": "staged_text_visual",
+        "status": "needs_host_visual_verification",
+        "expected_payload_hash": platform._hash_text(expected_text),
+        "expected_character_count": len(expected_text),
+        "screen_path": screen.get("path"),
+        "screen_state": screen.get("state"),
+        "input_crop_path": crop.get("path"),
+        "input_crop_resized_path": crop.get("resized_path"),
+        "input_crop_region": crop.get("region") or TASHUO_MAC_IOS_APP_INPUT_OCR_REGION,
+        "ocr_status": crop.get("status"),
+        "ocr_text_hash": crop.get("text_hash"),
+        "ocr_text_character_count": crop.get("text_character_count"),
+        "next_host_action": "visually_verify_staged_text_before_live_send",
+        "instructions": "Visually compare the text in the staged input screenshot with the expected payload held by the current action request. Do not press Return unless the visual comparison is exact.",
+    }
 
 
 def _stage_only_tashuo_verification(

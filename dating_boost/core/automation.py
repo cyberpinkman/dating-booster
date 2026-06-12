@@ -87,23 +87,7 @@ class AutomationRepository:
             return None
 
     def start_session(self, authorization: dict[str, Any]) -> dict[str, Any]:
-        review_repo = ReviewQueueRepository(self.root)
-        if review_repo.has_pending():
-            latest_report_path = self._latest_machine_report_path()
-            pending = review_repo.load_items(status="pending")
-            session_ids = {item.session_id for item in pending if item.session_id}
-            confirm_hint = "memory review decide --data-dir DIR --confirm memory-review:" + (
-                session_ids.pop() if len(session_ids) == 1 else "<session_id>"
-            )
-            return {
-                "schema_version": 1,
-                "status": "needs_memory_review",
-                "reason": "pending_memory_suggestions_require_review",
-                "pending_count": len(pending),
-                "report_path": str(latest_report_path) if latest_report_path else None,
-                "resumed_from_report": str(latest_report_path) if latest_report_path else None,
-                "confirm_hint": confirm_hint,
-            }
+        memory_review = self.needs_memory_review()
         auth_result = self.save_authorization(authorization)
         readiness = UserDisclosureRepository(self.root).readiness(mode="autonomous")
         if authorization.get("autonomous_send") and not readiness["ready"]:
@@ -114,6 +98,7 @@ class AutomationRepository:
                 "authorization_id": auth_result["authorization_id"],
                 "user_profile_readiness": readiness,
                 "resumed_from_report": None,
+                "memory_review": memory_review if memory_review.get("needs_memory_review") else None,
             }
         latest_report_path = self._latest_machine_report_path()
         session_id = f"session_{auth_result['authorization_id']}_{_digest(authorization)[:8]}"
@@ -137,6 +122,10 @@ class AutomationRepository:
             "session_id": session_id,
             "authorization_id": auth_result["authorization_id"],
             "resumed_from_report": session["resumed_from_report"],
+            "memory_review": memory_review if memory_review.get("needs_memory_review") else None,
+            "warnings": ["pending_memory_suggestions_require_review"]
+            if memory_review.get("needs_memory_review")
+            else [],
         }
 
     def stop_session(self) -> dict[str, Any]:
@@ -615,6 +604,16 @@ class AutomationRepository:
             elif planner_recommendation and draft_payload and not _draft_aligns_with_planner(dict(draft_payload), planner_recommendation):
                 state["state"] = "needs_reply"
                 warnings.append("planner_misaligned_draft")
+            elif planner_recommendation and draft_payload and (
+                strategy_block := _draft_strategy_block_reason(
+                    dict(draft_payload),
+                    planner_recommendation,
+                    observation,
+                )
+            ):
+                state["state"] = "needs_reply"
+                state["draft_strategy_block_reason"] = strategy_block
+                warnings.append(strategy_block)
             elif host_identity_confidence == "low":
                 state["state"] = "needs_reply"
                 warnings.append("low_identity_confidence")
@@ -653,6 +652,7 @@ class AutomationRepository:
                     is_nudge=False,
                     authorization=authorization,
                     planner_recommendation=planner_recommendation,
+                    target_binding=thread_item.get("target_binding"),
                 )
             elif assessment.get("recommended_next") == "reply":
                 state["state"] = "needs_reply"
@@ -692,6 +692,7 @@ class AutomationRepository:
                         is_nudge=True,
                         authorization=authorization,
                         planner_recommendation=planner_recommendation,
+                        target_binding=thread_item.get("target_binding"),
                     )
                 elif state.get("last_nudged_inbound_fingerprint") == latest_fingerprint:
                     if draft_payload and _draft_payload_hash(dict(draft_payload)) == state.get("last_outbound_payload_hash"):
@@ -929,6 +930,7 @@ class AutomationRepository:
         is_nudge: bool,
         authorization: dict[str, Any],
         planner_recommendation: dict[str, Any] | None = None,
+        target_binding: Any = None,
     ) -> None:
         raw_draft = dict(draft_payload)
         draft = _draft_from_dict(raw_draft)
@@ -979,7 +981,8 @@ class AutomationRepository:
             warnings.append("draft_blocked")
             return
 
-        payload_hash = _text_hash(draft.best_reply)
+        payload_messages = _draft_payload_messages(raw_draft, draft.best_reply)
+        payload_hash = _draft_messages_payload_hash(payload_messages)
         if state.get("last_outbound_payload_hash") == payload_hash:
             warnings.append("duplicate_send_request_suppressed")
             return
@@ -1004,38 +1007,48 @@ class AutomationRepository:
             "precondition_hash": precondition_hash,
         }
         low_investment_repair_applied = draft.conversation_move == "low_investment_repair"
-        action_requests.append(
-            {
-                "schema_version": 1,
-                "action_request_id": action_request_id,
-                "match_id": match_id,
-                "candidate_key": candidate_key,
-                "action": "send_message",
-                "payload_text": draft.best_reply,
-                "payload_hash": payload_hash,
-                "precondition_hash": precondition_hash,
-                "autonomous_audit_binding": autonomous_audit_binding,
-                "pre_action_observation_id": observation.observation_id,
-                "target_profile_observation": observation.profile_observation.to_dict(),
-                "requires_post_action_verification": True,
-                "policy": {
-                    "allowed": policy.allowed,
-                    "severity": policy.severity,
-                    "reason": policy.reason,
-                    "requires_user_confirmation": policy.requires_user_confirmation,
-                },
-                "planner_revision": planner_recommendation.get("planner_revision") if planner_recommendation else None,
-                "conversation_stage": planner_recommendation.get("conversation_stage") if planner_recommendation else None,
-                "conversation_move": draft.conversation_move,
-                "planner_alignment": "ok" if planner_recommendation else "not_provided",
-                "next_milestone": planner_recommendation.get("next_milestone") if planner_recommendation else None,
-                "disclosure_source": disclosure_source,
-                "used_user_material_ids": used_material_ids,
-                "question_debt_after": planner_recommendation.get("question_debt") if planner_recommendation else state.get("question_debt"),
-                "reciprocity_balance_after": planner_recommendation.get("reciprocity_balance") if planner_recommendation else state.get("reciprocity_balance"),
-                "low_investment_repair_applied": low_investment_repair_applied,
-            }
-        )
+        payload_text = "\n".join(message["text"] for message in payload_messages)
+        action_request = {
+            "schema_version": 1,
+            "action_request_id": action_request_id,
+            "match_id": match_id,
+            "candidate_key": candidate_key,
+            "action": "send_message",
+            "payload_text": payload_text,
+            "payload_hash": payload_hash,
+            "payload_format": "message_sequence" if len(payload_messages) > 1 else "single_message",
+            "payload_messages": payload_messages,
+            "message_count": len(payload_messages),
+            "precondition_hash": precondition_hash,
+            "autonomous_audit_binding": autonomous_audit_binding,
+            "pre_action_observation_id": observation.observation_id,
+            "target_profile_observation": observation.profile_observation.to_dict(),
+            "requires_post_action_verification": True,
+            "policy": {
+                "allowed": policy.allowed,
+                "severity": policy.severity,
+                "reason": policy.reason,
+                "requires_user_confirmation": policy.requires_user_confirmation,
+            },
+            "planner_revision": planner_recommendation.get("planner_revision") if planner_recommendation else None,
+            "conversation_stage": planner_recommendation.get("conversation_stage") if planner_recommendation else None,
+            "conversation_move": draft.conversation_move,
+            "planner_alignment": "ok" if planner_recommendation else "not_provided",
+            "next_milestone": planner_recommendation.get("next_milestone") if planner_recommendation else None,
+            "disclosure_source": disclosure_source,
+            "used_user_material_ids": used_material_ids,
+            "question_debt_after": planner_recommendation.get("question_debt") if planner_recommendation else state.get("question_debt"),
+            "reciprocity_balance_after": planner_recommendation.get("reciprocity_balance") if planner_recommendation else state.get("reciprocity_balance"),
+            "low_investment_repair_applied": low_investment_repair_applied,
+            "draft_strategy_evidence": _draft_strategy_evidence(
+                raw_draft,
+                planner_recommendation,
+                observation,
+            ),
+        }
+        if isinstance(target_binding, dict):
+            action_request["target_binding"] = dict(target_binding)
+        action_requests.append(action_request)
         state["state"] = "send_requested"
         state["last_action"] = "send_message"
         state["last_action_request_id"] = action_request_id
@@ -1763,6 +1776,94 @@ def _draft_aligns_with_planner(draft_payload: dict[str, Any], planner_recommenda
     recommended_move = str(planner_recommendation.get("recommended_move") or "")
     draft_move = str(draft_payload.get("conversation_move") or "")
     return bool(recommended_move and draft_move == recommended_move)
+
+
+def _draft_strategy_block_reason(
+    draft_payload: dict[str, Any],
+    planner_recommendation: dict[str, Any],
+    observation: AppObservation,
+) -> str | None:
+    if str(planner_recommendation.get("recommended_move") or "") != "low_investment_repair":
+        return None
+    low_investment_streak = int(planner_recommendation.get("low_investment_streak") or 0)
+    topic_lifecycle = planner_recommendation.get("topic_lifecycle")
+    topic = dict(topic_lifecycle) if isinstance(topic_lifecycle, dict) else {}
+    current_topic = str(topic.get("current_topic") or "").strip()
+    topic_state = str(topic.get("topic_state") or "").strip()
+    if low_investment_streak < 2 and topic_state not in {"saturating", "exhausted"}:
+        return None
+
+    texts = [message["text"] for message in _draft_payload_messages(draft_payload, str(draft_payload.get("best_reply") or ""))]
+    combined = "\n".join(texts)
+    hooks = [
+        str(item).strip()
+        for item in observation.profile_observation.hook_candidates
+        if str(item).strip()
+    ]
+    non_topic_hooks = [hook for hook in hooks if hook != current_topic]
+    selected_hook = str(draft_payload.get("selected_hook") or "").strip()
+    strategic_delta = str(draft_payload.get("strategic_delta") or "").strip()
+    if selected_hook and selected_hook != current_topic and selected_hook in combined + strategic_delta:
+        return None
+    if strategic_delta and any(hook and hook != current_topic and hook in strategic_delta + combined for hook in hooks):
+        return None
+    if any(hook and hook != current_topic and hook in combined for hook in non_topic_hooks):
+        return None
+    if current_topic and current_topic not in combined:
+        return None
+    return "draft_strategy_no_delta"
+
+
+def _draft_strategy_evidence(
+    draft_payload: dict[str, Any],
+    planner_recommendation: dict[str, Any] | None,
+    observation: AppObservation,
+) -> dict[str, Any]:
+    profile_hooks = [
+        str(item)
+        for item in observation.profile_observation.hook_candidates
+        if str(item).strip()
+    ]
+    return {
+        "selected_hook": str(draft_payload.get("selected_hook") or draft_payload.get("hook_source") or "unknown"),
+        "strategic_delta": str(draft_payload.get("strategic_delta") or draft_payload.get("why_this_works") or ""),
+        "meeting_path": str(draft_payload.get("meeting_path") or ""),
+        "why_not_ask_question": str(draft_payload.get("why_not_ask_question") or ""),
+        "why_not_invite_now": str(draft_payload.get("why_not_invite_now") or ""),
+        "planner_move": planner_recommendation.get("recommended_move") if planner_recommendation else None,
+        "topic_state": (
+            dict(planner_recommendation.get("topic_lifecycle") or {}).get("topic_state")
+            if planner_recommendation
+            else None
+        ),
+        "available_profile_hooks": profile_hooks,
+    }
+
+
+def _draft_payload_messages(draft_payload: dict[str, Any], fallback_text: str) -> list[dict[str, Any]]:
+    raw_messages = draft_payload.get("message_sequence")
+    if isinstance(raw_messages, list):
+        texts = [str(item).strip() for item in raw_messages if str(item).strip()]
+    else:
+        texts = [str(fallback_text).strip()]
+    if not texts:
+        texts = [str(fallback_text)]
+    return [
+        {
+            "index": index,
+            "text": text,
+            "message_hash": _text_hash(text),
+            "character_count": len(text),
+        }
+        for index, text in enumerate(texts, start=1)
+    ]
+
+
+def _draft_messages_payload_hash(messages: list[dict[str, Any]]) -> str:
+    texts = [str(message.get("text") or "") for message in messages]
+    if len(texts) == 1:
+        return _text_hash(texts[0])
+    return _digest({"payload_format": "message_sequence", "messages": texts})
 
 
 def _digest(payload: dict[str, Any]) -> str:

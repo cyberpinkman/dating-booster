@@ -70,9 +70,12 @@ summarize the prompt/reply and ask the user whether to enable the question,
 skip the gate, accept the male reply, or reject it. On a male user's account,
 drafting a question-gate reply is allowed for user review, but the current
 harness does not stage or send question-gate replies.
-TaShuo mac-ios-app currently supports launch/observe/prepare-message-page/stage-draft only.
-Managed live send for this runtime is blocked as `experimental_blocked_cjk_stage_verification`;
-host-loop must return `runtime_live_send_not_supported:tashuo:mac-ios-app` instead of attempting a send.
+TaShuo mac-ios-app supports launch/observe/prepare-message-page/stage-draft and
+ordinary-chat managed live send. Live send must run through host-loop or
+through a managed-session wait point resumed by host-loop with
+`--managed-gui-send --harness-runtime mac-ios-app`, structural row-to-thread
+target binding, exact staged-text verification, and post-send
+exact-text/input-cleared verification.
 
 ```bash
 dating-boost harness doctor --app-id tinder --json
@@ -379,8 +382,11 @@ only after verification. A trailing space can commit a Pinyin candidate such as
 
 Target binding is not interchangeable with target selection. If the requested
 target has an emoji or otherwise non-OCR nickname, keep the same target and
-collect app-specific structural evidence, such as message-list row index/bounds
-plus the `open-conversation` transition into an ordinary thread. Blocking is
+collect app-specific structural evidence. For TaShuo mac-ios-app current-thread
+sends, use `current_thread_visual_identity` with a fresh visual anchor hash from
+the opened conversation; do not use message-list row position or header OCR as
+the binding evidence. For iPhone Mirroring row-open paths, row/bounds plus the
+`open-conversation` transition into an ordinary thread may be used. Blocking is
 only a fail-safe when same-target evidence cannot be collected or verified
 before any send attempt; never choose another OCR-friendly conversation.
 

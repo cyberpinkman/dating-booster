@@ -83,6 +83,43 @@ class ManagedSessionTests(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["reason"], "managed_gui_send_required_for_live_mode")
 
+    def test_start_warns_for_old_memory_review_without_blocking(self):
+        from dating_boost.core.memory.review_queue import ReviewItem, ReviewQueueRepository
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            ReviewQueueRepository(data_dir).enqueue(
+                ReviewItem(
+                    review_item_id="rev_old_session",
+                    session_id="session_old",
+                    match_id="match_old",
+                    observation_id="obs_old",
+                    proposal={
+                        "predicate": "thread_cue",
+                        "value": "ordinary conversation page",
+                        "subject": "Old Match",
+                        "scope": "conversation",
+                        "fact_type": "visible_fact",
+                        "confidence": "medium",
+                        "evidence_text": "Old session suggestion.",
+                    },
+                    status="pending",
+                    created_at="2026-05-25T00:00:00Z",
+                    reported_at=None,
+                    reviewed_at=None,
+                    dedupe_key="old_session_ui_cue",
+                    source="deterministic",
+                    risk="low",
+                )
+            )
+
+            payload = self._start_repo(data_dir)
+
+        self.assertEqual(payload["status"], "active")
+        self.assertIn("pending_memory_suggestions_require_review", payload["warnings"])
+        self.assertEqual(payload["memory_review"]["pending_count"], 1)
+
     def test_tinder_missing_iphone_mirroring_stops_session(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"

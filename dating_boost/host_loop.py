@@ -807,67 +807,90 @@ class HostLoopSupervisor:
             authorization,
             action_request,
             app_id=self.args.app_id,
-            draft_text=str(work_item.get("payload_text") or ""),
+            draft_text=_work_item_payload_text(work_item),
             data_dir=self.data_dir,
         )
         if contract_reason is not None:
             return self._finish("blocked", contract_reason, current=work_item)
-        draft_path.write_text(str(work_item.get("payload_text") or ""), encoding="utf-8")
-        _write_json(action_request_path, action_request)
-        command_args = [
-            "harness",
-            self.args.app_id,
-            "send-message",
-            "--data-dir",
-            str(self.data_dir),
-            "--authorization",
-            str(authorization_path),
-            "--text-file",
-            str(draft_path),
-            "--action-request",
-            str(action_request_path),
-            "--output-dir",
-            str(self.work_dir / "harness"),
-            "--json",
-        ]
-        harness_runtime = str(getattr(self.args, "harness_runtime", "") or "").strip()
-        if harness_runtime:
-            command_args[3:3] = ["--runtime", harness_runtime]
-        try:
-            harness_payload = self._run_cli_json(
-                *command_args,
-                allow_error=True,
-            )
-        finally:
-            if draft_path.exists():
-                draft_path.unlink()
-            if action_request_path.exists():
-                action_request_path.unlink()
-
-        self._append_timeline("managed_gui_send", work_item, {"harness": _redacted_managed_send_payload(harness_payload)})
-        if harness_payload.get("status") != "ok":
-            return self._finish(
-                "blocked",
-                str(harness_payload.get("reason") or "managed_gui_send_failed"),
-                current=work_item,
-                extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
-            )
-        harness_evidence = harness_payload.get("evidence") if isinstance(harness_payload.get("evidence"), dict) else {}
-        if not harness_payload.get("post_action_observation_id"):
-            return self._finish(
-                "blocked",
-                "post_action_observation_required",
-                current=work_item,
-                extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
-            )
+        payload_messages = _work_item_payload_messages(work_item)
+        harness_payloads: list[dict[str, Any]] = []
         required_evidence = _managed_gui_send_required_evidence(self.args.app_id)
-        if any(harness_evidence.get(key) is not True for key in required_evidence):
-            return self._finish(
-                "blocked",
-                "managed_gui_send_verification_incomplete",
-                current=work_item,
-                extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
+        harness_runtime = str(getattr(self.args, "harness_runtime", "") or "").strip()
+        for message in payload_messages:
+            message_work_item = _single_message_work_item(work_item, message)
+            message_action_request = self._live_send_action_request(message_work_item)
+            draft_path = self.work_dir / (
+                f"managed_payload.{_safe_name(str(work_item.get('work_item_id') or 'send'))}."
+                f"{int(message['index']):02d}.txt"
             )
+            action_request_path = self.work_dir / (
+                f"managed_action_request.{_safe_name(str(work_item.get('work_item_id') or 'send'))}."
+                f"{int(message['index']):02d}.json"
+            )
+            draft_path.write_text(str(message["text"]), encoding="utf-8")
+            _write_json(action_request_path, message_action_request)
+            command_args = [
+                "harness",
+                self.args.app_id,
+                "send-message",
+                "--data-dir",
+                str(self.data_dir),
+                "--authorization",
+                str(authorization_path),
+                "--text-file",
+                str(draft_path),
+                "--action-request",
+                str(action_request_path),
+                "--output-dir",
+                str(self.work_dir / "harness"),
+                "--json",
+            ]
+            if harness_runtime:
+                command_args[3:3] = ["--runtime", harness_runtime]
+            try:
+                harness_payload = self._run_cli_json(
+                    *command_args,
+                    allow_error=True,
+                )
+            finally:
+                if draft_path.exists():
+                    draft_path.unlink()
+                if action_request_path.exists():
+                    action_request_path.unlink()
+
+            harness_payload["message_sequence_index"] = message["index"]
+            harness_payload["message_sequence_count"] = len(payload_messages)
+            harness_payloads.append(harness_payload)
+            self._append_timeline("managed_gui_send", message_work_item, {"harness": _redacted_managed_send_payload(harness_payload)})
+            if harness_payload.get("status") == "needs_host_visual_verification":
+                return self._finish(
+                    "waiting_for_host",
+                    str(harness_payload.get("reason") or "staged_text_requires_visual_verification"),
+                    current=work_item,
+                    extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
+                )
+            if harness_payload.get("status") != "ok":
+                return self._finish(
+                    "blocked",
+                    str(harness_payload.get("reason") or "managed_gui_send_failed"),
+                    current=work_item,
+                    extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
+                )
+            harness_evidence = harness_payload.get("evidence") if isinstance(harness_payload.get("evidence"), dict) else {}
+            if not harness_payload.get("post_action_observation_id"):
+                return self._finish(
+                    "blocked",
+                    "post_action_observation_required",
+                    current=work_item,
+                    extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
+                )
+            if any(harness_evidence.get(key) is not True for key in required_evidence):
+                return self._finish(
+                    "blocked",
+                    "managed_gui_send_verification_incomplete",
+                    current=work_item,
+                    extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
+                )
 
         verification = {
             "status": "ok",
@@ -884,11 +907,14 @@ class HostLoopSupervisor:
             "precondition_hash": work_item.get("precondition_hash"),
             "autonomous_audit_binding": work_item.get("autonomous_audit_binding"),
             "pre_action_observation_id": work_item.get("pre_action_observation_id"),
-            "post_action_observation_id": harness_payload.get("post_action_observation_id"),
+            "post_action_observation_id": harness_payloads[-1].get("post_action_observation_id"),
             "result_status": "succeeded",
+            "message_count": len(payload_messages),
+            "payload_format": "message_sequence" if len(payload_messages) > 1 else "single_message",
             "evidence": {
                 "managed_gui_send": True,
-                **harness_evidence,
+                "message_sequence_send": len(payload_messages) > 1,
+                **(harness_payloads[-1].get("evidence") if isinstance(harness_payloads[-1].get("evidence"), dict) else {}),
             },
         }
         result_path = self._work_file(work_item, "action_result")
@@ -911,7 +937,7 @@ class HostLoopSupervisor:
             authorization,
             self._live_send_action_request(work_item),
             app_id=self.args.app_id,
-            draft_text=str(work_item.get("payload_text") or ""),
+            draft_text=_work_item_payload_text(work_item),
             data_dir=self.data_dir,
         )
 
@@ -1524,8 +1550,73 @@ def _redacted_managed_send_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "post_action_observation_id",
         "evidence",
         "clipboard_restored",
+        "next_host_action",
+        "visual_verification_request",
+        "message_sequence_index",
+        "message_sequence_count",
     }
     return {key: value for key, value in payload.items() if key in allowed}
+
+
+def _work_item_payload_messages(work_item: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_messages = work_item.get("payload_messages")
+    if work_item.get("payload_format") == "message_sequence" and isinstance(raw_messages, list):
+        messages = []
+        for expected_index, item in enumerate(raw_messages, start=1):
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            message_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            messages.append(
+                {
+                    "index": int(item.get("index") or expected_index),
+                    "text": text,
+                    "message_hash": str(item.get("message_hash") or message_hash),
+                    "character_count": int(item.get("character_count") or len(text)),
+                }
+            )
+        if messages:
+            return messages
+    text = str(work_item.get("payload_text") or "")
+    return [
+        {
+            "index": 1,
+            "text": text,
+            "message_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "character_count": len(text),
+        }
+    ]
+
+
+def _work_item_payload_text(work_item: dict[str, Any]) -> str:
+    return "\n".join(message["text"] for message in _work_item_payload_messages(work_item))
+
+
+def _single_message_work_item(work_item: dict[str, Any], message: dict[str, Any]) -> dict[str, Any]:
+    text = str(message["text"])
+    message_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    single = dict(work_item)
+    single["action_request_id"] = f"{work_item.get('action_request_id')}.{int(message['index']):02d}"
+    single["payload_text"] = text
+    single["payload_hash"] = message_hash
+    single["payload_format"] = "single_message"
+    single["payload_messages"] = [
+        {
+            "index": 1,
+            "text": text,
+            "message_hash": message_hash,
+            "character_count": len(text),
+        }
+    ]
+    single["message_count"] = 1
+    binding = single.get("autonomous_audit_binding")
+    if isinstance(binding, dict):
+        updated_binding = dict(binding)
+        updated_binding["payload_hash"] = message_hash
+        single["autonomous_audit_binding"] = updated_binding
+    return single
 
 
 def _managed_gui_send_required_evidence(app_id: str) -> tuple[str, ...]:
@@ -1797,6 +1888,8 @@ def _next_host_action_for_block_reason(reason: str | None) -> str | None:
         return "provide_structural_target_binding_evidence"
     if reason == "target_binding_lost_current_thread":
         return "stop_do_not_send_recover_current_thread_binding"
+    if reason == "staged_text_requires_visual_verification":
+        return "visually_verify_staged_text_before_live_send"
     if isinstance(reason, str) and reason.startswith("runtime_live_send_not_supported:"):
         return "choose_supported_runtime_or_stage_only"
     return None

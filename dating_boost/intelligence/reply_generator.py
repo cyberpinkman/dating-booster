@@ -43,7 +43,7 @@ def generate_reply(context_pack: Mapping[str, Any], reply_mode: ReplyMode, backe
 def _build_system_prompt() -> str:
     return (
         "You generate dating-app reply drafts as structured JSON. "
-        "Return only fields required by the provided schema. "
+        "Return all required fields and useful optional strategy fields from the provided schema. "
         "Use situation_read to summarize recipient investment, the latest message, current friction, and whether the "
         "user has already sent too much. "
         "Use conversation_move for one clear move such as answer_or_riff, take_the_lead, deepen_current, "
@@ -60,6 +60,11 @@ def _build_system_prompt() -> str:
         "with one light concrete decision and do not ask them to decide again. "
         "When asking, prefer unknown details behind profile hooks, and avoid multi-option survey wording, tag "
         "stacking, abstract planning nouns, and repeating known facts as if they were new hooks. "
+        "Use strategic_delta to state the concrete new conversational handle; if there is no strategic delta, revise "
+        "instead of sending. Use selected_hook when the draft uses a profile or conversation hook. "
+        "Use message_sequence when a Chinese private-chat reply is more natural split into several short messages, "
+        "especially when bridging from one topic to another; split near commas or sentence boundaries, keep each "
+        "message short, and do not hide a long paragraph inside one bubble. "
         "Respect safety constraints, respect hard facts, and do not invent identity, location, education, work, "
         "relationship intent, or other hard facts."
     )

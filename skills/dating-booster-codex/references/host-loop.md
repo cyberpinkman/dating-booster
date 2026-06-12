@@ -59,9 +59,9 @@ visual-only button or bubble evidence is not enough. Bumble managed send applies
 to ordinary chat sends; autonomous Opening Move send is not supported. TaShuo
 managed send applies to ordinary chat sends; current harness question-gate
 staging/sending is not supported. TaShuo mac-ios-app managed live send is
-currently blocked as `experimental_blocked_cjk_stage_verification`; host-loop
-must return `runtime_live_send_not_supported:tashuo:mac-ios-app` for that runtime. The
-harness never authorizes like,
+supported for ordinary chat only and requires `--harness-runtime mac-ios-app`,
+structural row-to-thread target binding, exact staged-text verification, and
+post-send exact-text/input-cleared verification. The harness never authorizes like,
 super-like, SuperSwipe, pass, unmatch, report, premium purchase, profile edit,
 TaShuo 飞行 start-chat, or question-gate decision actions.
 
@@ -89,7 +89,8 @@ dating-boost-host-loop run \
   --json
 ```
 
-TaShuo mac-ios-app managed live send is currently a negative-path check:
+TaShuo mac-ios-app managed live send uses the same host-loop gate with the
+runtime selected explicitly:
 
 ```bash
 dating-boost-host-loop run \
@@ -105,8 +106,9 @@ dating-boost-host-loop run \
   --json
 ```
 
-The command above must block before any real send attempt until capabilities
-declare managed live-send support for the mac-ios-app runtime.
+The command above must still block if structural target binding, exact
+staged-text verification, input-cleared evidence, or outbound exact-text
+evidence is missing.
 
 When running from a cloned repository, `python3 scripts/operator_host_loop.py`
 is a compatibility wrapper around the same command.

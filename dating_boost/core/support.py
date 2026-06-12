@@ -200,9 +200,10 @@ class SupportLogRepository:
         sensitive: dict[str, Any] | None = None,
         sensitive_kind: str | None = None,
     ) -> dict[str, Any]:
-        ready = self._ensure_ready()
-        if ready.get("status") != "ok":
-            return ready
+        if sensitive is not None:
+            ready = self._ensure_ready()
+            if ready.get("status") != "ok":
+                return ready
         if not self.store.get_document(_session_path(session_id)):
             return _blocked("support_session_not_found", session_id=session_id)
         evidence_summary = None

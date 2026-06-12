@@ -137,6 +137,7 @@ class SkillPackageTests(unittest.TestCase):
 
     def test_agent_facing_docs_do_not_present_handcrafted_live_send_requests(self):
         docs = [
+            Path("README.md"),
             Path("AGENTS.md"),
             Path("skills/dating-booster-codex/SKILL.md"),
             Path("skills/dating-booster-codex/INSTALL.md"),
@@ -164,6 +165,9 @@ class SkillPackageTests(unittest.TestCase):
             "execute `send_message` only through gated app-specific `harness <app> send-message` paths",
             "managed send requires `harness <app> send-message",
             "fully managed sending also requires `--managed-gui-send` or the explicit `harness",
+            "experimental_blocked_cjk_stage_verification",
+            "runtime_live_send_not_supported:tashuo:mac-ios-app",
+            "mac-ios-app is not currently a managed live-send runtime",
         )
 
         for path in docs:

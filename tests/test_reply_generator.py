@@ -43,6 +43,15 @@ class ReplyGeneratorTests(unittest.TestCase):
         ):
             self.assertIn(field_name, REPLY_SCHEMA["required"])
             self.assertIn(field_name, REPLY_SCHEMA["properties"])
+        for optional_field in (
+            "message_sequence",
+            "strategic_delta",
+            "selected_hook",
+            "meeting_path",
+            "why_not_ask_question",
+            "why_not_invite_now",
+        ):
+            self.assertIn(optional_field, REPLY_SCHEMA["properties"])
 
     def test_core_prompt_includes_strategy_and_chinese_naturalness_guidance(self):
         backend = CapturingBackend(
@@ -78,6 +87,10 @@ class ReplyGeneratorTests(unittest.TestCase):
             "do not ask them to decide again",
             "multi-option",
             "tag stacking",
+            "message_sequence",
+            "strategic_delta",
+            "split",
+            "no strategic delta",
             "hard facts",
         ):
             self.assertIn(phrase, system_prompt)

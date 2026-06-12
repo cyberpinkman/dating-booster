@@ -152,6 +152,10 @@ class AppProfileContractTests(unittest.TestCase):
         self.assertTrue(profile["native_gui_harness"]["live_send"]["requires_exact_staged_text_verification"])
         self.assertTrue(profile["native_gui_harness"]["live_send"]["requires_outbound_bubble_verification"])
         self.assertIn("chat_list_row_to_thread", profile["target_binding"]["allowed_structural_binding_types"])
+        self.assertIn("current_thread_visual_identity", profile["target_binding"]["allowed_structural_binding_types"])
+        pitfalls = "\n".join(profile["known_gui_pitfalls"])
+        self.assertIn("visual_anchor_hash", pitfalls)
+        self.assertIn("do not use message-list row position or header OCR", pitfalls)
 
         policy = profile["question_gate_policy"]
 
@@ -186,7 +190,7 @@ class AppProfileContractTests(unittest.TestCase):
             }.issubset(blocked)
         )
 
-    def test_tashuo_mac_ios_app_stage_is_alternate_runtime_and_live_send_is_blocked(self):
+    def test_tashuo_mac_ios_app_stage_and_live_send_are_alternate_runtime_capabilities(self):
         profile = json.loads((PROFILE_DIR / "tashuo.json").read_text(encoding="utf-8"))
 
         self.assertNotIn("stage_draft", profile["native_gui_harness"]["supported_stage_actions"])
@@ -197,9 +201,9 @@ class AppProfileContractTests(unittest.TestCase):
         self.assertEqual(mac_runtime["backend"], "mac_ios_app")
         self.assertIn("stage_draft", mac_runtime["supported_stage_actions"])
         self.assertIn("prepare_message_page", mac_runtime["supported_stage_actions"])
-        self.assertEqual(mac_runtime["supported_live_actions"], [])
-        self.assertEqual(mac_runtime["live_send_status"], "experimental_blocked_cjk_stage_verification")
-        self.assertEqual(mac_runtime["live_send_block_reason"], "cjk_stage_verification_not_stable")
+        self.assertIn("send_message", mac_runtime["supported_live_actions"])
+        self.assertEqual(mac_runtime["live_send_status"], "supported")
+        self.assertNotIn("live_send_block_reason", mac_runtime)
 
     def test_iphone_dating_apps_allow_row_to_thread_binding_for_non_ocr_nicknames(self):
         for app_id in ("tinder", "bumble", "tashuo"):

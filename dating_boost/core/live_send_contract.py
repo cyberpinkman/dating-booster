@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -183,7 +184,9 @@ def live_send_action_request_block_reason(
     if request_app_id is not None and request_app_id != app_id:
         return "action_request_app_mismatch"
 
-    expected_hash = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
+    expected_hash, payload_reason = _expected_action_payload_hash(action_request, draft_text)
+    if payload_reason is not None:
+        return payload_reason
     if action_request.get("payload_hash") != expected_hash:
         return "action_request_payload_hash_mismatch"
     if action_request.get("requires_post_action_verification") is not True:
@@ -240,6 +243,37 @@ def _planner_evidence_block_reason(action_request: dict[str, Any]) -> str | None
     ):
         return "action_request_planner_context_required"
     return None
+
+
+def _expected_action_payload_hash(action_request: dict[str, Any], draft_text: str) -> tuple[str, str | None]:
+    if action_request.get("payload_format") != "message_sequence":
+        return hashlib.sha256(draft_text.encode("utf-8")).hexdigest(), None
+    raw_messages = action_request.get("payload_messages")
+    if not isinstance(raw_messages, list) or not raw_messages:
+        return "", "action_request_payload_messages_required"
+    texts: list[str] = []
+    for expected_index, item in enumerate(raw_messages, start=1):
+        if not isinstance(item, dict):
+            return "", "action_request_payload_messages_invalid"
+        if item.get("index") != expected_index:
+            return "", "action_request_payload_messages_invalid"
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return "", "action_request_payload_messages_invalid"
+        if item.get("message_hash") != hashlib.sha256(text.encode("utf-8")).hexdigest():
+            return "", "action_request_payload_message_hash_mismatch"
+        if item.get("character_count") != len(text):
+            return "", "action_request_payload_messages_invalid"
+        texts.append(text)
+    joined = "\n".join(texts)
+    if action_request.get("payload_text") not in {None, joined}:
+        return "", "action_request_payload_text_mismatch"
+    if draft_text != joined:
+        return "", "action_request_payload_text_mismatch"
+    payload = {"payload_format": "message_sequence", "messages": texts}
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest(), None
 
 
 def _authorization_target_block_reason(authorization: dict[str, Any], target_match_id: str) -> str | None:
@@ -343,6 +377,17 @@ def _target_binding_allowed_structural_evidence_present(
     allowed_types = {str(item) for item in allowed_items} if isinstance(allowed_items, list) else set()
     if binding_type is None or binding_type not in allowed_types:
         return False
+    if binding_type == "current_thread_visual_identity":
+        thread_evidence = target_binding.get("thread_evidence")
+        if not isinstance(thread_evidence, dict):
+            return False
+        return (
+            _non_empty(target_binding.get("conversation_fingerprint"))
+            and _non_empty(thread_evidence.get("observation_id"))
+            and _non_empty(thread_evidence.get("screen_state"))
+            and _non_empty(thread_evidence.get("latest_inbound_fingerprint"))
+            and _non_empty(thread_evidence.get("visual_anchor_hash"))
+        )
     selection_evidence = target_binding.get("selection_evidence")
     if not isinstance(selection_evidence, dict):
         return False

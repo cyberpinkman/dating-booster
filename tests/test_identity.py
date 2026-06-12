@@ -48,6 +48,25 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(result.confidence, IdentityConfidence.HIGH)
         self.assertFalse(result.requires_user_confirmation)
 
+    def test_unique_name_and_fingerprint_match_is_high_confidence_without_profile_cues(self):
+        observation = load_observation(Path("tests/fixtures/intelligence/app_observation_chat.json"))
+
+        result = resolve_match_identity(
+            observation,
+            existing_matches=[
+                {
+                    "match_id": "match_alex",
+                    "display_name": "Alex",
+                    "profile_cues": [],
+                    "conversation_fingerprint": "alex-weekend-question",
+                }
+            ],
+        )
+
+        self.assertEqual(result.match_id, "match_alex")
+        self.assertEqual(result.confidence, IdentityConfidence.HIGH)
+        self.assertFalse(result.requires_user_confirmation)
+
     def test_low_information_new_matches_use_observation_id_to_avoid_collisions(self):
         first_observation = AppObservation.minimal(
             observation_id="obs_low_info_1",

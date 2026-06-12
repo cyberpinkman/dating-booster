@@ -43,6 +43,27 @@ def resolve_match_identity(observation: Any, existing_matches: Iterable[dict[str
         for candidate in candidates
         if visible_name and _normalize(candidate.get("display_name")) == visible_name
     ]
+    fingerprint_matches = [
+        candidate
+        for candidate in name_matches
+        if _fingerprint_matches(candidate, fingerprint)
+    ]
+    if len(fingerprint_matches) == 1:
+        return IdentityResult(
+            match_id=fingerprint_matches[0]["match_id"],
+            confidence=IdentityConfidence.HIGH,
+            requires_user_confirmation=False,
+            reason="Visible name and conversation fingerprint matched.",
+        )
+
+    if len(fingerprint_matches) > 1:
+        return IdentityResult(
+            match_id=fingerprint_matches[0]["match_id"],
+            confidence=IdentityConfidence.CONFLICT,
+            requires_user_confirmation=True,
+            reason="Multiple existing matches shared the same visible name and conversation fingerprint.",
+        )
+
     high_matches = [
         candidate
         for candidate in name_matches

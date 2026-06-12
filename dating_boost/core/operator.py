@@ -33,6 +33,8 @@ class OperatorRepository:
                 "authorization_id": automation_session.get("authorization_id"),
                 "user_profile_readiness": automation_session.get("user_profile_readiness"),
                 "resumed_from_report": automation_session.get("resumed_from_report"),
+                "memory_review": automation_session.get("memory_review"),
+                "warnings": automation_session.get("warnings", []),
             }
         session = {
             "schema_version": 1,
@@ -57,6 +59,8 @@ class OperatorRepository:
             "authorization_id": session["authorization_id"],
             "initial_surface": initial_surface,
             "resumed_from_report": automation_session.get("resumed_from_report"),
+            "memory_review": automation_session.get("memory_review"),
+            "warnings": automation_session.get("warnings", []),
         }
 
     def next_work_item(self) -> dict[str, Any]:
@@ -571,7 +575,6 @@ def _scan_batch_from_current_thread_payload(
                     "latest_preview_hash": f"sha256:{hashlib.sha256(latest_preview.encode('utf-8')).hexdigest()}",
                     "timestamp_cue": payload.get("timestamp_cue") or "current_thread",
                     "unread_cue": payload.get("unread_cue") or "unknown",
-                    "position": 1,
                     "identity_confidence": payload.get("identity_confidence") or "medium",
                     "identity_evidence": payload.get("identity_evidence") or "Current thread observation.",
                     "match_identity_hints": {
