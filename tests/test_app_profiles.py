@@ -214,10 +214,12 @@ class AppProfileContractTests(unittest.TestCase):
     def test_live_send_required_evidence_names_match_harness_payload_keys(self):
         known_evidence_keys = {
             "staged_text_verified",
+            "staged_exact_text_verified",
             "staged_exact_text_ocr_verified",
             "input_cleared_after_send",
             "post_action_screen_captured",
             "outbound_message_verified",
+            "outbound_exact_text_verified",
             "outbound_exact_text_ocr_verified",
         }
 
@@ -227,6 +229,15 @@ class AppProfileContractTests(unittest.TestCase):
                 required = set(profile["live_send_requirements"]["required_evidence"])
                 self.assertTrue(required)
                 self.assertLessEqual(required, known_evidence_keys)
+
+    def test_tashuo_mac_ios_live_send_required_evidence_is_not_ocr_only(self):
+        profile = json.loads((PROFILE_DIR / "tashuo.json").read_text(encoding="utf-8"))
+        required = set(profile["live_send_requirements"]["required_evidence"])
+
+        self.assertIn("staged_exact_text_verified", required)
+        self.assertIn("outbound_exact_text_verified", required)
+        self.assertNotIn("staged_exact_text_ocr_verified", required)
+        self.assertNotIn("outbound_exact_text_ocr_verified", required)
 
 
 if __name__ == "__main__":

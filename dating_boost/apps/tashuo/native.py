@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -89,9 +90,9 @@ TASHUO_QUESTION_GATE_POLICY: dict[str, Any] = {
 }
 TASHUO_MESSAGE_INPUT_UNFOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.91}
 TASHUO_MESSAGE_INPUT_FOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.91}
-TASHUO_MAC_IOS_APP_MESSAGE_INPUT_FOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.85}
+TASHUO_MAC_IOS_APP_MESSAGE_INPUT_FOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.90}
 TASHUO_MESSAGES_TAB_TAP_RATIO = {"x": 0.67, "y": 0.96}
-TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.84}
+TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65}
 TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_MAX_DISTANCE = 6
 TASHUO_MAC_IOS_APP_INPUT_OCR_REGION = {"x1": 0.035, "y1": 0.772, "x2": 0.905, "y2": 0.906}
 
@@ -270,6 +271,17 @@ def _copy_tap_ratio(ratio: dict[str, float]) -> dict[str, float]:
     return {"x": float(ratio["x"]), "y": float(ratio["y"])}
 
 
+def _tap_ratio_option(value: Any) -> dict[str, float] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        x = max(0.0, min(1.0, float(value["x"])))
+        y = max(0.0, min(1.0, float(value["y"])))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return {"x": x, "y": y}
+
+
 def _tashuo_message_input_tap_ratio(session: Any, *, focused: bool) -> dict[str, float]:
     if focused and _is_mac_ios_app_session(session):
         return _copy_tap_ratio(TASHUO_MAC_IOS_APP_MESSAGE_INPUT_FOCUSED_TAP_RATIO)
@@ -322,7 +334,47 @@ def run_tashuo_action(
     }
     if dry_run:
         return payload
+    if action == "open-conversation":
+        already_open = _tashuo_already_at_open_conversation_target(session, planned_steps, output_dir=output_dir)
+        if already_open is not None:
+            payload.update(already_open)
+            return payload
     return session._execute_planned_steps(payload, output_dir=output_dir)
+
+
+def _tashuo_already_at_open_conversation_target(
+    session: Any,
+    planned_steps: list[dict[str, Any]],
+    *,
+    output_dir: Path | None = None,
+) -> dict[str, Any] | None:
+    if not planned_steps:
+        return None
+    expected_states = planned_steps[0].get("expected_tashuo_states")
+    expected = set(expected_states if isinstance(expected_states, list) else [expected_states])
+    expected.discard(None)
+    if not expected:
+        return None
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    before = output_dir / "iphone_mirroring.before_action.png" if output_dir is not None else None
+    doctor = session.doctor(capture=True, output=before)
+    if doctor.get("status") == "blocked":
+        return {
+            "preflight": doctor,
+            "status": "blocked",
+            "reason": doctor.get("reason") or "tashuo_preflight_not_verified",
+        }
+    screen_state = doctor.get("screen", {}).get("state")
+    if screen_state not in expected:
+        return None
+    return {
+        "preflight": doctor,
+        "screen_state": screen_state,
+        "already_at_expected_state": True,
+        "target_binding_created": False,
+        "next_host_action": "observe_current_thread",
+    }
 
 
 def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_dir: Path | None = None) -> dict[str, Any]:
@@ -725,6 +777,12 @@ def send_tashuo_message(
         "risk": "live_send_precondition",
         "requires_exact_text_match": True,
     }
+    ax_set_text_step = {
+        "intent": "set_tashuo_message_input_with_accessibility_if_paste_did_not_stage",
+        "risk": "live_send_precondition",
+        "fallback_only": True,
+        "requires_exact_text_verification_after_ax_set": True,
+    }
     type_fallback_step = {
         "intent": "type_tashuo_message_input_if_paste_did_not_stage",
         "risk": "live_send_precondition",
@@ -752,7 +810,7 @@ def send_tashuo_message(
         "action": "send_message",
         "target": "tashuo_message_input",
         "mode": "dry_run" if dry_run else "execute",
-        "planned_steps": [input_step, paste_step, type_fallback_step, ime_commit_step, send_step],
+        "planned_steps": [input_step, paste_step, ax_set_text_step, type_fallback_step, ime_commit_step, send_step],
         "draft_fingerprint": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
         "draft_character_count": len(draft_text),
         **platform._text_fingerprint_fields("draft_clipboard", draft_text),
@@ -787,15 +845,32 @@ def send_tashuo_message(
         payload.update({"status": "blocked", "reason": "tashuo_conversation_not_verified"})
         return payload
 
+    deferred_target_binding_mismatch: dict[str, Any] | None = None
     if target_binding is not None:
         target_verification = _verify_tashuo_target_binding(session, target_binding, output_dir=output_dir)
         payload["target_binding_verification"] = target_verification
         if target_verification.get("status") != "ok":
-            payload.update({
-                "status": "blocked",
-                "reason": target_verification.get("reason") or "target_binding_mismatch",
-            })
-            return payload
+            can_defer_anchor_mismatch = (
+                _is_mac_ios_app_session(session)
+                and target_binding.get("binding_type") == "current_thread_visual_identity"
+                and target_verification.get("reason") == "target_binding_visual_anchor_mismatch"
+                and target_verification.get("screen_state") == "tashuo_conversation"
+            )
+            if can_defer_anchor_mismatch:
+                deferred_target_binding_mismatch = target_verification
+            else:
+                payload.update({
+                    "status": "blocked",
+                    "reason": target_verification.get("reason") or "target_binding_mismatch",
+                })
+                return payload
+
+    if deferred_target_binding_mismatch is not None:
+        payload["target_binding_verification"] = {
+            **deferred_target_binding_mismatch,
+            "status": "deferred",
+            "deferred_until": "already_sent_exact_text_check",
+        }
 
     baseline_output = output_dir / f"{capture_prefix}.before_stage_message.png" if output_dir is not None else None
     baseline_screen = session.capture_window(output=baseline_output, window=window)
@@ -812,6 +887,62 @@ def send_tashuo_message(
         return payload
     if baseline_screen.get("state") != "tashuo_conversation":
         payload.update({"status": "blocked", "reason": "tashuo_conversation_not_verified"})
+        return payload
+
+    already_sent_ax_static_text_values = _tashuo_ax_static_text_values(session) if _is_mac_ios_app_session(session) else None
+    already_sent_ax_text_area_value = _tashuo_ax_text_area_value(session) if _is_mac_ios_app_session(session) else None
+    already_sent_verification = _verify_tashuo_outbound_message(
+        baseline_screen,
+        draft_text,
+        ax_static_text_values=already_sent_ax_static_text_values,
+        ax_text_area_value=already_sent_ax_text_area_value,
+    )
+    if already_sent_verification.get("status") == "ok":
+        post_id_source = f"{payload['draft_fingerprint']}:{baseline_screen.get('path') or platform._now_iso()}:{uuid4().hex}"
+        post_observation_id = "gui_post_send_" + hashlib.sha256(post_id_source.encode("utf-8")).hexdigest()[:16]
+        current_thread_anchor = _tashuo_current_thread_visual_anchor(baseline_screen)
+        payload["post_action_observation"] = platform._redacted_screen(baseline_screen)
+        payload["post_action_observation_id"] = post_observation_id
+        payload["outbound_message_verification"] = already_sent_verification
+        payload["current_thread_visual_anchor"] = current_thread_anchor
+        payload["already_sent"] = True
+        payload["staged_text_verified"] = False
+        payload["executed_steps"] = []
+        if deferred_target_binding_mismatch is not None:
+            recovered_target = {**deferred_target_binding_mismatch}
+            recovered_target.pop("reason", None)
+            recovered_target.update({
+                "status": "ok",
+                "recovered_by": "already_sent_exact_text_current_thread",
+                "uses_header_ocr": False,
+            })
+            if current_thread_anchor.get("status") == "ok":
+                recovered_target["observed_visual_anchor_hash"] = current_thread_anchor.get("visual_anchor_hash")
+                recovered_target["visual_anchor_hash_status"] = "ok"
+            payload["target_binding_verification"] = recovered_target
+        payload["evidence"] = {
+            "staged_text_verified": False,
+            "staged_exact_text_verified": False,
+            "staged_exact_text_ax_verified": False,
+            "staged_exact_text_ocr_verified": False,
+            "send_input_backend": "already_sent_idempotent_skip",
+            "input_cleared_after_send": bool(already_sent_verification.get("input_cleared_after_send")),
+            "post_action_screen_captured": baseline_screen.get("status") == "ok",
+            "outbound_message_verified": True,
+            "outbound_exact_text_verified": bool(already_sent_verification.get("exact_text_verified")),
+            "outbound_exact_text_ax_verified": bool(already_sent_verification.get("exact_text_ax_verified")),
+            "outbound_exact_text_ocr_verified": bool(already_sent_verification.get("exact_text_ocr_verified")),
+            "visual_only_exact_verification_allowed": False,
+            "post_action_observation_id": post_observation_id,
+        }
+        return payload
+
+    if deferred_target_binding_mismatch is not None:
+        payload.update({
+            "status": "blocked",
+            "reason": deferred_target_binding_mismatch.get("reason") or "target_binding_mismatch",
+            "already_sent_verification": already_sent_verification,
+        })
         return payload
 
     previous_clipboard = session._read_clipboard()
@@ -855,6 +986,26 @@ def send_tashuo_message(
         )
         staged_text = str(staged_screen.get("text") or "")
         staged_input_placeholder_visible = _tashuo_input_placeholder_visible(staged_text)
+        if staged_verification.get("status") != "ok" and _is_mac_ios_app_session(session):
+            ax_set_result = _set_tashuo_ax_text_area_value(session, draft_text)
+            executed_steps.append({**ax_set_text_step, "result": ax_set_result})
+            payload["ax_set_text_area_result"] = ax_set_result
+            if ax_set_result.get("status") == "ok":
+                time.sleep(0.25)
+                staged_output = output_dir / f"{capture_prefix}.after_ax_set_message.png" if output_dir is not None else None
+                staged_screen = session.capture_window(output=staged_output, window=window)
+                staged_verification = _verify_staged_tashuo_message_with_crop_ocr(
+                    session,
+                    staged_screen,
+                    draft_text,
+                    baseline_screen=baseline_screen,
+                    output_dir=output_dir,
+                    label=f"{capture_prefix}.after_ax_set_message.input_crop",
+                )
+                payload["ax_set_text_verification"] = staged_verification
+                payload["staging_input_backend"] = ax_set_result.get("input_backend")
+                staged_text = str(staged_screen.get("text") or "")
+                staged_input_placeholder_visible = _tashuo_input_placeholder_visible(staged_text)
         direct_type_fallback_candidate = (
             staged_verification.get("status") != "ok"
             and platform._direct_type_fallback_allowed(draft_text)
@@ -971,6 +1122,23 @@ def send_tashuo_message(
         })
         return payload
 
+    if payload.get("staging_input_backend") == "macos_accessibility":
+        refocus_step = {
+            **focused_input_step,
+            "intent": "focus_tashuo_message_input_after_accessibility_set",
+        }
+        refocus_result = session._click_ratio(window, refocus_step["tap_ratio"])
+        executed_steps.append({**refocus_step, "result": refocus_result})
+        payload["ax_set_refocus_result"] = refocus_result
+        if refocus_result.get("status") != "ok":
+            payload.update({
+                "status": "blocked",
+                "reason": refocus_result.get("reason") or "tashuo_input_refocus_after_ax_set_failed",
+                "executed_steps": executed_steps,
+            })
+            return payload
+        time.sleep(0.2)
+
     send_result = session._press_return_key()
     executed_steps.append({**send_step, "result": send_result})
     payload["executed_steps"] = executed_steps
@@ -982,26 +1150,38 @@ def send_tashuo_message(
     post_output = output_dir / f"{capture_prefix}.after_send_message.png" if output_dir is not None else None
     post_screen = session.capture_window(output=post_output, window=window)
     payload["post_action_observation"] = platform._redacted_screen(post_screen)
+    payload["current_thread_visual_anchor"] = _tashuo_current_thread_visual_anchor(post_screen)
     post_id_source = f"{payload['draft_fingerprint']}:{post_screen.get('path') or platform._now_iso()}:{uuid4().hex}"
     post_observation_id = "gui_post_send_" + hashlib.sha256(post_id_source.encode("utf-8")).hexdigest()[:16]
     payload["post_action_observation_id"] = post_observation_id
     post_screen_captured = post_screen.get("status") == "ok"
+    post_ax_static_text_values = _tashuo_ax_static_text_values(session) if _is_mac_ios_app_session(session) else None
+    post_ax_text_area_value = _tashuo_ax_text_area_value(session) if _is_mac_ios_app_session(session) else None
     outbound_verification = _verify_tashuo_outbound_message(
         post_screen,
         draft_text,
         staged_screen=staged_screen,
+        ax_static_text_values=post_ax_static_text_values,
+        ax_text_area_value=post_ax_text_area_value,
         trusted_direct_input=payload.get("staging_input_backend") == "applescript_direct_keystroke",
     )
     payload["outbound_message_verification"] = outbound_verification
     outbound_verified = outbound_verification.get("status") == "ok"
     input_cleared = bool(outbound_verification.get("input_cleared_after_send"))
+    staged_exact_text_verified = bool(
+        staged_verification.get("exact_text_ocr_verified") or staged_verification.get("exact_text_ax_verified")
+    )
     payload["evidence"] = {
         "staged_text_verified": bool(payload.get("staged_text_verified")),
+        "staged_exact_text_verified": staged_exact_text_verified,
+        "staged_exact_text_ax_verified": bool(staged_verification.get("exact_text_ax_verified")),
         "staged_exact_text_ocr_verified": bool(staged_verification.get("exact_text_ocr_verified")),
         "send_input_backend": send_result.get("input_backend"),
         "input_cleared_after_send": input_cleared,
         "post_action_screen_captured": post_screen_captured,
         "outbound_message_verified": outbound_verified,
+        "outbound_exact_text_verified": bool(outbound_verification.get("exact_text_verified")),
+        "outbound_exact_text_ax_verified": bool(outbound_verification.get("exact_text_ax_verified")),
         "outbound_exact_text_ocr_verified": bool(outbound_verification.get("exact_text_ocr_verified")),
         "visual_only_exact_verification_allowed": False,
         "post_action_observation_id": post_observation_id,
@@ -1081,6 +1261,31 @@ def _verify_tashuo_target_binding(
     if not header_matched:
         return {**result, "status": "blocked", "reason": "target_binding_header_mismatch"}
     return {**result, "status": "ok"}
+
+
+def _tashuo_current_thread_visual_anchor(
+    screen: dict[str, Any],
+    *,
+    region: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    anchor_region = region or dict(TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION)
+    base = {
+        "screen_state": screen.get("state", "unknown"),
+        "visual_state": screen.get("visual_state", "unknown"),
+        "visual_anchor_region": anchor_region,
+        "uses_header_ocr": False,
+    }
+    if screen.get("status") != "ok":
+        return {**base, "status": "blocked", "reason": screen.get("reason") or "screen_not_captured"}
+    if screen.get("state") != "tashuo_conversation":
+        return {**base, "status": "blocked", "reason": "tashuo_conversation_not_verified"}
+    screen_path = str(screen.get("path") or "")
+    if not screen_path:
+        return {**base, "status": "blocked", "reason": "target_binding_screen_path_missing"}
+    return {
+        **base,
+        **_tashuo_visual_anchor_hash_for_path(Path(screen_path), region=anchor_region),
+    }
 
 
 def _verify_tashuo_current_thread_visual_identity(
@@ -1382,11 +1587,13 @@ def _verify_staged_tashuo_message_with_crop_ocr(
     output_dir: Path | None = None,
     label: str = "tashuo.input_crop",
 ) -> dict[str, Any]:
+    ax_value = _tashuo_ax_text_area_value(session) if _is_mac_ios_app_session(session) else None
     result = _verify_staged_tashuo_message(
         screen,
         expected_text,
         baseline_screen=baseline_screen,
         trusted_direct_input=trusted_direct_input,
+        ax_text_area_value=ax_value,
     )
     if result.get("status") == "ok" or screen.get("status") != "ok":
         return result
@@ -1403,6 +1610,7 @@ def _verify_staged_tashuo_message_with_crop_ocr(
         baseline_screen=baseline_screen,
         trusted_direct_input=trusted_direct_input,
         input_crop_ocr=crop_ocr,
+        ax_text_area_value=ax_value,
     )
 
 
@@ -1413,6 +1621,7 @@ def _verify_staged_tashuo_message(
     baseline_screen: dict[str, Any] | None = None,
     trusted_direct_input: bool = False,
     input_crop_ocr: dict[str, Any] | None = None,
+    ax_text_area_value: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     observed_text = str(screen.get("text") or "")
     crop_text = (
@@ -1426,8 +1635,14 @@ def _verify_staged_tashuo_message(
     baseline_stats = platform._expected_text_observation_stats(baseline_text, expected_text) if baseline_text else None
     screen_exact = platform._message_text_matches(observed_text, expected_text)
     crop_exact = bool(crop_text) and platform._message_text_matches(crop_text, expected_text)
+    ax_text = (
+        str(ax_text_area_value.get("value") or "")
+        if isinstance(ax_text_area_value, dict) and ax_text_area_value.get("status") == "ok"
+        else ""
+    )
+    ax_exact = bool(ax_text) and platform._message_text_matches(ax_text, expected_text)
     result = {
-        "verification_method": "tashuo_staged_message_ocr_payload_text",
+        "verification_method": "tashuo_staged_message_ax_then_ocr_payload_text",
         "expected_payload_hash": platform._hash_text(expected_text),
         "expected_character_count": len(expected_text),
         "observed_text_hash": observed_stats["text_hash"],
@@ -1437,11 +1652,17 @@ def _verify_staged_tashuo_message(
         "baseline_text_hash": baseline_stats["text_hash"] if baseline_stats else None,
         "send_action": "press_return",
         "exact_text_ocr_verified": screen_exact or crop_exact,
+        "exact_text_ax_verified": ax_exact,
+        "ax_text_area_value_hash": platform._hash_text(ax_text) if ax_text else None,
+        "ax_text_area_character_count": len(ax_text) if ax_text else 0,
         "screen_exact_text_ocr_verified": screen_exact,
         "input_crop_exact_text_ocr_verified": crop_exact,
         "visual_only_exact_verification_allowed": False,
         "screen": platform._redacted_screen(screen),
     }
+    if ax_text_area_value is not None and ax_text_area_value.get("status") != "ok":
+        result["ax_text_area_status"] = ax_text_area_value.get("status")
+        result["ax_text_area_reason"] = ax_text_area_value.get("reason")
     if input_crop_ocr is not None:
         result["input_crop_ocr"] = _redacted_tashuo_input_crop_ocr(input_crop_ocr, expected_text)
     if screen.get("status") != "ok":
@@ -1453,9 +1674,9 @@ def _verify_staged_tashuo_message(
     baseline_state = baseline_screen.get("state") if isinstance(baseline_screen, dict) else None
     if screen.get("state") != "tashuo_conversation" and baseline_state != "tashuo_conversation":
         return {**result, "status": "blocked", "reason": "tashuo_conversation_not_verified"}
-    if not result["exact_text_ocr_verified"]:
+    if not (result["exact_text_ocr_verified"] or result["exact_text_ax_verified"]):
         return {**result, "status": "needs_verification", "reason": "staged_text_not_verified"}
-    if baseline_stats and observed_stats["expected_text_occurrences"] <= baseline_stats["expected_text_occurrences"]:
+    if not result["exact_text_ax_verified"] and baseline_stats and observed_stats["expected_text_occurrences"] <= baseline_stats["expected_text_occurrences"]:
         return {**result, "status": "needs_verification", "reason": "staged_text_not_newly_visible"}
     return {**result, "status": "ok"}
 
@@ -1560,6 +1781,213 @@ def _redacted_tashuo_input_crop_ocr(payload: dict[str, Any], expected_text: str)
         "exact_text_ocr_verified": bool(text) and platform._message_text_matches(text, expected_text),
         "stderr": payload.get("stderr"),
     }
+
+
+def _tashuo_ax_text_area_value(session: Any) -> dict[str, Any]:
+    script = r'''
+-- DATING_BOOST_AX_TEXT_AREA_VALUE
+on findTextAreaValue(e, depth)
+  tell application "System Events"
+    try
+      if role of e is "AXTextArea" then
+        return value of e as text
+      end if
+      if depth < 24 then
+        repeat with child in UI elements of e
+          set found to my findTextAreaValue(child, depth + 1)
+          if found is not missing value then return found
+        end repeat
+      end if
+    end try
+  end tell
+  return missing value
+end findTextAreaValue
+
+tell application "System Events"
+  tell process "她说"
+    set found to my findTextAreaValue(window 1, 0)
+    if found is missing value then
+      return "__DATING_BOOST_TEXT_AREA_NOT_FOUND__"
+    end if
+    return found
+  end tell
+end tell
+'''
+    result = session.runner.run(["osascript", "-e", script])
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "tashuo_ax_text_area_read_failed",
+            "stderr": platform._short(result.stderr),
+        }
+    value = str(result.stdout or "").rstrip("\n")
+    if value == "__DATING_BOOST_TEXT_AREA_NOT_FOUND__":
+        return {"status": "blocked", "reason": "tashuo_ax_text_area_not_found"}
+    if value == "missing value":
+        value = ""
+    return {"status": "ok", "value": value, "input_backend": "macos_accessibility"}
+
+
+def _tashuo_ax_static_text_values(session: Any) -> dict[str, Any]:
+    script = r'''
+-- DATING_BOOST_AX_STATIC_TEXT_VALUES
+on collectStaticTexts(e, depth)
+  set foundValues to {}
+  tell application "System Events"
+    try
+      if role of e is "AXStaticText" then
+        try
+          set v to value of e as text
+          if v is not "" then set end of foundValues to v
+        end try
+      end if
+      if depth < 24 then
+        repeat with child in UI elements of e
+          set childValues to my collectStaticTexts(child, depth + 1)
+          repeat with itemValue in childValues
+            set end of foundValues to itemValue as text
+          end repeat
+        end repeat
+      end if
+    end try
+  end tell
+  return foundValues
+end collectStaticTexts
+
+tell application "System Events"
+  tell process "她说"
+    set valuesList to my collectStaticTexts(window 1, 0)
+    set AppleScript's text item delimiters to linefeed
+    return valuesList as text
+  end tell
+end tell
+'''
+    result = session.runner.run(["osascript", "-e", script])
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "tashuo_ax_static_text_read_failed",
+            "stderr": platform._short(result.stderr),
+        }
+    raw = str(result.stdout or "").strip()
+    values: list[str] = []
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            values = [str(item).strip() for item in parsed if _tashuo_ax_text_value_is_useful(str(item))]
+        else:
+            values = [line.strip() for line in raw.splitlines() if _tashuo_ax_text_value_is_useful(line)]
+    return {
+        "status": "ok",
+        "value_count": len(values),
+        "values": values,
+        "input_backend": "macos_accessibility",
+    }
+
+
+def _tashuo_ax_text_value_is_useful(value: str) -> bool:
+    stripped = str(value).strip()
+    return bool(stripped) and stripped != "missing value"
+
+
+def _set_tashuo_ax_text_area_value(session: Any, text: str) -> dict[str, Any]:
+    escaped_text = json.dumps(text, ensure_ascii=False)
+    script = f'''
+-- DATING_BOOST_AX_SET_TEXT_AREA_VALUE
+on setTextAreaValue(e, depth, newValue)
+  tell application "System Events"
+    try
+      if role of e is "AXTextArea" then
+        set value of e to newValue
+        return true
+      end if
+      if depth < 24 then
+        repeat with child in UI elements of e
+          set changed to my setTextAreaValue(child, depth + 1, newValue)
+          if changed is true then return true
+        end repeat
+      end if
+    end try
+  end tell
+  return false
+end setTextAreaValue
+
+tell application "System Events"
+  tell process "她说"
+    set changed to my setTextAreaValue(window 1, 0, {escaped_text})
+    if changed is true then
+      return "set"
+    end if
+    return "not_found"
+  end tell
+end tell
+'''
+    result = session.runner.run(["osascript", "-e", script])
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "tashuo_ax_text_area_set_failed",
+            "stderr": platform._short(result.stderr),
+            "input_backend": "macos_accessibility",
+        }
+    if str(result.stdout or "").strip() != "set":
+        return {
+            "status": "blocked",
+            "reason": "tashuo_ax_text_area_not_found",
+            "input_backend": "macos_accessibility",
+        }
+    return {
+        "status": "ok",
+        "input_backend": "macos_accessibility",
+        "expected_payload_hash": platform._hash_text(text),
+        "expected_character_count": len(text),
+    }
+
+
+def _clear_tashuo_ax_text_area(session: Any) -> dict[str, Any]:
+    script = r'''
+-- DATING_BOOST_AX_CLEAR_TEXT_AREA
+on clearTextAreas(e, depth)
+  tell application "System Events"
+    try
+      if role of e is "AXTextArea" then
+        set value of e to ""
+        return true
+      end if
+      if depth < 24 then
+        repeat with child in UI elements of e
+          set cleared to my clearTextAreas(child, depth + 1)
+          if cleared is true then return true
+        end repeat
+      end if
+    end try
+  end tell
+  return false
+end clearTextAreas
+
+tell application "System Events"
+  tell process "她说"
+    set cleared to my clearTextAreas(window 1, 0)
+    if cleared is true then
+      return "cleared"
+    end if
+    return "not_found"
+  end tell
+end tell
+'''
+    result = session.runner.run(["osascript", "-e", script])
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "tashuo_ax_text_area_clear_failed",
+            "stderr": platform._short(result.stderr),
+        }
+    if str(result.stdout or "").strip() != "cleared":
+        return {"status": "blocked", "reason": "tashuo_ax_text_area_not_found"}
+    return {"status": "ok", "input_backend": "macos_accessibility"}
 
 
 def _tashuo_host_visual_staged_verification_available(
@@ -1668,6 +2096,8 @@ def _verify_tashuo_outbound_message(
     expected_text: str,
     *,
     staged_screen: dict[str, Any] | None = None,
+    ax_static_text_values: dict[str, Any] | None = None,
+    ax_text_area_value: dict[str, Any] | None = None,
     trusted_direct_input: bool = False,
 ) -> dict[str, Any]:
     result = platform._verify_outbound_message(screen, expected_text)
@@ -1675,27 +2105,59 @@ def _verify_tashuo_outbound_message(
     staged_text = str(staged_screen.get("text") or "") if isinstance(staged_screen, dict) else ""
     observed_stats = platform._expected_text_observation_stats(observed_text, expected_text)
     staged_stats = platform._expected_text_observation_stats(staged_text, expected_text) if staged_text else None
+    ax_values = (
+        [str(item) for item in ax_static_text_values.get("values", []) if str(item).strip()]
+        if isinstance(ax_static_text_values, dict) and isinstance(ax_static_text_values.get("values"), list)
+        else []
+    )
+    ax_text = "\n".join(ax_values)
+    ax_stats = platform._expected_text_observation_stats(ax_text, expected_text) if ax_text else None
+    ax_text_area = (
+        str(ax_text_area_value.get("value") or "")
+        if isinstance(ax_text_area_value, dict) and ax_text_area_value.get("status") == "ok"
+        else None
+    )
+    input_cleared = (
+        ax_text_area.strip() == ""
+        if ax_text_area is not None
+        else _tashuo_input_placeholder_visible(observed_text)
+    )
     outgoing_bubble_visible = _tashuo_outgoing_bubble_visual_visible(screen)
     staged_outgoing_bubble_visible = (
         _tashuo_outgoing_bubble_visual_visible(staged_screen) if isinstance(staged_screen, dict) else False
     )
+    exact_text_ocr_verified = result.get("status") == "ok"
+    exact_text_ax_verified = bool(ax_text) and platform._message_text_matches(ax_text, expected_text)
+    exact_text_verified = exact_text_ocr_verified or exact_text_ax_verified
     extra = {
-        "verification_method": "tashuo_post_send_ocr_payload_text_delta",
+        "verification_method": (
+            "tashuo_post_send_ax_static_text_then_ocr_payload_text"
+            if ax_static_text_values is not None
+            else "tashuo_post_send_ocr_payload_text_delta"
+        ),
         "observed_expected_text_occurrences": observed_stats["expected_text_occurrences"],
         "staged_expected_text_occurrences": staged_stats["expected_text_occurrences"] if staged_stats else None,
         "staged_text_hash": staged_stats["text_hash"] if staged_stats else None,
-        "input_cleared_after_send": _tashuo_input_placeholder_visible(observed_text),
+        "ax_static_text_status": ax_static_text_values.get("status") if isinstance(ax_static_text_values, dict) else None,
+        "ax_static_text_count": ax_static_text_values.get("value_count") if isinstance(ax_static_text_values, dict) else None,
+        "ax_expected_text_occurrences": ax_stats["expected_text_occurrences"] if ax_stats else None,
+        "ax_text_hash": ax_stats["text_hash"] if ax_stats else None,
+        "ax_text_area_status": ax_text_area_value.get("status") if isinstance(ax_text_area_value, dict) else None,
+        "ax_text_area_value_hash": platform._hash_text(ax_text_area) if ax_text_area else None,
+        "input_cleared_after_send": input_cleared,
         "outgoing_bubble_visual_visible": outgoing_bubble_visible,
         "staged_outgoing_bubble_visual_visible": staged_outgoing_bubble_visible,
         "send_action": "press_return",
-        "exact_text_ocr_verified": result.get("status") == "ok",
+        "exact_text_verified": exact_text_verified,
+        "exact_text_ax_verified": exact_text_ax_verified,
+        "exact_text_ocr_verified": exact_text_ocr_verified,
         "visual_only_exact_verification_allowed": False,
     }
-    if result.get("status") != "ok":
-        return {**result, **extra}
     if screen.get("state") != "tashuo_conversation":
         return {**result, **extra, "status": "needs_verification", "reason": "tashuo_conversation_not_verified"}
-    if extra["input_cleared_after_send"] is not True:
+    if input_cleared is not True:
+        return {**result, **extra, "status": "needs_verification", "reason": "outbound_message_not_verified"}
+    if exact_text_verified is not True:
         return {**result, **extra, "status": "needs_verification", "reason": "outbound_message_not_verified"}
     return {**result, **extra, "status": "ok"}
 
@@ -1735,6 +2197,31 @@ def _cleanup_failed_tashuo_stage(
             "input_focus_state": input_focus_state,
             "attempts": attempts,
         }
+
+    if _is_mac_ios_app_session(session):
+        ax_clear_result = _clear_tashuo_ax_text_area(session)
+        attempts.append({"intent": "clear_tashuo_text_area_for_failed_stage_cleanup", "result": ax_clear_result})
+        if ax_clear_result.get("status") == "ok":
+            time.sleep(0.2)
+            output = output_dir / f"{_tashuo_capture_prefix(session)}.after_failed_stage_cleanup.png" if output_dir is not None else None
+            screen = session.capture_window(output=output, window=window)
+            observed_text = str(screen.get("text") or "")
+            expected_still_visible = platform._message_text_matches(observed_text, expected_text)
+            input_placeholder_visible = _tashuo_input_placeholder_visible(observed_text)
+            result = {
+                "attempts": attempts,
+                "input_tap_ratio": input_tap_ratio,
+                "input_focus_state": input_focus_state,
+                "screen": platform._redacted_screen(screen),
+                "expected_payload_hash": platform._hash_text(expected_text),
+                "expected_text_still_visible": expected_still_visible,
+                "input_placeholder_visible": input_placeholder_visible,
+                "cleanup_backend": "macos_accessibility",
+            }
+            if screen.get("status") != "ok":
+                return {**result, "status": "needs_verification", "reason": "failed_stage_cleanup_screen_not_captured"}
+            if not expected_still_visible and input_placeholder_visible:
+                return {**result, "status": "ok"}
 
     escape_result = session._press_escape_key()
     attempts.append({"intent": "cancel_tashuo_input_candidate_for_failed_stage_cleanup", "result": escape_result})
@@ -1862,9 +2349,57 @@ def _verify_tashuo_step_postcondition(
     else:
         state_check = _verify_tashuo_step_state(screen, step, key="expected_tashuo_states")
         if state_check["status"] != "ok":
+            retry = _retry_tashuo_step_postcondition_after_transition(
+                session,
+                window,
+                step,
+                first_result=result,
+                output_dir=output_dir,
+                step_index=step_index,
+            )
+            if retry is not None:
+                return retry
             result.update(state_check)
             result["reason"] = "tashuo_step_postcondition_not_verified"
     return result
+
+
+def _retry_tashuo_step_postcondition_after_transition(
+    session: Any,
+    window: Any,
+    step: dict[str, Any],
+    *,
+    first_result: dict[str, Any],
+    output_dir: Path | None,
+    step_index: int,
+) -> dict[str, Any] | None:
+    retry_after = float(step.get("postcondition_retry_after_seconds") or 0)
+    if retry_after <= 0:
+        return None
+    if first_result.get("screen_state") not in {"unknown", "tashuo_unknown"}:
+        return None
+    time.sleep(retry_after)
+    output = None
+    if output_dir is not None:
+        output = output_dir / f"iphone_mirroring.tashuo_postcondition_{step_index:02d}.retry.png"
+    screen = session.capture_window(output=output, window=window)
+    retry_result = {
+        "status": screen.get("status", "blocked"),
+        "checked": True,
+        "screen": platform._redacted_screen(screen),
+        "screen_state": screen.get("state", "unknown"),
+        "retried_after_transition": True,
+        "first_screen_state": first_result.get("screen_state"),
+        "first_screen": first_result.get("screen"),
+    }
+    if retry_result["status"] != "ok":
+        retry_result["reason"] = screen.get("reason") or "tashuo_postcondition_retry_capture_failed"
+        return retry_result
+    state_check = _verify_tashuo_step_state(screen, step, key="expected_tashuo_states")
+    if state_check["status"] != "ok":
+        retry_result.update(state_check)
+        retry_result["reason"] = "tashuo_step_postcondition_not_verified"
+    return retry_result
 
 
 def _capture_tashuo_profile_read_step() -> dict[str, Any]:
@@ -1946,8 +2481,36 @@ def _tashuo_action_steps(action: str, **options: Any) -> list[dict[str, Any]]:
     row_y = min(0.86, 0.52 + (max(row_index, 1) - 1) * 0.12)
     if options.get("y_ratio") is not None:
         row_y = max(0.16, min(0.88, float(options["y_ratio"])))
+    visual_tap_ratio = _tap_ratio_option(options.get("tap_ratio"))
+    visual_target_label = str(options.get("visual_target_label") or "").strip()
+    visual_target_preview = str(options.get("visual_target_preview") or "").strip()
     gate_x = min(0.84, 0.15 + (max(gate_index, 1) - 1) * 0.22)
     profile_read_states = ["tashuo_profile", "tashuo_self_profile", "tashuo_recommend"]
+    open_conversation_steps = [
+        {
+            **_tashuo_tap_step(
+                "tap_tashuo_visual_conversation_target",
+                x=visual_tap_ratio["x"],
+                y=visual_tap_ratio["y"],
+                requires_states="tashuo_chat_list",
+                expected_states=["tashuo_conversation", "tashuo_question_gate"],
+            ),
+            "selection_method": "host_visual_tap_ratio",
+            **({"visual_target_label": visual_target_label} if visual_target_label else {}),
+            **({"visual_target_preview": visual_target_preview} if visual_target_preview else {}),
+        }
+    ] if visual_tap_ratio is not None else [
+        {
+            **_tashuo_tap_step(
+                "tap_tashuo_conversation_row",
+                x=0.45,
+                y=row_y,
+                requires_states="tashuo_chat_list",
+                expected_states=["tashuo_conversation", "tashuo_question_gate"],
+            ),
+            "row_index": row_index,
+        }
+    ]
     actions: dict[str, list[dict[str, Any]]] = {
         "open-recommend": [
             _tashuo_bottom_tab_step("tap_tashuo_recommend_tab", x=0.14, y=0.92, expected_state="tashuo_recommend")
@@ -1988,18 +2551,7 @@ def _tashuo_action_steps(action: str, **options: Any) -> list[dict[str, Any]]:
                 expected_states="tashuo_chat_list",
             )
         ],
-        "open-conversation": [
-            {
-                **_tashuo_tap_step(
-                    "tap_tashuo_conversation_row",
-                    x=0.45,
-                    y=row_y,
-                    requires_states="tashuo_chat_list",
-                    expected_states=["tashuo_conversation", "tashuo_question_gate"],
-                ),
-                "row_index": row_index,
-            }
-        ],
+        "open-conversation": open_conversation_steps,
         "open-question-gate": [
             {
                 **_tashuo_tap_step(
@@ -2044,13 +2596,16 @@ def _tashuo_action_steps(action: str, **options: Any) -> list[dict[str, Any]]:
             )
         ],
         "close-profile": [
-            _tashuo_tap_step(
-                "tap_tashuo_profile_back",
-                x=0.09,
-                y=0.13,
-                requires_states="tashuo_profile",
-                expected_states="tashuo_conversation",
-            )
+            {
+                **_tashuo_tap_step(
+                    "tap_tashuo_profile_back",
+                    x=0.09,
+                    y=0.13,
+                    requires_states="tashuo_profile",
+                    expected_states="tashuo_conversation",
+                ),
+                "postcondition_retry_after_seconds": 0.8,
+            }
         ],
         "return-to-chats": [
             _tashuo_tap_step(

@@ -50,6 +50,10 @@ or the match has given repeated low-investment replies, do not send a draft
 that merely paraphrases the current topic. Use `strategic_delta`,
 `selected_hook`, and, when the reply is more natural split across bubbles,
 `message_sequence`.
+Do not package already-confirmed facts as survey-style A/B choices. When testing
+one new guess, prefer a yes/no-style hypothesis. Prefer lifestyle or interest
+hooks before work unless the match made work salient or showed strong work/事业
+investment.
 
 ## Managed Live Send
 
@@ -74,9 +78,28 @@ handcraft action requests; consume the request returned by `operator next`,
 - `payload_messages`: optional ordered message list for multi-bubble ordinary
   chat sends. Host-loop sends each item in order through the managed GUI path;
   callers must not handcraft per-message action requests.
+  Managed live-send continuity for a sequence is 20 seconds per message,
+  starting before the first message send attempt; if a partial sequence exceeds
+  that window, re-observe and replan instead of sending the remaining messages
+  later.
 - `match_id` or `target_match_id`: target match identity.
 - `target_binding.target_match_id`: must equal the target match identity.
 - `target_binding.required_visible_text` or `target_binding.visible_name`: visible marker required on the current conversation page.
+
+## Relationship Progress Report
+
+Every bounded managed workflow stop/final response should include
+`relationship_progress_report` when a report can be produced:
+
+- `report_type`: `relationship_progress`.
+- `format`: `markdown`.
+- `markdown`: user-facing work report to show before ending the host turn.
+- `human_report_path` and `machine_report_path`: local report files for audit
+  and recovery.
+- `next_host_action`: `present_relationship_progress_report`.
+
+`operator report latest` or `automation report latest` is a fallback when an
+older response lacks the inline report; it is not the primary end-of-run UX.
 - Either a confirmed `confirmation_id` plus `confirmation_payload_hash` and `confirmation_precondition_hash`, or an `autonomous_audit_binding` whose `authorization_id`, `target_match_id`, `payload_hash`, and `precondition_hash` match the action request.
 
 If any evidence is missing, block or return `needs_verification`.

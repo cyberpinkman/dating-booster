@@ -2718,7 +2718,7 @@ def _handle_action_record_correction(args: argparse.Namespace) -> int:
     try:
         event = ActionAuditRepository(args.data_dir).append_correction(
             payload,
-            created_at=MVP_TIMESTAMP,
+            created_at=_now_iso(),
         )
     except ValueError as exc:
         _print_json(

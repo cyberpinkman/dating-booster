@@ -170,14 +170,24 @@ not send a draft that merely paraphrases the current topic. Add a concrete new
 handle, usually via `selected_hook` and `strategic_delta`, or stop and revise.
 For example, after both sides say they are slow to warm up, repeating what
 slow-warm means is not enough; bridge to a usable hook or small scene.
+Do not package an already-confirmed fact as one side of a survey-style A/B
+choice. When testing one new guess, prefer a yes/no-style hypothesis. Prefer
+lifestyle or interest hooks before work unless the match explicitly made work
+salient or showed strong work/事业 investment.
 
 When one reply naturally has two jobs, such as acknowledging the previous topic
 and opening a new hook, prefer `message_sequence` with several short messages
 instead of one dense paragraph. Split near commas or sentence boundaries. Each
-message should stand alone as a normal chat bubble. The operator/host-loop will
-bind the whole sequence with one payload hash and send each ordinary chat
-message through the managed GUI path; do not handcraft per-message action
-requests.
+message should stand alone as a normal chat bubble. Do not mechanically split
+punctuation; each bubble needs a job, and the final bubble should carry the
+conversational push or landing. The operator/host-loop will bind the whole
+sequence with one payload hash and send each ordinary chat message through the
+managed GUI path; do not handcraft per-message action requests.
+For managed live send, a multi-bubble `message_sequence` must complete inside a
+continuous window of 20 seconds per message, starting before the first message
+send attempt. If the window expires after a partial send, stop, observe the
+current thread, and replan; do not resume-send the remaining bubbles as if they
+were still part of the same sequence.
 
 ## Workflow
 
@@ -322,7 +332,7 @@ dating-boost harness tashuo stage-draft --runtime mac-ios-app --text-file tashuo
 dating-boost harness tashuo send-message --text-file tashuo-draft.txt --dry-run --json
 ```
 
-If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. If already in a thread, bind that thread with `current_thread_visual_identity` and a fresh visual anchor hash from the conversation screenshot; do not use message-list row position or header OCR as target-binding evidence. The mac-ios-app runtime supports launch/observe/prepare-message-page/stage-draft and ordinary-chat managed live send. Live send must be executed by host-loop with `--managed-gui-send --harness-runtime mac-ios-app` or by a managed-session wait point resumed through that host-loop runtime, with structural target binding, exact staged-text verification, and post-send exact-text/input-cleared verification. Direct harness live send remains executor-internal and must not be used as an agent workaround.
+If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. If already in a thread, bind that thread with `current_thread_visual_identity` and a fresh visual anchor hash from the conversation screenshot; do not use message-list row position or header OCR as target-binding evidence. The mac-ios-app runtime supports launch/observe/prepare-message-page/stage-draft and ordinary-chat managed live send. Live send must be executed by host-loop with `--managed-gui-send --harness-runtime mac-ios-app` or by a managed-session wait point resumed through that host-loop runtime, with `current_thread_visual_identity` target binding, exact staged-text verification, and post-send exact-text/input-cleared verification. Direct harness live send remains executor-internal and must not be used as an agent workaround.
 
 For iPhone Mirroring, use `harness tashuo observe` before choosing a bounded navigation action. It
 returns redacted page/layout hints for the four top-level tabs (`推荐`, `飞行`,
@@ -344,10 +354,13 @@ authorization to bypass this rule. Ordinary chat send is allowed only through
 managed-session/host-loop live execution; the direct harness send command is
 executor-internal only and must consume a system-generated work item, not a
 handcrafted action request. It requires target-specific binding, exact staged-text
-OCR verification, a fresh post-send observation, and outbound-message
-verification. Visual-only button or bubble evidence alone does not satisfy
-exact-text verification. TaShuo ordinary chat sends by pressing Return after
-exact staged-text verification; do not click or plan a Send-button action.
+verification, a fresh post-send observation, input-cleared evidence, and outbound
+exact-text verification. For mac-ios-app, exact verification may use
+Accessibility text evidence plus visual state; do not require header OCR or
+message-list row position. For iPhone Mirroring, OCR/text evidence remains the
+default exact-text path. Visual-only button or bubble evidence alone does not
+satisfy exact-text verification. TaShuo ordinary chat sends by pressing Return
+after exact staged-text verification; do not click or plan a Send-button action.
 
 Launch search should type `tashu`, not full `tashuo`, and verify the `她说` or
 `TaShuo` app result by screenshot/OCR before tapping. If moving Home Screen or
@@ -483,7 +496,7 @@ duplicates, gates risky actions, and writes reports.
 9. After each send, perform post-action verification and call `dating-boost operator record-action-result --data-dir .local/dating-boost --input action_result.json`.
 10. If the work item is `handoff`, appointment details, contact exchange, or high-risk content, stop automation for that match and ask the user to take over.
 11. Continue calling `operator next` until the user stops the session or the operator returns `wait`.
- 12. Stop with `dating-boost operator stop --data-dir .local/dating-boost` and show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
+ 12. Stop with `dating-boost operator stop --data-dir .local/dating-boost`; the JSON response includes `relationship_progress_report.markdown`. Show that work report to the user before ending. Use `dating-boost operator report latest --data-dir .local/dating-boost --format md` only as a recovery fallback.
  13. After stopping, check the report for Memory Suggestions. If any pending items exist, present them to the user and ask for accept/reject decisions. Execute `dating-boost memory review decide --data-dir .local/dating-boost --accept <id1> --reject <id2>` with the user's choices. Only accepted items become long-term memory.
  14. On a later run, if `operator session start` or `managed-session start` reports pending memory suggestions, keep them as non-blocking review warnings unless the CLI explicitly returns a blocking status. Do not accept or reject suggestions without user choices; present them after the bounded session and use `dating-boost memory review list --data-dir .local/dating-boost --status pending` plus `memory review decide` to process them.
  15. On a later run, use `dating-boost operator report latest` and local state to continue without relying on host-agent memory.
@@ -521,6 +534,9 @@ dating-boost managed-session stop --data-dir .local/dating-boost --json
 For live sends, use `--send-mode live --managed-gui-send` only with explicit
 authorization. The returned work item still goes through the same target
 binding, staged text, and post-send verification gates as host-loop sends.
+When a managed run or stop response includes `relationship_progress_report`,
+present its Markdown as the final work report. Do not finish a bounded
+full-management workflow by only reporting action status or file paths.
 
 ## Tinder Host Loop
 
@@ -591,7 +607,7 @@ the local state engine; it does not scan the screen or click the app.
 9. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
 10. Execute only allowed ordinary `send_message` action requests whose planner alignment is `ok` and whose draft has strategic delta. If the request contains `payload_messages`, treat it as one planned sequence and let host-loop send the messages in order.
 11. After each send or completed message sequence, perform post-action verification and call `dating-boost action record-result`.
- 12. Stop with `dating-boost automation session stop --data-dir .local/dating-boost` and show `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
+ 12. Stop with `dating-boost automation session stop --data-dir .local/dating-boost`; the JSON response includes `relationship_progress_report.markdown`. Show that work report to the user before ending. Use `dating-boost automation report latest --data-dir .local/dating-boost --format md` only as a recovery fallback.
  13. After stopping, check the report for Memory Suggestions. If any pending items exist, present them to the user and ask for accept/reject decisions. Execute `dating-boost memory review decide --data-dir .local/dating-boost --accept <id1> --reject <id2>` with the user's choices.
  14. On a later run, if `automation session start` reports pending memory suggestions, keep them as non-blocking review warnings unless the CLI explicitly returns a blocking status. Do not accept or reject suggestions without user choices; present them after the bounded session and use `dating-boost memory review list --data-dir .local/dating-boost --status pending` plus `memory review decide`.
  15. On a later run, use `dating-boost automation report latest` and local state to continue without relying on host-agent memory.

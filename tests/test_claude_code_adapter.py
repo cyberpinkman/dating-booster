@@ -145,6 +145,11 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
             "dating-boost-host-loop",
             "references/contracts.md",
             "references/workflows.md",
+            "survey-style a/b",
+            "yes/no-style hypothesis",
+            "prefer lifestyle or interest",
+            "relationship_progress_report",
+            "report file paths",
         ):
             self.assertIn(phrase, skill_text)
         self.assertNotIn("status: p1 planned adapter", readme_text)

@@ -1,9 +1,11 @@
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from dating_boost import __version__
 from dating_boost.cli import main
@@ -393,14 +395,15 @@ class AgentNativeCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            exit_code, payload, _ = self._run([
-                "action",
-                "record-correction",
-                "--data-dir",
-                str(data_dir),
-                "--input",
-                str(correction_path),
-            ])
+            with patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-06-12T04:48:00Z"}):
+                exit_code, payload, _ = self._run([
+                    "action",
+                    "record-correction",
+                    "--data-dir",
+                    str(data_dir),
+                    "--input",
+                    str(correction_path),
+                ])
             current_events = (data_dir / "audit" / "action_results.jsonl").read_text(encoding="utf-8").splitlines()
             corrections = [
                 json.loads(line)
@@ -412,6 +415,7 @@ class AgentNativeCliTests(unittest.TestCase):
             self.assertEqual(current_events, original_events)
             self.assertEqual(corrections[0]["corrected_status"], "unknown")
             self.assertEqual(corrections[0]["corrects_event_id"], "action_result_manual_001")
+            self.assertEqual(corrections[0]["created_at"], "2026-06-12T04:48:00Z")
 
     def _run(self, argv):
         output = StringIO()

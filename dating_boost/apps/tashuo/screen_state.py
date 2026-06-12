@@ -66,6 +66,7 @@ def classify_tashuo_screen_image(path: Path) -> dict[str, Any]:
     bottom_nav = _tashuo_bottom_nav_hint(pixels)
     bottom_nav_present = bool(bottom_nav["present"])
     conversation_toolbar = _tashuo_conversation_toolbar_hint(pixels)
+    profile_visual = _tashuo_profile_visual_hint(pixels)
     state = {
         "recommend": "tashuo_recommend",
         "flight": "tashuo_flight",
@@ -74,12 +75,15 @@ def classify_tashuo_screen_image(path: Path) -> dict[str, Any]:
     }.get(str(bottom_nav["active_tab"]), "unknown")
     if state == "unknown" and not bottom_nav_present and conversation_toolbar["present"]:
         state = "tashuo_conversation"
+    if state == "unknown" and not bottom_nav_present and not conversation_toolbar["present"] and profile_visual["present"]:
+        state = "tashuo_profile"
     return {
         "status": "ok",
         "state": state,
         "active_tab": str(bottom_nav["active_tab"]),
         "bottom_nav_present": bottom_nav_present,
         "conversation_toolbar_present": conversation_toolbar["present"],
+        "profile_visual_present": profile_visual["present"],
     }
 
 
@@ -108,6 +112,8 @@ def combine_tashuo_screen_states(
             return top_level_state
     if visual_state == "tashuo_conversation" and text_state in {"unknown", "tashuo_unknown"}:
         return "tashuo_conversation"
+    if visual_state == "tashuo_profile" and text_state in {"unknown", "tashuo_unknown"}:
+        return "tashuo_profile"
     return text_state
 
 
@@ -320,7 +326,11 @@ def _tashuo_bottom_nav_hint(pixels: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tashuo_conversation_toolbar_hint(pixels: dict[str, Any]) -> dict[str, Any]:
-    input_pill_signal = _region_nonwhite_ratio(pixels, 0.03, 0.855, 0.97, 0.930, threshold=248)
+    input_pill_candidates = (
+        _region_nonwhite_ratio(pixels, 0.03, 0.855, 0.97, 0.930, threshold=248),
+        _region_nonwhite_ratio(pixels, 0.03, 0.800, 0.97, 0.895, threshold=248),
+    )
+    input_pill_signal = max(input_pill_candidates)
     slots = (
         ("voice", 0.07, 0.20),
         ("image", 0.30, 0.43),
@@ -330,7 +340,10 @@ def _tashuo_conversation_toolbar_hint(pixels: dict[str, Any]) -> dict[str, Any]:
     slot_results = [
         {
             "name": name,
-            "signal": _region_nonwhite_ratio(pixels, x1, 0.935, x2, 0.990, threshold=245),
+            "signal": max(
+                _region_nonwhite_ratio(pixels, x1, 0.935, x2, 0.990, threshold=245),
+                _region_nonwhite_ratio(pixels, x1, 0.895, x2, 0.980, threshold=245),
+            ),
         }
         for name, x1, x2 in slots
     ]
@@ -338,7 +351,25 @@ def _tashuo_conversation_toolbar_hint(pixels: dict[str, Any]) -> dict[str, Any]:
     return {
         "present": input_pill_signal > 0.50 and visible_slots >= 4,
         "input_pill_signal": input_pill_signal,
+        "input_pill_candidates": input_pill_candidates,
         "visible_toolbar_slots": visible_slots,
+    }
+
+
+def _tashuo_profile_visual_hint(pixels: dict[str, Any]) -> dict[str, Any]:
+    hero = _region_stats(pixels, 0.02, 0.10, 0.98, 0.72)
+    bottom_card = _region_stats(pixels, 0.02, 0.76, 0.98, 0.995)
+    bottom_inner = _region_stats(pixels, 0.05, 0.80, 0.95, 0.98)
+    media_signal = (
+        hero["bright_ratio"] < 0.35
+        and hero["color_ratio"] > 0.18
+        and (hero["dark_ratio"] + hero["mid_ratio"]) > 0.25
+    )
+    info_card_signal = bottom_card["bright_ratio"] > 0.55 and bottom_inner["bright_ratio"] > 0.65
+    return {
+        "present": media_signal and info_card_signal,
+        "media_signal": media_signal,
+        "info_card_signal": info_card_signal,
     }
 
 

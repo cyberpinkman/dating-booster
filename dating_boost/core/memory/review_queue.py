@@ -148,6 +148,7 @@ def review_item_display(item: dict[str, Any]) -> dict[str, str]:
         ("thread_cue", "tashuo_permanent_chat_enabled"): "她说已开启永久聊天，之后可以继续正常聊天。",
         ("thread_cue", "match_latest_reply_low_investment"): "对方最近回复信息量低，后续适合先轻松承接，不要马上推进邀约。",
         ("thread_cue", "early_thread"): "这段对话还在开场早期，适合先建立自然来回。",
+        ("thread_cue", "tashuo_question_gate_skipped"): "对方已跳过她说问答考验，可以直接正常开场聊天。",
         ("thread_cue", "question gate skipped"): "对方已跳过她说问答考验，可以直接正常开场聊天。",
         ("thread_cue", "bottom input toolbar present"): "当前聊天输入区可用，可以继续起草回复。",
         ("thread_cue", "ordinary conversation page"): "当前是普通聊天页，不是飞行页或问答决策页。",

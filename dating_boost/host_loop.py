@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,10 @@ from dating_boost.apps.registry import host_loop_app_ids, manifest_for_app, supp
 from dating_boost.core.live_send_contract import target_binding_structural_evidence_present, validate_live_send_contract
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.core.production_store import ProductionDataStore
+from dating_boost.core.relationship_report import (
+    RELATIONSHIP_PROGRESS_NEXT_ACTION,
+    build_relationship_progress_report,
+)
 from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.support import SupportLogRepository
 from dating_boost.perception.observations import ProfileObservation
@@ -25,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = Path(".local") / "dating-boost-host-loop"
 DEFAULT_FIXTURE_NOW = "2026-05-26T00:00:00Z"
 REPORT_FINAL_STATUSES = {"wait", "blocked", "handoff", "scheduled_wait", "stopped", "error"}
+MESSAGE_SEQUENCE_SECONDS_PER_MESSAGE = 20
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -813,11 +819,91 @@ class HostLoopSupervisor:
         if contract_reason is not None:
             return self._finish("blocked", contract_reason, current=work_item)
         payload_messages = _work_item_payload_messages(work_item)
+        sequence_timing_enabled = len(payload_messages) > 1
+        message_sequence_window_seconds = _managed_sequence_window_seconds(len(payload_messages))
+        progress_path = _managed_sequence_progress_path(self.work_dir, work_item)
+        sequence_progress = _managed_sequence_progress_load(progress_path, work_item)
         harness_payloads: list[dict[str, Any]] = []
+        message_results: list[dict[str, Any]] = list(sequence_progress.get("message_results") or [])
+        sequence_started_at = str(sequence_progress.get("sequence_started_at") or "")
+        sequence_last_sent_at = str(sequence_progress.get("last_message_sent_at") or "")
+        completed_indices = {
+            int(result.get("index") or 0)
+            for result in message_results
+            if isinstance(result, dict) and result.get("status") == "ok"
+        }
         required_evidence = _managed_gui_send_required_evidence(self.args.app_id)
         harness_runtime = str(getattr(self.args, "harness_runtime", "") or "").strip()
+        sequence_work_item = dict(work_item)
+        if isinstance(sequence_progress.get("target_binding"), dict):
+            sequence_work_item["target_binding"] = sequence_progress["target_binding"]
         for message in payload_messages:
-            message_work_item = _single_message_work_item(work_item, message)
+            if int(message["index"]) in completed_indices:
+                continue
+            if sequence_timing_enabled and completed_indices and not sequence_started_at:
+                return self._finish(
+                    "blocked",
+                    "message_sequence_window_unverifiable",
+                    current=work_item,
+                    extra={
+                        "message_sequence_window_seconds": message_sequence_window_seconds,
+                        "completed_message_count": sum(1 for result in message_results if result.get("status") == "ok"),
+                        "failed_message_index": message.get("index"),
+                        "message_results": message_results,
+                        "next_host_action": "observe_current_thread_and_replan_sequence",
+                    },
+                )
+            if sequence_timing_enabled:
+                expired = _managed_sequence_expiry(
+                    sequence_started_at,
+                    window_seconds=message_sequence_window_seconds,
+                )
+                if expired is not None:
+                    return self._finish(
+                        "blocked",
+                        "message_sequence_window_expired",
+                        current=work_item,
+                        extra={
+                            **expired,
+                            "completed_message_count": sum(1 for result in message_results if result.get("status") == "ok"),
+                            "failed_message_index": message.get("index"),
+                            "message_results": message_results,
+                            "next_host_action": "observe_current_thread_and_replan_sequence",
+                        },
+                    )
+            if sequence_timing_enabled and not sequence_started_at:
+                sequence_started_at = _now_iso()
+                _managed_sequence_progress_save(
+                    progress_path,
+                    work_item,
+                    message_results=message_results,
+                    target_binding=sequence_work_item.get("target_binding") if isinstance(sequence_work_item.get("target_binding"), dict) else None,
+                    sequence_started_at=sequence_started_at,
+                    last_message_sent_at=sequence_last_sent_at or None,
+                    message_sequence_window_seconds=message_sequence_window_seconds,
+                )
+            remaining_seconds = None
+            if sequence_timing_enabled:
+                remaining_seconds = _managed_sequence_remaining_seconds(
+                    sequence_started_at,
+                    window_seconds=message_sequence_window_seconds,
+                )
+                if remaining_seconds is not None and remaining_seconds <= 0:
+                    return self._finish(
+                        "blocked",
+                        "message_sequence_window_expired",
+                        current=work_item,
+                        extra={
+                            "message_sequence_started_at": sequence_started_at,
+                            "message_sequence_window_seconds": message_sequence_window_seconds,
+                            "message_sequence_elapsed_seconds": message_sequence_window_seconds,
+                            "completed_message_count": sum(1 for result in message_results if result.get("status") == "ok"),
+                            "failed_message_index": message.get("index"),
+                            "message_results": message_results,
+                            "next_host_action": "observe_current_thread_and_replan_sequence",
+                        },
+                    )
+            message_work_item = _single_message_work_item(sequence_work_item, message)
             message_action_request = self._live_send_action_request(message_work_item)
             draft_path = self.work_dir / (
                 f"managed_payload.{_safe_name(str(work_item.get('work_item_id') or 'send'))}."
@@ -851,6 +937,7 @@ class HostLoopSupervisor:
                 harness_payload = self._run_cli_json(
                     *command_args,
                     allow_error=True,
+                    timeout_seconds=remaining_seconds,
                 )
             finally:
                 if draft_path.exists():
@@ -861,37 +948,94 @@ class HostLoopSupervisor:
             harness_payload["message_sequence_index"] = message["index"]
             harness_payload["message_sequence_count"] = len(payload_messages)
             harness_payloads.append(harness_payload)
+            message_result = _managed_gui_send_message_result(message, harness_payload)
+            message_results.append(message_result)
             self._append_timeline("managed_gui_send", message_work_item, {"harness": _redacted_managed_send_payload(harness_payload)})
             if harness_payload.get("status") == "needs_host_visual_verification":
                 return self._finish(
                     "waiting_for_host",
                     str(harness_payload.get("reason") or "staged_text_requires_visual_verification"),
                     current=work_item,
-                    extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
+                    extra={
+                        "managed_gui_send": _redacted_managed_send_payload(harness_payload),
+                        "completed_message_count": max(len(message_results) - 1, 0),
+                        "failed_message_index": message.get("index"),
+                        "message_results": message_results,
+                    },
                 )
             if harness_payload.get("status") != "ok":
                 return self._finish(
                     "blocked",
                     str(harness_payload.get("reason") or "managed_gui_send_failed"),
                     current=work_item,
-                    extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
+                    extra={
+                        "managed_gui_send": _redacted_managed_send_payload(harness_payload),
+                        "completed_message_count": max(len(message_results) - 1, 0),
+                        "failed_message_index": message.get("index"),
+                        "message_results": message_results,
+                    },
                 )
-            harness_evidence = harness_payload.get("evidence") if isinstance(harness_payload.get("evidence"), dict) else {}
+            harness_evidence = _managed_gui_send_normalized_evidence(
+                harness_payload.get("evidence") if isinstance(harness_payload.get("evidence"), dict) else {}
+            )
             if not harness_payload.get("post_action_observation_id"):
                 return self._finish(
                     "blocked",
                     "post_action_observation_required",
                     current=work_item,
-                    extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
+                    extra={
+                        "managed_gui_send": _redacted_managed_send_payload(harness_payload),
+                        "completed_message_count": max(len(message_results) - 1, 0),
+                        "failed_message_index": message.get("index"),
+                        "message_results": message_results,
+                    },
                 )
-            if any(harness_evidence.get(key) is not True for key in required_evidence):
+            required_for_payload = _managed_gui_send_required_evidence_for_payload(required_evidence, harness_payload)
+            if any(harness_evidence.get(key) is not True for key in required_for_payload):
                 return self._finish(
                     "blocked",
                     "managed_gui_send_verification_incomplete",
                     current=work_item,
-                    extra={"managed_gui_send": _redacted_managed_send_payload(harness_payload)},
+                    extra={
+                        "managed_gui_send": _redacted_managed_send_payload(harness_payload),
+                        "completed_message_count": max(len(message_results) - 1, 0),
+                        "failed_message_index": message.get("index"),
+                        "message_results": message_results,
+                    },
                 )
+            sent_at = _now_iso()
+            sequence_last_sent_at = sent_at
+            message_results[-1]["evidence"] = _managed_gui_send_message_evidence(harness_evidence)
+            message_results[-1]["sent_at"] = sent_at
+            sequence_work_item["target_binding"] = _managed_gui_send_refreshed_target_binding(
+                sequence_work_item.get("target_binding") if isinstance(sequence_work_item.get("target_binding"), dict) else None,
+                harness_payload,
+            )
+            _managed_sequence_progress_save(
+                progress_path,
+                work_item,
+                message_results=message_results,
+                target_binding=sequence_work_item.get("target_binding") if isinstance(sequence_work_item.get("target_binding"), dict) else None,
+                sequence_started_at=sequence_started_at,
+                last_message_sent_at=sequence_last_sent_at,
+                message_sequence_window_seconds=message_sequence_window_seconds,
+            )
 
+        if not message_results:
+            return self._finish("blocked", "managed_gui_send_no_message_results", current=work_item)
+        final_harness_payload = harness_payloads[-1] if harness_payloads else {}
+        final_evidence = _managed_gui_send_normalized_evidence(
+            final_harness_payload.get("evidence") if isinstance(final_harness_payload.get("evidence"), dict) else {}
+        )
+        if not final_evidence:
+            final_evidence = {
+                key: bool(value)
+                for key, value in (message_results[-1].get("evidence") if isinstance(message_results[-1].get("evidence"), dict) else {}).items()
+            }
+        sequence_elapsed_seconds = _managed_sequence_elapsed_seconds(
+            sequence_started_at,
+            now_iso=sequence_last_sent_at or _now_iso(),
+        )
         verification = {
             "status": "ok",
             "action_request_id": work_item.get("action_request_id"),
@@ -907,14 +1051,23 @@ class HostLoopSupervisor:
             "precondition_hash": work_item.get("precondition_hash"),
             "autonomous_audit_binding": work_item.get("autonomous_audit_binding"),
             "pre_action_observation_id": work_item.get("pre_action_observation_id"),
-            "post_action_observation_id": harness_payloads[-1].get("post_action_observation_id"),
+            "post_action_observation_id": message_results[-1].get("post_action_observation_id"),
             "result_status": "succeeded",
             "message_count": len(payload_messages),
             "payload_format": "message_sequence" if len(payload_messages) > 1 else "single_message",
+            "message_sequence_started_at": sequence_started_at or None,
+            "message_sequence_last_sent_at": sequence_last_sent_at or None,
+            "message_sequence_window_seconds": message_sequence_window_seconds,
+            "message_sequence_elapsed_seconds": sequence_elapsed_seconds,
+            "message_results": message_results,
             "evidence": {
                 "managed_gui_send": True,
                 "message_sequence_send": len(payload_messages) > 1,
-                **(harness_payloads[-1].get("evidence") if isinstance(harness_payloads[-1].get("evidence"), dict) else {}),
+                "message_sequence_within_window": (
+                    sequence_elapsed_seconds is None
+                    or sequence_elapsed_seconds <= message_sequence_window_seconds
+                ),
+                **final_evidence,
             },
         }
         result_path = self._work_file(work_item, "action_result")
@@ -922,6 +1075,8 @@ class HostLoopSupervisor:
         recorded = self._run_cli_json("operator", "record-action-result", "--data-dir", str(self.data_dir), "--input", str(result_path))
         self.action_results_recorded.append(recorded)
         self._append_timeline("action_result", work_item, {"path": str(result_path), "recorded": recorded})
+        if progress_path.exists():
+            progress_path.unlink()
         self._clear_host_work_item(work_item, consume=True)
         return None
 
@@ -1104,6 +1259,21 @@ class HostLoopSupervisor:
                 payload["machine_report_path"] = _data_dir_path(self.data_dir, operator_stop.get("machine_report_path"))
                 payload["human_report_path"] = _data_dir_path(self.data_dir, operator_stop.get("human_report_path"))
                 payload["report_summary"] = operator_stop.get("summary")
+                relationship_report = operator_stop.get("relationship_progress_report")
+                if isinstance(relationship_report, dict):
+                    payload["relationship_progress_report"] = _host_loop_relationship_report_paths(
+                        self.data_dir,
+                        relationship_report,
+                    )
+                    payload["next_host_action"] = RELATIONSHIP_PROGRESS_NEXT_ACTION
+                elif operator_stop.get("human_report_path"):
+                    payload["relationship_progress_report"] = build_relationship_progress_report(
+                        data_dir=self.data_dir,
+                        human_report_path=str(operator_stop.get("human_report_path")),
+                        machine_report_path=operator_stop.get("machine_report_path"),
+                        summary=dict(operator_stop.get("summary") or {}),
+                    )
+                    payload["next_host_action"] = RELATIONSHIP_PROGRESS_NEXT_ACTION
             except (HostLoopError, HostLoopCommandError, RuntimeError) as exc:
                 payload["report_error"] = str(exc)
         return payload
@@ -1209,18 +1379,36 @@ class HostLoopSupervisor:
         target = consumed_dir / f"{len(list(consumed_dir.iterdir())) + 1:04d}_{path.name}"
         path.replace(target)
 
-    def _run_cli_json(self, *args: str, allow_error: bool = False) -> dict[str, Any]:
+    def _run_cli_json(
+        self,
+        *args: str,
+        allow_error: bool = False,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
         env = dict(os.environ)
         if self.fixture_host is not None:
             env.setdefault("DATING_BOOST_NOW", DEFAULT_FIXTURE_NOW)
-        result = subprocess.run(
-            [sys.executable, "-m", "dating_boost.cli", *args],
-            cwd=ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-            env=env,
-        )
+        command = [sys.executable, "-m", "dating_boost.cli", *args]
+        try:
+            result = subprocess.run(
+                command,
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            if allow_error:
+                return {
+                    "schema_version": 1,
+                    "status": "blocked",
+                    "reason": "cli_command_timeout",
+                    "timeout_seconds": timeout_seconds,
+                    "command": " ".join(args),
+                }
+            raise RuntimeError(f"dating-boost {' '.join(args)} timed out after {timeout_seconds}s")
         if result.returncode != 0:
             structured_error = _try_read_json_object(result.stdout)
             if allow_error and structured_error is not None:
@@ -1552,10 +1740,194 @@ def _redacted_managed_send_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "clipboard_restored",
         "next_host_action",
         "visual_verification_request",
+        "current_thread_visual_anchor",
         "message_sequence_index",
         "message_sequence_count",
     }
     return {key: value for key, value in payload.items() if key in allowed}
+
+
+def _managed_gui_send_normalized_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(evidence)
+    normalized["staged_exact_text_verified"] = bool(
+        evidence.get("staged_exact_text_verified")
+        or evidence.get("staged_exact_text_ax_verified")
+        or evidence.get("staged_exact_text_ocr_verified")
+    )
+    normalized["outbound_exact_text_verified"] = bool(
+        evidence.get("outbound_exact_text_verified")
+        or evidence.get("outbound_exact_text_ax_verified")
+        or evidence.get("outbound_exact_text_ocr_verified")
+    )
+    return normalized
+
+
+def _managed_gui_send_message_evidence(evidence: dict[str, Any]) -> dict[str, bool]:
+    return {
+        "staged_text_verified": bool(evidence.get("staged_text_verified")),
+        "staged_exact_text_verified": bool(evidence.get("staged_exact_text_verified")),
+        "input_cleared_after_send": bool(evidence.get("input_cleared_after_send")),
+        "post_action_screen_captured": bool(evidence.get("post_action_screen_captured")),
+        "outbound_message_verified": bool(evidence.get("outbound_message_verified")),
+        "outbound_exact_text_verified": bool(evidence.get("outbound_exact_text_verified")),
+    }
+
+
+def _managed_gui_send_message_result(message: dict[str, Any], harness_payload: dict[str, Any]) -> dict[str, Any]:
+    evidence = _managed_gui_send_normalized_evidence(
+        harness_payload.get("evidence") if isinstance(harness_payload.get("evidence"), dict) else {}
+    )
+    result = {
+        "index": int(message.get("index") or 0),
+        "message_hash": str(message.get("message_hash") or ""),
+        "character_count": int(message.get("character_count") or 0),
+        "post_action_observation_id": harness_payload.get("post_action_observation_id"),
+        "status": harness_payload.get("status"),
+        "evidence": _managed_gui_send_message_evidence(evidence),
+    }
+    if harness_payload.get("already_sent") is True:
+        result["already_sent"] = True
+    if harness_payload.get("reason"):
+        result["reason"] = harness_payload.get("reason")
+    return result
+
+
+def _managed_gui_send_required_evidence_for_payload(
+    required_evidence: tuple[str, ...],
+    harness_payload: dict[str, Any],
+) -> tuple[str, ...]:
+    if harness_payload.get("already_sent") is not True:
+        return required_evidence
+    return tuple(
+        key
+        for key in required_evidence
+        if key not in {"staged_text_verified", "staged_exact_text_verified", "staged_exact_text_ocr_verified"}
+    )
+
+
+def _managed_gui_send_refreshed_target_binding(
+    target_binding: dict[str, Any] | None,
+    harness_payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not isinstance(target_binding, dict):
+        return target_binding
+    anchor = harness_payload.get("current_thread_visual_anchor")
+    if not isinstance(anchor, dict) or anchor.get("status") != "ok":
+        return target_binding
+    visual_hash = str(anchor.get("visual_anchor_hash") or "").strip()
+    if not visual_hash:
+        return target_binding
+
+    refreshed = dict(target_binding)
+    thread_evidence = (
+        dict(refreshed.get("thread_evidence"))
+        if isinstance(refreshed.get("thread_evidence"), dict)
+        else {}
+    )
+    thread_evidence["visual_anchor_hash"] = visual_hash
+    if isinstance(anchor.get("visual_anchor_region"), dict):
+        thread_evidence["visual_anchor_region"] = anchor.get("visual_anchor_region")
+    thread_evidence["screen_state"] = str(anchor.get("screen_state") or thread_evidence.get("screen_state") or "tashuo_conversation")
+    if harness_payload.get("post_action_observation_id"):
+        thread_evidence["observation_id"] = harness_payload.get("post_action_observation_id")
+    refreshed["thread_evidence"] = thread_evidence
+    return refreshed
+
+
+def _managed_sequence_progress_path(work_dir: Path, work_item: dict[str, Any]) -> Path:
+    return work_dir / f"managed_sequence_progress.{_safe_name(str(work_item.get('work_item_id') or 'send'))}.json"
+
+
+def _managed_sequence_window_seconds(message_count: int) -> int:
+    return max(1, int(message_count or 1)) * MESSAGE_SEQUENCE_SECONDS_PER_MESSAGE
+
+
+def _parse_iso_datetime_utc(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _managed_sequence_elapsed_seconds(started_at: Any, *, now_iso: str | None = None) -> float | None:
+    started = _parse_iso_datetime_utc(started_at)
+    now = _parse_iso_datetime_utc(now_iso or _now_iso())
+    if started is None or now is None:
+        return None
+    return max(0.0, (now - started).total_seconds())
+
+
+def _managed_sequence_expiry(started_at: Any, *, window_seconds: int) -> dict[str, Any] | None:
+    elapsed_seconds = _managed_sequence_elapsed_seconds(started_at)
+    if elapsed_seconds is None or elapsed_seconds <= window_seconds:
+        return None
+    return {
+        "message_sequence_started_at": started_at,
+        "message_sequence_window_seconds": window_seconds,
+        "message_sequence_elapsed_seconds": elapsed_seconds,
+    }
+
+
+def _managed_sequence_remaining_seconds(started_at: Any, *, window_seconds: int) -> float | None:
+    elapsed_seconds = _managed_sequence_elapsed_seconds(started_at)
+    if elapsed_seconds is None:
+        return None
+    return max(0.0, float(window_seconds) - elapsed_seconds)
+
+
+def _managed_sequence_progress_load(path: Path, work_item: dict[str, Any]) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = _read_json(path)
+    except (OSError, json.JSONDecodeError, HostLoopError):
+        return {}
+    if payload.get("action_request_id") != work_item.get("action_request_id"):
+        return {}
+    if payload.get("payload_hash") != work_item.get("payload_hash"):
+        return {}
+    raw_results = payload.get("message_results")
+    message_results = [result for result in raw_results if isinstance(result, dict)] if isinstance(raw_results, list) else []
+    progress: dict[str, Any] = {"message_results": message_results}
+    if isinstance(payload.get("sequence_started_at"), str):
+        progress["sequence_started_at"] = payload["sequence_started_at"]
+    if isinstance(payload.get("last_message_sent_at"), str):
+        progress["last_message_sent_at"] = payload["last_message_sent_at"]
+    if isinstance(payload.get("target_binding"), dict):
+        progress["target_binding"] = payload["target_binding"]
+    return progress
+
+
+def _managed_sequence_progress_save(
+    path: Path,
+    work_item: dict[str, Any],
+    *,
+    message_results: list[dict[str, Any]],
+    target_binding: dict[str, Any] | None,
+    sequence_started_at: str | None,
+    last_message_sent_at: str | None,
+    message_sequence_window_seconds: int,
+) -> None:
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "action_request_id": work_item.get("action_request_id"),
+        "work_item_id": work_item.get("work_item_id"),
+        "payload_hash": work_item.get("payload_hash"),
+        "completed_message_count": sum(1 for result in message_results if result.get("status") == "ok"),
+        "sequence_started_at": sequence_started_at,
+        "last_message_sent_at": last_message_sent_at,
+        "message_sequence_window_seconds": message_sequence_window_seconds,
+        "message_results": message_results,
+    }
+    if isinstance(target_binding, dict):
+        payload["target_binding"] = target_binding
+    _write_json(path, payload)
 
 
 def _work_item_payload_messages(work_item: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1769,6 +2141,13 @@ def _data_dir_path(data_dir: Path, value: Any) -> str | None:
     if path.is_absolute():
         return str(path)
     return str(data_dir / path)
+
+
+def _host_loop_relationship_report_paths(data_dir: Path, report: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(report)
+    normalized["human_report_path"] = _data_dir_path(data_dir, normalized.get("human_report_path"))
+    normalized["machine_report_path"] = _data_dir_path(data_dir, normalized.get("machine_report_path"))
+    return normalized
 
 
 def _digest(payload: Any) -> str:

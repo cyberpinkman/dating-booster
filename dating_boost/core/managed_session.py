@@ -11,6 +11,7 @@ from typing import Any, Callable
 from dating_boost.apps.registry import create_adapter, managed_session_policy, supported_app_ids
 from dating_boost.core.automation import AutomationRepository
 from dating_boost.core.operator import OperatorRepository
+from dating_boost.core.relationship_report import RELATIONSHIP_PROGRESS_NEXT_ACTION
 from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.storage import JsonStorage
 
@@ -140,7 +141,19 @@ class ManagedSessionRepository:
             operator_stop = self._operator.stop_session()
         except (FileNotFoundError, ValueError):
             operator_stop = {"status": "not_found"}
-        return _payload("stopped", reason=reason, app_id=str(session.get("app_id")), session=session, operator=operator_stop)
+        relationship_report = operator_stop.get("relationship_progress_report") if isinstance(operator_stop, dict) else None
+        return _payload(
+            "stopped",
+            reason=reason,
+            app_id=str(session.get("app_id")),
+            session=session,
+            operator=operator_stop,
+            machine_report_path=operator_stop.get("machine_report_path") if isinstance(operator_stop, dict) else None,
+            human_report_path=operator_stop.get("human_report_path") if isinstance(operator_stop, dict) else None,
+            report_summary=operator_stop.get("summary") if isinstance(operator_stop, dict) else None,
+            relationship_progress_report=relationship_report if isinstance(relationship_report, dict) else None,
+            next_host_action=RELATIONSHIP_PROGRESS_NEXT_ACTION if isinstance(relationship_report, dict) else None,
+        )
 
     def notify(self, *, source: str, app_id: str) -> dict[str, Any]:
         app_id = _validate_app_id(app_id)

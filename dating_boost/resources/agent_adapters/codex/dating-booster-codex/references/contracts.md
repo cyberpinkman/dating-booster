@@ -166,6 +166,11 @@ When one reply is more natural as several chat bubbles, include
 `message_sequence`. `best_reply` should be the same content joined with newlines;
 Dating Booster binds the whole sequence as one payload and host-loop sends each
 ordinary chat message in order.
+For managed live send, the sequence continuity window is 20 seconds per message
+and starts before the first message send attempt. A 3-message sequence therefore
+has a 60-second window. If a partial sequence exceeds the window, append audit
+evidence/correction as needed, re-observe, and replan instead of sending the
+remaining messages later.
 
 ```json
 {

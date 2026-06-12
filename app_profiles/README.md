@@ -131,8 +131,10 @@ requires it.
   exception, not by removing `send` from default blocked actions.
 - Latest inbound messages are clearly separated from old visible context.
 - Draft staging requires exact staged-text verification. For Bumble and TaShuo,
-  paste is primary and direct typing is only a fallback; OCR must still verify
-  the exact payload text before Send.
+  paste is primary and direct typing is only a fallback; the configured runtime
+  must verify the exact payload text before Send/Return. OCR may be the exact
+  path for iPhone Mirroring; mac-ios-app runtimes may use Accessibility text
+  evidence plus visual state when declared by the app profile.
 - Raw OCR text is not exposed in normal JSON output when it could contain
   private chat history.
 - Unsupported actions include app-specific high-risk operations such as likes,

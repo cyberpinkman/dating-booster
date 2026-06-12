@@ -18,6 +18,10 @@ from dating_boost.core.memory.review_queue import ReviewQueueRepository, review_
 from dating_boost.core.models import Divergence, ReplyMode
 from dating_boost.core.planner import PlannerRepository, planner_context_items
 from dating_boost.core.production_store import payload_digest
+from dating_boost.core.relationship_report import (
+    RELATIONSHIP_PROGRESS_NEXT_ACTION,
+    build_relationship_progress_report,
+)
 from dating_boost.core.repositories import JsonMemoryRepository
 from dating_boost.core.storage import JsonStorage
 from dating_boost.core.user_disclosure import UserDisclosureRepository
@@ -27,6 +31,83 @@ from dating_boost.policy.content import evaluate_draft_content
 
 
 ACTIVE_SLOT_STATUSES = {"soft_mentioned", "handoff_pending", "user_confirmed"}
+
+WORK_TOPIC_KEYWORDS = (
+    "工作",
+    "上班",
+    "公司",
+    "职业",
+    "事业",
+    "职场",
+    "同事",
+    "老板",
+    "客户",
+    "项目",
+    "业务",
+    "运营",
+    "产品",
+    "销售",
+    "kpi",
+    "绩效",
+    "加班",
+    "救火",
+    "救火队长",
+    "提前把坑",
+    "坑都填",
+    "开会",
+    "汇报",
+)
+
+WORK_HIGH_SALIENCE_MARKERS = (
+    "热爱工作",
+    "喜欢工作",
+    "很喜欢工作",
+    "事业心",
+    "搞事业",
+    "创业",
+    "工作狂",
+    "职业规划",
+    "职场",
+    "管理者",
+    "带团队",
+)
+
+LIFESTYLE_HOOK_KEYWORDS = (
+    "露营",
+    "咖啡",
+    "电影",
+    "音乐",
+    "唱歌",
+    "旅行",
+    "看展",
+    "健身",
+    "瑜伽",
+    "美食",
+    "日料",
+    "宠物",
+    "猫",
+    "狗",
+    "桌游",
+    "狼人杀",
+    "户外",
+    "滑雪",
+    "爬山",
+    "摄影",
+    "阅读",
+    "酒吧",
+    "live",
+    "concert",
+)
+
+SLOW_WARM_CONTEXT_MARKERS = ("慢热", "慢慢熟", "慢慢来", "熟了")
+SLOW_WARM_RESTATEMENTS = (
+    "聊天慢慢熟",
+    "慢慢熟",
+    "刚开始话少",
+    "熟了",
+    "熟了会",
+    "慢热",
+)
 
 
 class AutomationRepository:
@@ -172,6 +253,12 @@ class AutomationRepository:
         session["status"] = "stopped"
         session["stopped_at"] = now
         self._storage.write_json(Path("automation") / "session.json", session)
+        relationship_report = build_relationship_progress_report(
+            data_dir=self.root,
+            human_report_path=human_path,
+            machine_report_path=machine_path,
+            summary=summary,
+        )
         return {
             "schema_version": 1,
             "status": "stopped",
@@ -180,6 +267,8 @@ class AutomationRepository:
             "human_report_path": str(human_path),
             "summary": summary,
             "memory_review": memory_review,
+            "relationship_progress_report": relationship_report,
+            "next_host_action": RELATIONSHIP_PROGRESS_NEXT_ACTION,
         }
 
     def latest_report(self) -> dict[str, Any]:
@@ -194,7 +283,7 @@ class AutomationRepository:
                     "machine_report": self._active_machine_report(session),
                 }
             return {"schema_version": 1, "status": "not_found"}
-        report = _report_with_memory_display(self._storage.read_json(path, expected_schema_version=1))
+        report = _report_with_memory_display(self._refresh_report_current_state(self._storage.read_json(path, expected_schema_version=1)))
         return {
             "schema_version": 1,
             "status": "ok",
@@ -207,6 +296,19 @@ class AutomationRepository:
         if latest.get("status") == "ok" and isinstance(latest.get("machine_report"), dict):
             return _human_report(latest["machine_report"]).rstrip()
         raise FileNotFoundError(Path("automation") / "reports" / "machine_latest.json")
+
+    def _refresh_report_current_state(self, report: dict[str, Any]) -> dict[str, Any]:
+        refreshed = dict(report)
+        states = self.load_states()
+        ledger = self.load_ledger()
+        user_readiness = UserDisclosureRepository(self.root).readiness(mode="autonomous")
+        refreshed["states"] = states
+        refreshed["summary"] = _build_summary(states, ledger, user_readiness)
+        refreshed["user_profile_readiness"] = user_readiness
+        refreshed["conversation_plans"] = self._planner_plans(states)
+        refreshed["appointment_ledger"] = ledger
+        refreshed["next_priority_queue"] = _next_priority_queue(states)
+        return refreshed
 
     def _active_machine_report(self, session: dict[str, Any]) -> dict[str, Any]:
         states = self.load_states()
@@ -1572,12 +1674,17 @@ def _report_with_memory_display(report: dict[str, Any]) -> dict[str, Any]:
         return normalized
     review = dict(memory_review)
     items: list[dict[str, Any]] = []
+    seen_review_ids: set[str] = set()
     for item in review.get("items", []):
         if not isinstance(item, dict):
             continue
+        review_item_id = str(item.get("review_item_id") or "")
+        if review_item_id and review_item_id in seen_review_ids:
+            continue
+        if review_item_id:
+            seen_review_ids.add(review_item_id)
         enriched = dict(item)
-        if not isinstance(enriched.get("display"), dict):
-            enriched["display"] = review_item_display(enriched)
+        enriched["display"] = review_item_display(enriched)
         items.append(enriched)
     review["items"] = items
     normalized["memory_review"] = review
@@ -1783,18 +1890,35 @@ def _draft_strategy_block_reason(
     planner_recommendation: dict[str, Any],
     observation: AppObservation,
 ) -> str | None:
-    if str(planner_recommendation.get("recommended_move") or "") != "low_investment_repair":
-        return None
     low_investment_streak = int(planner_recommendation.get("low_investment_streak") or 0)
     topic_lifecycle = planner_recommendation.get("topic_lifecycle")
     topic = dict(topic_lifecycle) if isinstance(topic_lifecycle, dict) else {}
     current_topic = str(topic.get("current_topic") or "").strip()
     topic_state = str(topic.get("topic_state") or "").strip()
+    texts = [
+        message["text"]
+        for message in _draft_payload_messages(
+            draft_payload,
+            str(draft_payload.get("best_reply") or ""),
+        )
+    ]
+    combined = "\n".join(texts)
+
+    if _draft_forced_choice_restates_confirmed_info(
+        texts,
+        current_topic=current_topic,
+        topic=topic,
+        observation=observation,
+    ):
+        return "draft_forced_choice_restates_confirmed_info"
+    if _draft_work_topic_not_preferred(draft_payload, texts, observation):
+        return "draft_work_topic_not_preferred"
+
+    if str(planner_recommendation.get("recommended_move") or "") != "low_investment_repair":
+        return None
     if low_investment_streak < 2 and topic_state not in {"saturating", "exhausted"}:
         return None
 
-    texts = [message["text"] for message in _draft_payload_messages(draft_payload, str(draft_payload.get("best_reply") or ""))]
-    combined = "\n".join(texts)
     hooks = [
         str(item).strip()
         for item in observation.profile_observation.hook_candidates
@@ -1812,6 +1936,120 @@ def _draft_strategy_block_reason(
     if current_topic and current_topic not in combined:
         return None
     return "draft_strategy_no_delta"
+
+
+def _draft_forced_choice_restates_confirmed_info(
+    texts: list[str],
+    *,
+    current_topic: str,
+    topic: dict[str, Any],
+    observation: AppObservation,
+) -> bool:
+    confirmed_items = [current_topic]
+    new_information = topic.get("new_information")
+    if isinstance(new_information, list):
+        confirmed_items.extend(str(item) for item in new_information if str(item).strip())
+    confirmed_items.extend(
+        str(message.get("text") or "")
+        for message in observation.conversation_observation.latest_inbound_messages
+        if str(message.get("text") or "").strip()
+    )
+    confirmed_items.extend(
+        str(item)
+        for item in observation.conversation_observation.thread_cues
+        if str(item).strip()
+    )
+    confirmed_context = "\n".join(confirmed_items)
+    for line in _draft_lines(texts):
+        if not _looks_like_ab_choice_question(line):
+            continue
+        left_side = line.split("还是", 1)[0]
+        if _text_restates_confirmed_info(left_side, confirmed_context, current_topic):
+            return True
+    return False
+
+
+def _draft_work_topic_not_preferred(
+    draft_payload: dict[str, Any],
+    texts: list[str],
+    observation: AppObservation,
+) -> bool:
+    selected_hook = str(draft_payload.get("selected_hook") or "").strip()
+    strategic_delta = str(draft_payload.get("strategic_delta") or "").strip()
+    hook_source = str(draft_payload.get("hook_source") or "").strip()
+    draft_context = "\n".join([*texts, selected_hook, strategic_delta, hook_source])
+    if not _has_work_topic(draft_context):
+        return False
+
+    latest_inbound_text = "\n".join(
+        str(message.get("text") or "")
+        for message in observation.conversation_observation.latest_inbound_messages
+    )
+    if _has_work_topic(latest_inbound_text):
+        return False
+    if _has_work_high_salience(observation.profile_observation.profile_text):
+        return False
+
+    hooks = [
+        str(item).strip()
+        for item in observation.profile_observation.hook_candidates
+        if str(item).strip()
+    ]
+    if not any(_is_lifestyle_hook(hook) for hook in hooks):
+        return False
+    return True
+
+
+def _draft_lines(texts: list[str]) -> list[str]:
+    lines: list[str] = []
+    for text in texts:
+        lines.extend(part.strip() for part in str(text).splitlines() if part.strip())
+    return lines
+
+
+def _looks_like_ab_choice_question(line: str) -> bool:
+    if "还是" not in line:
+        return False
+    if re.search(r"(你|平时|一般|通常|喜欢|爱|会|是|更|偏).{0,40}还是", line):
+        return True
+    return bool(re.search(r"还是.{0,24}[?？吗嘛么呢]", line))
+
+
+def _text_restates_confirmed_info(text: str, confirmed_context: str, current_topic: str) -> bool:
+    if current_topic and current_topic in text:
+        return True
+    if _has_slow_warm_context(confirmed_context) and any(marker in text for marker in SLOW_WARM_RESTATEMENTS):
+        return True
+    normalized_confirmed = _normalized_strategy_text(confirmed_context)
+    normalized_text = _normalized_strategy_text(text)
+    return bool(
+        normalized_text
+        and len(normalized_text) >= 4
+        and normalized_text in normalized_confirmed
+    )
+
+
+def _has_slow_warm_context(text: str) -> bool:
+    return any(marker in text for marker in SLOW_WARM_CONTEXT_MARKERS)
+
+
+def _has_work_topic(text: str) -> bool:
+    normalized = str(text).lower()
+    return any(marker in normalized for marker in WORK_TOPIC_KEYWORDS)
+
+
+def _has_work_high_salience(text: str) -> bool:
+    normalized = str(text).lower()
+    return any(marker in normalized for marker in WORK_HIGH_SALIENCE_MARKERS)
+
+
+def _is_lifestyle_hook(hook: str) -> bool:
+    normalized = str(hook).lower()
+    return any(marker in normalized for marker in LIFESTYLE_HOOK_KEYWORDS)
+
+
+def _normalized_strategy_text(text: str) -> str:
+    return re.sub(r"[\s，。！？、,.!?：:；;“”\"'（）()]+", "", str(text))
 
 
 def _draft_strategy_evidence(

@@ -99,14 +99,33 @@ Prefer hooks that can reveal unknown details:
 Avoid asking the match to choose among tags they already wrote. That often gets
 "都行" or "看情况".
 
+Prefer lifestyle, interests, scenes, and shared rhythm before work. A job label
+such as "运营" is not enough reason to lead with work style. Use work only when
+the match explicitly mentions work, shows strong work/事业投入, asks about work,
+or has no better lifestyle/interest hook available.
+
 ## Shape The Reply
 
 - 一句为主，最多两句。
+- If one reply has two jobs, such as 承接上一句 and opening a new hook, use
+  `message_sequence` with two or three short bubbles instead of one dense line.
+- Managed live-send continuity for `message_sequence` is 20 seconds per bubble
+  from before the first send attempt; if the window expires after a partial
+  send, do not send the remaining bubbles later without re-observing and
+  replanning.
+- Do not mechanically split every comma or period. Each bubble needs a clear
+  role: acknowledge, add a concrete handle, or land the push. The final bubble
+  should usually carry the conversational push.
 - One question at most; zero questions is often better when the match already asked something.
 - If the match asked a question or showed surprise, answer or riff before adding a new hook.
 - Do not force a question when a natural reaction would be stronger.
 - If the match delegates a choice, make one concrete choice instead of bouncing the decision back.
-- Ask A or B when the options are natural; avoid A/B/C list questions.
+- Avoid survey-style A/B wording. Use A/B only when the options are visible,
+  concrete, natural, and the choice itself has conversational payoff.
+- Never make an already-confirmed fact one side of an A/B choice. If the match
+  already said she is slow to warm up, "聊天慢慢熟还是..." is not a real option.
+- When testing one guess, prefer a yes/no-style hypothesis or light statement:
+  "你会是见面更放松一点的那种吗" reads more human than "你是 A 还是 B".
 - Use one label at most. "夜猫子" is enough; "ESFP 夜猫子" usually sounds like tag stacking.
 - Prefer concrete words over abstract planning words.
 - If the previous user sent many messages, do not send another multi-line bundle.
@@ -200,3 +219,51 @@ Why this works:
 - It keeps the reward playful and specific without becoming sexually forward.
 - It uses profile-compatible hooks: Japanese food, gifts, pure-love pace, and
   long-term/low-pressure intent.
+
+## Worked Example: Slow-Warm Bridge
+
+Situation:
+
+- Both sides have acknowledged 慢热.
+- The next move should make the thread more meetable, not explain what 慢热
+  means.
+
+Weak draft:
+
+- "你是聊天慢慢熟，还是见到人之后反而更容易放松"
+
+Issue: the first option only restates the confirmed fact. The A/B shape exposes
+planner logic and makes the match choose between a known fact and a new guess.
+
+Better direction:
+
+- "那慢热同盟先成立"
+- "不过我生活中还是比较能聊的"
+- "你会是见面更放松一点的那种吗哈哈"
+
+Why this works:
+
+- It acknowledges the shared trait without explaining it.
+- It adds user-side energy.
+- It tests one useful meet-path hypothesis in a human yes/no shape.
+
+## Worked Example: Lifestyle Before Work
+
+Situation:
+
+- Match profile says "运营" plus lifestyle hooks like 露营, 咖啡, 电影.
+- The match has not made work a live topic.
+
+Weak draft:
+
+- "你平时更像救火队长，还是提前把坑都填好的那种"
+
+Issue: it turns a job label into a work-style interview and uses stiff A/B
+wording. In a dating context, work should not outrank available lifestyle hooks
+unless the match made work salient.
+
+Better direction:
+
+- Bridge into 露营、咖啡、电影, or another concrete生活场景.
+- If work later becomes salient, use one concrete work-adjacent observation
+  rather than an interview-style work personality choice.

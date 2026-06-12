@@ -51,8 +51,10 @@ direct `harness <app> send-message --authorization --action-request` is
 executor-internal only and must consume system-generated work items or
 confirmation-flow hashes. Do not handcraft action requests. Bumble and TaShuo
 ordinary chat managed sends require the same authorization, target-specific
-binding, staged-text OCR, and post-send evidence gates. Visual UI-affordance or
-bubble evidence alone is not exact-text verification. Bumble
+binding, exact staged-text verification, and post-send evidence gates. For
+TaShuo mac-ios-app, exact verification may use Accessibility text evidence plus
+visual state; iPhone Mirroring still defaults to OCR/text evidence. Visual
+UI-affordance or bubble evidence alone is not exact-text verification. Bumble
 must not like, pass, SuperSwipe, unmatch, report, edit profile data, or purchase
 Premium. TaShuo must not like, pass, start a 飞行 chat, unmatch, report, edit
 profile data, purchase Premium, or make question-gate decisions. TaShuo ordinary
@@ -73,9 +75,10 @@ harness does not stage or send question-gate replies.
 TaShuo mac-ios-app supports launch/observe/prepare-message-page/stage-draft and
 ordinary-chat managed live send. Live send must run through host-loop or
 through a managed-session wait point resumed by host-loop with
-`--managed-gui-send --harness-runtime mac-ios-app`, structural row-to-thread
-target binding, exact staged-text verification, and post-send
-exact-text/input-cleared verification.
+`--managed-gui-send --harness-runtime mac-ios-app`,
+`current_thread_visual_identity` binding, exact staged-text verification, and
+post-send exact-text/input-cleared verification. Do not use message-list row
+position or header OCR as mac-ios-app target-binding evidence.
 
 ```bash
 dating-boost harness doctor --app-id tinder --json
@@ -416,7 +419,9 @@ toward a goal such as meeting in person.
 10. For `handoff`, appointment details, contact exchange, likes, unmatches, reports, or profile edits, stop automation for that match and ask the user to take over.
 11. Continue `operator next -> observe/act -> ingest/result` until the user stops or the operator returns `wait`.
 12. Stop with `dating-boost operator stop --data-dir .local/dating-boost`.
-13. Show `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
+13. Show `relationship_progress_report.markdown` from the stop response as the
+    final work report. If the field is missing, recover with
+    `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
 14. Resume later by reading `dating-boost operator report latest --data-dir .local/dating-boost` and continuing from local state.
 
 ## Session-scoped Managed Runner
@@ -440,6 +445,8 @@ session. After resume or equivalent manual operator processing, call
 `managed-session run --wait` again. Use `managed-session notify` only as an
 event hint; it does not bypass fresh observation, planner, or send gates.
 Stop with `dating-boost managed-session stop --data-dir .local/dating-boost`.
+If the response includes `relationship_progress_report.markdown`, show it as
+the final work report before ending the host turn.
 
 ## Tinder Host Loop Supervisor
 
@@ -491,7 +498,9 @@ tests. Prefer the operator workflow for real host-managed sessions.
 9. Optionally run `dating-boost planner update --data-dir .local/dating-boost --match-id MATCH_ID --goal-id GOAL_ID --observation observation.json --assessment planner_assessment.json --json` and inspect `dating-boost planner recommend --data-dir .local/dating-boost --match-id MATCH_ID --json` when debugging one thread.
 10. Run `dating-boost automation session step --data-dir .local/dating-boost --scan-batch scan_batch.json`.
 11. Stop with `dating-boost automation session stop --data-dir .local/dating-boost`.
-12. Show `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
+12. Show `relationship_progress_report.markdown` from the stop response as the
+    final work report. If the field is missing, recover with
+    `dating-boost automation report latest --data-dir .local/dating-boost --format md`.
 
 Do not use automation session output to commit to exact meeting details, contact
 exchange, likes, unmatches, reports, or profile edits.

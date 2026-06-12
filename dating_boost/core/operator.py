@@ -309,6 +309,8 @@ class OperatorRepository:
             "machine_report_path": automation_stop["machine_report_path"],
             "human_report_path": automation_stop["human_report_path"],
             "summary": automation_stop["summary"],
+            "relationship_progress_report": automation_stop.get("relationship_progress_report"),
+            "next_host_action": automation_stop.get("next_host_action"),
         }
 
     def latest_report(self) -> dict[str, Any]:

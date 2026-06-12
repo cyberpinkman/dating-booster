@@ -54,14 +54,17 @@ policy-checked action request, target-chat binding, staged text verification,
 outbound-bubble verification, and an unpaused safety switch. Direct harness
 send is executor-internal only and must consume a system-generated work item or
 confirmation-flow result; do not handcraft action requests. Bumble and TaShuo
-managed send additionally require target-specific binding and exact OCR payload verification;
-visual-only button or bubble evidence is not enough. Bumble managed send applies
+managed send additionally require target-specific binding and exact payload verification;
+for TaShuo mac-ios-app this may use Accessibility text evidence plus visual
+state, while iPhone Mirroring still defaults to OCR/text evidence. Visual-only
+button or bubble evidence is not enough. Bumble managed send applies
 to ordinary chat sends; autonomous Opening Move send is not supported. TaShuo
 managed send applies to ordinary chat sends; current harness question-gate
 staging/sending is not supported. TaShuo mac-ios-app managed live send is
 supported for ordinary chat only and requires `--harness-runtime mac-ios-app`,
-structural row-to-thread target binding, exact staged-text verification, and
-post-send exact-text/input-cleared verification. The harness never authorizes like,
+`current_thread_visual_identity` target binding, exact staged-text verification,
+and post-send exact-text/input-cleared verification. Do not use message-list row
+position or header OCR as mac-ios-app binding evidence. The harness never authorizes like,
 super-like, SuperSwipe, pass, unmatch, report, premium purchase, profile edit,
 TaShuo 飞行 start-chat, or question-gate decision actions.
 

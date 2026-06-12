@@ -60,9 +60,9 @@
   "stage_send_verification": [
     "Managed TaShuo draft staging is supported only inside harness tashuo send-message.",
     "Paste the draft into a verified TaShuo ordinary conversation input first; direct typing is only a no-newline fallback when paste does not stage, and IME space commit follows direct typing before final verification.",
-    "After paste, direct typing, or IME space commit, OCR must verify staged text exactly equals payload_text before pressing Return.",
+    "After paste, direct typing, or IME space commit, exact text evidence must verify staged text equals payload_text before pressing Return; mac-ios-app may satisfy this through Accessibility text evidence.",
     "TaShuo ordinary chat sends with Return; there is no Send button to click.",
-    "Visual bubble evidence alone is not exact-text verification.",
+    "Visible bubble evidence alone is not exact-text verification unless paired with exact text evidence from OCR, Accessibility, or an approved visual verification flow.",
     "Question-gate replies may be drafted for user review, but current harness question-gate staging/sending is not supported."
   ],
   "native_gui_harness": {
@@ -249,10 +249,10 @@
     "If Cmd+V or paste produces a literal shortcut key such as v, an IME candidate, or any wrong text, cancel/refocus/backspace-clean it, verify the input is empty or safe, and block instead of continuing.",
     "TaShuo live send requires target-specific binding evidence. For mac-ios-app current-thread send, use current_thread_visual_identity with a fresh visual_anchor_hash; do not use message-list row position or header OCR as the binding evidence. For iPhone Mirroring row-open paths, row-to-thread structural evidence remains allowed.",
     "Emoji or otherwise non-OCR nicknames are valid targets in any message-list row; bind the intended row with chat_list_row_to_thread evidence instead of switching to an OCR-friendly conversation.",
-    "Ordinary conversation classification can use the persistent bottom input toolbar and four tool buttons as page-structure evidence; exact payload verification still requires OCR/text evidence, while mac-ios-app current-thread target binding must use a visual anchor hash.",
+    "Ordinary conversation classification can use the persistent bottom input toolbar and four tool buttons as page-structure evidence; exact payload verification requires text or approved visual evidence, while mac-ios-app current-thread target binding must use a visual anchor hash.",
     "For mac-ios-app task startup, use prepare-message-page: determine the top-level page from the visual bottom-tab highlight, tap the messages tab if needed, then hand off to visual message-list planning without OCR-first fallback or fixed row-coordinate thread entry.",
     "TaShuo ordinary chat sends with Return; do not plan or execute a Send-button click.",
-    "Visible bubble evidence can support diagnosis but cannot replace exact OCR verification of the payload text.",
+    "Visible bubble evidence can support diagnosis but cannot replace exact verification of the payload text.",
     "Non-ABC input sources can leave app names in the iOS Spotlight candidate bar; verify the app result after typing before tapping."
   ],
   "unsupported_actions": [
@@ -478,11 +478,11 @@
     ],
     "required_evidence": [
       "staged_text_verified",
-      "staged_exact_text_ocr_verified",
+      "staged_exact_text_verified",
       "input_cleared_after_send",
       "post_action_screen_captured",
       "outbound_message_verified",
-      "outbound_exact_text_ocr_verified"
+      "outbound_exact_text_verified"
     ],
     "exact_text_verification": true,
     "post_action_verification": true,

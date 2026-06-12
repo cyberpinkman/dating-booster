@@ -14,6 +14,8 @@ critique, review, or debug output.
 
 - 真人会不会这么打字: Would a normal Chinese dating-app user send this exact sentence?
 - Is there one clear move, or did the draft pack too many ideas into one line?
+- 如果用了 `message_sequence`, 每条气泡是否都有独立作用，而不是机械按逗号/句号切开?
+- 最后一条气泡有没有承担推进、落点或自然交还话题?
 - 如果对方已经提问、吐槽或惊讶，草稿是在接话，还是为了续聊而强行提问?
 - 如果对方说 "你定"/"你安排"/"听你的"，草稿是在接过选择权，还是继续反问?
 - Does it ask about an unknown detail, or only repeat an 已知标签 from the profile?
@@ -21,6 +23,9 @@ critique, review, or debug output.
 - Does it use 抽象词 or AI-sounding nouns such as "路线", "放松方式", or "选择倾向"?
 - Does it use logic-comparison wording like "偏 A 还是 B" when a person would say "喜欢 A 还是 B"?
 - Does it use an unnatural multi-option question such as "A 还是 B 还是 C"?
+- Does it make an already-confirmed fact one side of an A/B choice?
+- If the draft only needs to test one guess, would a yes/no-style question sound more human than "A 还是 B"?
+- Is it leading with work when lifestyle or interest hooks are available and the match has not made work salient?
 - Does it have 标签堆叠, such as "ESFP 夜猫子", when one label would be enough?
 - Is it too polished, balanced, or explanatory for the user's previous style?
 
@@ -87,3 +92,26 @@ keeps bouncing the decision back.
 Better:
 
 > 那我定了，奖励你一个点菜权，下次日料你挑一家
+
+Bad:
+
+> 你是聊天慢慢熟，还是见到人之后反而更容易放松
+
+Issue: "聊天慢慢熟" only restates 慢热 after both sides have already confirmed it.
+The A/B form makes the draft look planned rather than spoken.
+
+Better:
+
+> 你会是见面更放松一点的那种吗哈哈
+
+Bad:
+
+> 你平时更像救火队长，还是提前把坑都填好的那种
+
+Issue: this turns a job label into a work-style interview and uses stiff A/B
+wording. Work is not the best first hook when the profile also has normal
+dating-context hooks like camping, coffee, movies, music, pets, or food.
+
+Better:
+
+> 你露营会是那种到地方就开始放空的人吗哈哈

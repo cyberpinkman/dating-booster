@@ -81,6 +81,20 @@ Strict bundles must not contain raw draft text, raw conversation text, raw profi
 7. Check high-risk actions through `dating-boost policy check-action`.
 8. After any host action, verify from fresh screen evidence and record the result with `dating-boost action record-result`.
 
+For Chinese dating replies, use `message_sequence` when one reply naturally has
+two jobs, such as acknowledging the previous topic and opening a new hook. Keep
+each bubble short and useful; do not mechanically split every comma or period.
+The final bubble should carry the conversational push or landing. `best_reply`
+is the same content joined with newlines, and host-loop sends the ordered
+sequence as one audited action.
+Do not package already-confirmed facts as survey-style A/B choices. When testing
+one new guess, prefer a yes/no-style hypothesis. Prefer lifestyle or interest
+hooks before work unless the match made work salient or showed strong work/事业
+investment.
+When a managed run or stop response includes `relationship_progress_report`,
+show its Markdown before ending the host turn; do not finish by only reporting
+status or report file paths.
+
 ## User Model And Planning
 
 For fully managed or autonomous sessions, collect both dating profile and self interview data:
@@ -213,8 +227,11 @@ dating-boost-host-loop run --adapter-package agent_adapters/claude-code/adapter-
 
 TaShuo mac-ios-app is a managed live-send runtime for ordinary chat messages
 only. Use `--harness-runtime mac-ios-app` with host-loop/managed-session, and
-require structural row-to-thread target binding plus exact staged and post-send
-verification before recording a successful action result.
+require `current_thread_visual_identity` structural target binding plus exact
+staged and post-send verification before recording a successful action result.
+Do not use message-list row position or header OCR as mac-ios-app binding
+evidence; exact verification may use Accessibility text evidence plus visual
+state.
 
 The direct `harness <app> send-message --authorization --action-request` command
 is executor-internal only. It may consume only a `send_message` work item

@@ -346,6 +346,10 @@ class ManagedSessionTests(unittest.TestCase):
         self.assertEqual(status_payload["status"], "active")
         self.assertEqual(stop_exit, 0)
         self.assertEqual(stop_payload["status"], "stopped")
+        self.assertEqual(stop_payload["next_host_action"], "present_relationship_progress_report")
+        report = stop_payload["relationship_progress_report"]
+        self.assertEqual(report["format"], "markdown")
+        self.assertIn("Dating Booster Session Report", report["markdown"])
 
     def _started_repo(
         self,
