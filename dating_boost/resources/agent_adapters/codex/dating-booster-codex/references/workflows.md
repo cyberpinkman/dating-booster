@@ -428,11 +428,25 @@ toward a goal such as meeting in person.
 Use this when the user wants a bounded managed window without keeping the host
 agent active between events. The local runner performs tokenless checks and
 returns only when host work is needed, paused, blocked, or stopped.
+Multi-thread management is global: managed-session/operator serially chooses
+the next candidate by opportunity priority, and app runtimes execute only the
+current work item. High-throughput is an explicit testing mode, not the
+production default.
 
 ```bash
-dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --json
+dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --json
 dating-boost managed-session run --data-dir .local/dating-boost --wait --json
 ```
+
+Use `--management-mode high-throughput --max-threads-per-cycle N --max-pages-per-cycle N --cycle-send-limit N` only for explicit link testing.
+For TaShuo local Mac iOS app managed sessions, add
+`--harness-runtime mac-ios-app`; without it, managed-session precheck uses the
+app profile default iPhone Mirroring runtime.
+Real TaShuo mac-ios-app smoke check, stage-only:
+`python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`.
+`managed-session run/tick` includes `relationship_progress_snapshot`; use it to
+report all-object state, waiting reasons, next wake, and the next priority queue
+without stopping the active session.
 
 If `run` returns `no_work`, do not continue screenshot analysis or drafting.
 If it returns `host_work_required`, execute the included operator work item

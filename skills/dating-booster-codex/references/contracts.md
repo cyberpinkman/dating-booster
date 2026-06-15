@@ -299,7 +299,14 @@ The assembled `scan_batch` shape is:
   "session_id": "session_123",
   "app_id": "tinder",
   "captured_at": "2026-05-26T10:00:00Z",
-  "scan_cursor": "page_1",
+  "scan_cursor": {
+    "current": "page_1",
+    "next": "page_2",
+    "exhausted": false
+  },
+  "page_index": 1,
+  "visible_range": {"start": 1, "end": 5},
+  "entries_observed_count": 5,
   "scan_budget": 5,
   "message_list_snapshot": {
     "entries": [
@@ -525,7 +532,15 @@ The assembled `scan_batch` shape is:
   },
   "states": [],
   "appointment_ledger": [],
-  "next_priority_queue": []
+  "next_priority_queue": [
+    {
+      "match_id": "match_123",
+      "candidate_key": "row_1",
+      "state": "nudge_scheduled",
+      "priority": 1,
+      "next_due_at": "2026-05-26T10:30:00Z"
+    }
+  ]
 }
 ```
 

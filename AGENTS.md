@@ -185,6 +185,12 @@ TaShuo mac-ios-app 托管 live send 支持普通聊天消息，但只能走 host
 dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tashuo --send-mode live --managed-gui-send --harness-runtime mac-ios-app --work-dir .local/dating-boost-host-loop --json
 ```
 
+TaShuo mac-ios-app 真实托管 smoke 使用独立脚本，默认 stage mode，不真实发送：
+
+```bash
+python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json
+```
+
 TaShuo 启动搜索使用 `tashu` 并通过截图/OCR 确认 `她说` 或 `TaShuo`。`飞行` screen-tap chat starts、recommendation likes、passes、question-gate decisions 都是 blocked actions。
 
 ## WeChat quick path
@@ -200,15 +206,19 @@ dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run -
 
 ## Managed session
 
-`managed-session` 只在用户显式启动后的当前托管窗口内运行。Session 外不监听、不扫描、不自动回复。
+`managed-session` 只在用户显式启动后的当前托管窗口内运行。Session 外不监听、不扫描、不自动回复。全对象自动管理是全局 `managed-session`/`operator` 能力：runner 按机会窗口优先级串行处理多个对象，runtime 只执行当前 work item，不决定全局优先级。
 
 ```bash
-dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --json
+dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --json
 dating-boost managed-session run --wait --data-dir .local/dating-boost --json
 dating-boost managed-session notify --data-dir .local/dating-boost --source manual --app-id tinder --json
 dating-boost managed-session status --data-dir .local/dating-boost --json
 dating-boost managed-session stop --data-dir .local/dating-boost --json
 ```
+
+生产默认 `--management-mode conservative`；真实链路压测可显式使用 `--management-mode high-throughput --max-threads-per-cycle N --max-pages-per-cycle N --cycle-send-limit N`。高吞吐只提高每轮扫描/处理预算，不绕过授权、target binding、staged-text verification 或 post-send verification。
+TaShuo 本地 iOS app 托管必须显式传 `--harness-runtime mac-ios-app`，否则 session precheck 使用 app profile 默认 iPhone Mirroring runtime。
+`managed-session run/tick` 返回 `relationship_progress_snapshot`，用于 host 展示本轮全对象状态摘要、下一优先队列和每个对象下一步；`managed-session stop` 和 host-loop final response 返回用户可读 `relationship_progress_report`。
 
 当 `managed-session run --wait` 返回 `host_work_required`，host agent 处理其中的 operator work item。如果用 host-loop supervisor 处理，使用同一个 data/work dir 运行：
 

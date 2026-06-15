@@ -262,13 +262,14 @@ class SkillPackageTests(unittest.TestCase):
             "harness bumble action",
             "harness bumble workflow",
             "harness tashuo stage-draft",
-            "harness tashuo send-message",
             "harness wechat launch",
             "harness wechat observe",
             "harness wechat stage-draft",
             "harness wechat send-message",
         ):
             self.assertTrue(command in workflows_text or command in host_loop_text, command)
+        self.assertNotIn("dating-boost harness tashuo send-message --text-file tashuo-draft", workflows_text)
+        self.assertNotIn("dating-boost harness tashuo send-message --text-file tashuo-draft", host_loop_text)
         for phrase in (
             "iphone mirroring",
             "long-press",

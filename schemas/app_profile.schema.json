@@ -172,12 +172,28 @@
       "required": [
         "precheck_failure_status",
         "precheck_failure_reason",
-        "precheck_failure_next_host_action"
+        "precheck_failure_next_host_action",
+        "default_max_threads_per_cycle",
+        "high_throughput_max_threads_per_cycle",
+        "default_max_pages_per_cycle",
+        "high_throughput_max_pages_per_cycle",
+        "cycle_send_limit",
+        "message_list_pagination_supported"
       ],
       "properties": {
         "precheck_failure_status": {"type": "string", "enum": ["paused", "stopped"]},
         "precheck_failure_reason": {"type": "string", "minLength": 1},
-        "precheck_failure_next_host_action": {"type": "string", "minLength": 1}
+        "precheck_failure_next_host_action": {"type": "string", "minLength": 1},
+        "runtime_precheck_failure_next_host_actions": {
+          "type": "object",
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
+        "default_max_threads_per_cycle": {"type": "integer", "minimum": 1},
+        "high_throughput_max_threads_per_cycle": {"type": "integer", "minimum": 1},
+        "default_max_pages_per_cycle": {"type": "integer", "minimum": 1},
+        "high_throughput_max_pages_per_cycle": {"type": "integer", "minimum": 1},
+        "cycle_send_limit": {"type": "integer", "minimum": 1},
+        "message_list_pagination_supported": {"type": "boolean"}
       }
     },
     "special_policies": {"type": "object"},

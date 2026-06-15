@@ -92,6 +92,16 @@ class AppProfileContractTests(unittest.TestCase):
                     )
                     if exposes_live_send:
                         self.assertEqual(profile["support_level"], "managed_live_send")
+                managed = profile["managed_session"]
+                for key in (
+                    "default_max_threads_per_cycle",
+                    "high_throughput_max_threads_per_cycle",
+                    "default_max_pages_per_cycle",
+                    "high_throughput_max_pages_per_cycle",
+                    "cycle_send_limit",
+                    "message_list_pagination_supported",
+                ):
+                    self.assertIn(key, managed, path.name)
 
     def test_bumble_opening_move_policy_is_role_sensitive_and_managed_send_safe(self):
         profile = json.loads((PROFILE_DIR / "bumble.json").read_text(encoding="utf-8"))

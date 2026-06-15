@@ -55,6 +55,42 @@ one new guess, prefer a yes/no-style hypothesis. Prefer lifestyle or interest
 hooks before work unless the match made work salient or showed strong work/事业
 investment.
 
+## Managed Session
+
+`managed-session start` accepts per-session management config:
+
+- `--management-mode conservative|high-throughput`.
+- `--max-threads-per-cycle N`.
+- `--max-pages-per-cycle N`.
+- `--cycle-send-limit N`.
+- `--harness-runtime <runtime>` for app profiles with alternate local runtimes,
+  such as TaShuo `mac-ios-app`.
+
+Conservative mode is the production default. High-throughput mode is only for
+explicit link testing and must not bypass authorization, target binding, staged
+text verification, or post-send verification.
+When TaShuo is being managed through the local Mac iOS app, pass
+`--harness-runtime mac-ios-app`; otherwise precheck uses the app profile default
+runtime, currently iPhone Mirroring.
+
+`scan_message_list` work items include:
+
+- `scan_cursor`: object with `current`, `next`, and `exhausted`.
+- `page_budget_remaining`.
+- `thread_budget_remaining`.
+- `management_mode`.
+
+Message-list observations must echo cursor progress with
+`scan_cursor.current`, `scan_cursor.next`, `scan_cursor.exhausted`,
+`page_index`, `visible_range`, and `entries_observed_count`. Candidate identity
+must use stable app-visible evidence such as visible name plus preview/profile
+fingerprint; list row number is navigation evidence only, not identity.
+
+`managed-session run/tick` returns `relationship_progress_snapshot` when
+available. The snapshot contains an object-state summary, `next_priority_queue`,
+and compact per-object state entries so host agents can report what was handled,
+skipped, waiting, or scheduled without stopping the session.
+
 ## Managed Live Send
 
 Live send requires all of these:

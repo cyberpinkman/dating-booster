@@ -122,6 +122,10 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--managed-gui-send", action="store_true")
     parser.add_argument("--harness-runtime")
     parser.add_argument("--initial-surface", choices=["auto", "message-list", "current-thread"], default="auto")
+    parser.add_argument("--management-mode", choices=["conservative", "high-throughput"], default="conservative")
+    parser.add_argument("--max-threads-per-cycle", type=int, default=5)
+    parser.add_argument("--max-pages-per-cycle", type=int, default=1)
+    parser.add_argument("--cycle-send-limit", type=int, default=1)
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--once", action="store_true")
@@ -534,6 +538,14 @@ class HostLoopSupervisor:
                     str(self._authorization_path()),
                     "--initial-surface",
                     initial_surface,
+                    "--management-mode",
+                    str(getattr(self.args, "management_mode", "conservative") or "conservative"),
+                    "--max-threads-per-cycle",
+                    str(getattr(self.args, "max_threads_per_cycle", 5) or 5),
+                    "--max-pages-per-cycle",
+                    str(getattr(self.args, "max_pages_per_cycle", 1) or 1),
+                    "--cycle-send-limit",
+                    str(getattr(self.args, "cycle_send_limit", 1) or 1),
                 )
                 if start.get("status") != "active":
                     return self._finish("blocked", "operator_session_not_active", extra={"start": start}), 0
@@ -1252,6 +1264,7 @@ class HostLoopSupervisor:
         if extra:
             payload.update(extra)
         if status in REPORT_FINAL_STATUSES and self.operator_session_active:
+            preserve_action = _next_host_action_for_block_reason(reason) is not None
             try:
                 operator_stop = self._run_cli_json("operator", "stop", "--data-dir", str(self.data_dir))
                 self.operator_session_active = False
@@ -1265,7 +1278,8 @@ class HostLoopSupervisor:
                         self.data_dir,
                         relationship_report,
                     )
-                    payload["next_host_action"] = RELATIONSHIP_PROGRESS_NEXT_ACTION
+                    if not preserve_action:
+                        payload["next_host_action"] = RELATIONSHIP_PROGRESS_NEXT_ACTION
                 elif operator_stop.get("human_report_path"):
                     payload["relationship_progress_report"] = build_relationship_progress_report(
                         data_dir=self.data_dir,
@@ -1273,7 +1287,8 @@ class HostLoopSupervisor:
                         machine_report_path=operator_stop.get("machine_report_path"),
                         summary=dict(operator_stop.get("summary") or {}),
                     )
-                    payload["next_host_action"] = RELATIONSHIP_PROGRESS_NEXT_ACTION
+                    if not preserve_action:
+                        payload["next_host_action"] = RELATIONSHIP_PROGRESS_NEXT_ACTION
             except (HostLoopError, HostLoopCommandError, RuntimeError) as exc:
                 payload["report_error"] = str(exc)
         return payload
@@ -1389,16 +1404,17 @@ class HostLoopSupervisor:
         if self.fixture_host is not None:
             env.setdefault("DATING_BOOST_NOW", DEFAULT_FIXTURE_NOW)
         command = [sys.executable, "-m", "dating_boost.cli", *args]
+        run_kwargs = {
+            "cwd": ROOT,
+            "check": False,
+            "capture_output": True,
+            "text": True,
+            "env": env,
+        }
+        if timeout_seconds is not None:
+            run_kwargs["timeout"] = timeout_seconds
         try:
-            result = subprocess.run(
-                command,
-                cwd=ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-                env=env,
-                timeout=timeout_seconds,
-            )
+            result = subprocess.run(command, **run_kwargs)
         except subprocess.TimeoutExpired:
             if allow_error:
                 return {
@@ -1447,8 +1463,11 @@ def _message_list_template(work_item: dict[str, Any], profile: dict[str, Any]) -
         "session_id": _session_hint(work_item),
         "app_id": app_id,
         "captured_at": "TODO_ISO_TIMESTAMP",
-        "scan_cursor": None,
-        "scan_budget": 5,
+        "scan_cursor": work_item.get("scan_cursor") or {"current": None, "next": None, "exhausted": False},
+        "page_index": None,
+        "visible_range": {"start": None, "end": None},
+        "entries_observed_count": 0,
+        "scan_budget": int(work_item.get("thread_budget_remaining") or 5),
         "screenshot_ref": "",
         "provenance": {
             "author": "host_agent",

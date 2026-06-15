@@ -253,9 +253,20 @@ run `dating-boost-host-loop resume` with the same data/work dirs; do not start a
 fresh `dating-boost-host-loop run`, because a fresh run starts a new operator
 session. After resume or equivalent manual operator processing, return to
 `managed-session run --wait`.
+Full-object management is global: managed-session/operator serially advances
+multiple candidates by opportunity priority. App runtimes execute only the
+current work item. Use high-throughput mode only for explicit link testing.
+For TaShuo local Mac iOS app managed sessions, pass
+`--harness-runtime mac-ios-app`; otherwise precheck uses the default iPhone
+Mirroring runtime.
+For real TaShuo mac-ios-app stage-only smoke, use
+`python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`.
+`managed-session run/tick` includes `relationship_progress_snapshot` for
+all-object state, waiting reasons, next wake, and next priority queue while the
+session remains active.
 
 ```bash
-dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --json
+dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --json
 dating-boost managed-session run --data-dir .local/dating-boost --wait --json
 dating-boost managed-session notify --data-dir .local/dating-boost --source manual --app-id tinder --json
 dating-boost managed-session status --data-dir .local/dating-boost --json

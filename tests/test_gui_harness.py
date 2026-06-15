@@ -933,6 +933,63 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["verification"]["status"], "ok")
         self.assertEqual(payload["verification"]["screen"]["state"], "tashuo_recommend")
 
+    def test_tashuo_mac_ios_app_activation_retries_runtime_process_name(self):
+        class RetryActivationRunner(FakeRunner):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.frontmost_attempts = 0
+
+            def run(self, command, *, input=None):
+                if command and command[0] == "osascript" and any(
+                    'set frontmost of process "tashuo"' in item for item in command
+                ):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    self.frontmost_attempts += 1
+                    if self.frontmost_attempts == 1:
+                        return _result(stderr="process not ready", returncode=1)
+                    return _result(stdout="")
+                return super().run(command, input=input)
+
+        runner = RetryActivationRunner(
+            ocr_text="推荐\nsmilewen 31\n1日内活跃\n推荐\n飞行\n消息\n我的\n",
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.launch(dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertGreaterEqual(runner.frontmost_attempts, 2)
+        self.assertEqual(payload["executed_steps"][1]["result"]["status"], "ok")
+
+    def test_tashuo_mac_ios_app_doctor_reports_process_probe_when_window_missing(self):
+        class NoWindowRunner(FakeRunner):
+            def run(self, command, *, input=None):
+                if command and command[0] == "osascript" and any(
+                    "visible, count of windows" in item for item in command
+                ):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stdout="false, true, 0\n")
+                return super().run(command, input=input)
+
+        runner = NoWindowRunner(
+            ocr_text="",
+            window_info_stdout="missing value\n",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.doctor(capture=False)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "mac_ios_app_process_has_no_windows")
+        process_probe = payload["window_probe"]["processes"][0]
+        self.assertEqual(process_probe["process_name"], "tashuo")
+        self.assertTrue(process_probe["process_exists"])
+        self.assertTrue(process_probe["visible"])
+        self.assertEqual(process_probe["window_count"], 0)
+
     def test_tashuo_mac_ios_app_observe_uses_local_runtime_capture_name(self):
         runner = FakeRunner(
             ocr_text="消息\n待回答 (0)\n全部消息\n推荐\n飞行\n消息\n我的\n",

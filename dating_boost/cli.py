@@ -738,6 +738,11 @@ def main(argv: list[str] | None = None) -> int:
     managed_start_parser.add_argument("--managed-gui-send", action="store_true")
     managed_start_parser.add_argument("--scan-interval", type=int, default=120)
     managed_start_parser.add_argument("--nudge-delay-minutes", type=int, default=30)
+    managed_start_parser.add_argument("--management-mode", choices=["conservative", "high-throughput"], default="conservative")
+    managed_start_parser.add_argument("--max-threads-per-cycle", type=int)
+    managed_start_parser.add_argument("--max-pages-per-cycle", type=int)
+    managed_start_parser.add_argument("--cycle-send-limit", type=int)
+    managed_start_parser.add_argument("--harness-runtime")
     managed_start_parser.add_argument("--json", action="store_true")
     managed_start_parser.set_defaults(handler=_handle_managed_session_start)
     managed_tick_parser = managed_session_subparsers.add_parser("tick")
@@ -783,6 +788,10 @@ def main(argv: list[str] | None = None) -> int:
         choices=["message-list", "current-thread"],
         default="message-list",
     )
+    operator_session_start_parser.add_argument("--management-mode", choices=["conservative", "high-throughput"], default="conservative")
+    operator_session_start_parser.add_argument("--max-threads-per-cycle", type=int, default=5)
+    operator_session_start_parser.add_argument("--max-pages-per-cycle", type=int, default=1)
+    operator_session_start_parser.add_argument("--cycle-send-limit", type=int, default=1)
     operator_session_start_parser.set_defaults(handler=_handle_operator_session_start)
 
     operator_next_parser = operator_subparsers.add_parser("next")
@@ -2911,6 +2920,11 @@ def _handle_managed_session_start(args: argparse.Namespace) -> int:
             managed_gui_send=args.managed_gui_send,
             scan_interval_seconds=args.scan_interval,
             nudge_delay_minutes=args.nudge_delay_minutes,
+            management_mode=args.management_mode,
+            max_threads_per_cycle=args.max_threads_per_cycle,
+            max_pages_per_cycle=args.max_pages_per_cycle,
+            cycle_send_limit=args.cycle_send_limit,
+            harness_runtime=args.harness_runtime,
         )
     except ValueError as exc:
         payload = {"schema_version": 1, "status": "blocked", "reason": str(exc)}
@@ -2966,6 +2980,10 @@ def _handle_operator_session_start(args: argparse.Namespace) -> int:
         payload = OperatorRepository(args.data_dir).start_session(
             _read_json_object(args.authorization),
             initial_surface=args.initial_surface,
+            management_mode=args.management_mode,
+            max_threads_per_cycle=args.max_threads_per_cycle,
+            max_pages_per_cycle=args.max_pages_per_cycle,
+            cycle_send_limit=args.cycle_send_limit,
         )
     except ValueError as exc:
         _print_json({"schema_version": 1, "status": "error", "reason": str(exc)})

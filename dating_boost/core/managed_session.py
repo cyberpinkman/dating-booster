@@ -10,7 +10,12 @@ from typing import Any, Callable
 
 from dating_boost.apps.registry import create_adapter, managed_session_policy, supported_app_ids
 from dating_boost.core.automation import AutomationRepository
-from dating_boost.core.operator import OperatorRepository
+from dating_boost.core.operator import (
+    DEFAULT_CYCLE_SEND_LIMIT,
+    DEFAULT_MAX_PAGES_PER_CYCLE,
+    DEFAULT_MAX_THREADS_PER_CYCLE,
+    OperatorRepository,
+)
 from dating_boost.core.relationship_report import RELATIONSHIP_PROGRESS_NEXT_ACTION
 from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.storage import JsonStorage
@@ -25,7 +30,7 @@ DEFAULT_SCAN_INTERVAL_SECONDS = 120
 DEFAULT_NUDGE_DELAY_MINUTES = 30
 
 
-AdapterFactory = Callable[[str], Any]
+AdapterFactory = Callable[..., Any]
 
 
 class ManagedSessionRepository:
@@ -34,7 +39,7 @@ class ManagedSessionRepository:
         self._storage = JsonStorage(root)
         self._automation = AutomationRepository(root)
         self._operator = OperatorRepository(root)
-        self._harness_factory = harness_factory or (lambda app_id: create_adapter(app_id))
+        self._harness_factory = harness_factory or (lambda app_id, runtime=None: create_adapter(app_id, runtime=runtime))
 
     def start(
         self,
@@ -47,8 +52,22 @@ class ManagedSessionRepository:
         managed_gui_send: bool,
         scan_interval_seconds: int = DEFAULT_SCAN_INTERVAL_SECONDS,
         nudge_delay_minutes: int = DEFAULT_NUDGE_DELAY_MINUTES,
+        management_mode: str = "conservative",
+        max_threads_per_cycle: int | None = None,
+        max_pages_per_cycle: int | None = None,
+        cycle_send_limit: int | None = None,
+        harness_runtime: str | None = None,
     ) -> dict[str, Any]:
         app_id = _validate_app_id(app_id)
+        normalized_runtime = _normalize_runtime(harness_runtime)
+        policy = _managed_session_policy(app_id)
+        session_config = _resolve_session_config(
+            policy,
+            management_mode=management_mode,
+            max_threads_per_cycle=max_threads_per_cycle,
+            max_pages_per_cycle=max_pages_per_cycle,
+            cycle_send_limit=cycle_send_limit,
+        )
         memory_review = self._automation.needs_memory_review()
         if send_mode == "live":
             block_reason = _live_send_start_block_reason(authorization, managed_gui_send=managed_gui_send, app_id=app_id)
@@ -61,8 +80,8 @@ class ManagedSessionRepository:
                 return _payload("blocked", reason=str(exc), app_id=app_id)
         if availability is not None:
             self._automation.save_availability(availability)
-        app_check = self._app_precheck(app_id)
-        operator_start = self._operator.start_session(authorization)
+        app_check = self._app_precheck(app_id, runtime=normalized_runtime)
+        operator_start = self._operator.start_session(authorization, **session_config)
         if operator_start.get("status") != "active":
             return _payload(
                 str(operator_start.get("status") or "blocked"),
@@ -80,7 +99,11 @@ class ManagedSessionRepository:
             initial_status = str(policy.get("precheck_failure_status") or "stopped")
             stop_reason = str(app_check.get("reason") or policy.get("precheck_failure_reason") or "app_unavailable")
             stopped_at = now if initial_status == "stopped" else None
-            next_host_action = str(policy.get("precheck_failure_next_host_action") or "restore_app_or_stop_managed_session")
+            next_host_action = _precheck_failure_next_host_action(
+                policy,
+                app_check,
+                runtime=normalized_runtime,
+            )
         session = {
             "schema_version": MANAGED_SESSION_SCHEMA_VERSION,
             "session_id": operator_start["session_id"],
@@ -91,6 +114,8 @@ class ManagedSessionRepository:
             "managed_gui_send": bool(managed_gui_send),
             "scan_interval_seconds": max(1, int(scan_interval_seconds)),
             "nudge_delay_minutes": max(1, int(nudge_delay_minutes)),
+            **session_config,
+            "harness_runtime": normalized_runtime,
             "started_at": now,
             "updated_at": now,
             "stopped_at": stopped_at,
@@ -177,7 +202,9 @@ class ManagedSessionRepository:
         if session.get("status") == "stopped":
             return _payload("stopped", reason=str(session.get("stop_reason") or "session_stopped"), app_id=str(session.get("app_id")), session=session)
         app_id = _validate_app_id(str(session.get("app_id") or ""))
+        runtime = _normalize_runtime(session.get("harness_runtime"))
         now = _now_iso()
+        relationship_snapshot = self._relationship_progress_snapshot()
         session["last_tick_at"] = now
         session["updated_at"] = now
         safety_status = SafetyRepository(self.root).status()
@@ -189,6 +216,7 @@ class ManagedSessionRepository:
                 app_id=app_id,
                 session=session,
                 safety=safety_status,
+                relationship_progress_snapshot=relationship_snapshot,
                 next_host_action="resume_safety_or_stop_managed_session",
             )
         authorization = self._automation.load_authorization() or {}
@@ -199,9 +227,15 @@ class ManagedSessionRepository:
             if session["status"] == "stopped":
                 session["stopped_at"] = now
             self._write_session(session)
-            return _payload(str(session["status"]), reason=auth_reason, app_id=app_id, session=session)
+            return _payload(
+                str(session["status"]),
+                reason=auth_reason,
+                app_id=app_id,
+                session=session,
+                relationship_progress_snapshot=relationship_snapshot,
+            )
 
-        app_check = self._app_precheck(app_id)
+        app_check = self._app_precheck(app_id, runtime=runtime)
         session["last_app_precheck"] = app_check
         if app_check["status"] != "ok":
             policy = _managed_session_policy(app_id)
@@ -217,7 +251,8 @@ class ManagedSessionRepository:
                 app_id=app_id,
                 session=session,
                 app_precheck=app_check,
-                next_host_action=str(policy.get("precheck_failure_next_host_action") or "restore_app_or_stop_managed_session"),
+                relationship_progress_snapshot=relationship_snapshot,
+                next_host_action=_precheck_failure_next_host_action(policy, app_check, runtime=runtime),
             )
         if session.get("status") == "paused" and app_check["status"] == "ok":
             session["status"] = "active"
@@ -242,6 +277,7 @@ class ManagedSessionRepository:
                 app_id=app_id,
                 session=session,
                 app_precheck=app_check,
+                relationship_progress_snapshot=relationship_snapshot,
                 **_next_wake(session, automation_states),
             )
 
@@ -249,12 +285,19 @@ class ManagedSessionRepository:
             self.root,
             nudge_delay_minutes=int(session.get("nudge_delay_minutes") or DEFAULT_NUDGE_DELAY_MINUTES),
         )
+        if "scan_interval_due" in reasons:
+            self._operator.reset_cycle_limits()
         operator_payload = self._operator.next_work_item()
         work_item = operator_payload.get("work_item") if isinstance(operator_payload, dict) else None
         if not isinstance(work_item, dict):
             self._write_session(session)
             return _payload("blocked", reason="operator_returned_no_work_item", app_id=app_id, operator=operator_payload)
         work_type = str(work_item.get("work_item_type") or "")
+        relationship_snapshot_with_work = _snapshot_with_current_work(
+            relationship_snapshot,
+            work_item,
+            wake_reasons=reasons,
+        )
         if work_type in {"wait", "scheduled_wait"}:
             session["last_scan_at"] = now if "scan_interval_due" in reasons or "notify" in " ".join(reasons) else session.get("last_scan_at")
             self._write_session(session)
@@ -266,6 +309,7 @@ class ManagedSessionRepository:
                 app_precheck=app_check,
                 wake_reasons=reasons,
                 operator=operator_payload,
+                relationship_progress_snapshot=relationship_snapshot_with_work,
                 **_next_wake(session, self._automation.load_states()),
             )
         session["last_host_work_item_id"] = work_item.get("work_item_id")
@@ -284,8 +328,39 @@ class ManagedSessionRepository:
             wake_reasons=reasons,
             work_item=work_item,
             operator=operator_payload,
+            relationship_progress_snapshot=relationship_snapshot_with_work,
             next_host_action=_next_host_action(work_type),
         )
+
+    def _relationship_progress_snapshot(self) -> dict[str, Any]:
+        try:
+            latest = self._automation.latest_report()
+            report = latest.get("machine_report") if isinstance(latest, dict) else None
+        except Exception:
+            report = None
+        if not isinstance(report, dict):
+            return {"summary": {}, "next_priority_queue": [], "object_states": []}
+        object_states = []
+        for state in report.get("states", []):
+            if not isinstance(state, dict):
+                continue
+            object_states.append(
+                {
+                    "match_id": state.get("match_id"),
+                    "candidate_key": state.get("candidate_key"),
+                    "state": state.get("state"),
+                    "candidate_type": state.get("candidate_type"),
+                    "next_due_at": state.get("next_due_at"),
+                    "pause_reason": state.get("pause_reason"),
+                    "handoff_reason": state.get("handoff_reason"),
+                    "last_scan_cursor": state.get("last_scan_cursor"),
+                }
+            )
+        return {
+            "summary": dict(report.get("summary") or {}),
+            "next_priority_queue": list(report.get("next_priority_queue") or []),
+            "object_states": object_states,
+        }
 
     def run(self, *, wait: bool, wait_timeout_seconds: float | None = None, poll_interval_seconds: float = 1.0) -> dict[str, Any]:
         if not wait:
@@ -320,7 +395,8 @@ class ManagedSessionRepository:
             return True
         if _scan_interval_due(session, now):
             return True
-        return _nudge_due(self._automation.load_states(), now)
+        states = self._automation.load_states()
+        return _nudge_due(states, now) or _scan_later_pending(states)
 
     def _load_session(self) -> dict[str, Any] | None:
         path = self.root / MANAGED_SESSION_PATH
@@ -331,9 +407,9 @@ class ManagedSessionRepository:
     def _write_session(self, payload: dict[str, Any]) -> None:
         self._storage.write_json(MANAGED_SESSION_PATH, payload)
 
-    def _app_precheck(self, app_id: str) -> dict[str, Any]:
+    def _app_precheck(self, app_id: str, *, runtime: str | None = None) -> dict[str, Any]:
         try:
-            adapter = self._harness_factory(app_id)
+            adapter = self._harness_factory(app_id, runtime=runtime)
             observed = adapter.observe()
             return _safe_app_check(observed, app_id=app_id)
         except Exception as exc:
@@ -360,6 +436,13 @@ def _safe_app_check(payload: dict[str, Any], *, app_id: str) -> dict[str, Any]:
         "screen_fingerprint": screen.get("text_fingerprint"),
         "screen_character_count": screen.get("text_character_count"),
     }
+    window_probe = payload.get("window_probe")
+    if not isinstance(window_probe, dict):
+        preflight = payload.get("preflight")
+        if isinstance(preflight, dict):
+            window_probe = preflight.get("window_probe")
+    if isinstance(window_probe, dict):
+        result["window_probe"] = window_probe
     if _unread_marker_present(layout):
         result["unread_possible"] = True
     if layout.get("reply_required_marker_present") or layout.get("reply_deadline_marker_present"):
@@ -372,6 +455,97 @@ def _managed_session_policy(app_id: str) -> dict[str, Any]:
         return managed_session_policy(app_id)
     except KeyError:
         return {}
+
+
+def _normalize_runtime(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _runtime_key(value: str | None) -> str:
+    return (value or "").strip().replace("-", "_")
+
+
+def _precheck_failure_next_host_action(
+    policy: dict[str, Any],
+    app_check: dict[str, Any],
+    *,
+    runtime: str | None,
+) -> str:
+    runtime_key = _runtime_key(runtime)
+    runtime_actions = policy.get("runtime_precheck_failure_next_host_actions")
+    if runtime_key and isinstance(runtime_actions, dict):
+        configured = runtime_actions.get(runtime_key)
+        if isinstance(configured, str) and configured.strip():
+            return configured
+    return str(policy.get("precheck_failure_next_host_action") or "restore_app_or_stop_managed_session")
+
+
+def _snapshot_with_current_work(
+    snapshot: dict[str, Any],
+    work_item: dict[str, Any],
+    *,
+    wake_reasons: list[str],
+) -> dict[str, Any]:
+    enriched = dict(snapshot)
+    enriched["current_work_item"] = {
+        "work_item_id": work_item.get("work_item_id"),
+        "work_item_type": work_item.get("work_item_type"),
+        "reason": work_item.get("reason"),
+        "candidate_key": work_item.get("candidate_key"),
+        "match_id": work_item.get("match_id"),
+        "next_priority_queue": work_item.get("next_priority_queue"),
+    }
+    enriched["wake_reasons"] = list(wake_reasons)
+    return enriched
+
+
+def _resolve_session_config(
+    policy: dict[str, Any],
+    *,
+    management_mode: str,
+    max_threads_per_cycle: int | None,
+    max_pages_per_cycle: int | None,
+    cycle_send_limit: int | None,
+) -> dict[str, Any]:
+    mode = str(management_mode or "conservative")
+    if mode not in {"conservative", "high-throughput"}:
+        raise ValueError("management_mode must be conservative or high-throughput")
+    default_threads_key = (
+        "high_throughput_max_threads_per_cycle"
+        if mode == "high-throughput"
+        else "default_max_threads_per_cycle"
+    )
+    default_pages_key = (
+        "high_throughput_max_pages_per_cycle"
+        if mode == "high-throughput"
+        else "default_max_pages_per_cycle"
+    )
+    return {
+        "management_mode": mode,
+        "max_threads_per_cycle": max(
+            1,
+            int(
+                max_threads_per_cycle
+                or policy.get(default_threads_key)
+                or DEFAULT_MAX_THREADS_PER_CYCLE
+            ),
+        ),
+        "max_pages_per_cycle": max(
+            1,
+            int(
+                max_pages_per_cycle
+                or policy.get(default_pages_key)
+                or DEFAULT_MAX_PAGES_PER_CYCLE
+            ),
+        ),
+        "cycle_send_limit": max(
+            1,
+            int(cycle_send_limit or policy.get("cycle_send_limit") or DEFAULT_CYCLE_SEND_LIMIT),
+        ),
+    }
 
 
 def _wake_reasons(
@@ -391,6 +565,8 @@ def _wake_reasons(
         reasons.append("scan_interval_due")
     if _nudge_due(automation_states, now):
         reasons.append("nudge_due")
+    if _scan_later_pending(automation_states):
+        reasons.append("scan_later_pending")
     return _unique(reasons)
 
 
@@ -400,6 +576,10 @@ def _operator_has_pending_work(operator_state: dict[str, Any]) -> bool:
         return True
     queue = operator_state.get("work_queue")
     return isinstance(queue, list) and any(isinstance(item, dict) for item in queue)
+
+
+def _scan_later_pending(states: list[dict[str, Any]]) -> bool:
+    return any(state.get("state") == "scan_later" for state in states)
 
 
 def _scan_interval_due(session: dict[str, Any], now: str) -> bool:

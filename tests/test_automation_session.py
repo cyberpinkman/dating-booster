@@ -211,6 +211,8 @@ class AutomationSessionTests(unittest.TestCase):
             scan = json.loads((FIXTURE_DIR / "scan_batch_initial.json").read_text(encoding="utf-8"))
             scan["scan_budget"] = 1
             first_thread = scan["thread_observations"][0]
+            scan["message_list_snapshot"]["entries"] = [scan["message_list_snapshot"]["entries"][0]]
+            scan["thread_observations"] = [first_thread]
             first_thread["observation"]["profile_observation"] = {
                 "profile_text": "",
                 "photo_cues": [],
@@ -873,6 +875,137 @@ class AutomationSessionTests(unittest.TestCase):
                 "row_new",
                 [item.get("candidate_key") for item in step_payload["scheduled_actions"]],
             )
+
+    def test_opportunity_priority_beats_new_unread_when_budget_is_tight(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            automation_dir = data_dir / "automation"
+            automation_dir.mkdir(parents=True, exist_ok=True)
+            self._write_json(
+                automation_dir / "states.json",
+                {
+                    "schema_version": 1,
+                    "states": [
+                        {
+                            "schema_version": 1,
+                            "match_id": "match_due",
+                            "candidate_key": "row_due",
+                            "state": "nudge_scheduled",
+                            "candidate_type": "continuation_candidate",
+                            "seen_before": True,
+                            "latest_inbound_fingerprint": "due:fp",
+                            "last_nudged_inbound_fingerprint": None,
+                            "next_due_at": "2026-05-26T00:00:00Z",
+                            "last_session_id": "session_priority_due",
+                        }
+                    ],
+                },
+            )
+            priority_scan = {
+                "schema_version": 1,
+                "session_id": "session_priority_due",
+                "app_id": "tinder",
+                "captured_at": "2026-05-26T00:01:00Z",
+                "scan_cursor": {"current": "page_1", "next": "page_2", "exhausted": False},
+                "scan_budget": 1,
+                "message_list_snapshot": {
+                    "entries": [
+                        {
+                            "candidate_key": "row_new",
+                            "visible_name": "New",
+                            "latest_preview": "刚匹配",
+                            "latest_preview_hash": "new_hash",
+                            "timestamp_cue": "刚刚",
+                            "unread_cue": "present",
+                            "position": 1,
+                        },
+                        {
+                            "candidate_key": "row_due",
+                            "visible_name": "Due",
+                            "latest_preview": "上次聊到这",
+                            "latest_preview_hash": "due_hash",
+                            "timestamp_cue": "30分钟前",
+                            "unread_cue": "absent",
+                            "position": 2,
+                        },
+                    ]
+                },
+                "thread_observations": [],
+            }
+            scan_path = Path(temp_dir) / "priority_due_scan.json"
+            self._write_json(scan_path, priority_scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+        self.assertEqual(step_exit, 0)
+        self.assertEqual(step_payload["scan_requests"][0]["candidate_key"], "row_due")
+        self.assertEqual(step_payload["scheduled_actions"][0]["type"], "scan_later")
+        self.assertEqual(step_payload["scheduled_actions"][0]["candidate_key"], "row_new")
+        self.assertEqual(step_payload["scheduled_actions"][0]["scan_cursor"], priority_scan["scan_cursor"])
+
+    def test_handoff_opportunity_without_existing_state_beats_new_match(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            priority_scan = _contact_exchange_scan_batch()
+            priority_scan["scan_budget"] = 1
+            priority_scan["message_list_snapshot"]["entries"].insert(
+                0,
+                {
+                    "candidate_key": "row_new",
+                    "visible_name": "New",
+                    "latest_preview": "刚匹配",
+                    "latest_preview_hash": "new_hash",
+                    "timestamp_cue": "刚刚",
+                    "unread_cue": "present",
+                    "position": 1,
+                },
+            )
+            scan_path = Path(temp_dir) / "priority_handoff_scan.json"
+            self._write_json(scan_path, priority_scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+        self.assertEqual(step_exit, 0)
+        self.assertEqual(step_payload["processed_entry_count"], 1)
+        self.assertEqual(step_payload["handoffs"][0]["candidate_key"], "row_iris")
+        self.assertEqual(step_payload["scheduled_actions"][0]["type"], "scan_later")
+        self.assertEqual(step_payload["scheduled_actions"][0]["candidate_key"], "row_new")
 
     def test_mismatched_action_result_does_not_complete_pending_send(self):
         with tempfile.TemporaryDirectory() as temp_dir:

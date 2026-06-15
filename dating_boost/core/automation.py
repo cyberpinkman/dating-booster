@@ -167,7 +167,7 @@ class AutomationRepository:
         except FileNotFoundError:
             return None
 
-    def start_session(self, authorization: dict[str, Any]) -> dict[str, Any]:
+    def start_session(self, authorization: dict[str, Any], *, session_config: dict[str, Any] | None = None) -> dict[str, Any]:
         memory_review = self.needs_memory_review()
         auth_result = self.save_authorization(authorization)
         readiness = UserDisclosureRepository(self.root).readiness(mode="autonomous")
@@ -193,6 +193,7 @@ class AutomationRepository:
             "stopped_at": None,
             "step_count": 0,
             "last_scan_cursor": None,
+            "session_config": dict(session_config or {}),
             "resumed_from_report": str(latest_report_path) if latest_report_path else None,
             "user_profile_readiness": readiness,
         }
@@ -522,6 +523,7 @@ class AutomationRepository:
         budget = int(scan_batch.get("scan_budget") or 5)
         processed_entries = entries[:budget]
         over_budget_entries = entries[budget:]
+        scan_cursor = _normalize_scan_cursor(scan_batch.get("scan_cursor"))
 
         action_requests: list[dict[str, Any]] = []
         handoffs: list[dict[str, Any]] = []
@@ -825,20 +827,38 @@ class AutomationRepository:
             state_updates.append(_state_update(state))
 
         for entry in over_budget_entries:
+            candidate_key = _non_empty(entry.get("candidate_key"), "candidate_key")
+            provisional_id = _provisional_match_id(entry)
+            state = states_by_match.get(provisional_id) or states_by_candidate.get(candidate_key) or _new_state(
+                match_id=provisional_id,
+                candidate_key=candidate_key,
+                session_id=session["session_id"],
+                timestamp=now,
+            )
+            state["state"] = "scan_later"
+            state["candidate_key"] = candidate_key
+            state["candidate_type"] = "continuation_candidate" if state.get("seen_before") else "new_match_candidate"
+            state["visible_name"] = entry.get("visible_name")
+            state["last_preview_hash"] = entry.get("latest_preview_hash")
+            state["last_scan_cursor"] = scan_cursor
+            state["updated_at"] = scan_batch.get("captured_at", now)
+            states_by_match[state["match_id"]] = state
             scheduled_actions.append(
                 {
                     "type": "scan_later",
-                    "candidate_key": entry.get("candidate_key"),
+                    "candidate_key": candidate_key,
                     "visible_name": entry.get("visible_name"),
                     "reason": "scan_budget_exceeded",
+                    "scan_cursor": scan_cursor,
                 }
             )
 
         self.save_states(list(states_by_match.values()))
         self.save_ledger(ledger)
         session["step_count"] = int(session.get("step_count") or 0) + 1
-        session["last_scan_cursor"] = scan_batch.get("scan_cursor")
+        session["last_scan_cursor"] = scan_cursor
         self._storage.write_json(Path("automation") / "session.json", session)
+        next_priority_queue = _next_priority_queue(list(states_by_match.values()))
 
         return {
             "schema_version": 1,
@@ -852,6 +872,7 @@ class AutomationRepository:
             "handoffs": handoffs,
             "scan_requests": scan_requests,
             "scheduled_actions": scheduled_actions,
+            "next_priority_queue": next_priority_queue,
             "warnings": _unique_strings(warnings),
             "machine_report_ref": str(Path("automation") / "reports" / "machine_latest.json"),
         }
@@ -1489,20 +1510,26 @@ def _entry_priority(
     state: dict[str, Any] | None,
     thread_item: dict[str, Any] | None,
 ) -> int:
-    if state is None:
-        return 0
     assessment = dict(thread_item.get("assessment", {})) if thread_item else {}
     latest_fingerprint = assessment.get("latest_inbound_fingerprint")
-    if latest_fingerprint and latest_fingerprint != state.get("latest_inbound_fingerprint"):
+    if (state is not None and state.get("state") == "appointment_handoff") or _is_handoff_assessment(assessment):
+        return 0
+    if state is not None and state.get("state") == "nudge_scheduled":
         return 1
-    latest_preview_hash = entry.get("latest_preview_hash")
-    if entry.get("unread_cue") == "present" and latest_preview_hash != state.get("last_preview_hash"):
-        return 1
-    if state.get("state") == "appointment_handoff" or _is_handoff_assessment(assessment):
+    if latest_fingerprint and state is not None and latest_fingerprint != state.get("latest_inbound_fingerprint"):
         return 2
-    if state.get("state") == "nudge_scheduled" or assessment.get("recommended_next") == "nudge_later":
+    latest_preview_hash = entry.get("latest_preview_hash")
+    if state is not None and entry.get("unread_cue") == "present" and latest_preview_hash != state.get("last_preview_hash"):
+        return 2
+    if state is not None and state.get("state") == "needs_target_profile":
         return 3
-    return 4
+    if state is None:
+        return 4
+    if state.get("state") == "scan_later":
+        return 5
+    if state.get("state") in {"sent_waiting", "waiting_for_match", "staged_pending_user"}:
+        return 6
+    return 7
 
 
 def _is_handoff_assessment(assessment: dict[str, Any]) -> bool:
@@ -1648,11 +1675,15 @@ def _build_summary(
 def _next_priority_queue(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
     priority = {
         "appointment_handoff": 0,
-        "needs_reply": 1,
-        "needs_thread_scan": 2,
-        "nudge_scheduled": 3,
-        "staged_pending_user": 4,
-        "sent_waiting": 4,
+        "nudge_scheduled": 1,
+        "needs_reply": 2,
+        "needs_target_profile": 3,
+        "new_match": 4,
+        "needs_thread_scan": 4,
+        "scan_later": 5,
+        "staged_pending_user": 6,
+        "sent_waiting": 6,
+        "waiting_for_match": 6,
     }
     items = [
         {
@@ -1660,11 +1691,23 @@ def _next_priority_queue(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "candidate_key": state.get("candidate_key"),
             "state": state.get("state"),
             "priority": priority.get(str(state.get("state")), 9),
+            "next_due_at": state.get("next_due_at"),
+            "last_scan_cursor": state.get("last_scan_cursor"),
         }
         for state in states
         if state.get("state") not in {"closed", "paused"}
     ]
     return sorted(items, key=lambda item: (item["priority"], str(item["match_id"])))
+
+
+def _normalize_scan_cursor(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return {
+            "current": value.get("current"),
+            "next": value.get("next"),
+            "exhausted": bool(value.get("exhausted")),
+        }
+    return {"current": value, "next": None, "exhausted": value is None}
 
 
 def _report_with_memory_display(report: dict[str, Any]) -> dict[str, Any]:

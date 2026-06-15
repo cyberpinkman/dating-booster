@@ -108,6 +108,9 @@ class NativeGuiHarness:
                 if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND
                 else "iphone_mirroring_window_not_found"
             )
+            if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND:
+                payload["window_probe"] = self._mac_ios_window_probe()
+                reason = _mac_ios_window_failure_reason(payload["window_probe"], default=reason)
             payload.update({"status": "blocked", "reason": reason})
             return payload
         payload["window"] = window.to_dict()
@@ -176,16 +179,45 @@ class NativeGuiHarness:
 
     def _activate_window(self) -> dict[str, Any]:
         if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND:
-            frontmost_result = self.runner.run(
-                [
-                    "osascript",
-                    "-e",
-                    f'tell application "System Events" to set frontmost of process "{self.window_title}" to true',
-                ]
-            )
+            attempts: list[dict[str, Any]] = []
+            bundle_id = str(self.runtime_config.get("bundle_id") or "").strip()
+            if bundle_id:
+                app_result = self.runner.run(
+                    ["osascript", "-e", f'tell application id {_applescript_string_literal(bundle_id)} to activate']
+                )
+                attempts.append({
+                    "method": "activate_application_id",
+                    "bundle_id": bundle_id,
+                    "status": "ok" if app_result.returncode == 0 else "blocked",
+                    "stderr": _short(app_result.stderr),
+                })
+            for attempt_index in range(6):
+                if attempt_index:
+                    time.sleep(0.35)
+                for process_name in self._mac_ios_process_names():
+                    frontmost_result = self.runner.run(
+                        [
+                            "osascript",
+                            "-e",
+                            f'tell application "System Events" to set frontmost of process {_applescript_string_literal(process_name)} to true',
+                        ]
+                    )
+                    attempts.append({
+                        "method": "set_process_frontmost",
+                        "process_name": process_name,
+                        "attempt": attempt_index + 1,
+                        "status": "ok" if frontmost_result.returncode == 0 else "blocked",
+                        "stderr": _short(frontmost_result.stderr),
+                    })
+                    if frontmost_result.returncode == 0:
+                        return {
+                            "status": "ok",
+                            "attempts": attempts,
+                        }
             return {
-                "status": "ok" if frontmost_result.returncode == 0 else "blocked",
-                "stderr": _short(frontmost_result.stderr),
+                "status": "blocked",
+                "reason": "mac_ios_app_process_not_frontmost",
+                "attempts": attempts,
             }
         result = self.runner.run(["osascript", "-e", f'tell application "{self.window_title}" to activate'])
         frontmost_result = self.runner.run(
@@ -201,21 +233,72 @@ class NativeGuiHarness:
         }
 
     def _window_info(self) -> WindowInfo | None:
-        for index in range(1, 5):
+        process_names = self._mac_ios_process_names() if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND else [self.window_title]
+        for process_name in process_names:
+            for index in range(1, 5):
+                script = (
+                    f'tell application "System Events" to tell process {_applescript_string_literal(process_name)} '
+                    f"to get {{frontmost, position of window {index}, size of window {index}, name of window {index}}}"
+                )
+                result = self.runner.run(["osascript", "-e", script])
+                if result.returncode != 0:
+                    continue
+                window = _parse_window_info(result.stdout)
+                if window is not None and self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND:
+                    if _looks_like_mac_ios_app_window(window):
+                        return window
+                elif window is not None and _looks_like_iphone_mirroring_window(window):
+                    return window
+        return None
+
+    def _mac_ios_process_names(self) -> list[str]:
+        names = [
+            self.window_title,
+            str(self.runtime_config.get("process_name") or ""),
+            str(self.runtime_config.get("display_name") or ""),
+            str(self.runtime_config.get("application_name") or ""),
+        ]
+        unique: list[str] = []
+        for name in names:
+            cleaned = name.strip()
+            if cleaned and cleaned not in unique:
+                unique.append(cleaned)
+        return unique or [self.window_title]
+
+    def _mac_ios_window_probe(self) -> dict[str, Any]:
+        probes: list[dict[str, Any]] = []
+        for process_name in self._mac_ios_process_names():
             script = (
-                f'tell application "System Events" to tell process "{self.window_title}" '
-                f"to get {{frontmost, position of window {index}, size of window {index}, name of window {index}}}"
+                'tell application "System Events"\n'
+                f"if exists process {_applescript_string_literal(process_name)} then\n"
+                f"tell process {_applescript_string_literal(process_name)} to get "
+                "{frontmost, visible, count of windows}\n"
+                "else\n"
+                'return "missing"\n'
+                "end if\n"
+                "end tell"
             )
             result = self.runner.run(["osascript", "-e", script])
-            if result.returncode != 0:
-                continue
-            window = _parse_window_info(result.stdout)
-            if window is not None and self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND:
-                if _looks_like_mac_ios_app_window(window):
-                    return window
-            elif window is not None and _looks_like_iphone_mirroring_window(window):
-                return window
-        return None
+            probe = {
+                "process_name": process_name,
+                "status": "ok" if result.returncode == 0 else "blocked",
+                "stdout": _short(result.stdout),
+                "stderr": _short(result.stderr),
+            }
+            parsed = _parse_mac_ios_process_probe(result.stdout)
+            if parsed:
+                probe.update(parsed)
+            probes.append(probe)
+        frontmost = self.runner.run(
+            ["osascript", "-e", 'tell application "System Events" to get name of first process whose frontmost is true']
+        )
+        return {
+            "status": "ok",
+            "processes": probes,
+            "frontmost_process": frontmost.stdout.strip() if frontmost.returncode == 0 else None,
+            "frontmost_probe_status": "ok" if frontmost.returncode == 0 else "blocked",
+            "frontmost_probe_stderr": _short(frontmost.stderr),
+        }
 
     def _click_ratio(self, window: WindowInfo, ratio: dict[str, float]) -> dict[str, Any]:
         x = round(window.x + window.width * float(ratio["x"]))
@@ -637,6 +720,40 @@ def _text_fingerprint_fields(prefix: str, text: str) -> dict[str, Any]:
         f"{prefix}_character_count": len(text),
         f"{prefix}_topic_labels": classify_text_topics(text),
     }
+
+
+def _parse_mac_ios_process_probe(stdout: str) -> dict[str, Any] | None:
+    text = stdout.strip()
+    if not text:
+        return None
+    if text == "missing":
+        return {"process_exists": False}
+    match = re.search(r"^\s*(true|false),\s*(true|false),\s*(\d+)\s*$", text, re.IGNORECASE)
+    if not match:
+        return None
+    return {
+        "process_exists": True,
+        "frontmost": match.group(1).lower() == "true",
+        "visible": match.group(2).lower() == "true",
+        "window_count": int(match.group(3)),
+    }
+
+
+def _mac_ios_window_failure_reason(window_probe: dict[str, Any], *, default: str) -> str:
+    processes = window_probe.get("processes")
+    if not isinstance(processes, list) or not processes:
+        return default
+    parsed = [process for process in processes if isinstance(process, dict) and "process_exists" in process]
+    if parsed and not any(process.get("process_exists") for process in parsed):
+        return "mac_ios_app_process_not_found"
+    if any(
+        process.get("process_exists") is True
+        and process.get("visible") is True
+        and process.get("window_count") == 0
+        for process in parsed
+    ):
+        return "mac_ios_app_process_has_no_windows"
+    return default
 
 
 def _looks_like_iphone_mirroring_window(window: WindowInfo) -> bool:

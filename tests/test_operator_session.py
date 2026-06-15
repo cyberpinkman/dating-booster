@@ -43,6 +43,152 @@ class OperatorSessionTests(unittest.TestCase):
             self.assertTrue(payload["agent_native_capabilities"]["goal_oriented_operator"])
             self.assertTrue(payload["agent_native_capabilities"]["stage_only_audit"])
 
+    def test_operator_start_persists_management_config_and_scan_work_budgets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            start_exit, start_payload, _ = self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+                "--management-mode",
+                "high-throughput",
+                "--max-threads-per-cycle",
+                "7",
+                "--max-pages-per-cycle",
+                "2",
+                "--cycle-send-limit",
+                "3",
+            ])
+            next_exit, next_payload, _ = self._run([
+                "operator",
+                "next",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+        self.assertEqual(start_exit, 0)
+        self.assertEqual(start_payload["status"], "active")
+        self.assertEqual(start_payload["management_mode"], "high-throughput")
+        work_item = next_payload["work_item"]
+        self.assertEqual(next_exit, 0)
+        self.assertEqual(work_item["work_item_type"], "scan_message_list")
+        self.assertEqual(work_item["management_mode"], "high-throughput")
+        self.assertEqual(work_item["page_budget_remaining"], 2)
+        self.assertEqual(work_item["thread_budget_remaining"], 7)
+        self.assertEqual(work_item["scan_cursor"], {"current": None, "next": None, "exhausted": False})
+
+    def test_operator_continues_message_list_scan_when_cursor_not_exhausted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+                "--max-pages-per-cycle",
+                "2",
+            ])
+            first_next_exit, first_next, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
+            self.assertEqual(first_next_exit, 0)
+            self.assertEqual(first_next["work_item"]["work_item_type"], "scan_message_list")
+            list_path = Path(temp_dir) / "empty_page.json"
+            self._write_json(
+                list_path,
+                {
+                    "schema_version": 1,
+                    "observation_type": "message_list",
+                    "session_id": "session_cursor",
+                    "app_id": "tinder",
+                    "captured_at": "2026-05-26T00:00:00Z",
+                    "scan_cursor": {"current": "page_1", "next": "page_2", "exhausted": False},
+                    "scan_budget": 5,
+                    "provenance": {"author": "host_agent", "evidence": "Empty first page."},
+                    "message_list_snapshot": {"entries": []},
+                },
+            )
+            self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(list_path),
+            ])
+
+            next_exit, next_payload, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
+
+        self.assertEqual(next_exit, 0)
+        work_item = next_payload["work_item"]
+        self.assertEqual(work_item["work_item_type"], "scan_message_list")
+        self.assertEqual(work_item["reason"], "scan_page_continuation_required")
+        self.assertEqual(work_item["scan_cursor"]["current"], "page_2")
+        self.assertEqual(work_item["page_budget_remaining"], 1)
+
+    def test_high_throughput_scans_page_budget_before_processing_first_page_work(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+                "--management-mode",
+                "high-throughput",
+                "--max-pages-per-cycle",
+                "2",
+            ])
+            self._run(["operator", "next", "--data-dir", str(data_dir)])
+            first_page = _single_candidate_message_list_observation("row_ada")
+            first_page["scan_cursor"] = {"current": "page_1", "next": "page_2", "exhausted": False}
+            first_page["scan_budget"] = 5
+            first_path = Path(temp_dir) / "first_page.json"
+            self._write_json(first_path, first_page)
+            self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(first_path),
+            ])
+
+            continuation_exit, continuation_payload, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
+            second_page = _message_list_observation()
+            second_page["scan_cursor"] = {"current": "page_2", "next": None, "exhausted": True}
+            second_page["message_list_snapshot"]["entries"] = []
+            second_path = Path(temp_dir) / "second_page.json"
+            self._write_json(second_path, second_page)
+            self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(second_path),
+            ])
+            open_exit, open_payload, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
+
+        self.assertEqual(continuation_exit, 0)
+        self.assertEqual(continuation_payload["work_item"]["work_item_type"], "scan_message_list")
+        self.assertEqual(continuation_payload["work_item"]["reason"], "scan_page_continuation_required")
+        self.assertEqual(continuation_payload["work_item"]["scan_cursor"]["current"], "page_2")
+        self.assertEqual(open_exit, 0)
+        self.assertEqual(open_payload["work_item"]["work_item_type"], "open_thread")
+        self.assertEqual(open_payload["work_item"]["candidate_key"], "row_ada")
+
     def test_operator_start_warns_for_old_memory_review_without_blocking(self):
         from dating_boost.core.memory.review_queue import ReviewItem, ReviewQueueRepository
 
@@ -406,6 +552,8 @@ class OperatorSessionTests(unittest.TestCase):
                 str(data_dir),
                 "--authorization",
                 str(FIXTURE_DIR / "auth_send.json"),
+                "--cycle-send-limit",
+                "2",
             ])
             list_path = Path(temp_dir) / "two_reply_list.json"
             self._write_json(list_path, _two_reply_message_list_observation())
@@ -467,6 +615,65 @@ class OperatorSessionTests(unittest.TestCase):
             ])
             self.assertEqual(final_exit, 0)
             self.assertEqual(final_payload["work_item"]["work_item_type"], "scan_message_list")
+
+    def test_operator_cycle_send_limit_defers_remaining_send_work(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+                "--cycle-send-limit",
+                "1",
+            ])
+            list_path = Path(temp_dir) / "two_reply_list.json"
+            self._write_json(list_path, _two_reply_message_list_observation())
+            self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(list_path),
+            ])
+            for candidate_key, visible_name in (("row_ada", "Ada"), ("row_zara", "Zara")):
+                thread_path = Path(temp_dir) / f"{candidate_key}.json"
+                self._write_json(
+                    thread_path,
+                    _reply_thread_observation(
+                        candidate_key=candidate_key,
+                        visible_name=visible_name,
+                        observation_id=f"obs_{candidate_key}_001",
+                        inbound_fingerprint=f"{candidate_key}:in:you-pick",
+                    ),
+                )
+                self._run([
+                    "operator",
+                    "ingest-observation",
+                    "--data-dir",
+                    str(data_dir),
+                    "--input",
+                    str(thread_path),
+                ])
+
+            first_exit, first_payload, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
+            self.assertEqual(first_exit, 0)
+            self.assertEqual(first_payload["work_item"]["work_item_type"], "send_message")
+            self._record_operator_success(data_dir, temp_dir, first_payload["work_item"])
+
+            limited_exit, limited_payload, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
+            state_exit, state_payload, _ = self._run(["operator", "get-state", "--data-dir", str(data_dir)])
+
+        self.assertEqual(limited_exit, 0)
+        self.assertEqual(limited_payload["work_item"]["work_item_type"], "scheduled_wait")
+        self.assertEqual(limited_payload["work_item"]["reason"], "cycle_send_limit_reached")
+        self.assertEqual(state_exit, 0)
+        self.assertEqual(state_payload["work_queue"][0]["candidate_key"], "row_zara")
 
     def test_operator_handoff_does_not_stick_as_current_work(self):
         with tempfile.TemporaryDirectory() as temp_dir:

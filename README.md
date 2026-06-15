@@ -46,6 +46,22 @@ Host agent 的 live send 应走 managed-session 或 host-loop；直接 `harness 
 
 未支持 app 不会出现在 `app_profiles/` 或 capabilities 里。Hinge 等其他 app 先作为 roadmap candidate 保留，只有具备 fixture、preflight 和可测试 runtime path 后才新增 app profile。
 
+## 全对象托管
+
+`managed-session` 是显式启动后的 session-scoped runner，不是后台监听器。它可以在一个托管窗口内自动管理多个对象，但执行模型是串行 work item：全局 managed-session/operator 按机会窗口、due nudge、新回复、补资料、新匹配等优先级调度；具体 runtime 只执行当前 work item。
+
+生产默认使用 `--management-mode conservative`。链路压测可显式使用 `--management-mode high-throughput --max-threads-per-cycle N --max-pages-per-cycle N --cycle-send-limit N`，但高吞吐只提高每轮预算，不绕过 live-send 授权、target binding、staged-text verification 或 post-send verification。
+
+TaShuo 本地 iOS app 托管需要显式传 `--harness-runtime mac-ios-app`；不传时会使用 app profile 默认 runtime，也就是 iPhone Mirroring。
+
+`managed-session run/tick` 会返回 `relationship_progress_snapshot`，用于展示本轮全对象状态摘要、下一优先队列和每个对象下一步；`managed-session stop` 和 host-loop final response 会输出用户可读的 `relationship_progress_report`。
+
+TaShuo mac-ios-app 真实托管 smoke 入口：
+
+```bash
+python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json
+```
+
 ## 给人类的快速开始
 
 如果你只是想试用，最稳定的方式是把仓库链接交给你的 host agent，并明确告诉它：

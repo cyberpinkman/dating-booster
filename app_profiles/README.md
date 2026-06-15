@@ -48,6 +48,9 @@ every `app_profiles/*.json` file against the same required contract shape.
   boundary.
 - `live_send_requirements`: exact evidence required before/after live send.
 - `managed_session`: profile-owned precheck failure status and recovery action.
+  It also declares default/high-throughput per-cycle thread/page budgets,
+  `cycle_send_limit`, whether message-list pagination is supported, and
+  optional runtime-specific precheck recovery actions.
 - `special_policies`: app-specific social rules such as Bumble Opening Move or
   TaShuo question gate.
 - `post_send_verification`: rules for recording a send result.

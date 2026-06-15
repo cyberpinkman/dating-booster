@@ -13,6 +13,10 @@ from dating_boost.core.storage import JsonStorage
 
 STICKY_WORK_ITEM_TYPES = {"scan_message_list", "observe_current_thread", "open_thread", "send_message"}
 INITIAL_SURFACES = {"message-list", "current-thread"}
+MANAGEMENT_MODES = {"conservative", "high-throughput"}
+DEFAULT_MAX_THREADS_PER_CYCLE = 5
+DEFAULT_MAX_PAGES_PER_CYCLE = 1
+DEFAULT_CYCLE_SEND_LIMIT = 1
 
 
 class OperatorRepository:
@@ -21,10 +25,25 @@ class OperatorRepository:
         self._storage = JsonStorage(root)
         self._automation = AutomationRepository(root, nudge_delay_minutes=nudge_delay_minutes)
 
-    def start_session(self, authorization: dict[str, Any], *, initial_surface: str = "message-list") -> dict[str, Any]:
+    def start_session(
+        self,
+        authorization: dict[str, Any],
+        *,
+        initial_surface: str = "message-list",
+        management_mode: str = "conservative",
+        max_threads_per_cycle: int = DEFAULT_MAX_THREADS_PER_CYCLE,
+        max_pages_per_cycle: int = DEFAULT_MAX_PAGES_PER_CYCLE,
+        cycle_send_limit: int = DEFAULT_CYCLE_SEND_LIMIT,
+    ) -> dict[str, Any]:
         if initial_surface not in INITIAL_SURFACES:
             raise ValueError("initial_surface must be message-list or current-thread")
-        automation_session = self._automation.start_session(authorization)
+        session_config = _session_config(
+            management_mode=management_mode,
+            max_threads_per_cycle=max_threads_per_cycle,
+            max_pages_per_cycle=max_pages_per_cycle,
+            cycle_send_limit=cycle_send_limit,
+        )
+        automation_session = self._automation.start_session(authorization, session_config=session_config)
         if automation_session.get("status") != "active":
             return {
                 "schema_version": 1,
@@ -47,6 +66,10 @@ class OperatorRepository:
             "last_decision": None,
             "initial_surface": initial_surface,
             "initial_surface_consumed": False,
+            **session_config,
+            "pages_scanned_current_cycle": 0,
+            "next_scan_cursor": {"current": None, "next": None, "exhausted": False},
+            "cycle_send_count": 0,
         }
         self._write_session(session)
         self._clear_current_work_file()
@@ -58,6 +81,7 @@ class OperatorRepository:
             "session_id": session["session_id"],
             "authorization_id": session["authorization_id"],
             "initial_surface": initial_surface,
+            **session_config,
             "resumed_from_report": automation_session.get("resumed_from_report"),
             "memory_review": automation_session.get("memory_review"),
             "warnings": automation_session.get("warnings", []),
@@ -77,11 +101,12 @@ class OperatorRepository:
         if isinstance(current, dict):
             return self._work_payload(current, reused=True)
 
-        queued = self._pop_next_work_item(session)
-        if queued is not None:
-            return self._work_payload(queued)
-
         scan_batch = self._load_pending_scan_batch()
+        if not (scan_batch is not None and session.get("accumulating_scan_pages")):
+            queued = self._pop_next_work_item(session)
+            if queued is not None:
+                return self._work_payload(queued)
+
         if scan_batch is None:
             if session.get("initial_surface") == "current-thread" and not session.get("initial_surface_consumed"):
                 work_item = {
@@ -94,20 +119,33 @@ class OperatorRepository:
                 session["initial_surface_consumed"] = True
                 self._set_current_work_item(session, work_item)
                 return self._work_payload(work_item)
-            work_item = {
-                "schema_version": 1,
-                "work_item_id": f"work_scan_message_list_{session['session_id']}",
-                "work_item_type": "scan_message_list",
-                "reason": "operator_needs_message_list_snapshot",
-                "instructions": "Observe the visible dating app message list and ingest a message_list observation.",
-            }
+            work_item = _scan_work_item(session, reason="operator_needs_message_list_snapshot")
             self._set_current_work_item(session, work_item)
             return self._work_payload(work_item)
 
         decision = self._automation.step(scan_batch)
         session["last_decision"] = decision
         self._write_session(session)
-        self._write_work_queue(_work_items_from_decision(decision, session["session_id"]))
+        new_work_items = _work_items_from_decision(decision, session["session_id"])
+        if _should_continue_scan_before_work(session, decision):
+            accumulated = self._load_work_queue() + _non_wait_work_items(new_work_items)
+            self._write_work_queue(accumulated)
+            session["accumulating_scan_pages"] = True
+            self._write_session(session)
+            self._clear_pending_scan_file()
+            work_item = _scan_work_item(session, reason="scan_page_continuation_required")
+            self._set_current_work_item(session, work_item)
+            return self._work_payload(work_item, decision=decision)
+        if session.get("accumulating_scan_pages"):
+            existing = self._load_work_queue()
+            work_items = existing + _non_wait_work_items(new_work_items)
+            if not work_items:
+                work_items = new_work_items
+            session["accumulating_scan_pages"] = False
+            self._write_session(session)
+        else:
+            work_items = new_work_items
+        self._write_work_queue(work_items)
         work_item = self._pop_next_work_item(session)
         if work_item is None:
             work_item = {
@@ -128,8 +166,8 @@ class OperatorRepository:
                 "session_id": payload.get("session_id") or session["session_id"],
                 "app_id": payload.get("app_id") or "tinder",
                 "captured_at": payload.get("captured_at") or _now_iso(),
-                "scan_cursor": payload.get("scan_cursor"),
-                "scan_budget": int(payload.get("scan_budget") or 5),
+                "scan_cursor": _normalize_scan_cursor(payload.get("scan_cursor")),
+                "scan_budget": int(payload.get("scan_budget") or session.get("max_threads_per_cycle") or DEFAULT_MAX_THREADS_PER_CYCLE),
                 "provenance": payload.get("provenance") or {
                     "author": "host_agent",
                     "evidence": "Operator message-list observation.",
@@ -139,13 +177,31 @@ class OperatorRepository:
             }
             _validate_or_raise(scan_batch)
             self._write_pending_scan_batch(scan_batch)
-            self._clear_work_queue_file()
+            current = session.get("current_work_item")
+            preserve_accumulated_queue = (
+                isinstance(current, dict)
+                and current.get("reason") == "scan_page_continuation_required"
+                and bool(session.get("accumulating_scan_pages"))
+            )
+            session["pages_scanned_current_cycle"] = int(session.get("pages_scanned_current_cycle") or 0) + 1
+            session["cycle_send_count"] = 0
+            session["last_scan_cursor"] = scan_batch["scan_cursor"]
+            next_cursor = scan_batch["scan_cursor"].get("next")
+            session["next_scan_cursor"] = {
+                "current": next_cursor,
+                "next": None,
+                "exhausted": bool(scan_batch["scan_cursor"].get("exhausted")),
+            }
+            self._write_session(session)
+            if not preserve_accumulated_queue:
+                self._clear_work_queue_file()
             self._clear_current_work_item(session, expected_type="scan_message_list")
             return {
                 "schema_version": 1,
                 "status": "ok",
                 "observation_type": "message_list",
                 "entry_count": len(scan_batch["message_list_snapshot"].get("entries", [])),
+                "scan_cursor": scan_batch["scan_cursor"],
             }
 
         if observation_type == "thread":
@@ -189,6 +245,9 @@ class OperatorRepository:
         event = ActionAuditRepository(self.root).append_action_result(payload, created_at=_now_iso())
         self._automation.apply_action_result(event)
         session = self._load_session()
+        if event.get("action") == "send_message":
+            session["cycle_send_count"] = int(session.get("cycle_send_count") or 0) + 1
+            self._write_session(session)
         self._clear_current_work_item(
             session,
             expected_type="send_message",
@@ -209,6 +268,8 @@ class OperatorRepository:
         event = ActionAuditRepository(self.root).append_stage_result(payload, created_at=_now_iso())
         self._automation.apply_stage_result(event)
         session = self._load_session()
+        session["cycle_send_count"] = int(session.get("cycle_send_count") or 0) + 1
+        self._write_session(session)
         self._clear_current_work_item(
             session,
             expected_type="send_message",
@@ -339,6 +400,13 @@ class OperatorRepository:
             "automation": self._automation.get_state_payload(),
         }
 
+    def reset_cycle_limits(self) -> dict[str, Any]:
+        session = self._load_session()
+        session["cycle_send_count"] = 0
+        session["pages_scanned_current_cycle"] = 0
+        self._write_session(session)
+        return {"schema_version": 1, "status": "ok"}
+
     def _load_session(self) -> dict[str, Any]:
         session = self._load_session_or_none()
         if session is None:
@@ -363,6 +431,14 @@ class OperatorRepository:
         queue = self._load_work_queue()
         if not queue:
             return None
+        if _cycle_send_limit_reached(session, queue[0]):
+            return {
+                "schema_version": 1,
+                "work_item_id": f"work_scheduled_cycle_send_limit_{session['session_id']}",
+                "work_item_type": "scheduled_wait",
+                "reason": "cycle_send_limit_reached",
+                "cycle_send_limit": int(session.get("cycle_send_limit") or DEFAULT_CYCLE_SEND_LIMIT),
+            }
         work_item = queue.pop(0)
         self._write_work_queue(queue)
         if work_item.get("work_item_type") in STICKY_WORK_ITEM_TYPES:
@@ -523,8 +599,94 @@ def _work_items_from_decision(decision: dict[str, Any], session_id: str) -> list
             "work_item_id": f"work_wait_{session_id}",
             "work_item_type": "wait",
             "reason": "no_eligible_operator_work",
+            "next_priority_queue": decision.get("next_priority_queue", []),
         }
     ]
+
+
+def _session_config(
+    *,
+    management_mode: str,
+    max_threads_per_cycle: int,
+    max_pages_per_cycle: int,
+    cycle_send_limit: int,
+) -> dict[str, Any]:
+    mode = str(management_mode or "conservative")
+    if mode not in MANAGEMENT_MODES:
+        raise ValueError("management_mode must be conservative or high-throughput")
+    return {
+        "management_mode": mode,
+        "max_threads_per_cycle": max(1, int(max_threads_per_cycle or DEFAULT_MAX_THREADS_PER_CYCLE)),
+        "max_pages_per_cycle": max(1, int(max_pages_per_cycle or DEFAULT_MAX_PAGES_PER_CYCLE)),
+        "cycle_send_limit": max(1, int(cycle_send_limit or DEFAULT_CYCLE_SEND_LIMIT)),
+    }
+
+
+def _scan_work_item(session: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    scan_cursor = _normalize_scan_cursor(session.get("next_scan_cursor"))
+    pages_scanned = int(session.get("pages_scanned_current_cycle") or 0)
+    max_pages = max(1, int(session.get("max_pages_per_cycle") or DEFAULT_MAX_PAGES_PER_CYCLE))
+    max_threads = max(1, int(session.get("max_threads_per_cycle") or DEFAULT_MAX_THREADS_PER_CYCLE))
+    return {
+        "schema_version": 1,
+        "work_item_id": f"work_scan_message_list_{session['session_id']}_{pages_scanned + 1}",
+        "work_item_type": "scan_message_list",
+        "reason": reason,
+        "instructions": "Observe the visible dating app message list and ingest a message_list observation.",
+        "scan_cursor": scan_cursor,
+        "page_budget_remaining": max(0, max_pages - pages_scanned),
+        "thread_budget_remaining": max_threads,
+        "management_mode": session.get("management_mode") or "conservative",
+    }
+
+
+def _decision_has_no_immediate_work(decision: dict[str, Any]) -> bool:
+    return not (
+        decision.get("action_requests")
+        or decision.get("handoffs")
+        or decision.get("scan_requests")
+        or decision.get("scheduled_actions")
+    )
+
+
+def _should_continue_scan_before_work(session: dict[str, Any], decision: dict[str, Any]) -> bool:
+    if not _can_continue_scan(session):
+        return False
+    if session.get("management_mode") == "high-throughput":
+        return True
+    return _decision_has_no_immediate_work(decision)
+
+
+def _can_continue_scan(session: dict[str, Any]) -> bool:
+    cursor = _normalize_scan_cursor(session.get("next_scan_cursor"))
+    if cursor.get("exhausted"):
+        return False
+    if not cursor.get("current"):
+        return False
+    pages_scanned = int(session.get("pages_scanned_current_cycle") or 0)
+    max_pages = max(1, int(session.get("max_pages_per_cycle") or DEFAULT_MAX_PAGES_PER_CYCLE))
+    return pages_scanned < max_pages
+
+
+def _cycle_send_limit_reached(session: dict[str, Any], work_item: dict[str, Any]) -> bool:
+    if work_item.get("work_item_type") != "send_message":
+        return False
+    limit = max(1, int(session.get("cycle_send_limit") or DEFAULT_CYCLE_SEND_LIMIT))
+    return int(session.get("cycle_send_count") or 0) >= limit
+
+
+def _non_wait_work_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in items if item.get("work_item_type") not in {"wait", "scheduled_wait"}]
+
+
+def _normalize_scan_cursor(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return {
+            "current": value.get("current"),
+            "next": value.get("next"),
+            "exhausted": bool(value.get("exhausted")),
+        }
+    return {"current": value, "next": None, "exhausted": False}
 
 
 def _candidate_key_from_thread_payload(payload: dict[str, Any]) -> str:
