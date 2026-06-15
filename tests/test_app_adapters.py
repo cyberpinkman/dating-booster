@@ -31,13 +31,28 @@ class AppAdapterArchitectureTests(unittest.TestCase):
             {app_id for app_id, profile in profiles.items() if profile["host_loop_supported"]},
         )
 
+    def test_registry_blocks_real_gui_adapter_creation_under_pytest(self):
+        from dating_boost.apps.registry import create_adapter
+
+        with patch.dict("os.environ", {"PYTEST_CURRENT_TEST": "test blocks real gui"}, clear=False):
+            with self.assertRaisesRegex(RuntimeError, "real_gui_adapter_disabled_in_tests"):
+                create_adapter("wechat")
+
+    def test_registry_allows_injected_runner_under_pytest(self):
+        from dating_boost.apps.registry import create_adapter
+
+        with patch.dict("os.environ", {"PYTEST_CURRENT_TEST": "test allows fake runner"}, clear=False):
+            adapter = create_adapter("wechat", runner=object())
+
+        self.assertEqual(adapter.manifest.app_id, "wechat")
+
     def test_each_profile_has_matching_adapter_manifest(self):
-        from dating_boost.apps.registry import get_adapter
+        from dating_boost.apps.registry import create_adapter
 
         for path in PROFILE_DIR.glob("*.json"):
             profile = json.loads(path.read_text(encoding="utf-8"))
             with self.subTest(app_id=profile["app_id"]):
-                adapter = get_adapter(profile["app_id"])
+                adapter = create_adapter(profile["app_id"], runner=object())
                 manifest = adapter.manifest
 
                 self.assertEqual(manifest.app_id, profile["app_id"])
@@ -347,18 +362,40 @@ class AppAdapterArchitectureTests(unittest.TestCase):
         self.assertNotIn("classify_tashuo_screen_text", global_screen_state_source)
 
     def test_harness_doctor_dispatches_to_adapter_not_session_app_branch(self):
-        calls: dict[str, object] = {}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            with redirect_stdout(StringIO()):
+                select_exit = main([
+                    "runtime",
+                    "select",
+                    "--data-dir",
+                    str(data_dir),
+                    "--app-id",
+                    "wechat",
+                    "--json",
+                ])
+            calls: dict[str, object] = {}
 
-        class FakeAdapter:
-            def doctor(self, *, capture=True, output=None):
-                calls["capture"] = capture
-                calls["output"] = output
-                return {"schema_version": 2, "status": "ok", "app_id": "wechat"}
+            class FakeAdapter:
+                def doctor(self, *, capture=True, output=None):
+                    calls["capture"] = capture
+                    calls["output"] = output
+                    return {"schema_version": 2, "status": "ok", "app_id": "wechat"}
 
-        with patch("dating_boost.cli.create_adapter", return_value=FakeAdapter()):
-            with redirect_stdout(StringIO()) as output:
-                exit_code = main(["harness", "doctor", "--app-id", "wechat", "--no-capture", "--json"])
+            with patch("dating_boost.cli.create_adapter", return_value=FakeAdapter()):
+                with redirect_stdout(StringIO()) as output:
+                    exit_code = main([
+                        "harness",
+                        "doctor",
+                        "--app-id",
+                        "wechat",
+                        "--data-dir",
+                        str(data_dir),
+                        "--no-capture",
+                        "--json",
+                    ])
 
+        self.assertEqual(select_exit, 0)
         self.assertEqual(exit_code, 0)
         self.assertEqual(json.loads(output.getvalue())["status"], "ok")
         self.assertEqual(calls, {"capture": False, "output": None})
@@ -366,7 +403,18 @@ class AppAdapterArchitectureTests(unittest.TestCase):
     def test_cli_action_uses_registry_adapter_and_options_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             options_path = Path(temp_dir) / "options.json"
+            data_dir = Path(temp_dir) / "data"
             options_path.write_text(json.dumps({"visible_name": "Ada", "y_ratio": 0.71}), encoding="utf-8")
+            with redirect_stdout(StringIO()):
+                select_exit = main([
+                    "runtime",
+                    "select",
+                    "--data-dir",
+                    str(data_dir),
+                    "--app-id",
+                    "tinder",
+                    "--json",
+                ])
             calls: dict[str, object] = {}
 
             class FakeAdapter:
@@ -386,10 +434,13 @@ class AppAdapterArchitectureTests(unittest.TestCase):
                         "open-conversation",
                         "--options-json",
                         str(options_path),
+                        "--data-dir",
+                        str(data_dir),
                         "--dry-run",
                         "--json",
                     ])
 
+        self.assertEqual(select_exit, 0)
         self.assertEqual(exit_code, 0)
         self.assertEqual(calls["action"], "open-conversation")
         self.assertTrue(calls["dry_run"])

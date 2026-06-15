@@ -163,6 +163,22 @@ def _run_cli_json(argv: list[str]) -> tuple[int, dict[str, object]]:
     return exit_code, json.loads(output.getvalue())
 
 
+def _select_runtime_scope(data_dir: Path, app_id: str, runtime: str = "default") -> None:
+    exit_code, payload = _run_cli_json([
+        "runtime",
+        "select",
+        "--data-dir",
+        str(data_dir),
+        "--app-id",
+        app_id,
+        "--runtime",
+        runtime,
+        "--json",
+    ])
+    if exit_code != 0:
+        raise AssertionError(payload)
+
+
 @contextmanager
 def _patch_cli_adapter():
     with patch("dating_boost.cli.create_adapter") as adapter_factory:
@@ -1426,6 +1442,7 @@ class GuiHarnessTests(unittest.TestCase):
         runner = FakeRunner(
             ocr_text=[
                 "Yasmine\n你好\n点击此处输入文字\n发送\n",
+                "Yasmine\n你好\n点击此处输入文字\n发送\n",
                 "Yasmine\n你好\n今晚聊得挺舒服的。\n发送\n",
                 "Yasmine\n你好\n今晚聊得挺舒服的。\n发送\n",
             ],
@@ -1447,9 +1464,62 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(any(command[:2] == ["xcrun", "swift"] for command in runner.commands))
         self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
 
+    def test_tashuo_mac_ios_app_stage_draft_clears_existing_input_before_paste(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Yasmine\n你好\n旧草稿\n发送\n",
+                "Yasmine\n你好\n旧草稿\n发送\n",
+                "Yasmine\n你好\n今晚聊得挺舒服的。\n发送\n",
+                "Yasmine\n你好\n今晚聊得挺舒服的。\n发送\n",
+            ],
+            window_name="她说",
+            ax_text_area_value="旧草稿",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.stage_draft("今晚聊得挺舒服的。", dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["pre_stage_clear_result"]["status"], "ok")
+        self.assertEqual(payload["staged_text_verification"]["status"], "verified")
+        self.assertTrue(payload["staged_text_verified"])
+        clear_index = next(
+            index
+            for index, command in enumerate(runner.commands)
+            if command and command[0] == "osascript" and any("DATING_BOOST_AX_CLEAR_TEXT_AREA" in item for item in command)
+        )
+        copy_index = next(
+            index
+            for index, command in enumerate(runner.commands)
+            if command and command[0] == "pbcopy"
+        )
+        self.assertLess(clear_index, copy_index)
+
+    def test_tashuo_mac_ios_app_stage_draft_duplicate_append_needs_user_verification(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Yasmine\n你好\n今晚聊得挺舒服的。\n发送\n",
+                "Yasmine\n你好\n今晚聊得挺舒服的。\n发送\n",
+                "Yasmine\n你好\n今晚聊得挺舒服的。\n今晚聊得挺舒服的。\n发送\n",
+                "Yasmine\n你好\n今晚聊得挺舒服的。\n今晚聊得挺舒服的。\n发送\n",
+            ],
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.stage_draft("今晚聊得挺舒服的。", dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["pre_stage_clear_result"]["status"], "blocked")
+        self.assertEqual(payload["staged_text_verification"]["status"], "needs_user_verification")
+        self.assertEqual(payload["staged_text_verification"]["reason"], "staged_text_may_have_been_appended")
+        self.assertFalse(payload["staged_text_verified"])
+        self.assertTrue(payload["staged_text_verification"]["possible_append_to_existing_staged_text"])
+
     def test_tashuo_mac_ios_app_stage_draft_cjk_ambiguous_ocr_needs_user_verification_not_failed(self):
         runner = FakeRunner(
             ocr_text=[
+                "Yasmine\n你好\n点击此处输入文字\n发送\n",
                 "Yasmine\n你好\n点击此处输入文字\n发送\n",
                 "Yasmine\n你好\n发送\n",
                 "Yasmine\n你好\n发送\n",
@@ -3195,16 +3265,26 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
 
     def test_cli_exposes_tinder_observe_with_redacted_payload(self):
-        with _patch_cli_adapter() as harness_class:
-            harness_class.return_value.observe_tinder_screen.return_value = {
-                "schema_version": 1,
-                "status": "ok",
-                "app_id": "tinder",
-                "screen_state": "tinder_messages",
-                "layout_hints": {"page": "chats"},
-            }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _select_runtime_scope(data_dir, "tinder")
+            with _patch_cli_adapter() as harness_class:
+                harness_class.return_value.observe_tinder_screen.return_value = {
+                    "schema_version": 1,
+                    "status": "ok",
+                    "app_id": "tinder",
+                    "screen_state": "tinder_messages",
+                    "layout_hints": {"page": "chats"},
+                }
 
-            exit_code, payload = _run_cli_json(["harness", "tinder", "observe", "--json"])
+                exit_code, payload = _run_cli_json([
+                    "harness",
+                    "tinder",
+                    "observe",
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "ok")
@@ -3212,23 +3292,211 @@ class GuiHarnessTests(unittest.TestCase):
         harness_class.return_value.observe_tinder_screen.assert_called_once()
 
     def test_cli_passes_explicit_runtime_to_tashuo_adapter(self):
-        with _patch_cli_adapter() as harness_class:
-            harness_class.return_value.launch_tashuo.return_value = {
-                "schema_version": 2,
-                "status": "ok",
-                "app_id": "tashuo",
-                "harness_backend": "mac_ios_app",
-            }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _select_runtime_scope(data_dir, "tashuo", "mac-ios-app")
+            with _patch_cli_adapter() as harness_class:
+                harness_class.return_value.launch_tashuo.return_value = {
+                    "schema_version": 2,
+                    "status": "ok",
+                    "app_id": "tashuo",
+                    "harness_backend": "mac_ios_app",
+                }
 
-            exit_code, payload = _run_cli_json([
-                "harness",
+                exit_code, payload = _run_cli_json([
+                    "harness",
+                    "tashuo",
+                    "launch",
+                    "--runtime",
+                    "mac-ios-app",
+                    "--data-dir",
+                    str(data_dir),
+                    "--dry-run",
+                    "--json",
+                ])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["harness_backend"], "mac_ios_app")
+        self.assertEqual(harness_class.call_args.kwargs["runtime"], "mac-ios-app")
+
+    def test_runtime_scope_data_dir_required_before_adapter_creation(self):
+        with _patch_cli_adapter() as harness_class:
+            exit_code, payload = _run_cli_json(["harness", "wechat", "observe", "--json"])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "runtime_scope_data_dir_required")
+        harness_class.assert_not_called()
+
+    def test_runtime_scope_blocks_unrelated_harness_app_before_adapter_creation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            select_exit, select_payload = _run_cli_json([
+                "runtime",
+                "select",
+                "--data-dir",
+                temp_dir,
+                "--app-id",
                 "tashuo",
-                "launch",
                 "--runtime",
                 "mac-ios-app",
-                "--dry-run",
                 "--json",
             ])
+            with _patch_cli_adapter() as harness_class:
+                exit_code, payload = _run_cli_json([
+                    "harness",
+                    "wechat",
+                    "observe",
+                    "--data-dir",
+                    temp_dir,
+                    "--json",
+                ])
+
+        self.assertEqual(select_exit, 0)
+        self.assertEqual(select_payload["status"], "selected")
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "runtime_scope_mismatch")
+        self.assertEqual(payload["selected_app_id"], "tashuo")
+        self.assertEqual(payload["selected_runtime"], "mac-ios-app")
+        self.assertFalse(harness_class.called)
+
+    def test_runtime_select_requires_clear_before_switching_target(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first_exit, first_payload = _run_cli_json([
+                "runtime",
+                "select",
+                "--data-dir",
+                temp_dir,
+                "--app-id",
+                "tashuo",
+                "--runtime",
+                "mac-ios-app",
+                "--json",
+            ])
+            second_exit, second_payload = _run_cli_json([
+                "runtime",
+                "select",
+                "--data-dir",
+                temp_dir,
+                "--app-id",
+                "wechat",
+                "--runtime",
+                "default",
+                "--json",
+            ])
+            clear_exit, clear_payload = _run_cli_json([
+                "runtime",
+                "clear",
+                "--data-dir",
+                temp_dir,
+                "--reason",
+                "user_requested_target_switch",
+                "--json",
+            ])
+            third_exit, third_payload = _run_cli_json([
+                "runtime",
+                "select",
+                "--data-dir",
+                temp_dir,
+                "--app-id",
+                "wechat",
+                "--runtime",
+                "default",
+                "--json",
+            ])
+
+        self.assertEqual(first_exit, 0)
+        self.assertEqual(first_payload["status"], "selected")
+        self.assertEqual(second_exit, 2)
+        self.assertEqual(second_payload["status"], "blocked")
+        self.assertEqual(second_payload["reason"], "runtime_scope_already_selected")
+        self.assertEqual(second_payload["selected_app_id"], "tashuo")
+        self.assertEqual(second_payload["requested_app_id"], "wechat")
+        self.assertEqual(clear_exit, 0)
+        self.assertEqual(clear_payload["status"], "cleared")
+        self.assertEqual(third_exit, 0)
+        self.assertEqual(third_payload["status"], "selected")
+        self.assertEqual(third_payload["selected_app_id"], "wechat")
+
+    def test_runtime_scope_is_required_for_data_dir_harness_before_adapter_creation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with _patch_cli_adapter() as harness_class:
+                exit_code, payload = _run_cli_json([
+                    "harness",
+                    "wechat",
+                    "observe",
+                    "--data-dir",
+                    temp_dir,
+                    "--json",
+                ])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "runtime_scope_required")
+        self.assertEqual(payload["requested_app_id"], "wechat")
+        self.assertEqual(payload["requested_runtime"], "default")
+        self.assertFalse(harness_class.called)
+
+    def test_runtime_scope_blocks_implicit_default_runtime_before_adapter_creation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _run_cli_json([
+                "runtime",
+                "select",
+                "--data-dir",
+                temp_dir,
+                "--app-id",
+                "tashuo",
+                "--runtime",
+                "mac-ios-app",
+                "--json",
+            ])
+            with _patch_cli_adapter() as harness_class:
+                exit_code, payload = _run_cli_json([
+                    "harness",
+                    "tashuo",
+                    "observe",
+                    "--data-dir",
+                    temp_dir,
+                    "--json",
+                ])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "runtime_scope_mismatch")
+        self.assertEqual(payload["requested_runtime"], "default")
+        self.assertEqual(payload["selected_runtime"], "mac-ios-app")
+        self.assertFalse(harness_class.called)
+
+    def test_runtime_scope_allows_selected_harness_app_and_runtime(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            _run_cli_json([
+                "runtime",
+                "select",
+                "--data-dir",
+                temp_dir,
+                "--app-id",
+                "tashuo",
+                "--runtime",
+                "mac-ios-app",
+                "--json",
+            ])
+            with _patch_cli_adapter() as harness_class:
+                harness_class.return_value.observe_tashuo_screen.return_value = {
+                    "schema_version": 2,
+                    "status": "ok",
+                    "app_id": "tashuo",
+                    "harness_backend": "mac_ios_app",
+                }
+                exit_code, payload = _run_cli_json([
+                    "harness",
+                    "tashuo",
+                    "observe",
+                    "--data-dir",
+                    temp_dir,
+                    "--runtime",
+                    "mac-ios-app",
+                    "--json",
+                ])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["harness_backend"], "mac_ios_app")
@@ -3513,7 +3781,9 @@ class GuiHarnessTests(unittest.TestCase):
     def test_cli_exposes_wechat_observe_stage_draft_and_send_message(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             draft_path = Path(temp_dir) / "wechat-draft.txt"
+            data_dir = Path(temp_dir) / "data"
             draft_path.write_text("今晚可以聊十分钟吗？", encoding="utf-8")
+            _select_runtime_scope(data_dir, "wechat")
             with _patch_cli_adapter() as harness_class:
                 harness_class.return_value.observe_wechat_screen.return_value = {
                     "schema_version": 1,
@@ -3522,7 +3792,14 @@ class GuiHarnessTests(unittest.TestCase):
                     "screen_state": "wechat_chat",
                     "layout_hints": {"page": "conversation"},
                 }
-                observe_exit, observe_payload = _run_cli_json(["harness", "wechat", "observe", "--json"])
+                observe_exit, observe_payload = _run_cli_json([
+                    "harness",
+                    "wechat",
+                    "observe",
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ])
 
                 harness_class.return_value.stage_wechat_draft.return_value = {
                     "schema_version": 1,
@@ -3537,6 +3814,8 @@ class GuiHarnessTests(unittest.TestCase):
                     "stage-draft",
                     "--text-file",
                     str(draft_path),
+                    "--data-dir",
+                    str(data_dir),
                     "--dry-run",
                     "--json",
                 ])
@@ -3553,6 +3832,8 @@ class GuiHarnessTests(unittest.TestCase):
                     "send-message",
                     "--text-file",
                     str(draft_path),
+                    "--data-dir",
+                    str(data_dir),
                     "--dry-run",
                     "--json",
                 ])
@@ -4055,6 +4336,7 @@ class GuiHarnessTests(unittest.TestCase):
             _write_json(auth_path, _live_send_auth("tinder", authorization_id="auth_tinder_live"))
             _write_json(payload_path, {"text": draft_text})
             _write_json(precondition_path, {"observation_id": "obs_before", "fingerprint": "ada:1"})
+            _select_runtime_scope(data_dir, "tinder")
 
             create_exit, create_payload = _run_cli_json([
                 "confirmation",
@@ -4144,6 +4426,7 @@ class GuiHarnessTests(unittest.TestCase):
                     auth_path = root / "auth.json"
                     action_path = root / "action_request.json"
                     draft_path.write_text(draft_text, encoding="utf-8")
+                    _select_runtime_scope(data_dir, app_id)
                     _write_json(auth_path, _live_send_auth(app_id, authorization_id=auth_id, allowed_match_ids=[match_id]))
                     _write_json(action_path, {
                         "schema_version": 1,
@@ -4213,6 +4496,7 @@ class GuiHarnessTests(unittest.TestCase):
                     auth_path = root / "auth.json"
                     action_path = root / "action_request.json"
                     draft_path.write_text(draft_text, encoding="utf-8")
+                    _select_runtime_scope(data_dir, app_id)
                     _write_json(auth_path, _live_send_auth(app_id, authorization_id=auth_id, allowed_match_ids=[match_id]))
                     _write_json(action_path, {
                         "schema_version": 1,

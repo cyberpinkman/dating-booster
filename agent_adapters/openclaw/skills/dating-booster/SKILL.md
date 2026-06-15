@@ -147,23 +147,39 @@ Low confidence, stale context, topic loops, appointment details, contact
 exchange, or unclear user preference should stop automatic sending for that
 match.
 
+## Runtime Scope
+
+Before real GUI observation, staging, host-loop, or managed-session work, select
+the target app/runtime for the shared data dir:
+
+```bash
+dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
+```
+
+After selection, every harness command must pass the same `--data-dir` and
+matching app/runtime. Do not invoke unrelated apps or runtimes during the
+selected session. If a command returns `runtime_scope_mismatch`, rerun with the
+selected app/runtime, or clear/reselect only after the user explicitly changes
+targets.
+
 ## Tinder iPhone Mirroring Harness
 
 Use the Tinder harness for iPhone Mirroring work:
 
 ```bash
-dating-boost harness doctor --app-id tinder --json
-dating-boost harness tinder launch --dry-run --json
-dating-boost harness tinder open-profile --dry-run --json
-dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
-dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --json
-dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --json
-dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-open-options.json --json
-dating-boost harness tinder workflow new-match-read-profile --dry-run --options-json tinder-new-match-profile-options.json --json
-dating-boost harness tinder action open-conversation --options-json tinder-open-iris-options.json --json
-dating-boost harness tinder action dismiss-subscription-paywall --json
-dating-boost harness tinder action dismiss-feedback-survey --json
-dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id tinder --runtime default --json
+dating-boost harness doctor --app-id tinder --data-dir .local/dating-boost --json
+dating-boost harness tinder launch --dry-run --data-dir .local/dating-boost --json
+dating-boost harness tinder open-profile --dry-run --data-dir .local/dating-boost --json
+dating-boost harness tinder observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-open-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow new-match-read-profile --dry-run --options-json tinder-new-match-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder action open-conversation --options-json tinder-open-iris-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder action dismiss-subscription-paywall --data-dir .local/dating-boost --json
+dating-boost harness tinder action dismiss-feedback-survey --data-dir .local/dating-boost --json
+dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --data-dir .local/dating-boost --json
 ```
 
 Use `new-match-open` for an unopened match when the agent should enter one
@@ -177,12 +193,12 @@ If `harness tinder observe` or any send/navigation result reports
 `tinder_subscription_paywall`, `subscription_paywall_visible`, or
 `tinder_subscription_paywall_dismissed`, do not ask the user to confirm a
 subscription and do not discuss plans. Immediately run
-`dating-boost harness tinder action dismiss-subscription-paywall --json`, then
+`dating-boost harness tinder action dismiss-subscription-paywall --data-dir .local/dating-boost --json`, then
 re-navigate to the verified chats/conversation path. Subscription purchase or
 plan selection is never an agent action.
 
 If a Tinder feedback survey appears, run
-`dating-boost harness tinder action dismiss-feedback-survey --json`. This must
+`dating-boost harness tinder action dismiss-feedback-survey --data-dir .local/dating-boost --json`. This must
 use the ignore/no-rating path and report `rating_submitted: false`.
 
 ## macOS WeChat Harness
@@ -190,11 +206,12 @@ use the ignore/no-rating path and report `rating_submitted: false`.
 Use the desktop WeChat harness for macOS WeChat:
 
 ```bash
-dating-boost harness doctor --app-id wechat --window-title WeChat --json
-dating-boost harness wechat launch --dry-run --json
-dating-boost harness wechat observe --output-dir .local/dating-boost-harness --json
-dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json
-dating-boost harness wechat send-message --text-file wechat-draft.txt --dry-run --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id wechat --runtime default --json
+dating-boost harness doctor --app-id wechat --data-dir .local/dating-boost --window-title WeChat --json
+dating-boost harness wechat launch --data-dir .local/dating-boost --dry-run --json
+dating-boost harness wechat observe --data-dir .local/dating-boost --output-dir .local/dating-boost-harness --json
+dating-boost harness wechat stage-draft --text-file wechat-draft.txt --data-dir .local/dating-boost --dry-run --json
+dating-boost harness wechat send-message --text-file wechat-draft.txt --data-dir .local/dating-boost --dry-run --json
 ```
 
 Prefer `--text-file` so private draft text does not enter shell history or
@@ -257,8 +274,9 @@ Full-object management is global: managed-session/operator serially advances
 multiple candidates by opportunity priority. App runtimes execute only the
 current work item. Use high-throughput mode only for explicit link testing.
 For TaShuo local Mac iOS app managed sessions, pass
-`--harness-runtime mac-ios-app`; otherwise precheck uses the default iPhone
-Mirroring runtime.
+`--harness-runtime mac-ios-app`. If the current scope selected mac-ios-app and
+that flag is omitted, block with `runtime_scope_mismatch` instead of falling
+back to iPhone Mirroring.
 For real TaShuo mac-ios-app stage-only smoke, use
 `python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`.
 `managed-session run/tick` includes `relationship_progress_snapshot` for

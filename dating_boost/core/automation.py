@@ -274,15 +274,15 @@ class AutomationRepository:
 
     def latest_report(self) -> dict[str, Any]:
         path = self._latest_machine_report_path()
+        session = self._load_session_or_none()
+        if session and session.get("status") == "active":
+            return {
+                "schema_version": 1,
+                "status": "ok",
+                "machine_report_path": None,
+                "machine_report": _report_with_memory_display(self._active_machine_report(session)),
+            }
         if path is None:
-            session = self._load_session_or_none()
-            if session and session.get("status") == "active":
-                return {
-                    "schema_version": 1,
-                    "status": "ok",
-                    "machine_report_path": None,
-                    "machine_report": self._active_machine_report(session),
-                }
             return {"schema_version": 1, "status": "not_found"}
         report = _report_with_memory_display(self._refresh_report_current_state(self._storage.read_json(path, expected_schema_version=1)))
         return {

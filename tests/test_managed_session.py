@@ -254,6 +254,65 @@ class ManagedSessionTests(unittest.TestCase):
         self.assertEqual(payload["next_host_action"], "launch_or_focus_mac_ios_app_and_restart_managed_session")
         self.assertNotEqual(payload["next_host_action"], "enable_iphone_mirroring_and_restart_managed_session")
 
+    def test_selected_runtime_scope_blocks_managed_session_default_runtime_precheck(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            (data_dir / "runtime").mkdir(parents=True, exist_ok=True)
+            _write_json(data_dir / "runtime" / "session_scope.json", {
+                "schema_version": 1,
+                "status": "selected",
+                "selected_app_id": "tashuo",
+                "selected_runtime": "mac-ios-app",
+            })
+            calls = []
+
+            def harness_factory(app_id, runtime=None):
+                calls.append({"app_id": app_id, "runtime": runtime})
+                return FakeHarness(app_id=app_id)
+
+            repo = ManagedSessionRepository(data_dir, harness_factory=harness_factory)
+            payload = repo.start(
+                app_id="tashuo",
+                authorization=_auth("tashuo"),
+                goal=_json(FIXTURE_DIR / "goal_meet.json"),
+                availability=_json(FIXTURE_DIR / "availability_weekend.json"),
+                send_mode="stage",
+                managed_gui_send=False,
+            )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "runtime_scope_mismatch")
+        self.assertEqual(payload["selected_runtime"], "mac-ios-app")
+        self.assertEqual(payload["requested_runtime"], "default")
+        self.assertEqual(calls, [])
+
+    def test_tashuo_managed_session_requires_runtime_choice_before_default_precheck(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            calls = []
+
+            def harness_factory(app_id, runtime=None):
+                calls.append({"app_id": app_id, "runtime": runtime})
+                return FakeHarness(app_id=app_id)
+
+            repo = ManagedSessionRepository(data_dir, harness_factory=harness_factory)
+            payload = repo.start(
+                app_id="tashuo",
+                authorization=_auth("tashuo"),
+                goal=_json(FIXTURE_DIR / "goal_meet.json"),
+                availability=_json(FIXTURE_DIR / "availability_weekend.json"),
+                send_mode="stage",
+                managed_gui_send=False,
+            )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "runtime_scope_required")
+        self.assertEqual(payload["requested_app_id"], "tashuo")
+        self.assertEqual(payload["requested_runtime"], "default")
+        self.assertEqual(calls, [])
+
     def test_tashuo_mac_ios_runtime_recovery_action_comes_from_app_profile(self):
         profile = _json(Path("app_profiles") / "tashuo.json")
 

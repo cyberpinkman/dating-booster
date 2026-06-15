@@ -633,6 +633,12 @@ def stage_tashuo_draft(
             "requires_verified_tashuo_thread": True,
         },
         {
+            "intent": "clear_existing_tashuo_message_input_if_present",
+            "risk": "draft_staging_only",
+            "does_not_send": True,
+            "fallback_ok": True,
+        },
+        {
             "intent": "copy_draft_to_clipboard",
             "risk": "draft_staging_only",
             "does_not_send": True,
@@ -680,23 +686,32 @@ def stage_tashuo_draft(
         payload.update({"status": "blocked", "reason": previous_clipboard["reason"]})
         return payload
     payload.update(platform._text_fingerprint_fields("previous_clipboard", previous_clipboard.get("text", "")))
+    baseline = output_dir / "mac_ios_app.tashuo.before_stage_draft.baseline.png" if output_dir is not None else None
+    baseline_screen = session.capture_window(output=baseline, window=window)
+    payload["pre_stage_observation"] = platform._redacted_screen(baseline_screen)
 
     executed_steps: list[dict[str, Any]] = []
     copy_result = {"status": "not_run"}
     paste_result = {"status": "not_run"}
+    clear_result = {"status": "not_run"}
     try:
         click_result = session._click_ratio(window, planned_steps[0]["tap_ratio"])
         executed_steps.append({**planned_steps[0], "result": click_result})
         if click_result["status"] != "ok":
             payload.update({"status": "blocked", "reason": click_result["reason"]})
             return payload
+        clear_result = _clear_tashuo_ax_text_area(session)
+        payload["pre_stage_clear_result"] = clear_result
+        executed_steps.append({**planned_steps[1], "result": clear_result})
+        if clear_result.get("status") == "ok":
+            time.sleep(0.1)
         copy_result = session._copy_to_clipboard(draft_text)
-        executed_steps.append({**planned_steps[1], "result": copy_result})
+        executed_steps.append({**planned_steps[2], "result": copy_result})
         if copy_result["status"] != "ok":
             payload.update({"status": "blocked", "reason": copy_result["reason"]})
             return payload
         paste_result = session._paste_clipboard_into_frontmost_app(prefer_core_graphics_keyboard=True)
-        executed_steps.append({**planned_steps[2], "result": paste_result})
+        executed_steps.append({**planned_steps[3], "result": paste_result})
         if paste_result["status"] != "ok":
             payload.update({"status": "blocked", "reason": paste_result["reason"]})
             return payload
@@ -711,8 +726,9 @@ def stage_tashuo_draft(
         payload["staged_text_verification"] = _stage_only_tashuo_verification(
             delayed_screen,
             draft_text,
-            baseline_screen=doctor.get("screen") if isinstance(doctor.get("screen"), dict) else None,
+            baseline_screen=baseline_screen if isinstance(baseline_screen, dict) else None,
             first_screen=after_screen,
+            trusted_direct_input=clear_result.get("status") == "ok",
         )
         payload["staged_text_verified"] = payload["staged_text_verification"]["status"] == "verified"
         payload["next_host_action"] = "verify_staged_text_before_send"
@@ -1660,6 +1676,13 @@ def _verify_staged_tashuo_message(
         "visual_only_exact_verification_allowed": False,
         "screen": platform._redacted_screen(screen),
     }
+    possible_append_to_existing = (
+        bool(baseline_stats)
+        and int(baseline_stats.get("expected_text_occurrences") or 0) > 0
+        and int(observed_stats.get("text_character_count") or 0)
+        > int(baseline_stats.get("text_character_count") or 0) + max(4, len(expected_text) // 3)
+    )
+    result["possible_append_to_existing_staged_text"] = possible_append_to_existing
     if ax_text_area_value is not None and ax_text_area_value.get("status") != "ok":
         result["ax_text_area_status"] = ax_text_area_value.get("status")
         result["ax_text_area_reason"] = ax_text_area_value.get("reason")
@@ -1676,7 +1699,11 @@ def _verify_staged_tashuo_message(
         return {**result, "status": "blocked", "reason": "tashuo_conversation_not_verified"}
     if not (result["exact_text_ocr_verified"] or result["exact_text_ax_verified"]):
         return {**result, "status": "needs_verification", "reason": "staged_text_not_verified"}
+    if possible_append_to_existing and not trusted_direct_input and not result["exact_text_ax_verified"]:
+        return {**result, "status": "needs_verification", "reason": "staged_text_may_have_been_appended"}
     if not result["exact_text_ax_verified"] and baseline_stats and observed_stats["expected_text_occurrences"] <= baseline_stats["expected_text_occurrences"]:
+        if trusted_direct_input:
+            return {**result, "status": "ok"}
         return {**result, "status": "needs_verification", "reason": "staged_text_not_newly_visible"}
     return {**result, "status": "ok"}
 
@@ -2055,8 +2082,14 @@ def _stage_only_tashuo_verification(
     *,
     baseline_screen: dict[str, Any] | None = None,
     first_screen: dict[str, Any] | None = None,
+    trusted_direct_input: bool = False,
 ) -> dict[str, Any]:
-    low_level = _verify_staged_tashuo_message(screen, expected_text, baseline_screen=baseline_screen)
+    low_level = _verify_staged_tashuo_message(
+        screen,
+        expected_text,
+        baseline_screen=baseline_screen,
+        trusted_direct_input=trusted_direct_input,
+    )
     observed_text = str(screen.get("text") or "")
     baseline_text = str(baseline_screen.get("text") or "") if isinstance(baseline_screen, dict) else ""
     first_text = str(first_screen.get("text") or "") if isinstance(first_screen, dict) else ""
@@ -2071,6 +2104,7 @@ def _stage_only_tashuo_verification(
         "screen_text_character_count": len(observed_text),
         "baseline_text_character_count": len(baseline_text),
         "first_screen_text_character_count": len(first_text),
+        "trusted_direct_input": trusted_direct_input,
     }
     if low_level.get("status") == "ok":
         return {**evidence, "status": "verified"}

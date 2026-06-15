@@ -181,6 +181,30 @@ class OpenClawAdapterTests(unittest.TestCase):
             self.assertTrue((target_path / "adapter-package.json").exists())
             self.assertTrue((target_path / "references" / "contracts.md").exists())
 
+    def test_adapter_openclaw_install_removes_stale_target_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target_path = root / ".openclaw" / "skills" / "dating-booster"
+            stale_file = target_path / "references" / "old-workflow.md"
+            stale_file.parent.mkdir(parents=True)
+            stale_file.write_text("old workflow draft path", encoding="utf-8")
+
+            install_exit, install_payload = self._run_cli([
+                "adapter",
+                "openclaw",
+                "install",
+                "--scope",
+                "project",
+                "--target",
+                str(root),
+                "--json",
+            ])
+
+            self.assertEqual(install_exit, 0)
+            self.assertEqual(install_payload["status"], "ok")
+            self.assertFalse(stale_file.exists())
+            self.assertTrue((target_path / "SKILL.md").exists())
+
     def test_adapter_hermes_install_uses_openclaw_compatible_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

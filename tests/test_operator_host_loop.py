@@ -11,7 +11,7 @@ from pathlib import Path
 import shutil
 
 from dating_boost.cli import main
-from dating_boost.host_loop import HostLoopCommandError, HostLoopSupervisor, _target_binding_for_work_item, _thread_template
+from dating_boost.host_loop import HostLoopCommandError, HostLoopError, HostLoopSupervisor, _target_binding_for_work_item, _thread_template
 from dating_boost.perception.observations import AppObservation
 
 
@@ -240,6 +240,283 @@ class OperatorHostLoopTests(unittest.TestCase):
             ]
             self.assertEqual(stage_events[0]["result_status"], "succeeded")
             self.assertIn("without recording send result", payload["stop_reason"])
+
+    def test_tashuo_mac_ios_stage_mode_runs_harness_stage_draft_and_preserves_stage_evidence(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            work_dir = root / "work"
+            auth_path = root / "tashuo_auth.json"
+            payload_text = "是，感觉你这作息已经是夜间型选手了哈哈"
+            payload_hash = hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
+            self._write_json(auth_path, {
+                "schema_version": 1,
+                "authorization_id": "auth_tashuo_stage",
+                "scope": "send_chat_messages",
+                "app_id": "tashuo",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "allowed_actions": ["send_message"],
+                "autonomous_send": True,
+                "requires_post_action_verification": True,
+                "revoked_at": None,
+            })
+            supervisor = HostLoopSupervisor(
+                argparse.Namespace(
+                    data_dir=data_dir,
+                    authorization=auth_path,
+                    goal=None,
+                    availability=None,
+                    app_id="tashuo",
+                    send_mode="stage",
+                    managed_gui_send=False,
+                    harness_runtime="mac-ios-app",
+                    work_dir=work_dir,
+                    max_steps=1,
+                    once=True,
+                    json=True,
+                    fixture_host=None,
+                    wait_timeout=None,
+                    poll_interval=1.0,
+                    adapter_package=None,
+                    skill_package=None,
+                    initial_surface="message-list",
+                    management_mode="conservative",
+                    max_threads_per_cycle=1,
+                    max_pages_per_cycle=1,
+                    cycle_send_limit=1,
+                )
+            )
+            work_dir.mkdir(parents=True, exist_ok=True)
+            work_item = _wechat_managed_work_item(payload_text, payload_hash)
+            work_item.update({
+                "work_item_id": "work_tashuo_stage",
+                "action_request_id": "act_tashuo_stage",
+                "match_id": "match_tashuo",
+                "candidate_key": "tashuo_xiaoyaowan",
+                "autonomous_audit_binding": _audit_binding(
+                    authorization_id="auth_tashuo_stage",
+                    target_match_id="match_tashuo",
+                    payload_hash=payload_hash,
+                ),
+                "target_binding": {
+                    "binding_type": "current_thread_visual_identity",
+                    "target_match_id": "match_tashuo",
+                    "candidate_key": "tashuo_xiaoyaowan",
+                    "visible_name": "小药丸儿",
+                    "visual_anchor_hash": "0123456789abcdef",
+                    "uses_header_ocr": False,
+                },
+            })
+            recorded_result: dict[str, object] = {}
+            stage_commands: list[tuple[str, ...]] = []
+
+            def fake_run_cli_json(*args: str, allow_error: bool = False, **kwargs: object) -> dict[str, object]:
+                if args[:3] == ("harness", "tashuo", "stage-draft"):
+                    stage_commands.append(args)
+                    self.assertIn("--runtime", args)
+                    self.assertEqual(args[args.index("--runtime") + 1], "mac-ios-app")
+                    text_path = Path(args[args.index("--text-file") + 1])
+                    self.assertEqual(text_path.read_text(encoding="utf-8"), payload_text)
+                    self.assertIn("--data-dir", args)
+                    return {
+                        "schema_version": 2,
+                        "status": "ok",
+                        "action": "stage_draft",
+                        "app_id": "tashuo",
+                        "harness_backend": "mac_ios_app",
+                        "stage_attempt_status": "completed",
+                        "staged_text_verified": True,
+                        "staged_text_verification": {
+                            "status": "verified",
+                            "expected_payload_hash": payload_hash,
+                            "expected_character_count": len(payload_text),
+                            "screen_exact_text_ocr_verified": True,
+                            "exact_text_ocr_verified": True,
+                            "exact_text_ax_verified": False,
+                            "screen": {
+                                "path": str(work_dir / "harness" / "mac_ios_app.tashuo.after_stage_draft.delayed.png"),
+                                "state": "tashuo_conversation",
+                                "status": "ok",
+                            },
+                        },
+                    }
+                if args[:2] == ("operator", "record-stage-result"):
+                    result_path = Path(args[args.index("--input") + 1])
+                    recorded_result.update(json.loads(result_path.read_text(encoding="utf-8")))
+                    return {
+                        "schema_version": 1,
+                        "status": "ok",
+                        "event_id": "stage_result_test",
+                        "action_request_id": recorded_result["action_request_id"],
+                        "result_status": recorded_result["result_status"],
+                        "path": "audit/stage_results.jsonl",
+                    }
+                raise AssertionError(args)
+
+            with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                result = supervisor._handle_send_message(work_item)
+
+        self.assertEqual(result["status"], "staged_waiting_user_confirmation")
+        self.assertEqual(len(stage_commands), 1)
+        self.assertEqual(recorded_result["result_status"], "succeeded")
+        self.assertEqual(recorded_result["stage_attempt_status"], "completed")
+        self.assertEqual(recorded_result["staged_text_verification"]["status"], "verified")
+        self.assertTrue(recorded_result["staged_text_verification"]["screen_exact_text_ocr_verified"])
+        self.assertIn("screenshot_ref", recorded_result)
+        self.assertFalse(recorded_result["evidence"]["sent"])
+        self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+
+    def test_host_loop_preflight_blocks_selected_runtime_scope_mismatch_before_cli_calls(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            work_dir = Path(temp_dir) / "work"
+            (data_dir / "runtime").mkdir(parents=True, exist_ok=True)
+            self._write_json(data_dir / "runtime" / "session_scope.json", {
+                "schema_version": 1,
+                "status": "selected",
+                "selected_app_id": "tashuo",
+                "selected_runtime": "mac-ios-app",
+            })
+            supervisor = HostLoopSupervisor(
+                argparse.Namespace(
+                    data_dir=data_dir,
+                    authorization=None,
+                    goal=None,
+                    availability=None,
+                    app_id="tashuo",
+                    send_mode="stage",
+                    managed_gui_send=False,
+                    harness_runtime=None,
+                    work_dir=work_dir,
+                    max_steps=1,
+                    once=True,
+                    json=True,
+                    fixture_host=None,
+                    wait_timeout=None,
+                    poll_interval=1.0,
+                    adapter_package=None,
+                    skill_package=None,
+                    initial_surface="message-list",
+                    management_mode="conservative",
+                    max_threads_per_cycle=1,
+                    max_pages_per_cycle=1,
+                    cycle_send_limit=1,
+                )
+            )
+            cli_calls = []
+
+            def fake_run_cli_json(*args: str, **kwargs: object) -> dict[str, object]:
+                cli_calls.append(args)
+                return {"schema_version": 1, "status": "ok"}
+
+            with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                with self.assertRaises(HostLoopError) as raised:
+                    supervisor._preflight()
+
+        self.assertIn("runtime_scope_mismatch", str(raised.exception))
+        self.assertEqual(cli_calls, [])
+
+    def test_tashuo_host_loop_preflight_requires_runtime_choice_before_cli_calls(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            work_dir = Path(temp_dir) / "work"
+            supervisor = HostLoopSupervisor(
+                argparse.Namespace(
+                    data_dir=data_dir,
+                    authorization=None,
+                    goal=None,
+                    availability=None,
+                    app_id="tashuo",
+                    send_mode="stage",
+                    managed_gui_send=False,
+                    harness_runtime=None,
+                    work_dir=work_dir,
+                    max_steps=1,
+                    once=True,
+                    json=True,
+                    fixture_host=None,
+                    wait_timeout=None,
+                    poll_interval=1.0,
+                    adapter_package=None,
+                    skill_package=None,
+                    initial_surface="message-list",
+                    management_mode="conservative",
+                    max_threads_per_cycle=1,
+                    max_pages_per_cycle=1,
+                    cycle_send_limit=1,
+                )
+            )
+            cli_calls = []
+
+            def fake_run_cli_json(*args: str, **kwargs: object) -> dict[str, object]:
+                cli_calls.append(args)
+                return {"schema_version": 1, "status": "ok"}
+
+            with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                with self.assertRaises(HostLoopError) as raised:
+                    supervisor._preflight()
+
+        self.assertIn("runtime_scope_required", str(raised.exception))
+        self.assertEqual(cli_calls, [])
+
+    def test_resume_send_work_item_starts_operator_session_before_handling(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            work_dir = root / "work"
+            auth_path = root / "auth.json"
+            self._write_json(auth_path, {"schema_version": 1, "authorization_id": "auth_resume"})
+            work_dir.mkdir(parents=True, exist_ok=True)
+            work_item = _wechat_managed_work_item("hello", hashlib.sha256("hello".encode("utf-8")).hexdigest())
+            work_item["work_item_id"] = "work_resume_send"
+            self._write_json(work_dir / "current_work_item.json", work_item)
+            supervisor = HostLoopSupervisor(
+                argparse.Namespace(
+                    data_dir=data_dir,
+                    authorization=auth_path,
+                    goal=None,
+                    availability=None,
+                    app_id="tashuo",
+                    send_mode="stage",
+                    managed_gui_send=False,
+                    harness_runtime="mac-ios-app",
+                    work_dir=work_dir,
+                    max_steps=1,
+                    once=True,
+                    json=True,
+                    fixture_host=None,
+                    wait_timeout=0,
+                    poll_interval=1.0,
+                    adapter_package=None,
+                    skill_package=None,
+                    initial_surface="current-thread",
+                    management_mode="conservative",
+                    max_threads_per_cycle=1,
+                    max_pages_per_cycle=1,
+                    cycle_send_limit=1,
+                )
+            )
+            calls: list[object] = []
+
+            def fake_start() -> dict[str, object]:
+                calls.append("start")
+                return {"schema_version": 1, "status": "active", "session_id": "session_resume"}
+
+            def fake_handle(current: dict[str, object]) -> dict[str, object]:
+                calls.append(("handle", supervisor.operator_session_active, current.get("work_item_id")))
+                return supervisor._finish("staged_waiting_user_confirmation", "stage_resume_test", current=current)
+
+            with (
+                patch.object(supervisor, "_preflight", lambda: None),
+                patch.object(supervisor, "_operator_session_status", return_value=None),
+                patch.object(supervisor, "_start_operator_session", side_effect=fake_start),
+                patch.object(supervisor, "_handle_send_message", side_effect=fake_handle),
+            ):
+                payload, exit_code = supervisor.run(resume=True)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "staged_waiting_user_confirmation")
+        self.assertEqual(calls, ["start", ("handle", True, "work_resume_send")])
 
     def test_fixture_host_loop_current_thread_start_does_not_return_to_message_list_before_staging(self):
         with tempfile.TemporaryDirectory() as temp_dir:

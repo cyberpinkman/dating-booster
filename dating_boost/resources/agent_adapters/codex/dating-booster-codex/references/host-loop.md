@@ -16,24 +16,27 @@ post-action evidence before any managed send is recorded.
 Run doctor first:
 
 ```bash
-dating-boost harness doctor --app-id tinder --json
-dating-boost harness tinder launch --dry-run --json
-dating-boost harness tinder open-profile --dry-run --json
-dating-boost harness tinder open-profile --launch-if-needed --json
-dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
-dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --json
-dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --json
-dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-open-options.json --json
-dating-boost harness tinder workflow new-match-read-profile --dry-run --options-json tinder-new-match-profile-options.json --json
-dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
-dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
-dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --json
-dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --json
-dating-boost harness tashuo observe --output-dir .local/dating-boost-harness --json
-dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options-json tashuo-chat-profile-options.json --json
-dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
-dating-boost harness tashuo action prepare-message-page --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
-dating-boost harness tashuo stage-draft --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id tinder --runtime default --json
+dating-boost harness doctor --app-id tinder --data-dir .local/dating-boost --json
+dating-boost harness tinder launch --dry-run --data-dir .local/dating-boost --json
+dating-boost harness tinder open-profile --dry-run --data-dir .local/dating-boost --json
+dating-boost harness tinder open-profile --launch-if-needed --data-dir .local/dating-boost --json
+dating-boost harness tinder observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-open-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow new-match-read-profile --dry-run --options-json tinder-new-match-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --data-dir .local/dating-boost --json
+dating-boost runtime clear --data-dir .local/dating-boost --reason user_requested_target_switch --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id bumble --runtime default --json
+dating-boost harness bumble observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --data-dir .local/dating-boost --json
+dating-boost runtime clear --data-dir .local/dating-boost --reason user_requested_target_switch --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
+dating-boost harness tashuo observe --data-dir .local/dating-boost --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo action prepare-message-page --data-dir .local/dating-boost --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo stage-draft --data-dir .local/dating-boost --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
 dating-boost-host-loop doctor \
   --data-dir .local/dating-boost \
   --app-id tinder \
@@ -92,7 +95,10 @@ dating-boost-host-loop run \
 ```
 
 TaShuo mac-ios-app managed live send uses the same host-loop gate with the
-runtime selected explicitly:
+runtime selected explicitly. The data-dir must already be scoped with
+`dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo
+--runtime mac-ios-app --json`; mismatched app/runtime requests block with
+`runtime_scope_mismatch` before any GUI adapter is created.
 
 ```bash
 dating-boost-host-loop run \

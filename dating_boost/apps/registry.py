@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +82,11 @@ def create_adapter(
     adapter_cls = _ADAPTER_CLASSES.get(app_id)
     if adapter_cls is None:
         raise KeyError(app_id)
+    if _real_gui_adapter_disabled_for_tests(runner=runner):
+        raise RuntimeError(
+            "real_gui_adapter_disabled_in_tests: pass a fake runner/session or set "
+            "DATING_BOOST_ALLOW_REAL_GUI_TESTS=1 for an explicit real-device test"
+        )
     return adapter_cls(
         manifest=manifest_for_app(app_id),
         platform=platform,
@@ -88,6 +94,14 @@ def create_adapter(
         window_title=window_title,
         runtime=runtime,
     )
+
+
+def _real_gui_adapter_disabled_for_tests(*, runner: Any | None) -> bool:
+    if runner is not None:
+        return False
+    if os.environ.get("DATING_BOOST_ALLOW_REAL_GUI_TESTS") == "1":
+        return False
+    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
 
 def target_binding_policy(app_id: str) -> dict[str, Any]:

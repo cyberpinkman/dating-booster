@@ -470,6 +470,60 @@ class OperatorSessionTests(unittest.TestCase):
             self.assertEqual(states[0]["state"], "staged_pending_user")
             self.assertEqual(states[0]["last_stage_result_event_id"], stage_payload["event_id"])
 
+    def test_operator_record_results_without_session_do_not_append_audit_events(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            action_result_path = Path(temp_dir) / "action_result.json"
+            stage_result_path = Path(temp_dir) / "stage_result.json"
+            self._write_json(
+                action_result_path,
+                {
+                    "action_request_id": "action_without_session",
+                    "action": "send_message",
+                    "target_match_id": "match_without_session",
+                    "payload_hash": "payload_without_session",
+                    "post_action_observation_id": "obs_without_session_sent",
+                    "result_status": "succeeded",
+                    "evidence": {"post_send_visible_text": "hello"},
+                },
+            )
+            self._write_json(
+                stage_result_path,
+                {
+                    "action_request_id": "stage_without_session",
+                    "target_match_id": "match_without_session",
+                    "payload_hash": "payload_without_session",
+                    "result_status": "succeeded",
+                    "staged_text_verified": True,
+                    "staged_text_verification": {"status": "verified"},
+                    "evidence": {"sent": False},
+                },
+            )
+
+            action_exit, action_payload, _ = self._run([
+                "operator",
+                "record-action-result",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(action_result_path),
+            ])
+            stage_exit, stage_payload, _ = self._run([
+                "operator",
+                "record-stage-result",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(stage_result_path),
+            ])
+
+            self.assertEqual(action_exit, 2)
+            self.assertEqual(stage_exit, 2)
+            self.assertEqual(action_payload["reason"], "operator session has not been started")
+            self.assertEqual(stage_payload["reason"], "operator session has not been started")
+            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+            self.assertFalse((data_dir / "audit" / "stage_results.jsonl").exists())
+
     def test_current_thread_target_profile_supplement_does_not_require_message_list(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
@@ -1039,6 +1093,67 @@ class OperatorSessionTests(unittest.TestCase):
 
             self.assertEqual(next_exit, 0)
             self.assertEqual(next_payload["work_item"]["work_item_type"], "scan_message_list")
+
+    def test_operator_report_latest_prefers_active_session_over_stale_machine_report(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            report_dir = data_dir / "automation" / "reports"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            stale_report = {
+                "schema_version": 1,
+                "session_id": "session_stale_previous_run",
+                "authorization_id": "auth_stale",
+                "started_at": "2026-05-25T00:00:00Z",
+                "stopped_at": "2026-05-25T00:05:00Z",
+                "summary": {
+                    "match_count": 0,
+                    "new_match_count": 0,
+                    "action_request_count": 0,
+                    "staged_pending_user_count": 0,
+                    "waiting_count": 0,
+                    "nudge_count": 0,
+                    "handoff_count": 0,
+                    "slot_count": 0,
+                    "slot_conflict_count": 0,
+                    "user_profile_ready": True,
+                    "disclosure_usage_count": 0,
+                    "low_investment_repair_count": 0,
+                    "paused_due_to_low_reciprocity": 0,
+                },
+                "user_profile_readiness": {},
+                "memory_review": {"required": False, "pending_count": 0, "items": []},
+                "states": [],
+                "conversation_plans": [],
+                "appointment_ledger": [],
+                "next_priority_queue": [],
+            }
+            (report_dir / "machine_latest.json").write_text(json.dumps(stale_report), encoding="utf-8")
+            (report_dir / "human_latest.md").write_text("# stale\n", encoding="utf-8")
+            start_exit, start_payload, _ = self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+
+            report_exit, report_payload, _ = self._run([
+                "operator",
+                "report",
+                "latest",
+                "--data-dir",
+                str(data_dir),
+                "--json",
+            ])
+
+            self.assertEqual(start_exit, 0)
+            self.assertEqual(report_exit, 0)
+            self.assertEqual(report_payload["automation_report"]["session_id"], start_payload["session_id"])
+            self.assertEqual(report_payload["automation_report"]["report_status"], "active")
+            self.assertIsNone(report_payload["automation_report"]["stopped_at"])
 
     def _init_profile(self, data_dir):
         self._run([

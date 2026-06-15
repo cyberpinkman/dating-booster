@@ -69,9 +69,12 @@ investment.
 Conservative mode is the production default. High-throughput mode is only for
 explicit link testing and must not bypass authorization, target binding, staged
 text verification, or post-send verification.
-When TaShuo is being managed through the local Mac iOS app, pass
-`--harness-runtime mac-ios-app`; otherwise precheck uses the app profile default
-runtime, currently iPhone Mirroring.
+Before real GUI work, select the target app/runtime in the data dir with
+`runtime select`. Harness, host-loop, and managed-session commands in that data
+dir must keep the same app/runtime. When TaShuo is being managed through the
+local Mac iOS app, pass `--harness-runtime mac-ios-app`; if a selected
+mac-ios-app scope receives a default-runtime request, it must block with
+`runtime_scope_mismatch` instead of falling back to iPhone Mirroring.
 
 `scan_message_list` work items include:
 

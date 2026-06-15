@@ -17,6 +17,7 @@ from dating_boost.core.operator import (
     OperatorRepository,
 )
 from dating_boost.core.relationship_report import RELATIONSHIP_PROGRESS_NEXT_ACTION
+from dating_boost.core.runtime_scope import RuntimeScopeRepository
 from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.storage import JsonStorage
 
@@ -80,6 +81,14 @@ class ManagedSessionRepository:
                 return _payload("blocked", reason=str(exc), app_id=app_id)
         if availability is not None:
             self._automation.save_availability(availability)
+        runtime_scope = RuntimeScopeRepository(self.root).ensure_selected(
+            app_id=app_id,
+            runtime=normalized_runtime,
+            source="managed_session_start",
+            require_explicit_runtime_choice=True,
+        )
+        if runtime_scope.get("status") == "blocked":
+            return runtime_scope
         app_check = self._app_precheck(app_id, runtime=normalized_runtime)
         operator_start = self._operator.start_session(authorization, **session_config)
         if operator_start.get("status") != "active":
@@ -127,6 +136,7 @@ class ManagedSessionRepository:
             "last_status": initial_status,
             "wake_event_cursor": _wake_event_count(self.root, app_id=app_id),
             "wake_event_cursor_app_id": app_id,
+            "runtime_scope": runtime_scope,
         }
         self._write_session(session)
         stopped_operator = None
@@ -235,6 +245,22 @@ class ManagedSessionRepository:
                 relationship_progress_snapshot=relationship_snapshot,
             )
 
+        runtime_scope = RuntimeScopeRepository(self.root).ensure_selected(
+            app_id=app_id,
+            runtime=runtime,
+            source="managed_session_tick",
+            require_explicit_runtime_choice=True,
+        )
+        if runtime_scope.get("status") == "blocked":
+            session["last_runtime_scope"] = runtime_scope
+            self._write_session(session)
+            return {
+                **runtime_scope,
+                "app_id": app_id,
+                "session": session,
+                "relationship_progress_snapshot": relationship_snapshot,
+            }
+        session["runtime_scope"] = runtime_scope
         app_check = self._app_precheck(app_id, runtime=runtime)
         session["last_app_precheck"] = app_check
         if app_check["status"] != "ok":

@@ -83,6 +83,15 @@ dating-boost support session start --data-dir .local/dating-boost --host codex -
 
 把返回的 `session_id` 用于后续 support bundle。严格 bundle 默认不含 raw chat、raw profile、截图、剪贴板内容或完整草稿。
 
+启动托管或真实 GUI 操作前，必须在同一个 `data-dir` 里选择目标 app/runtime：
+
+```bash
+dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
+dating-boost runtime status --data-dir .local/dating-boost --json
+```
+
+选择后，本次 session 的 harness、host-loop、managed-session 只能使用同一个 app/runtime。所有真实 GUI harness 命令都传同一个 `--data-dir`；如果命令请求了其他 app，或 TaShuo 漏传 `--runtime mac-ios-app` 导致请求 default runtime，CLI 必须返回 `runtime_scope_mismatch`，不得创建 adapter、不得唤起 iPhone Mirroring、微信或其他无关 app。只有用户明确切换目标时，才运行 `dating-boost runtime clear --data-dir .local/dating-boost --json` 后重新 select。
+
 ## 当前 app 语义
 
 | App | 当前用途 | Harness |
@@ -128,16 +137,17 @@ dating-boost policy check-draft --input draft.json --context context.json
 ## Tinder quick path
 
 ```bash
-dating-boost harness doctor --app-id tinder --json
-dating-boost harness tinder launch --dry-run --json
-dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
-dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --json
-dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --json
-dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-options.json --json
-dating-boost harness tinder workflow new-match-read-profile --dry-run --options-json tinder-new-match-profile-options.json --json
-dating-boost harness tinder action open-conversation --options-json tinder-open-conversation-options.json --json
-dating-boost harness tinder action dismiss-subscription-paywall --json
-dating-boost harness tinder action dismiss-feedback-survey --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id tinder --runtime default --json
+dating-boost harness doctor --app-id tinder --data-dir .local/dating-boost --json
+dating-boost harness tinder launch --dry-run --data-dir .local/dating-boost --json
+dating-boost harness tinder observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow new-match-read-profile --dry-run --options-json tinder-new-match-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder action open-conversation --options-json tinder-open-conversation-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder action dismiss-subscription-paywall --data-dir .local/dating-boost --json
+dating-boost harness tinder action dismiss-feedback-survey --data-dir .local/dating-boost --json
 ```
 
 `chat-read-match-profile` 只用于已有消息行。`new-match-open` 打开未开聊匹配并停在会话页。`new-match-read-profile` 读取未开聊匹配资料后回到当前会话。
@@ -147,13 +157,14 @@ dating-boost harness tinder action dismiss-feedback-survey --json
 ## Bumble quick path
 
 ```bash
-dating-boost harness doctor --app-id bumble --json
-dating-boost harness bumble launch --dry-run --json
-dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
-dating-boost harness bumble action open-chats --dry-run --json
-dating-boost harness bumble workflow browse-profile-read --dry-run --options-json bumble-profile-options.json --json
-dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --json
-dating-boost harness bumble workflow opening-move-open --dry-run --options-json bumble-opening-move-options.json --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id bumble --runtime default --json
+dating-boost harness doctor --app-id bumble --data-dir .local/dating-boost --json
+dating-boost harness bumble launch --dry-run --data-dir .local/dating-boost --json
+dating-boost harness bumble observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
+dating-boost harness bumble action open-chats --dry-run --data-dir .local/dating-boost --json
+dating-boost harness bumble workflow browse-profile-read --dry-run --options-json bumble-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness bumble workflow opening-move-open --dry-run --options-json bumble-opening-move-options.json --data-dir .local/dating-boost --json
 ```
 
 Opening Move 是 role-sensitive：女性用户场景下 agent 不决定是否启用/跳过，也不判断男性回复是否足够好；男性用户场景下可以为用户 review 起草 Opening Move 回复。
@@ -161,20 +172,22 @@ Opening Move 是 role-sensitive：女性用户场景下 agent 不决定是否启
 ## TaShuo quick path
 
 ```bash
-dating-boost harness doctor --app-id tashuo --json
-dating-boost harness tashuo launch --dry-run --json
-dating-boost harness tashuo observe --output-dir .local/dating-boost-harness --json
-dating-boost harness tashuo action open-chats --dry-run --json
-dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options-json tashuo-chat-profile-options.json --json
-dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime default --json
+dating-boost harness doctor --app-id tashuo --data-dir .local/dating-boost --json
+dating-boost harness tashuo launch --data-dir .local/dating-boost --dry-run --json
+dating-boost harness tashuo observe --data-dir .local/dating-boost --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo action open-chats --data-dir .local/dating-boost --dry-run --json
+dating-boost harness tashuo workflow chat-read-match-profile --data-dir .local/dating-boost --dry-run --options-json tashuo-chat-profile-options.json --json
+dating-boost harness tashuo workflow question-gate-open --data-dir .local/dating-boost --dry-run --options-json tashuo-question-gate-options.json --json
 ```
 
 Apple Silicon Mac 上如果用户已经安装并登录 Mac App Store 的她说 iOS app，可优先试验本地 `mac-ios-app` runtime。该 runtime 不占用真实手机，当前支持 launch/observe/prepare-message-page/stage-draft，以及受托管 live-send gate 保护的普通聊天 `send-message`。`send-message --runtime mac-ios-app` 仍是 executor-internal 路径，只能消费系统生成的 action request 或确认流结果；发送前必须有结构化目标绑定、exact staged-text verification，发送后必须有 input-cleared 和 outbound exact-text verification。question-gate staging/sending 仍不支持。
 
 ```bash
-dating-boost harness doctor --app-id tashuo --runtime mac-ios-app --json
-dating-boost harness tashuo action prepare-message-page --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
-dating-boost harness tashuo stage-draft --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
+dating-boost harness doctor --app-id tashuo --data-dir .local/dating-boost --runtime mac-ios-app --json
+dating-boost harness tashuo action prepare-message-page --data-dir .local/dating-boost --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo stage-draft --data-dir .local/dating-boost --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
 ```
 
 `prepare-message-page` 会打开 TaShuo Mac iOS app，用底部 tab 的视觉高亮判断当前一级页；如果不在 `消息` 页，只点击底部 `消息` tab。进入消息页后停止固定坐标流程，返回 `next_host_action=visual_plan_message_list`，后续由 host agent 进行视觉分析和规划，不要先跑 OCR 再回退视觉，也不要用固定 row 坐标直接进入聊天线程。
@@ -196,10 +209,11 @@ TaShuo 启动搜索使用 `tashu` 并通过截图/OCR 确认 `她说` 或 `TaShu
 ## WeChat quick path
 
 ```bash
-dating-boost harness doctor --app-id wechat --window-title WeChat --json
-dating-boost harness wechat launch --dry-run --json
-dating-boost harness wechat observe --output-dir .local/dating-boost-harness --json
-dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id wechat --runtime default --json
+dating-boost harness doctor --app-id wechat --data-dir .local/dating-boost --window-title WeChat --json
+dating-boost harness wechat launch --data-dir .local/dating-boost --dry-run --json
+dating-boost harness wechat observe --data-dir .local/dating-boost --output-dir .local/dating-boost-harness --json
+dating-boost harness wechat stage-draft --text-file wechat-draft.txt --data-dir .local/dating-boost --dry-run --json
 ```
 
 微信 stage 使用剪贴板把已通过 policy check 的草稿放入当前输入框；stage mode 不按 Enter、不点击 Send。真实 staging 必须传 `--data-dir`，让全局 safety pause 能阻断 paste。
@@ -207,6 +221,8 @@ dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run -
 ## Managed session
 
 `managed-session` 只在用户显式启动后的当前托管窗口内运行。Session 外不监听、不扫描、不自动回复。全对象自动管理是全局 `managed-session`/`operator` 能力：runner 按机会窗口优先级串行处理多个对象，runtime 只执行当前 work item，不决定全局优先级。
+
+启动前先选择目标 app/runtime；`managed-session start` 会校验并写入同一个 runtime scope。运行中不能从 TaShuo mac-ios-app 自动漂移到默认 iPhone Mirroring，也不能切到微信等其他 app。
 
 ```bash
 dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --json
@@ -217,7 +233,7 @@ dating-boost managed-session stop --data-dir .local/dating-boost --json
 ```
 
 生产默认 `--management-mode conservative`；真实链路压测可显式使用 `--management-mode high-throughput --max-threads-per-cycle N --max-pages-per-cycle N --cycle-send-limit N`。高吞吐只提高每轮扫描/处理预算，不绕过授权、target binding、staged-text verification 或 post-send verification。
-TaShuo 本地 iOS app 托管必须显式传 `--harness-runtime mac-ios-app`，否则 session precheck 使用 app profile 默认 iPhone Mirroring runtime。
+TaShuo 本地 iOS app 托管必须显式传 `--harness-runtime mac-ios-app`。如果当前 `runtime select` 已选择 mac-ios-app 而命令漏传 runtime，会被 `runtime_scope_mismatch` 阻断，不允许回落到默认 iPhone Mirroring runtime。
 `managed-session run/tick` 返回 `relationship_progress_snapshot`，用于 host 展示本轮全对象状态摘要、下一优先队列和每个对象下一步；`managed-session stop` 和 host-loop final response 返回用户可读 `relationship_progress_report`。
 
 当 `managed-session run --wait` 返回 `host_work_required`，host agent 处理其中的 operator work item。如果用 host-loop supervisor 处理，使用同一个 data/work dir 运行：

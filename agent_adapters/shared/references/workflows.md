@@ -69,8 +69,11 @@ queue: it serially advances multiple candidates by opportunity priority and uses
 cursor-based message-list scans. App runtimes must only execute the current work
 item. `--management-mode high-throughput` is for explicit testing and never
 bypasses send gates.
-For TaShuo local Mac iOS app sessions, pass `--harness-runtime mac-ios-app`;
-without it, precheck uses the app profile default iPhone Mirroring runtime.
+Before real GUI work, select the target app/runtime with `runtime select` and
+keep all harness, host-loop, and managed-session work inside that selected
+scope. For TaShuo local Mac iOS app sessions, pass `--harness-runtime
+mac-ios-app`; if that flag is omitted under a mac-ios-app scope, the run must
+block with `runtime_scope_mismatch` instead of falling back to iPhone Mirroring.
 For real TaShuo mac-ios-app stage-only smoke, use
 `python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`.
 `managed-session run/tick` returns `relationship_progress_snapshot` for

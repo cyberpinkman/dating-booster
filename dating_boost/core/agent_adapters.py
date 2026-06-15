@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from importlib import resources
 import json
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, ContextManager
@@ -50,9 +51,7 @@ def install_claude_code_adapter(*, scope: str, target: Path | None, dry_run: boo
     if dry_run:
         return payload
 
-    for source, destination in planned_files:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(source.read_bytes())
+    _write_clean_install(target_path, planned_files)
     return payload
 
 
@@ -96,9 +95,7 @@ def install_openclaw_adapter(
     if dry_run:
         return payload
 
-    for source, destination in planned_files:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(source.read_bytes())
+    _write_clean_install(target_path, planned_files)
     return payload
 
 
@@ -131,10 +128,16 @@ def install_codex_adapter(*, scope: str, target: Path | None, dry_run: bool) -> 
     if dry_run:
         return payload
 
+    _write_clean_install(target_path, planned_files)
+    return payload
+
+
+def _write_clean_install(target_path: Path, planned_files: list[tuple[Any, Path]]) -> None:
+    if target_path.exists():
+        shutil.rmtree(target_path)
     for source, destination in planned_files:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(source.read_bytes())
-    return payload
 
 
 def run_openclaw_adapter_doctor(data_dir: Path, *, target_host: str = "openclaw") -> dict[str, Any]:

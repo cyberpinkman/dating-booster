@@ -15,20 +15,20 @@ agent and uses iPhone Mirroring only for observe, paste, and verify.
    reports `encryption.status: encrypted`.
 6. Run `dating-boost safety status --data-dir .local/dating-boost --json` and
    stop if it is paused.
-7. For Tinder, run `dating-boost harness doctor --app-id tinder --json` and
+7. Select the target runtime before app-specific checks. For Tinder, run `dating-boost runtime select --data-dir .local/dating-boost --app-id tinder --runtime default --json`, then `dating-boost harness doctor --app-id tinder --data-dir .local/dating-boost --json` and
    stop if iPhone Mirroring is locked, unavailable, or cannot be
-   screenshot/OCR checked. For macOS WeChat, run
-   `dating-boost harness doctor --app-id wechat --window-title WeChat --json`
+   screenshot/OCR checked. For macOS WeChat, first run `dating-boost runtime select --data-dir .local/dating-boost --app-id wechat --runtime default --json`, then run
+   `dating-boost harness doctor --app-id wechat --data-dir .local/dating-boost --window-title WeChat --json`
    and stop if WeChat cannot be activated, screenshot, or OCR checked.
-8. Run `dating-boost harness tinder launch --dry-run --json` and
-   `dating-boost harness tinder open-profile --dry-run --json` to verify the
+8. Run `dating-boost harness tinder launch --dry-run --data-dir .local/dating-boost --json` and
+   `dating-boost harness tinder open-profile --dry-run --data-dir .local/dating-boost --json` to verify the
    safe launch/profile-tab navigation plan.
-   Run `dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json`
+   Run `dating-boost harness tinder observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json`
    once iPhone Mirroring is unlocked to record redacted page/layout hints.
-   Also dry-run `dating-boost harness tinder workflow self-profile-read --options-json tinder-self-profile-options.json --dry-run --json`
-   `dating-boost harness tinder workflow chat-read-match-profile --options-json tinder-chat-profile-options.json --dry-run --json`,
-   `dating-boost harness tinder workflow new-match-open --options-json tinder-new-match-open-options.json --dry-run --json`,
-   and `dating-boost harness tinder workflow new-match-read-profile --options-json tinder-new-match-profile-options.json --dry-run --json`
+   Also dry-run `dating-boost harness tinder workflow self-profile-read --options-json tinder-self-profile-options.json --dry-run --data-dir .local/dating-boost --json`
+   `dating-boost harness tinder workflow chat-read-match-profile --options-json tinder-chat-profile-options.json --dry-run --data-dir .local/dating-boost --json`,
+   `dating-boost harness tinder workflow new-match-open --options-json tinder-new-match-open-options.json --dry-run --data-dir .local/dating-boost --json`,
+   and `dating-boost harness tinder workflow new-match-read-profile --options-json tinder-new-match-profile-options.json --dry-run --data-dir .local/dating-boost --json`
    before using those chains on the real GUI.
 9. Stop if capabilities, required schema versions, data doctor, harness doctor, or required
    commands mismatch.
@@ -48,23 +48,23 @@ WeChat has a macOS desktop harness for launch, redacted observation, and draft
 staging, but no WeChat-specific profile navigation chain.
 
 1. Start with `dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json`.
-2. If the user profile needs refresh, run `dating-boost harness tinder open-profile --launch-if-needed --output-dir .local/dating-boost-harness --json`; stop if it returns `blocked` or `needs_verification`.
-   Then run `dating-boost harness tinder workflow self-profile-read --options-json tinder-self-profile-options.json --output-dir .local/dating-boost-harness --json` only after a fresh observation confirms the self profile page.
+2. If the user profile needs refresh, run `dating-boost harness tinder open-profile --launch-if-needed --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json`; stop if it returns `blocked` or `needs_verification`.
+   Then run `dating-boost harness tinder workflow self-profile-read --options-json tinder-self-profile-options.json --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json` only after a fresh observation confirms the self profile page.
    Save the before/after screenshots and author the user profile observation from visible content only.
 3. Run `dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tinder --send-mode stage --work-dir .local/dating-boost-host-loop --json`.
-4. Codex must run `dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json`
+4. Codex must run `dating-boost harness tinder observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json`
    before selecting a bounded navigation chain and again after each chain when
    collecting smoke artifacts.
-5. Codex may use `dating-boost harness tinder action open-chats --json`,
-   `dating-boost harness tinder action open-conversation --options-json tinder-open-row-options.json --json`,
-   and `dating-boost harness tinder action open-thread-profile --json` for
+5. Codex may use `dating-boost harness tinder action open-chats --data-dir .local/dating-boost --json`,
+   `dating-boost harness tinder action open-conversation --options-json tinder-open-row-options.json --data-dir .local/dating-boost --json`,
+   and `dating-boost harness tinder action open-thread-profile --data-dir .local/dating-boost --json` for
    bounded navigation after each screen is freshly observed. For match profile
-   refreshes, it may use `dating-boost harness tinder workflow chat-read-match-profile --options-json tinder-chat-profile-options.json --output-dir .local/dating-boost-harness --json`
+   refreshes, it may use `dating-boost harness tinder workflow chat-read-match-profile --options-json tinder-chat-profile-options.json --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json`
    after confirming the chat page layout.
-   For unopened matches, use `dating-boost harness tinder workflow new-match-open --options-json tinder-new-match-open-options.json --output-dir .local/dating-boost-harness --json`
-   or `dating-boost harness tinder workflow new-match-read-profile --options-json tinder-new-match-profile-options.json --output-dir .local/dating-boost-harness --json`.
+   For unopened matches, use `dating-boost harness tinder workflow new-match-open --options-json tinder-new-match-open-options.json --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json`
+   or `dating-boost harness tinder workflow new-match-read-profile --options-json tinder-new-match-profile-options.json --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json`.
    Process one unopened match at a time; after a managed opener send, return
-   with `dating-boost harness tinder action return-to-chats --output-dir .local/dating-boost-harness --json`
+   with `dating-boost harness tinder action return-to-chats --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json`
    before selecting the next visible unopened match.
 6. Codex may observe the message list, open the requested thread, paste the
    staged text into the input box, and verify the staged text.
@@ -78,16 +78,17 @@ staging, but no WeChat-specific profile navigation chain.
 Use this only for a user-authorized WeChat test chat. Desktop chat history can
 expose unrelated personal content, so keep the test boundary explicit.
 
-1. Run `dating-boost harness doctor --app-id wechat --window-title WeChat --json`.
-2. Run `dating-boost harness wechat launch --dry-run --json`, then execute
+1. Run `dating-boost runtime select --data-dir .local/dating-boost --app-id wechat --runtime default --json`.
+2. Run `dating-boost harness doctor --app-id wechat --data-dir .local/dating-boost --window-title WeChat --json`.
+3. Run `dating-boost harness wechat launch --data-dir .local/dating-boost --dry-run --json`, then execute
    launch only if the plan is expected.
-3. Run `dating-boost harness wechat observe --output-dir .local/dating-boost-harness --json`.
-4. Convert visible post-boundary chat content to an observation JSON and run
+4. Run `dating-boost harness wechat observe --data-dir .local/dating-boost --output-dir .local/dating-boost-harness --json`.
+5. Convert visible post-boundary chat content to an observation JSON and run
    `dating-boost memory ingest-observation`, `dating-boost context build`, and
    `dating-boost policy check-draft`.
-5. If the draft passes policy, write the approved draft to a local text file
-   and run `dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json`.
-6. Execute `stage-draft` only after confirming the active WeChat chat input is
+6. If the draft passes policy, write the approved draft to a local text file
+   and run `dating-boost harness wechat stage-draft --text-file wechat-draft.txt --data-dir .local/dating-boost --dry-run --json`.
+7. Execute `stage-draft` only after confirming the active WeChat chat input is
    the intended target. Real staging must include `--data-dir .local/dating-boost`
    so the global safety pause can block paste. Stage mode must not press Enter
    or click Send.

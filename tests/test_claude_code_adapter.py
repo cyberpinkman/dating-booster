@@ -218,6 +218,30 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
             self.assertTrue((target_path / "adapter-package.json").exists())
             self.assertTrue((target_path / "references" / "contracts.md").exists())
 
+    def test_adapter_claude_code_install_removes_stale_target_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target_path = root / ".claude" / "skills" / "dating-booster"
+            stale_file = target_path / "references" / "old-workflow.md"
+            stale_file.parent.mkdir(parents=True)
+            stale_file.write_text("old workflow draft path", encoding="utf-8")
+
+            install_exit, install_payload = self._run_cli([
+                "adapter",
+                "claude-code",
+                "install",
+                "--scope",
+                "project",
+                "--target",
+                str(root),
+                "--json",
+            ])
+
+            self.assertEqual(install_exit, 0)
+            self.assertEqual(install_payload["status"], "ok")
+            self.assertFalse(stale_file.exists())
+            self.assertTrue((target_path / "SKILL.md").exists())
+
     def test_installed_claude_code_skill_is_self_contained(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -323,6 +347,30 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
             self.assertTrue((target_path / "skill-package.json").exists())
             self.assertTrue((target_path / "scripts" / "doctor.py").exists())
             self.assertTrue((target_path / "references" / "contracts.md").exists())
+
+    def test_adapter_codex_install_removes_stale_target_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target_path = root / ".codex" / "skills" / "dating-booster-codex"
+            stale_file = target_path / "references" / "old-workflow.md"
+            stale_file.parent.mkdir(parents=True)
+            stale_file.write_text("old workflow draft path", encoding="utf-8")
+
+            install_exit, install_payload = self._run_cli([
+                "adapter",
+                "codex",
+                "install",
+                "--scope",
+                "project",
+                "--target",
+                str(root),
+                "--json",
+            ])
+
+            self.assertEqual(install_exit, 0)
+            self.assertEqual(install_payload["status"], "ok")
+            self.assertFalse(stale_file.exists())
+            self.assertTrue((target_path / "SKILL.md").exists())
             self.assertFalse(any("__pycache__" in file_info["target"] for file_info in install_payload["files"]))
 
     def test_adapter_codex_doctor_reports_ok(self):

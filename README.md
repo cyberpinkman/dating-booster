@@ -50,9 +50,17 @@ Host agent 的 live send 应走 managed-session 或 host-loop；直接 `harness 
 
 `managed-session` 是显式启动后的 session-scoped runner，不是后台监听器。它可以在一个托管窗口内自动管理多个对象，但执行模型是串行 work item：全局 managed-session/operator 按机会窗口、due nudge、新回复、补资料、新匹配等优先级调度；具体 runtime 只执行当前 work item。
 
+启动托管或真实 GUI 操作前先选择目标 app/runtime：
+
+```bash
+dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
+```
+
+选择后，同一个 `data-dir` 下的 harness、host-loop、managed-session 只能使用这个 app/runtime。请求其他 app，或 TaShuo 漏传 `--runtime mac-ios-app` 导致请求 default runtime，会被 `runtime_scope_mismatch` 阻断，不会唤起 iPhone Mirroring、微信或其他无关 app。切换目标时先 `runtime clear`，再重新 select。
+
 生产默认使用 `--management-mode conservative`。链路压测可显式使用 `--management-mode high-throughput --max-threads-per-cycle N --max-pages-per-cycle N --cycle-send-limit N`，但高吞吐只提高每轮预算，不绕过 live-send 授权、target binding、staged-text verification 或 post-send verification。
 
-TaShuo 本地 iOS app 托管需要显式传 `--harness-runtime mac-ios-app`；不传时会使用 app profile 默认 runtime，也就是 iPhone Mirroring。
+TaShuo 本地 iOS app 托管需要显式传 `--harness-runtime mac-ios-app`。如果 scope 已选择 mac-ios-app 而命令漏传 runtime，系统会阻断，不会回落到 app profile 默认的 iPhone Mirroring。
 
 `managed-session run/tick` 会返回 `relationship_progress_snapshot`，用于展示本轮全对象状态摘要、下一优先队列和每个对象下一步；`managed-session stop` 和 host-loop final response 会输出用户可读的 `relationship_progress_report`。
 

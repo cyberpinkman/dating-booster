@@ -242,9 +242,9 @@ class OperatorRepository:
 
     def record_action_result(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._validate_confirmation_contract(payload)
+        session = self._load_session()
         event = ActionAuditRepository(self.root).append_action_result(payload, created_at=_now_iso())
         self._automation.apply_action_result(event)
-        session = self._load_session()
         if event.get("action") == "send_message":
             session["cycle_send_count"] = int(session.get("cycle_send_count") or 0) + 1
             self._write_session(session)
@@ -265,9 +265,9 @@ class OperatorRepository:
         }
 
     def record_stage_result(self, payload: dict[str, Any]) -> dict[str, Any]:
+        session = self._load_session()
         event = ActionAuditRepository(self.root).append_stage_result(payload, created_at=_now_iso())
         self._automation.apply_stage_result(event)
-        session = self._load_session()
         session["cycle_send_count"] = int(session.get("cycle_send_count") or 0) + 1
         self._write_session(session)
         self._clear_current_work_item(

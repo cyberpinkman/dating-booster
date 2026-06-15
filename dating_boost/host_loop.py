@@ -21,6 +21,7 @@ from dating_boost.core.relationship_report import (
     RELATIONSHIP_PROGRESS_NEXT_ACTION,
     build_relationship_progress_report,
 )
+from dating_boost.core.runtime_scope import RuntimeScopeRepository
 from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.support import SupportLogRepository
 from dating_boost.perception.observations import ProfileObservation
@@ -509,6 +510,11 @@ class HostLoopSupervisor:
             if resume:
                 resumed_current = self._read_current_work_item_or_none()
                 if isinstance(resumed_current, dict) and resumed_current.get("work_item_type") == "send_message":
+                    if self._operator_session_status() != "active":
+                        start = self._start_operator_session()
+                        if start.get("status") != "active":
+                            return self._finish("blocked", "operator_session_not_active", extra={"start": start}), 0
+                    self.operator_session_active = True
                     self._write_current_work_item(resumed_current)
                     self._append_timeline("work_item", resumed_current, {"resumed_from_work_dir": True})
                     self.steps.append(
@@ -527,26 +533,7 @@ class HostLoopSupervisor:
                         current=resumed_current,
                     ), 0
             if not resume or self._operator_session_status() != "active":
-                initial_surface = self._initial_surface()
-                start = self._run_cli_json(
-                    "operator",
-                    "session",
-                    "start",
-                    "--data-dir",
-                    str(self.data_dir),
-                    "--authorization",
-                    str(self._authorization_path()),
-                    "--initial-surface",
-                    initial_surface,
-                    "--management-mode",
-                    str(getattr(self.args, "management_mode", "conservative") or "conservative"),
-                    "--max-threads-per-cycle",
-                    str(getattr(self.args, "max_threads_per_cycle", 5) or 5),
-                    "--max-pages-per-cycle",
-                    str(getattr(self.args, "max_pages_per_cycle", 1) or 1),
-                    "--cycle-send-limit",
-                    str(getattr(self.args, "cycle_send_limit", 1) or 1),
-                )
+                start = self._start_operator_session()
                 if start.get("status") != "active":
                     return self._finish("blocked", "operator_session_not_active", extra={"start": start}), 0
             self.operator_session_active = True
@@ -595,12 +582,48 @@ class HostLoopSupervisor:
         except RuntimeError as exc:
             return self._finish("error", str(exc)), 2
 
+    def _start_operator_session(self) -> dict[str, Any]:
+        initial_surface = self._initial_surface()
+        return self._run_cli_json(
+            "operator",
+            "session",
+            "start",
+            "--data-dir",
+            str(self.data_dir),
+            "--authorization",
+            str(self._authorization_path()),
+            "--initial-surface",
+            initial_surface,
+            "--management-mode",
+            str(getattr(self.args, "management_mode", "conservative") or "conservative"),
+            "--max-threads-per-cycle",
+            str(getattr(self.args, "max_threads_per_cycle", 5) or 5),
+            "--max-pages-per-cycle",
+            str(getattr(self.args, "max_pages_per_cycle", 1) or 1),
+            "--cycle-send-limit",
+            str(getattr(self.args, "cycle_send_limit", 1) or 1),
+        )
+
     def _preflight(self) -> None:
         if self.app_profile.get("host_loop_supported") is not True:
             raise HostLoopError(f"host loop is not supported for app_id={self.args.app_id}")
         send_modes = self.app_profile.get("host_loop_send_modes")
         if isinstance(send_modes, list) and send_modes and self.args.send_mode not in set(str(mode) for mode in send_modes):
             raise HostLoopError(f"send_mode {self.args.send_mode} is not supported for app_id={self.args.app_id}")
+        runtime_scope = RuntimeScopeRepository(self.data_dir).ensure_selected(
+            app_id=str(self.args.app_id),
+            runtime=getattr(self.args, "harness_runtime", None),
+            source="host_loop_preflight",
+            require_explicit_runtime_choice=True,
+        )
+        if runtime_scope.get("status") == "blocked":
+            raise HostLoopError(
+                f"{runtime_scope.get('reason')}: "
+                f"selected_app_id={runtime_scope.get('selected_app_id')} "
+                f"selected_runtime={runtime_scope.get('selected_runtime')} "
+                f"requested_app_id={runtime_scope.get('requested_app_id')} "
+                f"requested_runtime={runtime_scope.get('requested_runtime')}"
+            )
         capabilities = self._run_cli_json("capabilities", "--json", "--data-dir", str(self.data_dir))
         agent_caps = capabilities.get("agent_native_capabilities", {})
         if not agent_caps.get("host_loop_supervisor"):
@@ -654,7 +677,7 @@ class HostLoopSupervisor:
             return requested
         if self.fixture_host is not None and (self.fixture_host / "current_thread_observation.json").exists():
             return "current-thread"
-        command = ["harness", self.args.app_id, "observe", "--json"]
+        command = ["harness", self.args.app_id, "observe", "--data-dir", str(self.data_dir), "--json"]
         harness_runtime = str(getattr(self.args, "harness_runtime", "") or "").strip()
         if harness_runtime:
             command.extend(["--runtime", harness_runtime])
@@ -749,6 +772,10 @@ class HostLoopSupervisor:
         staged_path = self._work_file(work_item, "staged_verification")
         if self.fixture_host is not None and not staged_path.exists():
             _write_json(staged_path, _staged_verification(work_item, result_status="succeeded"))
+        if not staged_path.exists() and self._can_auto_stage_draft(work_item):
+            stage_wait = self._stage_draft_with_harness(work_item, staged_path)
+            if stage_wait is not None:
+                return stage_wait
         if not staged_path.exists():
             _write_json(_template_path(staged_path), _staged_verification_template(work_item))
             waiting = self._waiting("staged_verification", staged_path, work_item)
@@ -798,6 +825,71 @@ class HostLoopSupervisor:
         self._consume(staged_path)
         self._consume(result_path)
         return None
+
+    def _can_auto_stage_draft(self, work_item: dict[str, Any]) -> bool:
+        return (
+            self.fixture_host is None
+            and self.args.send_mode == "stage"
+            and self.args.app_id == "tashuo"
+            and str(work_item.get("work_item_type") or "") == "send_message"
+            and _normalized_harness_runtime(str(getattr(self.args, "harness_runtime", "") or "")) == "mac_ios_app"
+        )
+
+    def _stage_draft_with_harness(self, work_item: dict[str, Any], staged_path: Path) -> dict[str, Any] | None:
+        runtime = str(getattr(self.args, "harness_runtime", "") or "").strip()
+        draft_path = self.work_dir / f"stage_payload.{_safe_name(str(work_item.get('work_item_id') or 'send'))}.txt"
+        draft_path.write_text(_work_item_payload_text(work_item), encoding="utf-8")
+        command_args = [
+            "harness",
+            self.args.app_id,
+            "stage-draft",
+            "--runtime",
+            runtime,
+            "--data-dir",
+            str(self.data_dir),
+            "--text-file",
+            str(draft_path),
+            "--output-dir",
+            str(self.work_dir / "harness"),
+            "--json",
+        ]
+        try:
+            harness_payload = self._run_cli_json(*command_args, allow_error=True)
+        finally:
+            if draft_path.exists():
+                draft_path.unlink()
+        redacted = _redacted_stage_draft_payload(harness_payload)
+        self._append_timeline("stage_draft", work_item, {"harness": redacted})
+        if harness_payload.get("status") != "ok":
+            return self._finish(
+                "blocked",
+                str(harness_payload.get("reason") or "stage_draft_failed"),
+                current=work_item,
+                extra={"stage_draft": redacted},
+            )
+        staged_text_verification = harness_payload.get("staged_text_verification")
+        verification_status = (
+            str(staged_text_verification.get("status") or "")
+            if isinstance(staged_text_verification, dict)
+            else ""
+        )
+        if harness_payload.get("stage_attempt_status") == "completed" and (
+            harness_payload.get("staged_text_verified") is True or verification_status == "verified"
+        ):
+            _write_json(staged_path, _staged_verification_from_stage_draft(work_item, harness_payload))
+            return None
+        _write_json(_template_path(staged_path), _staged_verification_template(work_item))
+        return self._finish(
+            "waiting_for_host",
+            "waiting_for_staged_verification",
+            current=work_item,
+            extra={
+                "expected_input": str(staged_path),
+                "stage_draft": redacted,
+                "next_host_action": "verify_staged_text_visually_and_write_staged_verification",
+                "app_profile": _host_instructions(self.app_profile, str(work_item.get("work_item_type") or "")),
+            },
+        )
 
     def _handle_managed_gui_send(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
         if self.args.app_id not in set(host_loop_app_ids()):
@@ -1599,7 +1691,7 @@ def _staged_verification_template(work_item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _staged_verification(work_item: dict[str, Any], *, result_status: str, staged_text: str | None = None) -> dict[str, Any]:
-    payload_text = str(work_item.get("payload_text") or "")
+    payload_text = _work_item_payload_text(work_item)
     return {
         "schema_version": 1,
         "verification_type": "staged_text",
@@ -1617,8 +1709,51 @@ def _staged_verification(work_item: dict[str, Any], *, result_status: str, stage
     }
 
 
+def _staged_verification_from_stage_draft(work_item: dict[str, Any], harness_payload: dict[str, Any]) -> dict[str, Any]:
+    verification = _staged_verification(work_item, result_status="succeeded")
+    staged_text_verification = harness_payload.get("staged_text_verification")
+    if not isinstance(staged_text_verification, dict):
+        staged_text_verification = {}
+    screen = staged_text_verification.get("screen") if isinstance(staged_text_verification.get("screen"), dict) else {}
+    screenshot_ref = str(screen.get("path") or "") if isinstance(screen, dict) else ""
+    verification.update(
+        {
+            "stage_attempt_status": harness_payload.get("stage_attempt_status"),
+            "staged_text_verified": harness_payload.get("staged_text_verified") is True,
+            "staged_text_verification": staged_text_verification,
+        }
+    )
+    if screenshot_ref:
+        verification["screenshot_ref"] = screenshot_ref
+    evidence = dict(verification.get("evidence") if isinstance(verification.get("evidence"), dict) else {})
+    evidence.update(
+        {
+            "verification": "TaShuo mac-ios-app stage-draft verified the input box before stage-only audit.",
+            "input_method": "harness_stage_draft",
+            "harness_runtime": "mac_ios_app",
+            "stage_attempt_status": harness_payload.get("stage_attempt_status"),
+            "staged_text_verification_status": staged_text_verification.get("status"),
+            "screen_exact_text_ocr_verified": staged_text_verification.get("screen_exact_text_ocr_verified") is True,
+            "exact_text_ocr_verified": staged_text_verification.get("exact_text_ocr_verified") is True,
+            "exact_text_ax_verified": staged_text_verification.get("exact_text_ax_verified") is True,
+        }
+    )
+    if screenshot_ref:
+        evidence["screenshot_ref"] = screenshot_ref
+    verification["evidence"] = evidence
+    return verification
+
+
 def _stage_result_from_verification(work_item: dict[str, Any], verification: dict[str, Any]) -> dict[str, Any]:
-    return {
+    staged_text_verified = verification.get("staged_text_verified")
+    evidence = {
+        "verification": "Stage mode verified the payload text in the input box and did not send.",
+        "sent": False,
+    }
+    if isinstance(verification.get("evidence"), dict):
+        evidence.update(verification["evidence"])
+        evidence["sent"] = False
+    stage_result = {
         "schema_version": 1,
         "action_request_id": work_item.get("action_request_id"),
         "target_match_id": work_item.get("match_id"),
@@ -1627,13 +1762,14 @@ def _stage_result_from_verification(work_item: dict[str, Any], verification: dic
         "autonomous_audit_binding": work_item.get("autonomous_audit_binding"),
         "pre_action_observation_id": work_item.get("pre_action_observation_id"),
         "result_status": "succeeded",
-        "staged_text_verified": True,
-        "staged_text_verification": verification,
-        "evidence": {
-            "verification": "Stage mode verified the payload text in the input box and did not send.",
-            "sent": False,
-        },
+        "staged_text_verified": staged_text_verified if isinstance(staged_text_verified, bool) else True,
+        "staged_text_verification": verification.get("staged_text_verification") or verification,
+        "evidence": evidence,
     }
+    for key in ("stage_attempt_status", "screenshot_ref"):
+        if verification.get(key) is not None:
+            stage_result[key] = verification[key]
+    return stage_result
 
 
 def _action_result_template(work_item: dict[str, Any]) -> dict[str, Any]:
@@ -1678,13 +1814,23 @@ def _validate_staged_verification(payload: dict[str, Any], work_item: dict[str, 
         return {"status": "blocked", "reason": "staged verification payload_hash mismatch"}
     if payload.get("result_status") != "succeeded":
         return {"status": "blocked", "reason": "staged text was not verified as succeeded"}
-    if payload.get("staged_text") != work_item.get("payload_text"):
+    if payload.get("staged_text") != _work_item_payload_text(work_item):
         return {"status": "blocked", "reason": "staged text does not match payload_text"}
-    return {
+    result = {
         "status": "ok",
         "action_request_id": payload.get("action_request_id"),
         "payload_hash": payload.get("expected_payload_hash"),
     }
+    for key in (
+        "evidence",
+        "stage_attempt_status",
+        "staged_text_verified",
+        "staged_text_verification",
+        "screenshot_ref",
+    ):
+        if key in payload:
+            result[key] = payload[key]
+    return result
 
 
 def _validate_action_result(payload: dict[str, Any], work_item: dict[str, Any]) -> None:
@@ -1762,6 +1908,22 @@ def _redacted_managed_send_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "current_thread_visual_anchor",
         "message_sequence_index",
         "message_sequence_count",
+    }
+    return {key: value for key, value in payload.items() if key in allowed}
+
+
+def _redacted_stage_draft_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "schema_version",
+        "status",
+        "reason",
+        "app_id",
+        "action",
+        "harness_backend",
+        "stage_attempt_status",
+        "staged_text_verified",
+        "staged_text_verification",
+        "next_host_action",
     }
     return {key: value for key, value in payload.items() if key in allowed}
 

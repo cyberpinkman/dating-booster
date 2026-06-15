@@ -53,7 +53,9 @@ class ReviewItemSerializationTests(unittest.TestCase):
             "question gate skipped": "对方已跳过她说问答考验，可以直接正常开场聊天。",
             "notification banner visible but not blocking input": "她说通知提示没有挡住输入框，可以继续正常回复。",
             "bottom input toolbar present": "当前聊天输入区可用，可以继续起草回复。",
+            "message_input_present": "当前聊天输入区可用，可以继续起草回复。",
             "ordinary conversation page": "当前是普通聊天页，不是飞行页或问答决策页。",
+            "ordinary_chat_thread": "当前是普通聊天页，不是飞行页或问答决策页。",
         }
 
         for value, summary in cases.items():

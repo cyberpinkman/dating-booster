@@ -18,14 +18,12 @@ policy, and audit tools. They do not replace the repository specs.
 10. Warn, but do not automatically stop, if `source_spec_commit` differs while
    version, schema, and command checks pass.
 11. After the target app id is known, run `dating-boost support session start --data-dir .local/dating-boost --host codex --app-id <app-id> --json` and keep `session_id`. If host-loop runs with a different `--data-dir`, start a separate support session for that host-loop data dir before `dating-boost-host-loop run`.
-12. For real iPhone Mirroring work, run `dating-boost harness doctor --app-id tinder --json`.
-13. Use `dating-boost harness tinder launch --dry-run --json`,
-    `dating-boost harness tinder open-profile --dry-run --json`, and the
+12. For real iPhone Mirroring work, run `dating-boost runtime select --data-dir .local/dating-boost --app-id tinder --runtime default --json`, then `dating-boost harness doctor --app-id tinder --data-dir .local/dating-boost --json`.
+13. Use `dating-boost harness tinder launch --dry-run --data-dir .local/dating-boost --json`,
+    `dating-boost harness tinder open-profile --dry-run --data-dir .local/dating-boost --json`, and the
     relevant `harness tinder action/workflow --dry-run --json` before executing
     Tinder navigation.
-14. For real macOS WeChat work, run `dating-boost harness doctor --app-id wechat --window-title WeChat --json`,
-    `dating-boost harness wechat launch --dry-run --json`, and
-    `dating-boost harness wechat observe --json` before staging any draft.
+14. Before real GUI work, select the target app/runtime with `dating-boost runtime select --data-dir .local/dating-boost --app-id <app_id> --runtime <runtime> --json`. After selection, every harness command must use the same `--data-dir` and matching app/runtime. For real macOS WeChat work, select `--app-id wechat --runtime default`, then run the WeChat harness commands with `--data-dir .local/dating-boost` before staging any draft.
 15. Before ending, run `dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json`.
 
 For manual diagnostics, write a redacted payload JSON and optional sensitive
@@ -81,47 +79,51 @@ post-send exact-text/input-cleared verification. Do not use message-list row
 position or header OCR as mac-ios-app target-binding evidence.
 
 ```bash
-dating-boost harness doctor --app-id tinder --json
-dating-boost harness screenshot --app-id tinder --output iphone-mirroring.png --json
-dating-boost harness tinder launch --dry-run --json
-dating-boost harness tinder launch --output-dir .local/dating-boost-harness --json
-dating-boost harness tinder open-profile --dry-run --json
-dating-boost harness tinder open-profile --launch-if-needed --output-dir .local/dating-boost-harness --json
-dating-boost harness tinder observe --output-dir .local/dating-boost-harness --json
-dating-boost harness tinder action profile-photo-next --dry-run --json
-dating-boost harness tinder action open-conversation --options-json tinder-open-row-options.json --dry-run --json
-dating-boost harness tinder action open-conversation --options-json tinder-open-iris-options.json --json
-dating-boost harness tinder action dismiss-subscription-paywall --json
-dating-boost harness tinder action dismiss-feedback-survey --json
-dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --json
-dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --json
-dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-open-options.json --json
-dating-boost harness tinder workflow new-match-read-profile --dry-run --options-json tinder-new-match-profile-options.json --json
-dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --json
-dating-boost harness doctor --app-id bumble --json
-dating-boost harness screenshot --app-id bumble --output bumble.png --json
-dating-boost harness bumble launch --dry-run --json
-dating-boost harness bumble observe --output-dir .local/dating-boost-harness --json
-dating-boost harness bumble action open-chats --dry-run --json
-dating-boost harness bumble workflow browse-profile-read --dry-run --options-json bumble-profile-options.json --json
-dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --json
-dating-boost harness bumble workflow opening-move-open --dry-run --options-json bumble-opening-move-options.json --json
-dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --json
-dating-boost harness doctor --app-id tashuo --json
-dating-boost harness screenshot --app-id tashuo --output tashuo.png --json
-dating-boost harness tashuo launch --dry-run --json
-dating-boost harness tashuo observe --output-dir .local/dating-boost-harness --json
-dating-boost harness tashuo action open-chats --dry-run --json
-dating-boost harness tashuo workflow chat-read-match-profile --dry-run --options-json tashuo-chat-profile-options.json --json
-dating-boost harness tashuo workflow question-gate-open --dry-run --options-json tashuo-question-gate-options.json --json
-dating-boost harness tashuo action prepare-message-page --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
-dating-boost harness tashuo stage-draft --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
-dating-boost harness doctor --app-id wechat --window-title WeChat --json
-dating-boost harness screenshot --app-id wechat --window-title WeChat --output wechat.png --json
-dating-boost harness wechat launch --dry-run --json
-dating-boost harness wechat observe --output-dir .local/dating-boost-harness --json
-dating-boost harness wechat stage-draft --text-file wechat-draft.txt --dry-run --json
-dating-boost harness wechat send-message --text-file wechat-draft.txt --dry-run --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id tinder --runtime default --json
+dating-boost harness doctor --app-id tinder --data-dir .local/dating-boost --json
+dating-boost harness screenshot --app-id tinder --output iphone-mirroring.png --data-dir .local/dating-boost --json
+dating-boost harness tinder launch --dry-run --data-dir .local/dating-boost --json
+dating-boost harness tinder launch --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
+dating-boost harness tinder open-profile --dry-run --data-dir .local/dating-boost --json
+dating-boost harness tinder open-profile --launch-if-needed --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
+dating-boost harness tinder observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
+dating-boost harness tinder action profile-photo-next --dry-run --data-dir .local/dating-boost --json
+dating-boost harness tinder action open-conversation --options-json tinder-open-row-options.json --dry-run --data-dir .local/dating-boost --json
+dating-boost harness tinder action open-conversation --options-json tinder-open-iris-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder action dismiss-subscription-paywall --data-dir .local/dating-boost --json
+dating-boost harness tinder action dismiss-feedback-survey --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-open-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder workflow new-match-read-profile --dry-run --options-json tinder-new-match-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --data-dir .local/dating-boost --json
+dating-boost runtime clear --data-dir .local/dating-boost --reason user_requested_target_switch --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id bumble --runtime default --json
+dating-boost harness doctor --app-id bumble --data-dir .local/dating-boost --json
+dating-boost harness screenshot --app-id bumble --output bumble.png --data-dir .local/dating-boost --json
+dating-boost harness bumble launch --dry-run --data-dir .local/dating-boost --json
+dating-boost harness bumble observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
+dating-boost harness bumble action open-chats --dry-run --data-dir .local/dating-boost --json
+dating-boost harness bumble workflow browse-profile-read --dry-run --options-json bumble-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness bumble workflow opening-move-open --dry-run --options-json bumble-opening-move-options.json --data-dir .local/dating-boost --json
+dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --data-dir .local/dating-boost --json
+dating-boost runtime clear --data-dir .local/dating-boost --reason user_requested_target_switch --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
+dating-boost harness doctor --app-id tashuo --data-dir .local/dating-boost --runtime mac-ios-app --json
+dating-boost harness screenshot --app-id tashuo --data-dir .local/dating-boost --runtime mac-ios-app --output tashuo.png --json
+dating-boost harness tashuo launch --data-dir .local/dating-boost --runtime mac-ios-app --dry-run --json
+dating-boost harness tashuo observe --data-dir .local/dating-boost --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo action prepare-message-page --data-dir .local/dating-boost --runtime mac-ios-app --output-dir .local/dating-boost-harness --json
+dating-boost harness tashuo stage-draft --data-dir .local/dating-boost --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
+dating-boost runtime clear --data-dir .local/dating-boost --reason user_requested_target_switch --json
+dating-boost runtime select --data-dir .local/dating-boost --app-id wechat --runtime default --json
+dating-boost harness doctor --app-id wechat --data-dir .local/dating-boost --window-title WeChat --json
+dating-boost harness screenshot --app-id wechat --data-dir .local/dating-boost --window-title WeChat --output wechat.png --json
+dating-boost harness wechat launch --data-dir .local/dating-boost --dry-run --json
+dating-boost harness wechat observe --data-dir .local/dating-boost --output-dir .local/dating-boost-harness --json
+dating-boost harness wechat stage-draft --text-file wechat-draft.txt --data-dir .local/dating-boost --dry-run --json
+dating-boost harness wechat send-message --text-file wechat-draft.txt --data-dir .local/dating-boost --dry-run --json
 ```
 
 If doctor reports `iphone_mirroring_locked`, ask the user to unlock iPhone
@@ -196,12 +198,12 @@ subscription_paywall`, `subscription_paywall_visible`,
 `tinder_subscription_paywall`, or `tinder_subscription_paywall_dismissed`, treat
 it as accidental navigation. Do not ask the user whether to subscribe, do not
 discuss subscription plans, and do not click purchase or continue controls. Run
-`dating-boost harness tinder action dismiss-subscription-paywall --json`, then
+`dating-boost harness tinder action dismiss-subscription-paywall --data-dir .local/dating-boost --json`, then
 re-navigate to a verified chat or profile path before staging or sending.
 
 If `observe` or any Tinder harness result reports `page: feedback_survey`,
 `feedback_survey_visible`, or `tinder_feedback_survey`, treat it as a recoverable
-survey overlay. Run `dating-boost harness tinder action dismiss-feedback-survey --json`;
+survey overlay. Run `dating-boost harness tinder action dismiss-feedback-survey --data-dir .local/dating-boost --json`;
 the recovery must use the ignore/no-rating path and report
 `rating_submitted: false`.
 
@@ -432,6 +434,8 @@ Multi-thread management is global: managed-session/operator serially chooses
 the next candidate by opportunity priority, and app runtimes execute only the
 current work item. High-throughput is an explicit testing mode, not the
 production default.
+Before starting, select the app/runtime with `runtime select`; during the
+session, harness/host-loop/managed-session work must stay inside that scope.
 
 ```bash
 dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --json
@@ -440,8 +444,9 @@ dating-boost managed-session run --data-dir .local/dating-boost --wait --json
 
 Use `--management-mode high-throughput --max-threads-per-cycle N --max-pages-per-cycle N --cycle-send-limit N` only for explicit link testing.
 For TaShuo local Mac iOS app managed sessions, add
-`--harness-runtime mac-ios-app`; without it, managed-session precheck uses the
-app profile default iPhone Mirroring runtime.
+`--harness-runtime mac-ios-app`. If the current scope selected mac-ios-app and
+the flag is omitted, the run blocks with `runtime_scope_mismatch` before any
+default-runtime GUI adapter is created.
 Real TaShuo mac-ios-app smoke check, stage-only:
 `python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`.
 `managed-session run/tick` includes `relationship_progress_snapshot`; use it to

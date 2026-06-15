@@ -59,6 +59,7 @@ from dating_boost.core.production_store import ProductionDataStore, payload_dige
 from dating_boost.core.release import release_doctor
 from dating_boost.core.replay import latest_replay_markdown, latest_replay_payload
 from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
+from dating_boost.core.runtime_scope import RuntimeScopeRepository
 from dating_boost.core.scan_authoring import (
     assemble_scan_batch,
     normalize_scan_batch,
@@ -309,6 +310,24 @@ def main(argv: list[str] | None = None) -> int:
     support_bundle_parser.add_argument("--confirm")
     support_bundle_parser.add_argument("--json", action="store_true")
     support_bundle_parser.set_defaults(handler=_handle_support_bundle)
+
+    runtime_parser = subparsers.add_parser("runtime", help="Select and enforce the target app/runtime for this data-dir.")
+    runtime_subparsers = runtime_parser.add_subparsers(dest="runtime_command", required=True)
+    runtime_select_parser = runtime_subparsers.add_parser("select")
+    runtime_select_parser.add_argument("--data-dir", required=True, type=Path)
+    runtime_select_parser.add_argument("--app-id", required=True, choices=SUPPORTED_NATIVE_HARNESS_APPS)
+    runtime_select_parser.add_argument("--runtime", default="default")
+    runtime_select_parser.add_argument("--json", action="store_true")
+    runtime_select_parser.set_defaults(handler=_handle_runtime_select)
+    runtime_status_parser = runtime_subparsers.add_parser("status")
+    runtime_status_parser.add_argument("--data-dir", required=True, type=Path)
+    runtime_status_parser.add_argument("--json", action="store_true")
+    runtime_status_parser.set_defaults(handler=_handle_runtime_status)
+    runtime_clear_parser = runtime_subparsers.add_parser("clear")
+    runtime_clear_parser.add_argument("--data-dir", required=True, type=Path)
+    runtime_clear_parser.add_argument("--reason", default="manual_clear")
+    runtime_clear_parser.add_argument("--json", action="store_true")
+    runtime_clear_parser.set_defaults(handler=_handle_runtime_clear)
 
     harness_parser = subparsers.add_parser("harness", help="Native GUI harness diagnostics and safe navigation.")
     harness_subparsers = harness_parser.add_subparsers(dest="harness_command", required=True)
@@ -1233,8 +1252,40 @@ def _handle_support_bundle(args: argparse.Namespace) -> int:
     return 0 if payload.get("status") == "ok" else 2
 
 
+def _handle_runtime_select(args: argparse.Namespace) -> int:
+    try:
+        payload = RuntimeScopeRepository(args.data_dir).select(
+            app_id=args.app_id,
+            runtime=args.runtime,
+            source="runtime_select",
+        )
+    except ValueError as exc:
+        payload = {"schema_version": 1, "status": "blocked", "reason": str(exc)}
+    _print_json(payload)
+    return 0 if payload.get("status") == "selected" else 2
+
+
+def _handle_runtime_status(args: argparse.Namespace) -> int:
+    payload = RuntimeScopeRepository(args.data_dir).read()
+    if payload is None:
+        payload = {"schema_version": 1, "status": "not_found", "reason": "runtime_scope_not_selected"}
+    _print_json(payload)
+    return 0 if payload.get("status") in {"selected", "not_found"} else 2
+
+
+def _handle_runtime_clear(args: argparse.Namespace) -> int:
+    payload = RuntimeScopeRepository(args.data_dir).clear(reason=args.reason)
+    _print_json(payload)
+    return 0
+
+
 def _handle_harness_doctor(args: argparse.Namespace) -> int:
     block_payload = _unsupported_native_harness_payload(args.app_id)
+    if block_payload is not None:
+        _record_support_harness_result(args.data_dir, app_id=args.app_id, action="doctor", harness_payload=block_payload)
+        _print_json(block_payload)
+        return 2
+    block_payload = _runtime_scope_block_payload(args, args.app_id, getattr(args, "runtime", None))
     if block_payload is not None:
         _record_support_harness_result(args.data_dir, app_id=args.app_id, action="doctor", harness_payload=block_payload)
         _print_json(block_payload)
@@ -1248,6 +1299,11 @@ def _handle_harness_doctor(args: argparse.Namespace) -> int:
 
 def _handle_harness_screenshot(args: argparse.Namespace) -> int:
     block_payload = _unsupported_native_harness_payload(args.app_id)
+    if block_payload is not None:
+        _record_support_harness_result(args.data_dir, app_id=args.app_id, action="screenshot", harness_payload=block_payload)
+        _print_json(block_payload)
+        return 2
+    block_payload = _runtime_scope_block_payload(args, args.app_id, getattr(args, "runtime", None))
     if block_payload is not None:
         _record_support_harness_result(args.data_dir, app_id=args.app_id, action="screenshot", harness_payload=block_payload)
         _print_json(block_payload)
@@ -1279,6 +1335,27 @@ def _create_harness_adapter(app_id: str, window_title: str | None, *, runtime: s
     return create_adapter(app_id, window_title=_harness_window_title(app_id, window_title, runtime), runtime=runtime)
 
 
+def _runtime_scope_block_payload(args: argparse.Namespace, app_id: str, runtime: str | None) -> dict[str, Any] | None:
+    data_dir = getattr(args, "data_dir", None)
+    if data_dir is None:
+        return {
+            "schema_version": 1,
+            "status": "blocked",
+            "reason": "runtime_scope_data_dir_required",
+            "app_id": app_id,
+            "requested_app_id": app_id,
+            "requested_runtime": runtime or "default",
+            "next_host_action": "select_runtime_scope_with_data_dir_before_gui_harness",
+            "recovery_commands": [
+                (
+                    "dating-boost runtime select --data-dir .local/dating-boost "
+                    f"--app-id {app_id} --runtime {runtime or 'default'} --json"
+                )
+            ],
+        }
+    return RuntimeScopeRepository(data_dir).validate(app_id=app_id, runtime=runtime, require_selected=True)
+
+
 def _options_from_json(path: Path | None) -> dict[str, Any]:
     if path is None:
         return {}
@@ -1286,6 +1363,11 @@ def _options_from_json(path: Path | None) -> dict[str, Any]:
 
 
 def _handle_harness_app_launch(args: argparse.Namespace) -> int:
+    block_payload = _runtime_scope_block_payload(args, args.app_id, getattr(args, "runtime", None))
+    if block_payload is not None:
+        _record_support_harness_result(args.data_dir, app_id=args.app_id, action="launch", harness_payload=block_payload)
+        _print_json(block_payload)
+        return 2
     payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).launch(
         dry_run=args.dry_run,
         output_dir=args.output_dir,
@@ -1296,6 +1378,11 @@ def _handle_harness_app_launch(args: argparse.Namespace) -> int:
 
 
 def _handle_harness_app_alias(args: argparse.Namespace) -> int:
+    block_payload = _runtime_scope_block_payload(args, args.app_id, getattr(args, "runtime", None))
+    if block_payload is not None:
+        _record_support_harness_result(args.data_dir, app_id=args.app_id, action=str(getattr(args, "harness_alias", "alias")), harness_payload=block_payload)
+        _print_json(block_payload)
+        return 2
     adapter = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None))
     alias_spec = getattr(args, "harness_alias_spec", {})
     operation = str(alias_spec.get("operation") or "")
@@ -1326,6 +1413,11 @@ def _handle_harness_app_alias(args: argparse.Namespace) -> int:
 
 
 def _handle_harness_app_observe(args: argparse.Namespace) -> int:
+    block_payload = _runtime_scope_block_payload(args, args.app_id, getattr(args, "runtime", None))
+    if block_payload is not None:
+        _record_support_harness_result(args.data_dir, app_id=args.app_id, action="observe", harness_payload=block_payload)
+        _print_json(block_payload)
+        return 2
     payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).observe(
         output_dir=args.output_dir,
     )
@@ -1335,6 +1427,11 @@ def _handle_harness_app_observe(args: argparse.Namespace) -> int:
 
 
 def _handle_harness_app_action(args: argparse.Namespace) -> int:
+    block_payload = _runtime_scope_block_payload(args, args.app_id, getattr(args, "runtime", None))
+    if block_payload is not None:
+        _record_support_harness_result(args.data_dir, app_id=args.app_id, action=f"action_{args.action}", harness_payload=block_payload)
+        _print_json(block_payload)
+        return 2
     options = _options_from_json(getattr(args, "options_json", None))
     payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).run_action(
         args.action,
@@ -1353,6 +1450,11 @@ def _handle_harness_app_action(args: argparse.Namespace) -> int:
 
 
 def _handle_harness_app_workflow(args: argparse.Namespace) -> int:
+    block_payload = _runtime_scope_block_payload(args, args.app_id, getattr(args, "runtime", None))
+    if block_payload is not None:
+        _record_support_harness_result(args.data_dir, app_id=args.app_id, action=f"workflow_{args.workflow}", harness_payload=block_payload)
+        _print_json(block_payload)
+        return 2
     options = _options_from_json(getattr(args, "options_json", None))
     payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).run_workflow(
         args.workflow,
@@ -1396,6 +1498,11 @@ def _handle_harness_app_stage_draft(args: argparse.Namespace) -> int:
                 }
             )
             return 2
+    block_payload = _runtime_scope_block_payload(args, args.app_id, getattr(args, "runtime", None))
+    if block_payload is not None:
+        _record_support_harness_result(args.data_dir, app_id=args.app_id, action="stage_draft", harness_payload=block_payload)
+        _print_json(block_payload)
+        return 2
     draft_text = args.text_file.read_text(encoding="utf-8")
     payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).stage_draft(
         draft_text,
@@ -1431,6 +1538,18 @@ def _handle_harness_app_send_message(args: argparse.Namespace) -> int:
             _print_json(block_payload)
             return 2
         action_request = _read_json_object(args.action_request)
+    block_payload = _runtime_scope_block_payload(args, args.app_id, getattr(args, "runtime", None))
+    if block_payload is not None:
+        _record_support_harness_action(
+            args.data_dir,
+            app_id=args.app_id,
+            action="send_message",
+            draft_text=draft_text,
+            harness_payload=block_payload,
+            action_request=action_request,
+        )
+        _print_json(block_payload)
+        return 2
     payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).send_message(
         draft_text,
         dry_run=args.dry_run,
