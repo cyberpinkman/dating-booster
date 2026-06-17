@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import csv
 from datetime import datetime, timezone
-import hashlib
 import io
 import re
 import struct
@@ -42,10 +41,8 @@ from dating_boost.harness.screen_state import (
     classify_wechat_screen_text,
     combine_bumble_screen_states as _combine_bumble_screen_states,
     combine_screen_states as _combine_screen_states,
-    hash_text as _hash_text,
     _read_png_pixels as _read_png_pixels_for_send_button,
     _region_stats as _region_stats_for_send_button,
-    normalize_text as _normalize_text,
     redacted_screen as _redacted_screen,
     tinder_layout_hints as _tinder_layout_hints,
     tinder_profile_danger_action_visible as _tinder_profile_danger_action_visible,
@@ -57,7 +54,17 @@ from dating_boost.core.live_send_contract import (
     bumble_target_binding_specific_marker_present,
     target_binding_structural_evidence_present,
 )
-from dating_boost.core.support import classify_text_topics
+from dating_boost.core.send_verification import (
+    expected_text_observation_stats as _expected_text_observation_stats,
+    hash_text as _hash_text,
+    message_text_comparable as _message_text_comparable,
+    message_text_matches as _message_text_matches,
+    normalize_text as _normalize_text,
+    outbound_text_ocr_evidence as _outbound_text_ocr_evidence,
+    staged_text_ocr_evidence as _staged_text_ocr_evidence,
+    staged_text_visual_verification_request as _staged_text_visual_verification_request,
+    text_fingerprint_fields as _text_fingerprint_fields,
+)
 
 
 GUI_HARNESS_SCHEMA_VERSION = 2
@@ -718,14 +725,6 @@ def _default_screenshot_path() -> Path:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _text_fingerprint_fields(prefix: str, text: str) -> dict[str, Any]:
-    return {
-        f"{prefix}_fingerprint": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        f"{prefix}_character_count": len(text),
-        f"{prefix}_topic_labels": classify_text_topics(text),
-    }
 
 
 def _parse_mac_ios_process_probe(stdout: str) -> dict[str, Any] | None:

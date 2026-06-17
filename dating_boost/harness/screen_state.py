@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import re
 import struct
 from pathlib import Path
 from typing import Any
 import zlib
+
+from dating_boost.core.send_verification import hash_text, normalize_text
 
 
 TINDER_FOREGROUND_STATES = {
@@ -241,17 +242,9 @@ def redacted_screen(screen: dict[str, Any]) -> dict[str, Any]:
     text = str(screen.get("text") or "")
     result = {key: value for key, value in screen.items() if key != "text"}
     if text:
-        result["text_fingerprint"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        result["text_fingerprint"] = hash_text(text)
         result["text_character_count"] = len(text)
     return result
-
-
-def hash_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def normalize_text(text: str) -> str:
-    return " ".join(text.lower().split())
 
 
 def tinder_profile_field_coverage(text: str) -> dict[str, bool]:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from dating_boost.core import gui_harness as _platform
 
 
@@ -2524,30 +2526,25 @@ def _verify_staged_tinder_message(
     baseline_screen: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     observed_text = str(screen.get("text") or "")
-    text_matches = _message_text_matches(observed_text, expected_text)
-    observed_stats = _expected_text_observation_stats(observed_text, expected_text)
     baseline_text = str(baseline_screen.get("text") or "") if isinstance(baseline_screen, dict) else ""
-    baseline_stats = _expected_text_observation_stats(baseline_text, expected_text) if baseline_text else None
-    result = {
-        "verification_method": "tinder_staged_message_ocr_payload_text",
-        "expected_payload_hash": _hash_text(expected_text),
-        "expected_character_count": len(expected_text),
-        "observed_text_hash": observed_stats["text_hash"],
-        "observed_character_count": observed_stats["text_character_count"],
-        "observed_expected_text_occurrences": observed_stats["expected_text_occurrences"],
-        "baseline_expected_text_occurrences": baseline_stats["expected_text_occurrences"] if baseline_stats else None,
-        "baseline_text_hash": baseline_stats["text_hash"] if baseline_stats else None,
-        "exact_text_ocr_verified": text_matches,
-        "visual_only_exact_verification_allowed": False,
-        "screen": _redacted_screen(screen),
-    }
+    result = _staged_text_ocr_evidence(
+        verification_method="tinder_staged_message_ocr_payload_text",
+        observed_text=observed_text,
+        expected_text=expected_text,
+        baseline_text=baseline_text,
+        screen=screen,
+        redact_screen=_redacted_screen,
+    )
     if screen.get("status") != "ok":
         return {**result, "status": "blocked", "reason": screen.get("reason") or "stage_screen_not_captured"}
     if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
         return {**result, "status": "blocked", "reason": screen.get("state")}
-    if not text_matches:
+    if not result["exact_text_ocr_verified"]:
         return {**result, "status": "needs_verification", "reason": "staged_text_not_verified"}
-    if baseline_stats and observed_stats["expected_text_occurrences"] <= baseline_stats["expected_text_occurrences"]:
+    if (
+        result["baseline_expected_text_occurrences"] is not None
+        and result["observed_expected_text_occurrences"] <= result["baseline_expected_text_occurrences"]
+    ):
         return {**result, "status": "needs_verification", "reason": "staged_text_not_newly_visible"}
     return {**result, "status": "ok"}
 
@@ -2613,22 +2610,13 @@ def _tinder_visual_staged_verification_request(
     *,
     reused_existing_staged_text: bool = False,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "verification_type": "staged_text_visual",
-        "status": "needs_host_visual_verification",
-        "expected_payload_hash": _hash_text(expected_text),
-        "expected_character_count": len(expected_text),
-        "screen_path": screen.get("path"),
-        "screen_state": screen.get("state"),
-        "ocr_text_hash": staged_verification.get("observed_text_hash"),
-        "ocr_text_character_count": staged_verification.get("observed_character_count"),
-        "observed_expected_text_occurrences": staged_verification.get("observed_expected_text_occurrences"),
-        "baseline_expected_text_occurrences": staged_verification.get("baseline_expected_text_occurrences"),
-        "reused_existing_staged_text": reused_existing_staged_text,
-        "next_host_action": "visually_verify_staged_text_before_live_send",
-        "instructions": "Visually inspect the focused Tinder input and confirm it exactly matches the current payload before any live send. Do not treat OCR text elsewhere in the thread as proof that the input box contains the payload.",
-    }
+    return _staged_text_visual_verification_request(
+        screen=screen,
+        staged_verification=staged_verification,
+        expected_text=expected_text,
+        extra={"reused_existing_staged_text": reused_existing_staged_text},
+        instructions="Visually inspect the focused Tinder input and confirm it exactly matches the current payload before any live send. Do not treat OCR text elsewhere in the thread as proof that the input box contains the payload.",
+    )
 
 
 
@@ -2640,24 +2628,17 @@ def _verify_staged_bumble_message(
     trusted_direct_input: bool = False,
 ) -> dict[str, Any]:
     observed_text = str(screen.get("text") or "")
-    observed_stats = _expected_text_observation_stats(observed_text, expected_text)
     baseline_text = str(baseline_screen.get("text") or "") if isinstance(baseline_screen, dict) else ""
-    baseline_stats = _expected_text_observation_stats(baseline_text, expected_text) if baseline_text else None
     active_send_button_visible = _bumble_active_send_button_visual_visible(screen)
-    result = {
-        "verification_method": "bumble_staged_message_ocr_payload_text",
-        "expected_payload_hash": _hash_text(expected_text),
-        "expected_character_count": len(expected_text),
-        "observed_text_hash": observed_stats["text_hash"],
-        "observed_character_count": observed_stats["text_character_count"],
-        "observed_expected_text_occurrences": observed_stats["expected_text_occurrences"],
-        "baseline_expected_text_occurrences": baseline_stats["expected_text_occurrences"] if baseline_stats else None,
-        "baseline_text_hash": baseline_stats["text_hash"] if baseline_stats else None,
-        "active_send_button_visual_visible": active_send_button_visible,
-        "exact_text_ocr_verified": _message_text_matches(observed_text, expected_text),
-        "visual_only_exact_verification_allowed": False,
-        "screen": _redacted_screen(screen),
-    }
+    result = _staged_text_ocr_evidence(
+        verification_method="bumble_staged_message_ocr_payload_text",
+        observed_text=observed_text,
+        expected_text=expected_text,
+        baseline_text=baseline_text,
+        screen=screen,
+        redact_screen=_redacted_screen,
+        extra={"active_send_button_visual_visible": active_send_button_visible},
+    )
     if screen.get("status") != "ok":
         return {**result, "status": "blocked", "reason": screen.get("reason") or "stage_screen_not_captured"}
     if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
@@ -2667,9 +2648,12 @@ def _verify_staged_bumble_message(
     baseline_state = baseline_screen.get("state") if isinstance(baseline_screen, dict) else None
     if screen.get("state") != "bumble_conversation" and baseline_state != "bumble_conversation":
         return {**result, "status": "blocked", "reason": "bumble_conversation_not_verified"}
-    if not _message_text_matches(observed_text, expected_text):
+    if not result["exact_text_ocr_verified"]:
         return {**result, "status": "needs_verification", "reason": "staged_text_not_verified"}
-    if baseline_stats and observed_stats["expected_text_occurrences"] <= baseline_stats["expected_text_occurrences"]:
+    if (
+        result["baseline_expected_text_occurrences"] is not None
+        and result["observed_expected_text_occurrences"] <= result["baseline_expected_text_occurrences"]
+    ):
         return {**result, "status": "needs_verification", "reason": "staged_text_not_newly_visible"}
     if not _bumble_send_marker_visible(observed_text) and not active_send_button_visible:
         return {**result, "status": "needs_verification", "reason": "bumble_send_button_not_verified_after_staging"}
@@ -2702,21 +2686,12 @@ def _bumble_visual_staged_verification_request(
     staged_verification: dict[str, Any],
     expected_text: str,
 ) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "verification_type": "staged_text_visual",
-        "status": "needs_host_visual_verification",
-        "expected_payload_hash": _hash_text(expected_text),
-        "expected_character_count": len(expected_text),
-        "screen_path": screen.get("path"),
-        "screen_state": screen.get("state"),
-        "ocr_text_hash": staged_verification.get("observed_text_hash"),
-        "ocr_text_character_count": staged_verification.get("observed_character_count"),
-        "baseline_expected_text_occurrences": staged_verification.get("baseline_expected_text_occurrences"),
-        "observed_expected_text_occurrences": staged_verification.get("observed_expected_text_occurrences"),
-        "next_host_action": "visually_verify_staged_text_before_live_send",
-        "instructions": "Visually inspect the focused Bumble input and confirm it exactly matches the current payload before any live send. Do not treat a short repeated OCR token elsewhere in the thread as enough evidence.",
-    }
+    return _staged_text_visual_verification_request(
+        screen=screen,
+        staged_verification=staged_verification,
+        expected_text=expected_text,
+        instructions="Visually inspect the focused Bumble input and confirm it exactly matches the current payload before any live send. Do not treat a short repeated OCR token elsewhere in the thread as enough evidence.",
+    )
 
 
 
@@ -2759,49 +2734,16 @@ def _verify_bumble_outbound_message(
 
 def _verify_outbound_message(screen: dict[str, Any], expected_text: str) -> dict[str, Any]:
     observed_text = str(screen.get("text") or "")
-    text_matches = _message_text_matches(observed_text, expected_text)
-    result = {
-        "verification_method": "wechat_post_send_ocr_payload_text",
-        "expected_payload_hash": _hash_text(expected_text),
-        "expected_character_count": len(expected_text),
-        "observed_text_hash": _hash_text(observed_text) if observed_text else None,
-        "observed_character_count": len(observed_text) if observed_text else None,
-        "exact_text_ocr_verified": text_matches,
-    }
+    result = _outbound_text_ocr_evidence(
+        verification_method="wechat_post_send_ocr_payload_text",
+        observed_text=observed_text,
+        expected_text=expected_text,
+    )
     if screen.get("status") != "ok":
         return {**result, "status": "blocked", "reason": screen.get("reason") or "post_action_screen_not_captured"}
-    if not text_matches:
+    if not result["exact_text_ocr_verified"]:
         return {**result, "status": "needs_verification", "reason": "outbound_message_not_verified"}
     return {**result, "status": "ok"}
-
-
-
-def _expected_text_observation_stats(text: str, expected_text: str) -> dict[str, Any]:
-    normalized_text = _normalize_text(text)
-    normalized_expected = _normalize_text(expected_text)
-    comparable_text = _message_text_comparable(text)
-    comparable_expected = _message_text_comparable(expected_text)
-    return {
-        "text_hash": _hash_text(text) if text else None,
-        "normalized_text_hash": _hash_text(normalized_text) if normalized_text else None,
-        "text_character_count": len(text) if text else None,
-        "expected_text_occurrences": comparable_text.count(comparable_expected) if comparable_expected else 0,
-    }
-
-
-
-def _message_text_matches(observed_text: str, expected_text: str) -> bool:
-    if not expected_text:
-        return False
-    if expected_text in observed_text or _normalize_text(expected_text) in _normalize_text(observed_text):
-        return True
-    comparable_expected = _message_text_comparable(expected_text)
-    return bool(comparable_expected and comparable_expected in _message_text_comparable(observed_text))
-
-
-
-def _message_text_comparable(text: str) -> str:
-    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", text.lower())
 
 
 

@@ -2654,30 +2654,28 @@ def _verify_staged_tashuo_message(
         else ""
     )
     ax_exact = bool(ax_text) and platform._message_text_matches(ax_text, expected_text)
-    result = {
-        "verification_method": (
+    result = platform._staged_text_ocr_evidence(
+        verification_method=(
             "tashuo_staged_message_ax_then_host_visual_payload_text"
             if ocr_disabled_after_message_page
             else "tashuo_staged_message_ax_then_ocr_payload_text"
         ),
-        "ocr_disabled_after_message_page": ocr_disabled_after_message_page,
-        "expected_payload_hash": platform._hash_text(expected_text),
-        "expected_character_count": len(expected_text),
-        "observed_text_hash": observed_stats["text_hash"],
-        "observed_character_count": observed_stats["text_character_count"],
-        "observed_expected_text_occurrences": observed_stats["expected_text_occurrences"],
-        "baseline_expected_text_occurrences": baseline_stats["expected_text_occurrences"] if baseline_stats else None,
-        "baseline_text_hash": baseline_stats["text_hash"] if baseline_stats else None,
-        "send_action": "press_return",
-        "exact_text_ocr_verified": screen_exact or crop_exact,
-        "exact_text_ax_verified": ax_exact,
-        "ax_text_area_value_hash": platform._hash_text(ax_text) if ax_text else None,
-        "ax_text_area_character_count": len(ax_text) if ax_text else 0,
-        "screen_exact_text_ocr_verified": screen_exact,
-        "input_crop_exact_text_ocr_verified": crop_exact,
-        "visual_only_exact_verification_allowed": False,
-        "screen": platform._redacted_screen(screen),
-    }
+        observed_text=combined_text or observed_text,
+        expected_text=expected_text,
+        baseline_text=baseline_text,
+        screen=screen,
+        redact_screen=platform._redacted_screen,
+        exact_text_ocr_verified=screen_exact or crop_exact,
+        extra={
+            "ocr_disabled_after_message_page": ocr_disabled_after_message_page,
+            "send_action": "press_return",
+            "exact_text_ax_verified": ax_exact,
+            "ax_text_area_value_hash": platform._hash_text(ax_text) if ax_text else None,
+            "ax_text_area_character_count": len(ax_text) if ax_text else 0,
+            "screen_exact_text_ocr_verified": screen_exact,
+            "input_crop_exact_text_ocr_verified": crop_exact,
+        },
+    )
     possible_append_to_existing = (
         bool(baseline_stats)
         and int(baseline_stats.get("expected_text_occurrences") or 0) > 0
@@ -3057,25 +3055,22 @@ def _tashuo_visual_staged_verification_request(
 ) -> dict[str, Any]:
     crop_ocr = staged_verification.get("input_crop_ocr")
     crop = crop_ocr if isinstance(crop_ocr, dict) else {}
-    return {
-        "schema_version": 1,
-        "verification_type": "staged_text_visual",
-        "status": "needs_host_visual_verification",
-        "expected_payload_hash": platform._hash_text(expected_text),
-        "expected_character_count": len(expected_text),
-        "screen_path": screen.get("path"),
-        "screen_state": screen.get("state"),
-        "input_crop_path": crop.get("path"),
-        "input_crop_resized_path": crop.get("resized_path"),
-        "input_crop_region": crop.get("region") or TASHUO_MAC_IOS_APP_INPUT_OCR_REGION,
-        "ocr_status": "skipped" if staged_verification.get("ocr_disabled_after_message_page") else crop.get("status"),
-        "ocr_text_hash": None if staged_verification.get("ocr_disabled_after_message_page") else crop.get("text_hash"),
-        "ocr_text_character_count": None
-        if staged_verification.get("ocr_disabled_after_message_page")
-        else crop.get("text_character_count"),
-        "next_host_action": "visually_verify_staged_text_before_live_send",
-        "instructions": "Use visual inspection of the screenshot to compare the staged input with the expected payload held by the current action request. Do not use OCR and do not press Return unless the visual comparison is exact.",
-    }
+    return platform._staged_text_visual_verification_request(
+        screen=screen,
+        staged_verification=staged_verification,
+        expected_text=expected_text,
+        extra={
+            "input_crop_path": crop.get("path"),
+            "input_crop_resized_path": crop.get("resized_path"),
+            "input_crop_region": crop.get("region") or TASHUO_MAC_IOS_APP_INPUT_OCR_REGION,
+            "ocr_status": "skipped" if staged_verification.get("ocr_disabled_after_message_page") else crop.get("status"),
+            "ocr_text_hash": None if staged_verification.get("ocr_disabled_after_message_page") else crop.get("text_hash"),
+            "ocr_text_character_count": None
+            if staged_verification.get("ocr_disabled_after_message_page")
+            else crop.get("text_character_count"),
+        },
+        instructions="Use visual inspection of the screenshot to compare the staged input with the expected payload held by the current action request. Do not use OCR and do not press Return unless the visual comparison is exact.",
+    )
 
 
 def _tashuo_host_visual_outbound_verification_available(
