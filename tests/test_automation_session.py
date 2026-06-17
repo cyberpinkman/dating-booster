@@ -668,12 +668,12 @@ class AutomationSessionTests(unittest.TestCase):
         self.assertEqual(revision_request["candidate_key"], "row_ada")
         self.assertEqual(revision_request["reason"], "draft_revision_required")
         self.assertTrue(revision_request["requires_revised_draft"])
-        self.assertIn("specific appointment timing", revision_request["draft_revision_reason"])
+        self.assertEqual(revision_request["draft_revision_reason"], "content_soft_invite_detail")
         self.assertEqual(states_exit, 0)
         states_by_key = {state["candidate_key"]: state for state in states_payload["states"]}
         self.assertEqual(states_by_key["row_ada"]["state"], "needs_reply")
         self.assertTrue(states_by_key["row_ada"]["draft_revision_required"])
-        self.assertIn("specific appointment timing", states_by_key["row_ada"]["draft_revision_reason"])
+        self.assertEqual(states_by_key["row_ada"]["draft_revision_reason"], "content_soft_invite_detail")
 
     def test_automation_context_uses_projection_plus_latest_observation(self):
         with tempfile.TemporaryDirectory() as temp_dir:

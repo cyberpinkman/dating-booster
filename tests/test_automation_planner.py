@@ -80,6 +80,10 @@ class AutomationPlannerTests(unittest.TestCase):
             self.assertEqual(action_request["conversation_stage"], "warmup")
             self.assertEqual(action_request["planner_alignment"], "ok")
             self.assertEqual(action_request["next_milestone"], "从猫桥到她平时在家状态")
+            self.assertRegex(action_request["draft_review_id"], r"^draft_review_[0-9a-f]{16}$")
+            self.assertEqual(action_request["draft_review_summary"]["allowed_for_managed_send"], True)
+            self.assertEqual(action_request["policy"]["draft_review_id"], action_request["draft_review_id"])
+            self.assertEqual(action_request["policy"]["allowed"], action_request["draft_review_summary"]["allowed_for_managed_send"])
 
     def test_session_step_requires_planner_assessment_before_auto_send(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -26,6 +26,7 @@ from dating_boost.core.capabilities import build_capabilities
 from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.daemon import DaemonRepository
 from dating_boost.core.diagnostics import DiagnosticsRepository
+from dating_boost.core.draft_review_audit import DraftReviewAuditRepository
 from dating_boost.core.feedback import create_feedback_event
 from dating_boost.core.live_send_contract import (
     live_send_action_request_block_reason,
@@ -77,7 +78,7 @@ from dating_boost.perception.fixture_loader import load_observation
 from dating_boost.perception.observations import AppObservation
 from dating_boost.perception.screenshot_loader import build_observation_from_screenshot_analysis
 from dating_boost.policy import Action, authorize_action
-from dating_boost.policy.content import ContentPolicyDecision, evaluate_draft_content
+from dating_boost.policy.draft_review import DraftReviewDecision, review_draft
 from dating_boost.core.user_disclosure import UserDisclosureRepository, interview_template
 
 
@@ -576,6 +577,11 @@ def main(argv: list[str] | None = None) -> int:
     policy_check_draft_parser.add_argument("--input", required=True, type=Path)
     policy_check_draft_parser.add_argument("--context", required=True, type=Path)
     policy_check_draft_parser.add_argument("--data-dir", type=Path)
+    policy_check_draft_parser.add_argument(
+        "--review-mode",
+        choices=["display", "stage", "managed-live"],
+        default="display",
+    )
     policy_check_draft_parser.set_defaults(handler=_handle_policy_check_draft)
 
     action_parser = subparsers.add_parser("action", help="Agent-native host action audit commands.")
@@ -2684,26 +2690,40 @@ def _handle_draft(args: argparse.Namespace) -> int:
     observation = ObservationRepository(args.data_dir).load_latest_observation(args.match_id)
     context_pack = _build_mvp_context_pack(profile, args.match_id, reply_mode, observation, args.data_dir)
     draft = generate_reply(context_pack, reply_mode, backend)
-    policy = evaluate_draft_content(draft, context_pack)
+    review = review_draft(draft, context_pack, mode="display")
+    DraftReviewAuditRepository(args.data_dir).append_review(
+        review,
+        draft_payload=_draft_to_dict(draft),
+        context_pack=context_pack,
+        mode="display",
+        target_match_id=args.match_id,
+    )
+    _record_support_draft_review(
+        args.data_dir,
+        draft_payload=_draft_to_dict(draft),
+        context_pack=context_pack,
+        review=review,
+        command="draft",
+    )
 
-    if not policy.allowed:
+    if not review.allowed_for_display:
         _print_json(
             {
                 "status": "blocked",
                 "match_id": args.match_id,
                 "mode": reply_mode.value,
-                "policy": _policy_to_dict(policy),
+                "draft_review": _draft_review_public_dict(review),
             }
         )
         return 2
 
     payload: dict[str, Any] = {
-        "status": "ok",
+        "status": review.status,
         "match_id": args.match_id,
         "mode": reply_mode.value,
         "best_reply": draft.best_reply,
         "draft": _draft_to_dict(draft),
-        "policy": _policy_to_dict(policy),
+        "draft_review": _draft_review_public_dict(review),
     }
     if args.debug_context:
         payload["context_pack"] = context_pack
@@ -2749,28 +2769,38 @@ def _handle_context_build(args: argparse.Namespace) -> int:
 
 def _handle_policy_check_draft(args: argparse.Namespace) -> int:
     draft_payload = _read_json_object(args.input)
-    draft = _draft_from_dict(draft_payload)
     context_payload = _read_json_object(args.context)
     context_pack = context_payload.get("context_pack", context_payload)
     if not isinstance(context_pack, dict):
         raise ValueError("--context must contain a JSON object or a context_pack object")
-    policy = evaluate_draft_content(draft, context_pack)
+    mode = str(args.review_mode).replace("-", "_")
+    review = review_draft(draft_payload, context_pack, mode=mode)
     if args.data_dir is not None:
-        _record_support_policy_check_draft(
+        DraftReviewAuditRepository(args.data_dir).append_review(
+            review,
+            draft_payload=draft_payload,
+            context_pack=context_pack,
+            mode=mode,
+        )
+        _record_support_draft_review(
             args.data_dir,
             draft_payload=draft_payload,
-            draft=draft,
             context_pack=context_pack,
-            policy=policy,
+            review=review,
         )
+    allowed = {
+        "display": review.allowed_for_display,
+        "stage": review.allowed_for_stage,
+        "managed_live": review.allowed_for_managed_send,
+    }[mode]
     _print_json(
         {
             "schema_version": 1,
-            "status": "ok" if policy.allowed else "blocked",
-            "policy": _policy_to_dict(policy),
+            "status": review.status,
+            "draft_review": _draft_review_public_dict(review),
         }
     )
-    return 0 if policy.allowed else 2
+    return 0 if allowed else 2
 
 
 def _handle_planner_update(args: argparse.Namespace) -> int:
@@ -3512,22 +3542,32 @@ def _draft_from_dict(data: dict[str, Any]) -> DraftResponse:
     )
 
 
-def _policy_to_dict(policy: ContentPolicyDecision) -> dict[str, Any]:
+def _draft_review_public_dict(review: DraftReviewDecision) -> dict[str, Any]:
     return {
-        "allowed": policy.allowed,
-        "severity": policy.severity,
-        "reason": policy.reason,
-        "requires_user_confirmation": policy.requires_user_confirmation,
+        "schema_version": review.schema_version,
+        "review_id": review.review_id,
+        "status": review.status,
+        "allowed_for_display": review.allowed_for_display,
+        "allowed_for_stage": review.allowed_for_stage,
+        "allowed_for_managed_send": review.allowed_for_managed_send,
+        "requires_user_confirmation": review.requires_user_confirmation,
+        "primary_reason": review.primary_reason,
+        "summary": review.summary,
+        "findings": [finding.to_dict() for finding in review.findings],
+        "revision_hints": list(review.revision_hints),
+        "payload_hash": review.payload_hash,
+        "payload_format": review.payload_format,
+        "message_count": review.message_count,
     }
 
 
-def _record_support_policy_check_draft(
+def _record_support_draft_review(
     data_dir: Path,
     *,
     draft_payload: dict[str, Any],
-    draft: DraftResponse,
     context_pack: dict[str, Any],
-    policy: ContentPolicyDecision,
+    review: DraftReviewDecision,
+    command: str = "policy_check_draft",
 ) -> None:
     try:
         repository = SupportLogRepository(data_dir)
@@ -3536,28 +3576,25 @@ def _record_support_policy_check_draft(
             return
         repository.record_event(
             session_id=str(active["session_id"]),
-            event_type="draft_generated",
+            event_type="draft_review",
             payload={
-                "command": "policy_check_draft",
+                "command": command,
                 "target_match_id": context_pack.get("match_id"),
-                "draft": _draft_to_dict(draft),
+                "review_id": review.review_id,
+                "draft_review_summary": review.summary,
                 "context_source_manifest": context_source_manifest(context_pack),
-                "policy": _policy_to_dict(policy),
+                "draft_fingerprint": hashlib.sha256(
+                    str(draft_payload.get("best_reply") or "").encode("utf-8")
+                ).hexdigest(),
+                "draft_character_count": len(str(draft_payload.get("best_reply") or "")),
+                "draft_topic_labels": classify_text_topics(str(draft_payload.get("best_reply") or "")),
             },
             sensitive={
                 "draft_payload": draft_payload,
-                "draft_text": draft.best_reply,
+                "context_pack": context_pack,
+                "draft_review": review.to_dict(),
             },
             sensitive_kind="draft",
-        )
-        repository.record_event(
-            session_id=str(active["session_id"]),
-            event_type="policy_check_draft",
-            payload={
-                "target_match_id": context_pack.get("match_id"),
-                "context_source_manifest": context_source_manifest(context_pack),
-                "policy": _policy_to_dict(policy),
-            },
         )
     except Exception:
         return

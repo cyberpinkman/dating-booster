@@ -516,16 +516,108 @@ class SupportLogTests(unittest.TestCase):
             _sensitive_names, sensitive_joined = self._read_zip(sensitive_bundle)
 
         self.assertIn(policy_exit, {0, 2})
-        self.assertIn("policy", policy_payload)
+        self.assertIn("draft_review", policy_payload)
+        self.assertNotIn("policy", policy_payload)
         self.assertEqual(strict_exit, 0)
         self.assertIn(b"policy_check_draft", strict_joined)
-        self.assertIn(b"draft_generated", strict_joined)
+        self.assertIn(b"draft_review", strict_joined)
         self.assertIn(b"context_source_manifest", strict_joined)
         self.assertIn(b"dogs", strict_joined)
         self.assertIn(b"work", strict_joined)
         self.assertNotIn("AI内测项目".encode("utf-8"), strict_joined)
         self.assertEqual(sensitive_exit, 0)
         self.assertIn("AI内测项目".encode("utf-8"), sensitive_joined)
+
+    def test_draft_command_records_sensitive_review_evidence_when_support_session_active(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            strict_bundle = root / "draft-strict.zip"
+            sensitive_bundle = root / "draft-sensitive.zip"
+            self._run([
+                "init-profile",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                "tests/fixtures/intelligence/user_profile.json",
+            ])
+            _, import_payload = self._run([
+                "import-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                "tests/fixtures/intelligence/app_observation_chat.json",
+            ])
+            match_id = str(import_payload["match_id"])
+            self._run(["data", "migrate", "--data-dir", str(data_dir), "--json"])
+            _, start_payload = self._run([
+                "support",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--host",
+                "codex",
+                "--app-id",
+                "tinder",
+                "--json",
+            ])
+            session_id = start_payload["session_id"]
+
+            draft_exit, draft_payload = self._run([
+                "draft",
+                "--data-dir",
+                str(data_dir),
+                "--match-id",
+                match_id,
+                "--mode",
+                "adaptive",
+                "--backend",
+                "scripted",
+                "--scripted-backend-output",
+                "tests/fixtures/intelligence/scripted_reply.json",
+            ])
+            strict_exit, _ = self._run([
+                "support",
+                "bundle",
+                "--data-dir",
+                str(data_dir),
+                "--session-id",
+                session_id,
+                "--output",
+                str(strict_bundle),
+                "--redaction",
+                "strict",
+                "--json",
+            ])
+            sensitive_exit, _ = self._run([
+                "support",
+                "bundle",
+                "--data-dir",
+                str(data_dir),
+                "--session-id",
+                session_id,
+                "--output",
+                str(sensitive_bundle),
+                "--redaction",
+                "full-with-consent",
+                "--include-sensitive",
+                "draft",
+                "--confirm",
+                f"export-sensitive:{session_id}",
+                "--json",
+            ])
+            _strict_names, strict_joined = self._read_zip(strict_bundle)
+            _sensitive_names, sensitive_joined = self._read_zip(sensitive_bundle)
+
+        self.assertEqual(draft_exit, 0)
+        self.assertIn("draft_review", draft_payload)
+        self.assertEqual(strict_exit, 0)
+        self.assertIn(b"draft_review", strict_joined)
+        self.assertIn(b"context_source_manifest", strict_joined)
+        self.assertNotIn(b"Sounds fun", strict_joined)
+        self.assertEqual(sensitive_exit, 0)
+        self.assertIn(b"Sounds fun", sensitive_joined)
 
     def test_harness_stage_records_redacted_action_and_sensitive_draft_when_support_session_active(self):
         with tempfile.TemporaryDirectory() as temp_dir:

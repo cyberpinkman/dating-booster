@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.draft_review_audit import DraftReviewAuditRepository
 from dating_boost.core.production_store import ProductionDataStore
 
 
@@ -86,6 +87,14 @@ def live_send_next_host_action(reason: str | None) -> str:
         "planner_alignment_not_ok",
         "conversation_stage_required",
         "conversation_move_required",
+        "action_request_draft_review_required",
+        "action_request_draft_review_mismatch",
+        "draft_review_audit_not_found",
+        "draft_review_audit_not_managed_live",
+        "draft_review_audit_not_allowed",
+        "draft_review_audit_payload_hash_mismatch",
+        "draft_review_audit_target_missing",
+        "draft_review_audit_target_mismatch",
     }:
         return "use_operator_or_managed_session_work_item"
     return "use_operator_or_managed_session_work_item"
@@ -195,6 +204,11 @@ def live_send_action_request_block_reason(
     policy = action_request.get("policy")
     if not isinstance(policy, dict) or policy.get("allowed") is not True:
         return "action_request_policy_not_allowed"
+    draft_review_id = _stripped_or_none(action_request.get("draft_review_id"))
+    if draft_review_id is None:
+        return "action_request_draft_review_required"
+    if _stripped_or_none(policy.get("draft_review_id")) != draft_review_id:
+        return "action_request_draft_review_mismatch"
 
     target_match_id, target_reason = live_send_target_match_id(action_request)
     if target_reason is not None:
@@ -221,6 +235,14 @@ def live_send_action_request_block_reason(
     planner_reason = _planner_evidence_block_reason(action_request)
     if planner_reason is not None:
         return planner_reason
+    if data_dir is not None:
+        draft_review_reason = DraftReviewAuditRepository(data_dir).managed_send_block_reason(
+            draft_review_id,
+            payload_hash=expected_hash,
+            target_match_id=target_match_id,
+        )
+        if draft_review_reason is not None:
+            return draft_review_reason
     return None
 
 

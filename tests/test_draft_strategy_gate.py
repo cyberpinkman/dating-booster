@@ -1,7 +1,7 @@
 import unittest
 
-from dating_boost.core.automation import _draft_strategy_block_reason
 from dating_boost.perception.observations import AppObservation
+from dating_boost.policy.draft_review import review_draft
 
 
 class DraftStrategyGateTests(unittest.TestCase):
@@ -375,6 +375,24 @@ def _observation(
             "raw_ref": None,
         }
     )
+
+
+def _draft_strategy_block_reason(
+    draft_payload: dict[str, object],
+    planner_recommendation: dict[str, object],
+    observation: AppObservation,
+) -> str | None:
+    review = review_draft(
+        draft_payload,
+        {"match_id": "strategy_fixture", "items": []},
+        mode="managed_live",
+        observation=observation,
+        planner_recommendation=planner_recommendation,
+    )
+    for finding in review.findings:
+        if finding.category in {"strategy", "temporal_fit"}:
+            return finding.code
+    return None
 
 
 if __name__ == "__main__":

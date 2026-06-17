@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.context_pack import build_context_pack
+from dating_boost.core.draft_review_audit import DraftReviewAuditRepository
 from dating_boost.core.goals import DEFAULT_GOAL_TYPE, get_goal_type_definition
 from dating_boost.core.memory.ingest import store_observation_with_memory
 from dating_boost.core.memory.proposals import extract_proposals
@@ -27,7 +28,12 @@ from dating_boost.core.storage import JsonStorage
 from dating_boost.core.user_disclosure import UserDisclosureRepository
 from dating_boost.intelligence.reply_generator import DraftResponse
 from dating_boost.perception.observations import AppObservation
-from dating_boost.policy.content import evaluate_draft_content
+from dating_boost.policy.draft_review import (
+    draft_messages_payload_hash,
+    draft_payload_messages,
+    draft_strategy_evidence,
+    review_draft,
+)
 
 
 ACTIVE_SLOT_STATUSES = {"soft_mentioned", "handoff_pending", "user_confirmed"}
@@ -852,34 +858,6 @@ class AutomationRepository:
                 else:
                     state["state"] = "needs_reply"
                 warnings.extend(str(reason) for reason in planner_recommendation.get("block_reasons", []))
-            elif planner_recommendation and draft_payload and not _draft_aligns_with_planner(dict(draft_payload), planner_recommendation):
-                state["state"] = "needs_reply"
-                warnings.append("planner_misaligned_draft")
-                warnings.append("draft_revision_required")
-                _append_draft_revision_request(
-                    scan_requests,
-                    candidate_key=candidate_key,
-                    match_id=match_id,
-                    visible_name=observation.match_identity_hints.visible_name,
-                    reason="planner_misaligned_draft",
-                )
-            elif planner_recommendation and draft_payload and (
-                strategy_block := _draft_strategy_block_reason(
-                    dict(draft_payload),
-                    planner_recommendation,
-                    observation,
-                )
-            ):
-                _mark_draft_revision_required(state, reason=strategy_block)
-                warnings.append(strategy_block)
-                warnings.append("draft_revision_required")
-                _append_draft_revision_request(
-                    scan_requests,
-                    candidate_key=candidate_key,
-                    match_id=match_id,
-                    visible_name=observation.match_identity_hints.visible_name,
-                    reason=strategy_block,
-                )
             elif host_identity_confidence == "low":
                 state["state"] = "needs_reply"
                 warnings.append("low_identity_confidence")
@@ -1239,62 +1217,54 @@ class AutomationRepository:
     ) -> None:
         raw_draft = dict(draft_payload)
         draft = _draft_from_dict(raw_draft)
-        disclosure_moves = {"light_self_disclosure", "reciprocal_disclosure", "low_investment_repair"}
         disclosure_repo = UserDisclosureRepository(self.root)
-        disclosure_readiness = disclosure_repo.readiness(mode="autonomous")
-        if draft.conversation_move in disclosure_moves and not disclosure_readiness["ready"]:
-            state["state"] = "needs_reply"
-            warnings.append("user_disclosure_profile_required")
-            return
         disclosure_source = str(
-            raw_draft.get("disclosure_source")
-            or ("simulated_soft" if draft.conversation_move in disclosure_moves else "none")
+            raw_draft.get("disclosure_source") or ("simulated_soft" if draft.conversation_move in {
+                "light_self_disclosure",
+                "reciprocal_disclosure",
+                "low_investment_repair",
+            } else "none")
         )
         used_material_ids = [
             str(item)
             for item in raw_draft.get("used_user_material_ids", [])
             if str(item).strip()
         ] if isinstance(raw_draft.get("used_user_material_ids"), list) else []
-        disclosure_error = _disclosure_policy_error(
-            draft_move=draft.conversation_move,
-            disclosure_moves=disclosure_moves,
-            disclosure_source=disclosure_source,
-            used_material_ids=used_material_ids,
-            disclosure_profile=disclosure_repo.load_profile_or_none(),
-        )
-        if disclosure_error:
-            state["state"] = "needs_reply"
-            warnings.append(disclosure_error)
-            return
-
-        question_count = _draft_question_count(raw_draft, draft.best_reply)
-        if (
-            planner_recommendation
-            and int(planner_recommendation.get("low_investment_streak") or 0) >= 2
-            and int(planner_recommendation.get("question_debt") or 0) >= 2
-            and question_count > 0
-        ):
-            state["state"] = "needs_reply"
-            warnings.append("low_investment_direct_question_blocked")
-            return
 
         context_pack = self._context_pack(match_id, observation)
-        policy = evaluate_draft_content(draft, context_pack)
-        if not policy.allowed:
-            _mark_draft_revision_required(state, reason=policy.reason)
-            warnings.append("draft_blocked")
+        review = review_draft(
+            raw_draft,
+            context_pack,
+            mode="managed_live",
+            observation=observation,
+            planner_recommendation=planner_recommendation,
+            disclosure_profile=disclosure_repo.load_profile_or_none(),
+        )
+        DraftReviewAuditRepository(self.root).append_review(
+            review,
+            draft_payload=raw_draft,
+            context_pack=context_pack,
+            mode="managed_live",
+            target_match_id=match_id,
+        )
+        if not review.allowed_for_managed_send:
+            _mark_draft_revision_required(state, reason=review.primary_reason)
+            finding_codes = [finding.code for finding in review.findings]
+            warnings.extend(code for code in finding_codes if code not in warnings)
+            if any(finding.category == "content" for finding in review.findings):
+                warnings.append("draft_blocked")
             warnings.append("draft_revision_required")
             _append_draft_revision_request(
                 scan_requests,
                 candidate_key=candidate_key,
                 match_id=match_id,
                 visible_name=observation.match_identity_hints.visible_name,
-                reason=policy.reason,
+                reason=review.primary_reason,
             )
             return
 
-        payload_messages = _draft_payload_messages(raw_draft, draft.best_reply)
-        payload_hash = _draft_messages_payload_hash(payload_messages)
+        payload_messages = draft_payload_messages(raw_draft, draft.best_reply)
+        payload_hash = draft_messages_payload_hash(payload_messages)
         retry_suffix = _send_retry_suffix(state, payload_hash)
         if state.get("last_outbound_payload_hash") == payload_hash:
             if _state_has_active_send_request(state):
@@ -1342,11 +1312,14 @@ class AutomationRepository:
             "target_profile_observation": observation.profile_observation.to_dict(),
             "requires_post_action_verification": True,
             "policy": {
-                "allowed": policy.allowed,
-                "severity": policy.severity,
-                "reason": policy.reason,
-                "requires_user_confirmation": policy.requires_user_confirmation,
+                "allowed": review.allowed_for_managed_send,
+                "severity": "low" if review.allowed_for_managed_send else "high",
+                "reason": review.primary_reason,
+                "requires_user_confirmation": review.requires_user_confirmation,
+                "draft_review_id": review.review_id,
             },
+            "draft_review_id": review.review_id,
+            "draft_review_summary": review.summary,
             "planner_revision": planner_recommendation.get("planner_revision") if planner_recommendation else None,
             "conversation_stage": planner_recommendation.get("conversation_stage") if planner_recommendation else None,
             "conversation_move": draft.conversation_move,
@@ -1357,7 +1330,7 @@ class AutomationRepository:
             "question_debt_after": planner_recommendation.get("question_debt") if planner_recommendation else state.get("question_debt"),
             "reciprocity_balance_after": planner_recommendation.get("reciprocity_balance") if planner_recommendation else state.get("reciprocity_balance"),
             "low_investment_repair_applied": low_investment_repair_applied,
-            "draft_strategy_evidence": _draft_strategy_evidence(
+            "draft_strategy_evidence": draft_strategy_evidence(
                 raw_draft,
                 planner_recommendation,
                 observation,
@@ -1439,50 +1412,6 @@ def _draft_from_dict(data: dict[str, Any]) -> DraftResponse:
     )
 
 
-def _disclosure_policy_error(
-    *,
-    draft_move: str,
-    disclosure_moves: set[str],
-    disclosure_source: str,
-    used_material_ids: list[str],
-    disclosure_profile: dict[str, Any] | None,
-) -> str | None:
-    valid_sources = {"none", "user_material", "simulated_soft", "user_confirmed"}
-    if disclosure_source not in valid_sources:
-        return "invalid_disclosure_source"
-    if draft_move not in disclosure_moves:
-        return None
-    if disclosure_profile is None:
-        return "user_disclosure_profile_required"
-
-    simulation_policy = str(disclosure_profile.get("simulation_policy") or "free_simulation_soft")
-    material_ids = {
-        str(item.get("material_id"))
-        for item in disclosure_profile.get("shareable_material", [])
-        if (
-            isinstance(item, dict)
-            and str(item.get("material_id") or "").strip()
-            and isinstance(item.get("text"), str)
-            and item["text"].strip()
-            and str(item.get("sensitivity") or "low") in {"low", "medium"}
-        )
-    }
-
-    if disclosure_source == "simulated_soft":
-        if simulation_policy != "free_simulation_soft":
-            return "simulated_disclosure_not_allowed"
-        return None
-    if disclosure_source == "user_material":
-        if not used_material_ids:
-            return "user_material_disclosure_requires_material_ids"
-        if not set(used_material_ids).issubset(material_ids):
-            return "user_material_disclosure_unknown_material_id"
-        return None
-    if disclosure_source == "user_confirmed":
-        return "user_confirmed_disclosure_requires_handoff"
-    return "disclosure_source_required"
-
-
 def _target_profile_ready_for_send(observation: AppObservation) -> bool:
     profile = observation.profile_observation
     if profile.review_status != "observed":
@@ -1492,26 +1421,6 @@ def _target_profile_ready_for_send(observation: AppObservation) -> bool:
         or any(str(item).strip() for item in profile.photo_cues)
         or any(str(item).strip() for item in profile.hook_candidates)
     )
-
-
-def _draft_question_count(raw_draft: dict[str, Any], best_reply: str) -> int:
-    explicit = raw_draft.get("question_count")
-    if isinstance(explicit, int) and not isinstance(explicit, bool) and explicit >= 0:
-        return explicit
-    reply_shape = str(raw_draft.get("reply_shape") or "")
-    if reply_shape in {"question", "contains_question"}:
-        return 1
-    return 1 if _looks_like_direct_question(best_reply) else 0
-
-
-def _looks_like_direct_question(text: str) -> bool:
-    stripped = text.strip()
-    if "?" in stripped or "？" in stripped:
-        return True
-    question_phrases = ("是不是", "有没有", "会不会", "要不要", "能不能", "为什么", "怎么")
-    if any(marker in stripped for marker in question_phrases):
-        return True
-    return bool(re.search(r"(吗|嘛|么|呢)[。！!…]*$", stripped))
 
 
 def _can_request_send(
@@ -2495,503 +2404,6 @@ def _text_hash(value: str) -> str:
 def _draft_payload_hash(payload: dict[str, Any]) -> str:
     return _text_hash(str(payload.get("best_reply", "")))
 
-
-def _draft_aligns_with_planner(draft_payload: dict[str, Any], planner_recommendation: dict[str, Any]) -> bool:
-    recommended_move = str(planner_recommendation.get("recommended_move") or "")
-    draft_move = str(draft_payload.get("conversation_move") or "")
-    return bool(recommended_move and draft_move == recommended_move)
-
-
-def _draft_strategy_block_reason(
-    draft_payload: dict[str, Any],
-    planner_recommendation: dict[str, Any],
-    observation: AppObservation,
-) -> str | None:
-    low_investment_streak = int(planner_recommendation.get("low_investment_streak") or 0)
-    topic_lifecycle = planner_recommendation.get("topic_lifecycle")
-    topic = dict(topic_lifecycle) if isinstance(topic_lifecycle, dict) else {}
-    current_topic = str(topic.get("current_topic") or "").strip()
-    topic_state = str(topic.get("topic_state") or "").strip()
-    texts = [
-        message["text"]
-        for message in _draft_payload_messages(
-            draft_payload,
-            str(draft_payload.get("best_reply") or ""),
-        )
-    ]
-    combined = "\n".join(texts)
-
-    if _draft_forced_choice_restates_confirmed_info(
-        texts,
-        current_topic=current_topic,
-        topic=topic,
-        observation=observation,
-    ):
-        return "draft_forced_choice_restates_confirmed_info"
-    if _draft_stale_temporal_topic_without_bridge(
-        draft_payload,
-        texts,
-        current_topic=current_topic,
-        topic=topic,
-        observation=observation,
-    ):
-        return "draft_stale_temporal_topic_without_bridge"
-    if _draft_stale_reactivation_continues_old_topic(
-        draft_payload,
-        texts,
-        current_topic=current_topic,
-        topic=topic,
-    ):
-        return "draft_stale_reactivation_continues_old_topic"
-    if _draft_work_topic_not_preferred(draft_payload, texts, observation):
-        return "draft_work_topic_not_preferred"
-    if any(_looks_like_ab_choice_question(line) for line in _draft_lines(texts)):
-        return "draft_ai_survey_choice_question"
-    if _draft_redundant_confirmation_question(
-        draft_payload,
-        texts,
-        current_topic=current_topic,
-        topic=topic,
-        observation=observation,
-    ):
-        return "draft_redundant_confirmation_question"
-    if _draft_lacks_answerable_relationship_handle(
-        draft_payload,
-        texts,
-        planner_recommendation=planner_recommendation,
-        current_topic=current_topic,
-    ):
-        return "draft_no_answerable_relationship_handle"
-
-    if str(planner_recommendation.get("recommended_move") or "") != "low_investment_repair":
-        return None
-    if low_investment_streak < 2 and topic_state not in {"saturating", "exhausted"}:
-        return None
-
-    hooks = [
-        str(item).strip()
-        for item in observation.profile_observation.hook_candidates
-        if str(item).strip()
-    ]
-    non_topic_hooks = [hook for hook in hooks if hook != current_topic]
-    selected_hook = str(draft_payload.get("selected_hook") or "").strip()
-    strategic_delta = str(draft_payload.get("strategic_delta") or "").strip()
-    if selected_hook and selected_hook != current_topic and selected_hook in combined + strategic_delta:
-        return None
-    if strategic_delta and any(hook and hook != current_topic and hook in strategic_delta + combined for hook in hooks):
-        return None
-    if any(hook and hook != current_topic and hook in combined for hook in non_topic_hooks):
-        return None
-    if current_topic and current_topic not in combined:
-        return None
-    return "draft_strategy_no_delta"
-
-
-def _draft_stale_temporal_topic_without_bridge(
-    draft_payload: dict[str, Any],
-    texts: list[str],
-    *,
-    current_topic: str,
-    topic: dict[str, Any],
-    observation: AppObservation,
-) -> bool:
-    age_days = _latest_inbound_age_days(topic, observation, draft_payload)
-    if age_days is None or age_days < 2:
-        return False
-    combined = "\n".join(
-        [
-            *texts,
-            current_topic,
-            str(draft_payload.get("selected_hook") or ""),
-            str(draft_payload.get("strategic_delta") or ""),
-        ]
-    )
-    if not _has_transient_topic(combined):
-        return False
-    strategic_delta = str(draft_payload.get("strategic_delta") or "")
-    selected_hook = str(draft_payload.get("selected_hook") or "")
-    if _has_non_transient_substantial_hook(strategic_delta) or _has_non_transient_substantial_hook(selected_hook):
-        return False
-    return True
-
-
-def _draft_lacks_answerable_relationship_handle(
-    draft_payload: dict[str, Any],
-    texts: list[str],
-    *,
-    planner_recommendation: dict[str, Any],
-    current_topic: str,
-) -> bool:
-    recommended_move = str(planner_recommendation.get("recommended_move") or "")
-    if recommended_move in {"wait", "slow_down_wait", "handoff"}:
-        return False
-    conversation_move = str(draft_payload.get("conversation_move") or "")
-    if conversation_move in {"wait", "slow_down_wait", "handoff"}:
-        return False
-    combined = "\n".join(texts)
-    if any(marker in combined for marker in ANSWERABLE_HANDLE_MARKERS):
-        return False
-    selected_hook = str(draft_payload.get("selected_hook") or "").strip()
-    strategic_delta = str(draft_payload.get("strategic_delta") or "").strip()
-    if selected_hook and selected_hook != current_topic and selected_hook in combined + strategic_delta:
-        return False
-    if _has_non_transient_substantial_hook(strategic_delta) and not _strategic_delta_is_weak(strategic_delta):
-        return False
-    return True
-
-
-def _draft_redundant_confirmation_question(
-    draft_payload: dict[str, Any],
-    texts: list[str],
-    *,
-    current_topic: str,
-    topic: dict[str, Any],
-    observation: AppObservation,
-) -> bool:
-    latest_texts = [
-        str(message.get("text") or "").strip()
-        for message in observation.conversation_observation.latest_inbound_messages
-    ]
-    latest_texts = [text for text in latest_texts if text]
-    if not latest_texts:
-        return False
-    latest_context = "\n".join(
-        [
-            *latest_texts,
-            current_topic,
-            *[str(item) for item in topic.get("new_information", []) if str(item).strip()],
-        ]
-    )
-    latest_normalized = _normalized_strategy_text(latest_context)
-    if not latest_normalized:
-        return False
-    selected_hook = str(draft_payload.get("selected_hook") or "")
-    strategic_delta = str(draft_payload.get("strategic_delta") or "")
-    for line in _draft_lines(texts):
-        normalized = _normalized_strategy_text(line)
-        if not normalized:
-            continue
-        if not any(marker in normalized for marker in LOW_VALUE_CONFIRMATION_MARKERS):
-            continue
-        if any(marker in normalized for marker in UNKNOWN_FOLLOWUP_MARKERS):
-            continue
-        combined = _normalized_strategy_text("\n".join([line, selected_hook, strategic_delta]))
-        if _shares_latest_context(combined, latest_normalized) or _asks_obvious_latest_consequence(
-            latest_normalized,
-            normalized,
-        ):
-            return True
-    return False
-
-
-def _asks_obvious_latest_consequence(latest_text: str, draft_text: str) -> bool:
-    if not latest_text or not draft_text:
-        return False
-    latest_constraint_markers = (
-        "太大",
-        "太晚",
-        "太累",
-        "太冷",
-        "太热",
-        "大雨",
-        "下雨",
-        "雨大",
-        "暴雨",
-    )
-    obvious_consequence_markers = (
-        "被困",
-        "困住",
-        "出不了门",
-        "不能出门",
-        "没出门",
-        "不出门",
-        "回不去",
-        "动不了",
-        "睡着",
-        "倒头就睡",
-    )
-    return any(marker in latest_text for marker in latest_constraint_markers) and any(
-        marker in draft_text for marker in obvious_consequence_markers
-    )
-
-
-def _latest_inbound_age_days(
-    topic: dict[str, Any],
-    observation: AppObservation,
-    draft_payload: dict[str, Any],
-) -> float | None:
-    for source in (topic, draft_payload):
-        for key in (
-            "latest_inbound_age_days",
-            "days_since_latest_inbound",
-            "days_since_last_inbound",
-            "days_since_last_activity",
-            "elapsed_days",
-            "age_days",
-        ):
-            value = source.get(key)
-            try:
-                if value is not None and str(value).strip() != "":
-                    return float(value)
-            except (TypeError, ValueError):
-                continue
-    captured = _parse_optional_iso(observation.captured_at)
-    if captured is None:
-        return None
-    for message in reversed(observation.conversation_observation.latest_inbound_messages):
-        if not isinstance(message, dict):
-            continue
-        for key in ("sent_at", "timestamp", "created_at", "time"):
-            value = message.get(key)
-            if not isinstance(value, str) or not value.strip():
-                continue
-            parsed = _parse_optional_iso(value)
-            if parsed is not None:
-                return max(0.0, (captured - parsed).total_seconds() / 86400.0)
-        cue = str(message.get("timestamp_cue") or message.get("time_cue") or "")
-        cue_age = _timestamp_cue_age_days(cue, captured_at=observation.captured_at)
-        if cue_age is not None:
-            return cue_age
-    return None
-
-
-def _has_transient_topic(text: str) -> bool:
-    normalized = str(text).lower()
-    return any(marker.lower() in normalized for marker in TRANSIENT_TOPIC_KEYWORDS)
-
-
-def _has_non_transient_substantial_hook(text: str) -> bool:
-    normalized = _normalized_strategy_text(text)
-    if len(normalized) < 6:
-        return False
-    return not _has_transient_topic(text)
-
-
-def _shares_latest_context(draft_text: str, latest_text: str) -> bool:
-    if not draft_text or not latest_text:
-        return False
-    for marker in TRANSIENT_TOPIC_KEYWORDS:
-        marker_norm = _normalized_strategy_text(marker)
-        if marker_norm and marker_norm in draft_text and marker_norm in latest_text:
-            return True
-    for marker in ("上班", "下班", "慢热", "忙", "累", "晚班", "昨天", "那天"):
-        marker_norm = _normalized_strategy_text(marker)
-        if marker_norm and marker_norm in draft_text and marker_norm in latest_text:
-            return True
-    shared_chars = {
-        char
-        for char in set(draft_text)
-        if "\u4e00" <= char <= "\u9fff"
-        and char not in {"你", "我", "她", "他", "的", "了", "是", "也", "就", "那", "这", "有", "在"}
-    }
-    return len(shared_chars.intersection(set(latest_text))) >= 2
-
-
-def _strategic_delta_is_weak(text: str) -> bool:
-    normalized = str(text).lower()
-    return any(marker.lower() in normalized for marker in WEAK_STRATEGIC_DELTA_MARKERS)
-
-
-def _draft_forced_choice_restates_confirmed_info(
-    texts: list[str],
-    *,
-    current_topic: str,
-    topic: dict[str, Any],
-    observation: AppObservation,
-) -> bool:
-    confirmed_items = [current_topic]
-    new_information = topic.get("new_information")
-    if isinstance(new_information, list):
-        confirmed_items.extend(str(item) for item in new_information if str(item).strip())
-    confirmed_items.extend(
-        str(message.get("text") or "")
-        for message in observation.conversation_observation.latest_inbound_messages
-        if str(message.get("text") or "").strip()
-    )
-    confirmed_items.extend(
-        str(item)
-        for item in observation.conversation_observation.thread_cues
-        if str(item).strip()
-    )
-    confirmed_context = "\n".join(confirmed_items)
-    for line in _draft_lines(texts):
-        if not _looks_like_ab_choice_question(line):
-            continue
-        left_side = line.split("还是", 1)[0]
-        if _text_restates_confirmed_info(left_side, confirmed_context, current_topic):
-            return True
-    return False
-
-
-def _draft_work_topic_not_preferred(
-    draft_payload: dict[str, Any],
-    texts: list[str],
-    observation: AppObservation,
-) -> bool:
-    selected_hook = str(draft_payload.get("selected_hook") or "").strip()
-    strategic_delta = str(draft_payload.get("strategic_delta") or "").strip()
-    hook_source = str(draft_payload.get("hook_source") or "").strip()
-    draft_context = "\n".join([*texts, selected_hook, strategic_delta, hook_source])
-    if not _has_work_topic(draft_context):
-        return False
-
-    latest_inbound_text = "\n".join(
-        str(message.get("text") or "")
-        for message in observation.conversation_observation.latest_inbound_messages
-    )
-    if _has_work_topic(latest_inbound_text):
-        return False
-    if _has_work_high_salience(observation.profile_observation.profile_text):
-        return False
-
-    hooks = [
-        str(item).strip()
-        for item in observation.profile_observation.hook_candidates
-        if str(item).strip()
-    ]
-    if not any(_is_lifestyle_hook(hook) for hook in hooks):
-        return False
-    return True
-
-
-def _draft_stale_reactivation_continues_old_topic(
-    draft_payload: dict[str, Any],
-    texts: list[str],
-    *,
-    current_topic: str,
-    topic: dict[str, Any],
-) -> bool:
-    risk_flags = [
-        str(item)
-        for item in draft_payload.get("risk_flags", [])
-        if str(item).strip()
-    ] if isinstance(draft_payload.get("risk_flags"), list) else []
-    stale_hooks = [
-        str(item)
-        for item in topic.get("stale_hooks", [])
-        if str(item).strip()
-    ] if isinstance(topic.get("stale_hooks"), list) else []
-    stale_reactivation = (
-        "stale_thread_reactivation" in risk_flags
-        or any("visible timestamp" in hook or "旧" in hook or "stale" in hook.lower() for hook in stale_hooks)
-    )
-    if not stale_reactivation or not current_topic:
-        return False
-
-    selected_hook = str(draft_payload.get("selected_hook") or "").strip()
-    if selected_hook and _normalized_strategy_text(selected_hook) == _normalized_strategy_text(current_topic):
-        return True
-
-    strategic_delta = str(draft_payload.get("strategic_delta") or "").strip()
-    combined = "\n".join([*texts, strategic_delta])
-    normalized_topic = _normalized_strategy_text(current_topic)
-    if not normalized_topic:
-        return False
-    return normalized_topic in _normalized_strategy_text(combined)
-
-
-def _draft_lines(texts: list[str]) -> list[str]:
-    lines: list[str] = []
-    for text in texts:
-        lines.extend(part.strip() for part in str(text).splitlines() if part.strip())
-    return lines
-
-
-def _looks_like_ab_choice_question(line: str) -> bool:
-    if "还是" not in line:
-        return False
-    if re.search(r"(你|平时|一般|通常|喜欢|爱|会|是|更|偏).{0,40}还是", line):
-        return True
-    return bool(re.search(r"还是.{0,24}[?？吗嘛么呢]", line))
-
-
-def _text_restates_confirmed_info(text: str, confirmed_context: str, current_topic: str) -> bool:
-    if current_topic and current_topic in text:
-        return True
-    if _has_slow_warm_context(confirmed_context) and any(marker in text for marker in SLOW_WARM_RESTATEMENTS):
-        return True
-    normalized_confirmed = _normalized_strategy_text(confirmed_context)
-    normalized_text = _normalized_strategy_text(text)
-    return bool(
-        normalized_text
-        and len(normalized_text) >= 4
-        and normalized_text in normalized_confirmed
-    )
-
-
-def _has_slow_warm_context(text: str) -> bool:
-    return any(marker in text for marker in SLOW_WARM_CONTEXT_MARKERS)
-
-
-def _has_work_topic(text: str) -> bool:
-    normalized = str(text).lower()
-    return any(marker in normalized for marker in WORK_TOPIC_KEYWORDS)
-
-
-def _has_work_high_salience(text: str) -> bool:
-    normalized = str(text).lower()
-    return any(marker in normalized for marker in WORK_HIGH_SALIENCE_MARKERS)
-
-
-def _is_lifestyle_hook(hook: str) -> bool:
-    normalized = str(hook).lower()
-    return any(marker in normalized for marker in LIFESTYLE_HOOK_KEYWORDS)
-
-
-def _normalized_strategy_text(text: str) -> str:
-    return re.sub(r"[\s，。！？、,.!?：:；;“”\"'（）()]+", "", str(text))
-
-
-def _draft_strategy_evidence(
-    draft_payload: dict[str, Any],
-    planner_recommendation: dict[str, Any] | None,
-    observation: AppObservation,
-) -> dict[str, Any]:
-    profile_hooks = [
-        str(item)
-        for item in observation.profile_observation.hook_candidates
-        if str(item).strip()
-    ]
-    return {
-        "selected_hook": str(draft_payload.get("selected_hook") or draft_payload.get("hook_source") or "unknown"),
-        "strategic_delta": str(draft_payload.get("strategic_delta") or draft_payload.get("why_this_works") or ""),
-        "meeting_path": str(draft_payload.get("meeting_path") or ""),
-        "why_not_ask_question": str(draft_payload.get("why_not_ask_question") or ""),
-        "why_not_invite_now": str(draft_payload.get("why_not_invite_now") or ""),
-        "planner_move": planner_recommendation.get("recommended_move") if planner_recommendation else None,
-        "topic_state": (
-            dict(planner_recommendation.get("topic_lifecycle") or {}).get("topic_state")
-            if planner_recommendation
-            else None
-        ),
-        "available_profile_hooks": profile_hooks,
-    }
-
-
-def _draft_payload_messages(draft_payload: dict[str, Any], fallback_text: str) -> list[dict[str, Any]]:
-    raw_messages = draft_payload.get("message_sequence")
-    if isinstance(raw_messages, list):
-        texts = [str(item).strip() for item in raw_messages if str(item).strip()]
-    else:
-        texts = [str(fallback_text).strip()]
-    if not texts:
-        texts = [str(fallback_text)]
-    return [
-        {
-            "index": index,
-            "text": text,
-            "message_hash": _text_hash(text),
-            "character_count": len(text),
-        }
-        for index, text in enumerate(texts, start=1)
-    ]
-
-
-def _draft_messages_payload_hash(messages: list[dict[str, Any]]) -> str:
-    texts = [str(message.get("text") or "") for message in messages]
-    if len(texts) == 1:
-        return _text_hash(texts[0])
-    return _digest({"payload_format": "message_sequence", "messages": texts})
 
 
 def _digest(payload: dict[str, Any]) -> str:

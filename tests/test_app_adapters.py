@@ -138,7 +138,8 @@ class AppAdapterArchitectureTests(unittest.TestCase):
                 "precondition_hash": "pre_hash",
             },
             "requires_post_action_verification": True,
-            "policy": {"allowed": True},
+            "draft_review_id": "draft_review_fixture",
+            "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
             "target_binding": {
                 "required_visible_text": ["Opening Move", "Aa"],
                 "target_match_id": "match_bumble",
@@ -188,7 +189,8 @@ class AppAdapterArchitectureTests(unittest.TestCase):
                 "precondition_hash": "pre_hash",
             },
             "requires_post_action_verification": True,
-            "policy": {"allowed": True},
+            "draft_review_id": "draft_review_fixture",
+            "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
             "target_binding": {
                 "required_visible_text": ["Ada"],
                 "target_match_id": "match_bumble",
@@ -300,7 +302,8 @@ class AppAdapterArchitectureTests(unittest.TestCase):
                 "precondition_hash": "pre_hash",
             },
             "requires_post_action_verification": True,
-            "policy": {"allowed": True},
+            "draft_review_id": "draft_review_fixture",
+            "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
             "target_binding": {
                 "required_visible_text": ["Ada"],
                 "target_match_id": "match_bumble",
@@ -327,6 +330,60 @@ class AppAdapterArchitectureTests(unittest.TestCase):
                 data_dir=None,
             )
         )
+
+    def test_live_send_contract_rejects_forged_draft_review_id_when_data_dir_is_available(self):
+        draft_text = "hi"
+        payload_hash = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
+        action_request = {
+            "schema_version": 1,
+            "action_request_id": "act_bumble_send",
+            "action": "send_message",
+            "app_id": "bumble",
+            "match_id": "match_bumble",
+            "candidate_key": "bumble_ada",
+            "payload_hash": payload_hash,
+            "precondition_hash": "pre_hash",
+            "planner_alignment": "ok",
+            "conversation_stage": "warmup",
+            "conversation_move": "bridge_topic",
+            "autonomous_audit_binding": {
+                "binding_type": "autonomous_authorization",
+                "authorization_id": "auth_bumble_live",
+                "action": "send_message",
+                "target_match_id": "match_bumble",
+                "payload_hash": payload_hash,
+                "precondition_hash": "pre_hash",
+            },
+            "requires_post_action_verification": True,
+            "draft_review_id": "draft_review_forged",
+            "policy": {"allowed": True, "draft_review_id": "draft_review_forged"},
+            "target_binding": {
+                "required_visible_text": ["Ada"],
+                "target_match_id": "match_bumble",
+                "candidate_key": "bumble_ada",
+            },
+        }
+        authorization = {
+            "authorization_id": "auth_bumble_live",
+            "scope": "send_chat_messages",
+            "app_id": "bumble",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "allowed_actions": ["send_message"],
+            "autonomous_send": True,
+            "live_send": True,
+            "requires_post_action_verification": True,
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reason = live_send_action_request_block_reason(
+                action_request,
+                draft_text,
+                authorization=authorization,
+                app_id="bumble",
+                data_dir=Path(temp_dir),
+            )
+
+        self.assertEqual(reason, "draft_review_audit_not_found")
 
     def test_host_loop_required_send_evidence_comes_from_adapter_manifest(self):
         from dating_boost.apps.registry import manifest_for_app

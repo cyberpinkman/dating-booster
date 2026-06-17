@@ -1205,7 +1205,8 @@ class OperatorHostLoopTests(unittest.TestCase):
                     "evidence": "Profile was reviewed before drafting.",
                 },
                 "requires_post_action_verification": True,
-                "policy": {"allowed": True},
+                "draft_review_id": "draft_review_fixture",
+                "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
             }
             staged_path = supervisor._work_file(work_item, "staged_verification")
@@ -1221,6 +1222,8 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "staged_text": payload_text,
                 "evidence": {"verification": "Input box text was checked before send."},
             })
+
+            _write_draft_review_audit(data_dir, work_item)
 
             payload = supervisor._handle_send_message(work_item)
 
@@ -1284,7 +1287,8 @@ class OperatorHostLoopTests(unittest.TestCase):
                     payload_hash=payload_hash,
                 ),
                 "pre_action_observation_id": "obs_before",
-                "policy": {"allowed": True},
+                "draft_review_id": "draft_review_fixture",
+                "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "planner_alignment": "ok",
                 "conversation_stage": "rapport_building",
                 "conversation_move": "warm_reciprocal_question",
@@ -1337,6 +1341,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 raise AssertionError(args)
 
             with patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-06-12T00:00:00Z"}), patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertIsNone(result)
@@ -1427,7 +1432,8 @@ class OperatorHostLoopTests(unittest.TestCase):
                     payload_hash=payload_hash,
                 ),
                 "pre_action_observation_id": "obs_before",
-                "policy": {"allowed": True},
+                "draft_review_id": "draft_review_fixture",
+                "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "planner_alignment": "ok",
                 "conversation_stage": "warmup",
                 "conversation_move": "low_investment_repair",
@@ -1482,6 +1488,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "_run_cli_json",
                 fake_run_cli_json,
             ):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertIsNone(result)
@@ -1576,6 +1583,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 raise AssertionError(args)
 
             with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertIsNone(result)
@@ -1644,6 +1652,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 raise AssertionError(args)
 
             with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertEqual(result["status"], "blocked")
@@ -1708,6 +1717,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 raise AssertionError(args)
 
             with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertEqual(result["status"], "blocked")
@@ -1794,6 +1804,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 raise AssertionError(args)
 
             with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertIsNone(result)
@@ -1883,6 +1894,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                     raise AssertionError(args)
 
                 with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                    _write_draft_review_audit(data_dir, work_item)
                     result = supervisor._handle_managed_gui_send(work_item)
 
                 self.assertEqual(result["status"], "waiting_for_host")
@@ -1975,6 +1987,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 raise AssertionError(args)
 
             with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertIsNone(result)
@@ -2081,6 +2094,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 raise AssertionError(args)
 
             with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertIsNone(result)
@@ -2229,6 +2243,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "_run_cli_json",
                 fake_run_cli_json,
             ):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertIsNone(result)
@@ -2409,6 +2424,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 raise AssertionError(args)
 
             with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertEqual(result["status"], "blocked")
@@ -2553,6 +2569,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 raise AssertionError(args)
 
             with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertIsNone(result)
@@ -2728,6 +2745,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "_run_cli_json",
                 fake_run_cli_json,
             ):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertIsNone(result)
@@ -2858,6 +2876,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "_run_cli_json",
                 fake_run_cli_json,
             ):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
             self.assertTrue(progress_path.exists())
 
@@ -2963,6 +2982,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 raise AssertionError(args)
 
             with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertEqual(result["status"], "waiting_for_host")
@@ -3077,6 +3097,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 raise AssertionError(args)
 
             with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertEqual(result["status"], "waiting_for_host")
@@ -3208,6 +3229,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "_run_cli_json",
                 fake_run_cli_json,
             ):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
             progress_path = work_dir / "managed_sequence_progress.work_tashuo_sequence_visual_wait.json"
@@ -3399,6 +3421,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "_run_cli_json",
                 fake_run_cli_json,
             ):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertIsNone(result)
@@ -3505,6 +3528,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 raise AssertionError(args)
 
             with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                _write_draft_review_audit(data_dir, work_item)
                 result = supervisor._handle_managed_gui_send(work_item)
 
         self.assertIsNone(result)
@@ -3647,6 +3671,8 @@ class OperatorHostLoopTests(unittest.TestCase):
                 "staged_text": payload_text,
                 "evidence": {"verification": "Input box text was checked before send."},
             })
+
+            _write_draft_review_audit(data_dir, work_item)
 
             payload = supervisor._handle_send_message(work_item)
 
@@ -3927,6 +3953,44 @@ def _audit_binding(*, authorization_id: str, target_match_id: str, payload_hash:
     }
 
 
+def _write_draft_review_audit(data_dir: Path, work_item: dict) -> None:
+    review_id = str(work_item.get("draft_review_id") or "").strip()
+    payload_hash = str(work_item.get("payload_hash") or "").strip()
+    target_match_id = str(work_item.get("match_id") or work_item.get("target_match_id") or "").strip()
+    if not review_id or not payload_hash or not target_match_id:
+        return
+    payload_messages = work_item.get("payload_messages")
+    message_count = len(payload_messages) if isinstance(payload_messages, list) and payload_messages else 1
+    path = data_dir / "audit" / "draft_reviews.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "schema_version": 1,
+        "review_id": review_id,
+        "created_at": "2026-05-26T00:00:00Z",
+        "mode": "managed_live",
+        "target_match_id": target_match_id,
+        "payload_hash": payload_hash,
+        "payload_format": work_item.get("payload_format") or "single_message",
+        "message_count": message_count,
+        "status": "ok",
+        "allowed_for_display": True,
+        "allowed_for_stage": True,
+        "allowed_for_managed_send": True,
+        "requires_user_confirmation": False,
+        "primary_reason": "passed",
+        "finding_codes": [],
+        "findings": [],
+        "revision_hint_count": 0,
+        "context_manifest": [],
+        "draft_payload_hash": payload_hash,
+        "context_pack_hash": "context_fixture",
+        "draft_topic_labels": [],
+        "draft_character_count": len(str(work_item.get("payload_text") or "")),
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
 def _wechat_managed_work_item(payload_text: str, payload_hash: str) -> dict:
     return {
         "schema_version": 1,
@@ -3952,7 +4016,8 @@ def _wechat_managed_work_item(payload_text: str, payload_hash: str) -> dict:
             "evidence": "Profile was reviewed before drafting.",
         },
         "requires_post_action_verification": True,
-        "policy": {"allowed": True},
+        "draft_review_id": "draft_review_fixture",
+        "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
         "planner_alignment": "ok",
         "conversation_stage": "rapport_building",
         "conversation_move": "warm_reciprocal_question",

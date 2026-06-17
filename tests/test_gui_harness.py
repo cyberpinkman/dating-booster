@@ -251,6 +251,43 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
+def _write_draft_review_audit(
+    data_dir: Path,
+    *,
+    target_match_id: str,
+    payload_hash: str,
+    review_id: str = "draft_review_fixture",
+) -> None:
+    path = data_dir / "audit" / "draft_reviews.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "schema_version": 1,
+        "review_id": review_id,
+        "created_at": "2026-05-26T00:00:00Z",
+        "mode": "managed_live",
+        "target_match_id": target_match_id,
+        "payload_hash": payload_hash,
+        "payload_format": "single_message",
+        "message_count": 1,
+        "status": "ok",
+        "allowed_for_display": True,
+        "allowed_for_stage": True,
+        "allowed_for_managed_send": True,
+        "requires_user_confirmation": False,
+        "primary_reason": "passed",
+        "finding_codes": [],
+        "findings": [],
+        "revision_hint_count": 0,
+        "context_manifest": [],
+        "draft_payload_hash": payload_hash,
+        "context_pack_hash": "context_fixture",
+        "draft_topic_labels": [],
+        "draft_character_count": 0,
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
 def _live_send_auth(app_id: str, *, authorization_id: str, allowed_match_ids: list[str] | None = None) -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -4731,7 +4768,8 @@ class GuiHarnessTests(unittest.TestCase):
                 "candidate_key": "wechat_ada",
                 "payload_hash": "wrong_hash",
                 "requires_post_action_verification": True,
-                "policy": {"allowed": True},
+                "draft_review_id": "draft_review_fixture",
+                "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "target_binding": {"required_visible_text": ["Ada"]},
             }), encoding="utf-8")
             with _patch_cli_adapter() as harness_class:
@@ -4783,7 +4821,8 @@ class GuiHarnessTests(unittest.TestCase):
                 "candidate_key": "tinder_ada",
                 "payload_hash": "wrong_hash",
                 "requires_post_action_verification": True,
-                "policy": {"allowed": True},
+                "draft_review_id": "draft_review_fixture",
+                "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "target_binding": {"required_visible_text": ["Ada"]},
             }), encoding="utf-8")
             with _patch_cli_adapter() as harness_class:
@@ -4847,7 +4886,8 @@ class GuiHarnessTests(unittest.TestCase):
                     "precondition_hash": "pre_hash",
                 },
                 "requires_post_action_verification": True,
-                "policy": {"allowed": True},
+                "draft_review_id": "draft_review_fixture",
+                "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
             }), encoding="utf-8")
             with _patch_cli_adapter() as harness_class:
@@ -4901,7 +4941,8 @@ class GuiHarnessTests(unittest.TestCase):
                 "candidate_key": "tinder_ada",
                 "payload_hash": payload_hash,
                 "requires_post_action_verification": True,
-                "policy": {"allowed": True},
+                "draft_review_id": "draft_review_fixture",
+                "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
             }), encoding="utf-8")
             with _patch_cli_adapter() as harness_class:
@@ -4968,7 +5009,8 @@ class GuiHarnessTests(unittest.TestCase):
                     "precondition_hash": "pre_hash",
                 },
                 "requires_post_action_verification": True,
-                "policy": {"allowed": True},
+                "draft_review_id": "draft_review_fixture",
+                "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_bea"},
             }), encoding="utf-8")
             with _patch_cli_adapter() as harness_class:
@@ -5010,7 +5052,8 @@ class GuiHarnessTests(unittest.TestCase):
                 "payload_hash": payload_hash,
                 "confirmation_id": "confirmation_ada",
                 "requires_post_action_verification": True,
-                "policy": {"allowed": True},
+                "draft_review_id": "draft_review_fixture",
+                "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
             })
 
@@ -5091,10 +5134,12 @@ class GuiHarnessTests(unittest.TestCase):
                 "confirmation_payload_hash": create_payload["payload_hash"],
                 "confirmation_precondition_hash": create_payload["precondition_hash"],
                 "requires_post_action_verification": True,
-                "policy": {"allowed": True},
+                "draft_review_id": "draft_review_fixture",
+                "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 **_planner_evidence(),
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
             })
+            _write_draft_review_audit(data_dir, target_match_id="match_ada", payload_hash=payload_hash)
 
             with _patch_cli_adapter() as harness_class:
                 harness_class.return_value.send_tinder_message.return_value = {
@@ -5159,7 +5204,8 @@ class GuiHarnessTests(unittest.TestCase):
                             payload_hash=payload_hash,
                         ),
                         "requires_post_action_verification": True,
-                        "policy": {"allowed": True},
+                        "draft_review_id": "draft_review_fixture",
+                        "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                         **_planner_evidence(),
                         "target_binding": {
                             "required_visible_text": [marker],
@@ -5167,6 +5213,7 @@ class GuiHarnessTests(unittest.TestCase):
                             "candidate_key": candidate_key,
                         },
                     })
+                    _write_draft_review_audit(data_dir, target_match_id=match_id, payload_hash=payload_hash)
 
                     with _patch_cli_adapter() as harness_class:
                         getattr(harness_class.return_value, method_name).return_value = {
@@ -5229,7 +5276,8 @@ class GuiHarnessTests(unittest.TestCase):
                             payload_hash=payload_hash,
                         ),
                         "requires_post_action_verification": True,
-                        "policy": {"allowed": True},
+                        "draft_review_id": "draft_review_fixture",
+                        "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                         **_planner_evidence(),
                         "target_binding": {
                             "binding_type": "chat_list_row_to_thread",
@@ -5244,6 +5292,7 @@ class GuiHarnessTests(unittest.TestCase):
                             },
                         },
                     })
+                    _write_draft_review_audit(data_dir, target_match_id=match_id, payload_hash=payload_hash)
 
                     with _patch_cli_adapter() as harness_class:
                         getattr(harness_class.return_value, method_name).return_value = {
@@ -5297,7 +5346,8 @@ class GuiHarnessTests(unittest.TestCase):
                     payload_hash=payload_hash,
                 ),
                 "requires_post_action_verification": True,
-                "policy": {"allowed": True},
+                "draft_review_id": "draft_review_fixture",
+                "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "target_binding": {
                     "binding_type": "chat_list_row_to_thread",
                     "target_match_id": "match_tashuo_row_5",
@@ -5357,7 +5407,8 @@ class GuiHarnessTests(unittest.TestCase):
                     payload_hash=payload_hash,
                 ),
                 "requires_post_action_verification": True,
-                "policy": {"allowed": True},
+                "draft_review_id": "draft_review_fixture",
+                "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "target_binding": {
                     "required_visible_text": ["Opening Move", "Aa"],
                     "target_match_id": "match_bumble",
