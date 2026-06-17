@@ -66,7 +66,6 @@ from dating_boost.core.send_verification import (
     text_fingerprint_fields as _text_fingerprint_fields,
 )
 
-
 GUI_HARNESS_SCHEMA_VERSION = 2
 IPHONE_MIRRORING_HARNESS_BACKEND = "iphone_mirroring_macos"
 MAC_IOS_APP_HARNESS_BACKEND = "mac_ios_app"

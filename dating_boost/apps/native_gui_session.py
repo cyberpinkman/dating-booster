@@ -17,6 +17,12 @@ from dating_boost.core.send_pipeline import (  # noqa: E402
     SendAttemptContext,
     StagingResult,
 )
+from dating_boost.core.target_binding import (  # noqa: E402
+    RowToThreadBindingSpec,
+    finish_row_to_thread_screen_verification,
+    row_to_thread_base_result,
+    validate_row_to_thread_structural_evidence,
+)
 
 
 BLOCKED_GUI_ACTIONS = ["send", "like", "super_like", "unmatch", "report", "profile_edit"]
@@ -2297,60 +2303,31 @@ class AppSpecificNativeGuiSessionMixin:
         output_name: str,
         verification_method: str,
     ) -> dict[str, Any]:
-        selection_evidence = (
-            target_binding.get("selection_evidence")
-            if isinstance(target_binding.get("selection_evidence"), dict)
-            else {}
+        spec = RowToThreadBindingSpec(
+            app_id=app_id,
+            verification_method=verification_method,
+            source_states=frozenset(source_states),
+            conversation_state=conversation_state,
+            window_missing_reason="iphone_mirroring_window_not_found",
+            blocked_state_reasons=dict(blocked_state_reasons),
         )
-        row_index = selection_evidence.get("row_index")
-        base = {
-            "verification_method": verification_method,
-            "binding_type": target_binding.get("binding_type"),
-            "target_match_id": target_binding.get("target_match_id"),
-            "candidate_key": target_binding.get("candidate_key"),
-            "row_index": row_index,
-            "source_state": selection_evidence.get("source_state"),
-            "opened_state": selection_evidence.get("opened_state"),
-            "target_scope": selection_evidence.get("target_scope"),
-            "open_action": selection_evidence.get("open_action"),
-            "requires_target_specific_marker": True,
-            "requires_header_marker": False,
-            "emoji_nickname_supported": True,
-            "visual_only_exact_verification_allowed": False,
-        }
-        if not target_binding_structural_evidence_present(app_id, target_binding):
-            return {**base, "status": "blocked", "reason": "target_binding_structural_evidence_required"}
-        if selection_evidence.get("source_state") not in source_states:
-            return {**base, "status": "blocked", "reason": "target_binding_source_state_mismatch"}
-        if selection_evidence.get("opened_state") != conversation_state:
-            return {**base, "status": "blocked", "reason": "target_binding_opened_state_mismatch"}
-        if selection_evidence.get("open_action") != "open-conversation":
-            return {**base, "status": "blocked", "reason": "target_binding_open_action_mismatch"}
-        target_scope = selection_evidence.get("target_scope")
-        if target_scope not in {None, "ordinary_conversation", "existing_conversation"}:
-            return {**base, "status": "blocked", "reason": "target_binding_scope_not_ordinary_conversation"}
+        base = row_to_thread_base_result(target_binding, spec=spec)
+        structural_block = validate_row_to_thread_structural_evidence(target_binding, spec=spec, base=base)
+        if structural_block is not None:
+            return structural_block
         window = self._window_info()
         if window is None:
-            return {**base, "status": "blocked", "reason": "iphone_mirroring_window_not_found"}
+            return base.with_status("blocked", spec.window_missing_reason)
         output = output_dir / output_name if output_dir is not None else None
         screen = self.capture_window(output=output, window=window)
         observed_text = str(screen.get("text") or "")
-        result = {
-            **base,
-            "screen": _redacted_screen(screen),
-            "screen_state": screen.get("state", "unknown"),
-            "observed_text_hash": _hash_text(observed_text) if observed_text else None,
-        }
-        if screen.get("status") != "ok":
-            return {**result, "status": "blocked", "reason": "target_binding_screen_capture_failed"}
-        if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
-            return {**result, "status": "blocked", "reason": screen.get("state")}
-        blocked_reason = blocked_state_reasons.get(str(screen.get("state") or ""))
-        if blocked_reason:
-            return {**result, "status": "blocked", "reason": blocked_reason}
-        if screen.get("state") != conversation_state:
-            return {**result, "status": "blocked", "reason": "target_binding_chat_not_verified"}
-        return {**result, "status": "ok"}
+        return finish_row_to_thread_screen_verification(
+            base,
+            screen=screen,
+            redacted_screen=_redacted_screen(screen),
+            observed_text=observed_text,
+            spec=spec,
+        )
 
 
     def _verify_wechat_target_binding(

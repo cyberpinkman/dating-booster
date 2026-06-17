@@ -27,6 +27,12 @@ from dating_boost.core.send_pipeline import (
     SendAttemptContext,
     StagingResult,
 )
+from dating_boost.core.target_binding import (
+    RowToThreadBindingSpec,
+    finish_row_to_thread_screen_verification,
+    row_to_thread_base_result,
+    validate_row_to_thread_structural_evidence,
+)
 from dating_boost.harness.base import SubprocessRunner
 from dating_boost.harness.screen_state import _read_png_pixels
 
@@ -2461,58 +2467,34 @@ def _verify_tashuo_chat_list_row_target_binding(
     *,
     output_dir: Path | None = None,
 ) -> dict[str, Any]:
-    selection_evidence = (
-        target_binding.get("selection_evidence") if isinstance(target_binding.get("selection_evidence"), dict) else {}
+    spec = RowToThreadBindingSpec(
+        app_id="tashuo",
+        verification_method="tashuo_chat_list_row_to_thread_structural_binding",
+        source_states=frozenset({"tashuo_chat_list"}),
+        conversation_state="tashuo_conversation",
+        window_missing_reason="mac_ios_app_window_not_found"
+        if _is_mac_ios_app_session(session)
+        else "iphone_mirroring_window_not_found",
+        blocked_state_reasons={"tashuo_question_gate": "tashuo_question_gate_requires_user_confirmation"},
+        visual_only_exact_verification_allowed=_is_mac_ios_app_session(session),
     )
-    row_index = selection_evidence.get("row_index")
-    base = {
-        "verification_method": "tashuo_chat_list_row_to_thread_structural_binding",
-        "binding_type": target_binding.get("binding_type"),
-        "target_match_id": target_binding.get("target_match_id"),
-        "candidate_key": target_binding.get("candidate_key"),
-        "row_index": row_index,
-        "source_state": selection_evidence.get("source_state"),
-        "opened_state": selection_evidence.get("opened_state"),
-        "target_scope": selection_evidence.get("target_scope"),
-        "open_action": selection_evidence.get("open_action"),
-        "requires_target_specific_marker": True,
-        "requires_header_marker": False,
-        "emoji_nickname_supported": True,
-        "visual_only_exact_verification_allowed": _is_mac_ios_app_session(session),
-    }
-    if not target_binding_structural_evidence_present("tashuo", target_binding):
-        return {**base, "status": "blocked", "reason": "target_binding_structural_evidence_required"}
-    if selection_evidence.get("source_state") != "tashuo_chat_list":
-        return {**base, "status": "blocked", "reason": "target_binding_source_state_mismatch"}
-    if selection_evidence.get("opened_state") != "tashuo_conversation":
-        return {**base, "status": "blocked", "reason": "target_binding_opened_state_mismatch"}
-    if selection_evidence.get("open_action") != "open-conversation":
-        return {**base, "status": "blocked", "reason": "target_binding_open_action_mismatch"}
-    target_scope = selection_evidence.get("target_scope")
-    if target_scope not in {None, "ordinary_conversation", "existing_conversation"}:
-        return {**base, "status": "blocked", "reason": "target_binding_scope_not_ordinary_conversation"}
+    base = row_to_thread_base_result(target_binding, spec=spec)
+    structural_block = validate_row_to_thread_structural_evidence(target_binding, spec=spec, base=base)
+    if structural_block is not None:
+        return structural_block
     window = session._window_info()
     if window is None:
-        reason = "mac_ios_app_window_not_found" if _is_mac_ios_app_session(session) else "iphone_mirroring_window_not_found"
-        return {**base, "status": "blocked", "reason": reason}
+        return base.with_status("blocked", spec.window_missing_reason)
     output = output_dir / f"{_tashuo_capture_prefix(session)}.target_binding.png" if output_dir is not None else None
     screen = _capture_tashuo_window(session, output=output, window=window, ocr=not _is_mac_ios_app_session(session))
     observed_text = str(screen.get("text") or "")
-    result = {
-        **base,
-        "screen": platform._redacted_screen(screen),
-        "screen_state": screen.get("state", "unknown"),
-        "observed_text_hash": platform._hash_text(observed_text) if observed_text else None,
-    }
-    if screen.get("status") != "ok":
-        return {**result, "status": "blocked", "reason": "target_binding_screen_capture_failed"}
-    if screen.get("state") in {"iphone_mirroring_locked", "screen_permission_prompt"}:
-        return {**result, "status": "blocked", "reason": screen.get("state")}
-    if screen.get("state") == "tashuo_question_gate":
-        return {**result, "status": "blocked", "reason": "tashuo_question_gate_requires_user_confirmation"}
-    if screen.get("state") != "tashuo_conversation":
-        return {**result, "status": "blocked", "reason": "target_binding_chat_not_verified"}
-    return {**result, "status": "ok"}
+    return finish_row_to_thread_screen_verification(
+        base,
+        screen=screen,
+        redacted_screen=platform._redacted_screen(screen),
+        observed_text=observed_text,
+        spec=spec,
+    )
 
 
 def _tashuo_header_text(text: str) -> str:
