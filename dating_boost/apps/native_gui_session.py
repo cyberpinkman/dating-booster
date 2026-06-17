@@ -1073,6 +1073,24 @@ class AppSpecificNativeGuiSessionMixin:
                     "executed_steps": executed_steps,
                 })
                 return payload
+            if _bumble_staged_text_requires_host_visual_verification(
+                staged_verification,
+                draft_text,
+                target_binding=target_binding,
+                screen=staged_screen,
+            ):
+                payload["visual_verification_request"] = _bumble_visual_staged_verification_request(
+                    staged_screen,
+                    staged_verification,
+                    draft_text,
+                )
+                payload.update({
+                    "status": "needs_host_visual_verification",
+                    "reason": "staged_text_requires_visual_verification",
+                    "next_host_action": "visually_verify_staged_text_before_live_send",
+                    "executed_steps": executed_steps,
+                })
+                return payload
         finally:
             restore_result = self._copy_to_clipboard(previous_clipboard.get("text", ""))
             payload["clipboard_restored"] = restore_result["status"] == "ok"
@@ -1249,7 +1267,9 @@ class AppSpecificNativeGuiSessionMixin:
         stage_ready = False
         staged_screen = baseline_screen
         baseline_staged_verification = _verify_staged_tinder_message(baseline_screen, draft_text)
+        staged_verification = baseline_staged_verification
         if baseline_staged_verification.get("status") == "ok":
+            baseline_staged_verification["reused_existing_staged_text"] = True
             if not _tinder_send_button_visual_visible(baseline_screen):
                 payload["staged_text_verification"] = baseline_staged_verification
                 payload["staged_text_verified"] = True
@@ -1260,13 +1280,32 @@ class AppSpecificNativeGuiSessionMixin:
                     "executed_steps": executed_steps,
                 })
                 return payload
-            baseline_staged_verification["reused_existing_staged_text"] = True
             payload["staged_text_verification"] = baseline_staged_verification
             payload["staged_text_verified"] = True
             payload["previous_clipboard_read"] = False
             payload["draft_clipboard_copy"] = False
             payload["clipboard_restored"] = True
             payload["clipboard_restore_status"] = "not_needed"
+            if _tinder_staged_text_requires_host_visual_verification(
+                baseline_staged_verification,
+                draft_text,
+                target_binding=target_binding,
+                screen=baseline_screen,
+                reused_existing_staged_text=True,
+            ):
+                payload["visual_verification_request"] = _tinder_visual_staged_verification_request(
+                    baseline_screen,
+                    baseline_staged_verification,
+                    draft_text,
+                    reused_existing_staged_text=True,
+                )
+                payload.update({
+                    "status": "needs_host_visual_verification",
+                    "reason": "staged_text_requires_visual_verification",
+                    "next_host_action": "visually_verify_staged_text_before_live_send",
+                    "executed_steps": executed_steps,
+                })
+                return payload
             stage_ready = True
         else:
             previous_clipboard = self._read_clipboard()
@@ -1309,6 +1348,24 @@ class AppSpecificNativeGuiSessionMixin:
                     payload.update({
                         "status": "blocked",
                         "reason": staged_verification.get("reason") or "staged_text_not_verified",
+                        "executed_steps": executed_steps,
+                    })
+                    return payload
+                if _tinder_staged_text_requires_host_visual_verification(
+                    staged_verification,
+                    draft_text,
+                    target_binding=target_binding,
+                    screen=staged_screen,
+                ):
+                    payload["visual_verification_request"] = _tinder_visual_staged_verification_request(
+                        staged_screen,
+                        staged_verification,
+                        draft_text,
+                    )
+                    payload.update({
+                        "status": "needs_host_visual_verification",
+                        "reason": "staged_text_requires_visual_verification",
+                        "next_host_action": "visually_verify_staged_text_before_live_send",
                         "executed_steps": executed_steps,
                     })
                     return payload
@@ -1378,14 +1435,19 @@ class AppSpecificNativeGuiSessionMixin:
         outbound_verified = outbound_verification.get("status") == "ok"
         payload["evidence"] = {
             "staged_text_verified": payload["staged_text_verified"],
+            "staged_exact_text_ocr_verified": bool(staged_verification.get("exact_text_ocr_verified")),
             "send_input_backend": send_result.get("input_backend"),
             "input_cleared_after_send": outbound_verification.get("input_cleared_after_send") is True,
             "post_action_screen_captured": post_screen_captured,
             "outbound_message_verified": outbound_verified,
+            "outbound_exact_text_ocr_verified": bool(outbound_verification.get("exact_text_ocr_verified")),
+            "visual_only_exact_verification_allowed": False,
             "post_action_observation_id": post_observation_id,
         }
         if not post_screen_captured:
             payload.update({"status": "needs_verification", "reason": "post_action_screen_not_captured"})
+        elif outbound_verification.get("input_cleared_after_send") is not True:
+            payload.update({"status": "needs_verification", "reason": "post_send_input_not_verified_clear"})
         elif not outbound_verified:
             payload.update({"status": "needs_verification", "reason": "outbound_message_not_verified"})
         return payload
@@ -2475,6 +2537,8 @@ def _verify_staged_tinder_message(
         "observed_expected_text_occurrences": observed_stats["expected_text_occurrences"],
         "baseline_expected_text_occurrences": baseline_stats["expected_text_occurrences"] if baseline_stats else None,
         "baseline_text_hash": baseline_stats["text_hash"] if baseline_stats else None,
+        "exact_text_ocr_verified": text_matches,
+        "visual_only_exact_verification_allowed": False,
         "screen": _redacted_screen(screen),
     }
     if screen.get("status") != "ok":
@@ -2508,12 +2572,63 @@ def _verify_tinder_outbound_message(
         "staged_expected_text_occurrences": staged_stats["expected_text_occurrences"] if staged_stats else None,
         "staged_text_hash": staged_stats["text_hash"] if staged_stats else None,
         "input_cleared_after_send": not _tinder_send_marker_visible(observed_text),
+        "exact_text_ocr_verified": result.get("status") == "ok",
+        "visual_only_exact_verification_allowed": False,
     }
     if extra["input_cleared_after_send"] is not True:
         return {**result, **extra, "status": "needs_verification", "reason": "outbound_message_not_verified"}
     if staged_stats and observed_stats["normalized_text_hash"] == staged_stats["normalized_text_hash"]:
         return {**result, **extra, "status": "needs_verification", "reason": "outbound_message_not_verified"}
     return {**result, **extra, "status": "ok"}
+
+
+def _tinder_staged_text_requires_host_visual_verification(
+    staged_verification: dict[str, Any],
+    expected_text: str,
+    *,
+    target_binding: dict[str, Any] | None,
+    screen: dict[str, Any],
+    reused_existing_staged_text: bool = False,
+) -> bool:
+    if staged_verification.get("status") != "ok":
+        return False
+    if screen.get("status") != "ok" or not screen.get("path"):
+        return False
+    if reused_existing_staged_text:
+        return True
+    if not isinstance(target_binding, dict) or target_binding.get("binding_type") != "chat_list_row_to_thread":
+        return False
+    comparable_expected = _message_text_comparable(expected_text)
+    if len(comparable_expected) > 3:
+        return False
+    baseline_occurrences = int(staged_verification.get("baseline_expected_text_occurrences") or 0)
+    observed_occurrences = int(staged_verification.get("observed_expected_text_occurrences") or 0)
+    return baseline_occurrences > 0 and observed_occurrences > baseline_occurrences
+
+
+def _tinder_visual_staged_verification_request(
+    screen: dict[str, Any],
+    staged_verification: dict[str, Any],
+    expected_text: str,
+    *,
+    reused_existing_staged_text: bool = False,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "verification_type": "staged_text_visual",
+        "status": "needs_host_visual_verification",
+        "expected_payload_hash": _hash_text(expected_text),
+        "expected_character_count": len(expected_text),
+        "screen_path": screen.get("path"),
+        "screen_state": screen.get("state"),
+        "ocr_text_hash": staged_verification.get("observed_text_hash"),
+        "ocr_text_character_count": staged_verification.get("observed_character_count"),
+        "observed_expected_text_occurrences": staged_verification.get("observed_expected_text_occurrences"),
+        "baseline_expected_text_occurrences": staged_verification.get("baseline_expected_text_occurrences"),
+        "reused_existing_staged_text": reused_existing_staged_text,
+        "next_host_action": "visually_verify_staged_text_before_live_send",
+        "instructions": "Visually inspect the focused Tinder input and confirm it exactly matches the current payload before any live send. Do not treat OCR text elsewhere in the thread as proof that the input box contains the payload.",
+    }
 
 
 
@@ -2559,6 +2674,49 @@ def _verify_staged_bumble_message(
     if not _bumble_send_marker_visible(observed_text) and not active_send_button_visible:
         return {**result, "status": "needs_verification", "reason": "bumble_send_button_not_verified_after_staging"}
     return {**result, "status": "ok"}
+
+
+def _bumble_staged_text_requires_host_visual_verification(
+    staged_verification: dict[str, Any],
+    expected_text: str,
+    *,
+    target_binding: dict[str, Any] | None,
+    screen: dict[str, Any],
+) -> bool:
+    if staged_verification.get("status") != "ok":
+        return False
+    if screen.get("status") != "ok" or not screen.get("path"):
+        return False
+    if not isinstance(target_binding, dict) or target_binding.get("binding_type") != "chat_list_row_to_thread":
+        return False
+    comparable_expected = _message_text_comparable(expected_text)
+    if len(comparable_expected) > 3:
+        return False
+    baseline_occurrences = int(staged_verification.get("baseline_expected_text_occurrences") or 0)
+    observed_occurrences = int(staged_verification.get("observed_expected_text_occurrences") or 0)
+    return baseline_occurrences > 0 and observed_occurrences > baseline_occurrences
+
+
+def _bumble_visual_staged_verification_request(
+    screen: dict[str, Any],
+    staged_verification: dict[str, Any],
+    expected_text: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "verification_type": "staged_text_visual",
+        "status": "needs_host_visual_verification",
+        "expected_payload_hash": _hash_text(expected_text),
+        "expected_character_count": len(expected_text),
+        "screen_path": screen.get("path"),
+        "screen_state": screen.get("state"),
+        "ocr_text_hash": staged_verification.get("observed_text_hash"),
+        "ocr_text_character_count": staged_verification.get("observed_character_count"),
+        "baseline_expected_text_occurrences": staged_verification.get("baseline_expected_text_occurrences"),
+        "observed_expected_text_occurrences": staged_verification.get("observed_expected_text_occurrences"),
+        "next_host_action": "visually_verify_staged_text_before_live_send",
+        "instructions": "Visually inspect the focused Bumble input and confirm it exactly matches the current payload before any live send. Do not treat a short repeated OCR token elsewhere in the thread as enough evidence.",
+    }
 
 
 
@@ -2608,6 +2766,7 @@ def _verify_outbound_message(screen: dict[str, Any], expected_text: str) -> dict
         "expected_character_count": len(expected_text),
         "observed_text_hash": _hash_text(observed_text) if observed_text else None,
         "observed_character_count": len(observed_text) if observed_text else None,
+        "exact_text_ocr_verified": text_matches,
     }
     if screen.get("status") != "ok":
         return {**result, "status": "blocked", "reason": screen.get("reason") or "post_action_screen_not_captured"}

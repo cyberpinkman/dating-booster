@@ -548,6 +548,7 @@ class SupportLogTests(unittest.TestCase):
                 "--json",
             ])
             session_id = start_payload["session_id"]
+            self._select_runtime_scope(data_dir, "wechat")
 
             with _patch_cli_adapter() as harness_class:
                 harness_class.return_value.stage_wechat_draft.return_value = {
@@ -638,6 +639,7 @@ class SupportLogTests(unittest.TestCase):
                 "--json",
             ])
             session_id = start_payload["session_id"]
+            self._select_runtime_scope(data_dir, "tinder")
 
             with _patch_cli_adapter() as harness_class:
                 harness_class.return_value.observe_tinder_screen.return_value = {
@@ -763,6 +765,21 @@ class SupportLogTests(unittest.TestCase):
         with redirect_stdout(output):
             exit_code = main(argv)
         return exit_code, json.loads(output.getvalue())
+
+    def _select_runtime_scope(self, data_dir: Path, app_id: str, runtime: str = "default") -> None:
+        exit_code, payload = self._run([
+            "runtime",
+            "select",
+            "--data-dir",
+            str(data_dir),
+            "--app-id",
+            app_id,
+            "--runtime",
+            runtime,
+            "--json",
+        ])
+        if exit_code != 0:
+            raise AssertionError(payload)
 
     def _read_zip(self, path: Path) -> tuple[set[str], bytes]:
         with zipfile.ZipFile(path) as archive:

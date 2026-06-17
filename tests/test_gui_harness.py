@@ -405,8 +405,7 @@ class GuiHarnessTests(unittest.TestCase):
 
         payload = harness.launch_bumble(dry_run=True)
 
-        self.assertEqual(payload["status"], "needs_host_visual_verification")
-        self.assertEqual(payload["reason"], "staged_text_requires_visual_verification")
+        self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["target"], "bumble_app")
         self.assertEqual(payload["mode"], "dry_run")
         self.assertEqual(
@@ -437,8 +436,7 @@ class GuiHarnessTests(unittest.TestCase):
 
         payload = harness.launch_bumble(dry_run=False)
 
-        self.assertEqual(payload["status"], "needs_host_visual_verification")
-        self.assertEqual(payload["reason"], "outbound_message_requires_visual_verification")
+        self.assertEqual(payload["status"], "ok")
         type_step = next(step for step in payload["executed_steps"] if step["intent"] == "type_app_name_verified")
         self.assertTrue(type_step["result"]["retried_after_input_source_switch"])
         self.assertTrue(any("key code 49" in " ".join(command) and "control down" in " ".join(command) for command in runner.commands))
@@ -459,8 +457,7 @@ class GuiHarnessTests(unittest.TestCase):
 
         payload = harness.launch_bumble(dry_run=False)
 
-        self.assertEqual(payload["status"], "needs_host_visual_verification")
-        self.assertEqual(payload["reason"], "outbound_message_requires_visual_verification")
+        self.assertEqual(payload["status"], "ok")
         type_step = next(step for step in payload["executed_steps"] if step["intent"] == "type_app_name_verified")
         self.assertFalse(type_step["result"]["retried_after_input_source_switch"])
         self.assertFalse(type_step["result"]["ime_commit_after_typing"])
@@ -564,6 +561,11 @@ class GuiHarnessTests(unittest.TestCase):
 
         self.assertEqual(payload["status"], "needs_host_visual_verification")
         self.assertEqual(payload["reason"], "staged_text_requires_visual_verification")
+        self.assertEqual(payload["next_host_action"], "visually_verify_staged_text_before_live_send")
+        self.assertEqual(payload["visual_verification_request"]["verification_type"], "staged_text_visual")
+        self.assertEqual(payload["visual_verification_request"]["expected_character_count"], 2)
+        self.assertEqual(payload["visual_verification_request"]["baseline_expected_text_occurrences"], 1)
+        self.assertEqual(payload["visual_verification_request"]["observed_expected_text_occurrences"], 2)
         self.assertEqual(payload["target_binding_verification"]["status"], "ok")
         self.assertEqual(
             payload["target_binding_verification"]["verification_method"],
@@ -3662,7 +3664,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["staged_text_verification"]["status"], "ok")
         self.assertEqual(payload["outbound_message_verification"]["status"], "ok")
 
-    def test_tinder_send_message_reuses_existing_staged_text_after_safe_block(self):
+    def test_tinder_send_message_reused_existing_staged_text_waits_for_host_visual_verification(self):
         runner = FakeRunner(
             ocr_text=[
                 "Iris\nlriss613\nGIF Testing send path, please ignore] 1)\n",
@@ -3680,11 +3682,54 @@ class GuiHarnessTests(unittest.TestCase):
             target_binding={"required_visible_text": ["Iris"], "target_match_id": "match_iris"},
         )
 
-        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "staged_text_requires_visual_verification")
+        self.assertEqual(payload["next_host_action"], "visually_verify_staged_text_before_live_send")
         self.assertTrue(payload["staged_text_verification"]["reused_existing_staged_text"])
-        self.assertEqual([step["intent"] for step in payload["executed_steps"]], ["tap_tinder_send_button"])
+        self.assertEqual(payload["visual_verification_request"]["verification_type"], "staged_text_visual")
+        self.assertEqual(payload["visual_verification_request"]["expected_character_count"], len("Testing send path, please ignore."))
+        self.assertEqual(payload["executed_steps"], [])
+        self.assertNotIn("evidence", payload)
         self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
         self.assertFalse(any('keystroke "v"' in " ".join(command) for command in runner.commands))
+        self.assertFalse(any("tap_tinder_send_button" == step.get("intent") for step in payload["executed_steps"]))
+
+    def test_tinder_send_message_reused_short_row_binding_text_waits_for_host_visual_verification(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Tinder\n昨天 21:14\nhi\nMessage\nSend\n",
+                "Tinder\n昨天 21:14\nhi\nMessage\nSend\n",
+                "Tinder\n昨天 21:14\nhi\nMessage\nSend\n",
+            ],
+            screenshot_bytes=_tinder_conversation_send_button_png(),
+        )
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "hi",
+            dry_run=False,
+            target_binding={
+                "binding_type": "chat_list_row_to_thread",
+                "target_match_id": "match_tinder_row_5",
+                "candidate_key": "tinder_chat_row_5_emoji",
+                "selection_evidence": {
+                    "source_state": "tinder_messages",
+                    "opened_state": "tinder_conversation",
+                    "row_index": 5,
+                    "target_scope": "ordinary_conversation",
+                    "open_action": "open-conversation",
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "staged_text_requires_visual_verification")
+        self.assertEqual(payload["next_host_action"], "visually_verify_staged_text_before_live_send")
+        self.assertEqual(payload["visual_verification_request"]["verification_type"], "staged_text_visual")
+        self.assertEqual(payload["visual_verification_request"]["expected_character_count"], 2)
+        self.assertTrue(payload["visual_verification_request"]["reused_existing_staged_text"])
+        self.assertEqual(payload["executed_steps"], [])
+        self.assertNotIn("evidence", payload)
 
     def test_tinder_send_message_dismisses_feedback_survey_before_post_send_verification(self):
         runner = FakeRunner(
@@ -3833,8 +3878,11 @@ class GuiHarnessTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["status"], "needs_verification")
-        self.assertEqual(payload["reason"], "outbound_message_not_verified")
+        self.assertEqual(payload["reason"], "post_send_input_not_verified_clear")
+        self.assertFalse(payload["evidence"]["input_cleared_after_send"])
         self.assertFalse(payload["evidence"]["outbound_message_verified"])
+        self.assertTrue(payload["evidence"]["staged_exact_text_ocr_verified"])
+        self.assertTrue(payload["evidence"]["outbound_exact_text_ocr_verified"])
 
     def test_tinder_send_message_needs_verification_when_send_marker_remains_after_post_change(self):
         runner = FakeRunner(
@@ -3855,9 +3903,11 @@ class GuiHarnessTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["status"], "needs_verification")
-        self.assertEqual(payload["reason"], "outbound_message_not_verified")
+        self.assertEqual(payload["reason"], "post_send_input_not_verified_clear")
         self.assertFalse(payload["evidence"]["input_cleared_after_send"])
         self.assertFalse(payload["evidence"]["outbound_message_verified"])
+        self.assertTrue(payload["evidence"]["staged_exact_text_ocr_verified"])
+        self.assertTrue(payload["evidence"]["outbound_exact_text_ocr_verified"])
 
     def test_tinder_send_message_allows_send_word_inside_sent_message_body(self):
         runner = FakeRunner(
@@ -3880,6 +3930,8 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertTrue(payload["evidence"]["input_cleared_after_send"])
         self.assertTrue(payload["evidence"]["outbound_message_verified"])
+        self.assertTrue(payload["evidence"]["staged_exact_text_ocr_verified"])
+        self.assertTrue(payload["evidence"]["outbound_exact_text_ocr_verified"])
 
     def test_tinder_send_message_blocks_when_target_binding_mismatches_before_staging(self):
         runner = FakeRunner(ocr_text="Tinder\nZara\n昨天 21:14\n在吗\nMessage\nSend\n")
@@ -5387,28 +5439,29 @@ class GuiHarnessTests(unittest.TestCase):
             _select_runtime_scope(data_dir, "tinder")
             options_path = Path(temp_dir) / "workflow-options.json"
             _write_json(options_path, {"photo_steps": 1, "scroll_steps": 1})
-            action_exit, action_payload = _run_cli_json([
-                "harness",
-                "tinder",
-                "action",
-                "profile-photo-next",
-                "--data-dir",
-                str(data_dir),
-                "--dry-run",
-                "--json",
-            ])
-            workflow_exit, workflow_payload = _run_cli_json([
-                "harness",
-                "tinder",
-                "workflow",
-                "self-profile-read",
-                "--data-dir",
-                str(data_dir),
-                "--dry-run",
-                "--options-json",
-                str(options_path),
-                "--json",
-            ])
+            with patch.dict("os.environ", {"DATING_BOOST_ALLOW_REAL_GUI_TESTS": "1"}, clear=False):
+                action_exit, action_payload = _run_cli_json([
+                    "harness",
+                    "tinder",
+                    "action",
+                    "profile-photo-next",
+                    "--data-dir",
+                    str(data_dir),
+                    "--dry-run",
+                    "--json",
+                ])
+                workflow_exit, workflow_payload = _run_cli_json([
+                    "harness",
+                    "tinder",
+                    "workflow",
+                    "self-profile-read",
+                    "--data-dir",
+                    str(data_dir),
+                    "--dry-run",
+                    "--options-json",
+                    str(options_path),
+                    "--json",
+                ])
 
         self.assertEqual(action_exit, 0)
         self.assertEqual(action_payload["action"], "profile-photo-next")
@@ -5473,30 +5526,31 @@ class GuiHarnessTests(unittest.TestCase):
             read_options_path = Path(temp_dir) / "read-options.json"
             _write_json(open_options_path, {"carousel_swipes": 1, "match_index": 2})
             _write_json(read_options_path, {"carousel_swipes": 1, "match_index": 2, "profile_scroll_steps": 1})
-            open_exit, open_payload = _run_cli_json([
-                "harness",
-                "tinder",
-                "workflow",
-                "new-match-open",
-                "--data-dir",
-                str(data_dir),
-                "--dry-run",
-                "--options-json",
-                str(open_options_path),
-                "--json",
-            ])
-            read_exit, read_payload = _run_cli_json([
-                "harness",
-                "tinder",
-                "workflow",
-                "new-match-read-profile",
-                "--data-dir",
-                str(data_dir),
-                "--dry-run",
-                "--options-json",
-                str(read_options_path),
-                "--json",
-            ])
+            with patch.dict("os.environ", {"DATING_BOOST_ALLOW_REAL_GUI_TESTS": "1"}, clear=False):
+                open_exit, open_payload = _run_cli_json([
+                    "harness",
+                    "tinder",
+                    "workflow",
+                    "new-match-open",
+                    "--data-dir",
+                    str(data_dir),
+                    "--dry-run",
+                    "--options-json",
+                    str(open_options_path),
+                    "--json",
+                ])
+                read_exit, read_payload = _run_cli_json([
+                    "harness",
+                    "tinder",
+                    "workflow",
+                    "new-match-read-profile",
+                    "--data-dir",
+                    str(data_dir),
+                    "--dry-run",
+                    "--options-json",
+                    str(read_options_path),
+                    "--json",
+                ])
 
         self.assertEqual(open_exit, 0)
         self.assertEqual(open_payload["workflow"], "new-match-open")

@@ -1715,7 +1715,7 @@ class OperatorHostLoopTests(unittest.TestCase):
         self.assertEqual(result["next_host_action"], "open_target_profile_and_ingest_memory")
         self.assertEqual(result["action_results_recorded"], [])
 
-    def test_managed_tinder_live_send_runs_tinder_harness_and_records_without_input_clear_evidence(self):
+    def test_managed_tinder_live_send_records_required_iphone_mirroring_evidence(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             data_dir = root / "data"
@@ -1800,7 +1800,99 @@ class OperatorHostLoopTests(unittest.TestCase):
         self.assertEqual(recorded_result["result_status"], "succeeded")
         self.assertEqual(recorded_result["post_action_observation_id"], "gui_post_send_tinder_1234")
         self.assertTrue(recorded_result["evidence"]["managed_gui_send"])
+        self.assertTrue(recorded_result["evidence"]["staged_exact_text_verified"])
+        self.assertTrue(recorded_result["evidence"]["input_cleared_after_send"])
         self.assertTrue(recorded_result["evidence"]["outbound_message_verified"])
+        self.assertTrue(recorded_result["evidence"]["outbound_exact_text_verified"])
+
+    def test_managed_iphone_mirroring_live_send_waits_for_staged_host_visual_verification(self):
+        for app_id, auth_id, match_id, candidate_key in (
+            ("tinder", "auth_tinder_live", "match_tinder", "tinder_ada"),
+            ("bumble", "auth_bumble_live", "match_bumble", "bumble_ada"),
+        ):
+            with self.subTest(app_id=app_id), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                data_dir = root / "data"
+                work_dir = root / "work"
+                auth_path = root / f"{app_id}_auth.json"
+                payload_text = "hi"
+                payload_hash = hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
+                self._write_json(auth_path, {
+                    "schema_version": 1,
+                    "authorization_id": auth_id,
+                    "scope": "send_chat_messages",
+                    "app_id": app_id,
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "allowed_actions": ["send_message"],
+                    "autonomous_send": True,
+                    "live_send": True,
+                    "requires_post_action_verification": True,
+                    "revoked_at": None,
+                })
+                supervisor = HostLoopSupervisor(
+                    argparse.Namespace(
+                        data_dir=data_dir,
+                        authorization=auth_path,
+                        goal=None,
+                        availability=None,
+                        app_id=app_id,
+                        send_mode="live",
+                        managed_gui_send=True,
+                        work_dir=work_dir,
+                        max_steps=1,
+                        once=False,
+                        json=True,
+                        fixture_host=None,
+                        wait_timeout=None,
+                        poll_interval=1.0,
+                        adapter_package=None,
+                        skill_package=None,
+                    )
+                )
+                work_dir.mkdir(parents=True, exist_ok=True)
+                work_item = _wechat_managed_work_item(payload_text, payload_hash)
+                work_item["match_id"] = match_id
+                work_item["candidate_key"] = candidate_key
+                work_item["autonomous_audit_binding"] = _audit_binding(
+                    authorization_id=auth_id,
+                    target_match_id=match_id,
+                    payload_hash=payload_hash,
+                )
+                work_item["target_binding"] = {"required_visible_text": ["Ada"], "target_match_id": match_id}
+
+                def fake_run_cli_json(*args: str, allow_error: bool = False, **kwargs: object) -> dict[str, object]:
+                    if args[:3] == ("harness", app_id, "send-message"):
+                        return {
+                            "schema_version": 1,
+                            "status": "needs_host_visual_verification",
+                            "reason": "staged_text_requires_visual_verification",
+                            "app_id": app_id,
+                            "action": "send_message",
+                            "draft_fingerprint": payload_hash,
+                            "draft_character_count": len(payload_text),
+                            "visual_verification_request": {
+                                "schema_version": 1,
+                                "verification_type": "staged_text_visual",
+                                "expected_payload_hash": payload_hash,
+                                "screen_path": f"harness/iphone_mirroring.{app_id}.after_stage_message.png",
+                                "next_host_action": "visually_verify_staged_text_before_live_send",
+                            },
+                        }
+                    if args[:2] == ("operator", "record-action-result"):
+                        raise AssertionError("staged visual wait must not record a send result")
+                    raise AssertionError(args)
+
+                with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                    result = supervisor._handle_managed_gui_send(work_item)
+
+                self.assertEqual(result["status"], "waiting_for_host")
+                self.assertEqual(result["stop_reason"], "staged_text_requires_visual_verification")
+                self.assertEqual(result["next_host_action"], "visually_verify_staged_text_before_live_send")
+                self.assertFalse(supervisor.action_results_recorded)
+                self.assertEqual(
+                    result["managed_gui_send"]["visual_verification_request"]["expected_payload_hash"],
+                    payload_hash,
+                )
 
     def test_managed_bumble_live_send_runs_bumble_harness_and_records_result(self):
         with tempfile.TemporaryDirectory() as temp_dir:
