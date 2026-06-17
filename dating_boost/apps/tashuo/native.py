@@ -21,6 +21,12 @@ from dating_boost.core.live_send_contract import (
     target_binding_specific_marker_present,
     target_binding_structural_evidence_present,
 )
+from dating_boost.core.send_pipeline import (
+    EvidencePayload,
+    PostSendVerification,
+    SendAttemptContext,
+    StagingResult,
+)
 from dating_boost.harness.base import SubprocessRunner
 from dating_boost.harness.screen_state import _read_png_pixels
 
@@ -1405,21 +1411,18 @@ def send_tashuo_message(
         "visual_only_exact_verification_allowed": _is_mac_ios_app_session(session),
         "requires_exact_text_verification_before_return": True,
     }
-    payload = {
-        **session._base_payload("ok"),
-        "action": "send_message",
-        "target": "tashuo_message_input",
-        "mode": "dry_run" if dry_run else "execute",
-        "planned_steps": [input_step, paste_step, ax_set_text_step, type_fallback_step, ime_commit_step, send_step],
-        "draft_fingerprint": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
-        "draft_character_count": len(draft_text),
-        **platform._text_fingerprint_fields("draft_clipboard", draft_text),
-        "blocked_actions": list(TASHUO_SEND_BLOCKED_GUI_ACTIONS),
-        "question_gate_policy": copy.deepcopy(TASHUO_QUESTION_GATE_POLICY),
-        "input_coordinate_model": _tashuo_input_coordinate_model(session),
-        "live_send": True,
-        "requires_explicit_authorization": True,
-    }
+    payload = SendAttemptContext(
+        action="send_message",
+        target="tashuo_message_input",
+        draft_text=draft_text,
+        dry_run=dry_run,
+        planned_steps=(input_step, paste_step, ax_set_text_step, type_fallback_step, ime_commit_step, send_step),
+        blocked_actions=tuple(TASHUO_SEND_BLOCKED_GUI_ACTIONS),
+        extra_fields={
+            "question_gate_policy": copy.deepcopy(TASHUO_QUESTION_GATE_POLICY),
+            "input_coordinate_model": _tashuo_input_coordinate_model(session),
+        },
+    ).initial_payload(session._base_payload("ok"))
     if dry_run:
         return payload
     if output_dir is not None:
@@ -1785,23 +1788,28 @@ def send_tashuo_message(
     payload["outbound_message_verification"] = outbound_verification
     outbound_verified = outbound_verification.get("status") == "ok"
     input_cleared = bool(outbound_verification.get("input_cleared_after_send"))
-    payload["evidence"] = {
-        "staged_text_verified": bool(payload.get("staged_text_verified")),
-        "staged_exact_text_verified": staged_exact_text_verified,
-        "staged_exact_text_ax_verified": bool(staged_verification.get("exact_text_ax_verified")),
-        "staged_exact_text_ocr_verified": bool(staged_verification.get("exact_text_ocr_verified")),
-        "send_input_backend": send_result.get("input_backend"),
-        "input_cleared_after_send": input_cleared,
-        "post_action_screen_captured": post_screen_captured,
-        "outbound_message_verified": outbound_verified,
-        "outbound_exact_text_verified": bool(outbound_verification.get("exact_text_verified")),
-        "outbound_exact_text_ax_verified": bool(outbound_verification.get("exact_text_ax_verified")),
-        "outbound_exact_text_ocr_verified": bool(outbound_verification.get("exact_text_ocr_verified")),
-        "outbound_exact_text_visual_verified": bool(outbound_verification.get("exact_text_visual_verified")),
-        "outbound_visual_commit_verified": bool(outbound_verification.get("visual_commit_verified")),
-        "visual_only_exact_verification_allowed": bool(outbound_verification.get("visual_only_exact_verification_allowed")),
-        "post_action_observation_id": post_observation_id,
-    }
+    payload["evidence"] = EvidencePayload(
+        staging=StagingResult.from_verification(
+            staged_verification,
+            staged_text_verified=bool(payload.get("staged_text_verified")),
+        ),
+        post_send=PostSendVerification(
+            post_action_observation_id=post_observation_id,
+            input_cleared_after_send=input_cleared,
+            post_action_screen_captured=post_screen_captured,
+            outbound_message_verified=outbound_verified,
+        ),
+        send_input_backend=send_result.get("input_backend"),
+        extra_fields={
+            "staged_exact_text_verified": staged_exact_text_verified,
+            "outbound_exact_text_verified": bool(outbound_verification.get("exact_text_verified")),
+            "outbound_exact_text_ax_verified": bool(outbound_verification.get("exact_text_ax_verified")),
+            "outbound_exact_text_ocr_verified": bool(outbound_verification.get("exact_text_ocr_verified")),
+            "outbound_exact_text_visual_verified": bool(outbound_verification.get("exact_text_visual_verified")),
+            "outbound_visual_commit_verified": bool(outbound_verification.get("visual_commit_verified")),
+            "visual_only_exact_verification_allowed": bool(outbound_verification.get("visual_only_exact_verification_allowed")),
+        },
+    ).to_dict()
     if not post_screen_captured:
         payload.update({"status": "needs_verification", "reason": "post_action_screen_not_captured"})
     elif not input_cleared:

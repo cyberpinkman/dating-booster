@@ -11,6 +11,13 @@ for _name, _value in vars(_platform).items():
 
 del _name, _value
 
+from dating_boost.core.send_pipeline import (  # noqa: E402
+    EvidencePayload,
+    PostSendVerification,
+    SendAttemptContext,
+    StagingResult,
+)
+
 
 BLOCKED_GUI_ACTIONS = ["send", "like", "super_like", "unmatch", "report", "profile_edit"]
 WECHAT_BLOCKED_GUI_ACTIONS = ["send", "payments", "calls", "contact_exchange_without_user"]
@@ -438,19 +445,14 @@ class AppSpecificNativeGuiSessionMixin:
                 "risk": "post_action_verification",
             },
         ]
-        payload = {
-            **self._base_payload("ok"),
-            "action": "send_message",
-            "target": "wechat_message_input",
-            "mode": "dry_run" if dry_run else "execute",
-            "planned_steps": planned_steps,
-            "draft_fingerprint": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
-            "draft_character_count": len(draft_text),
-            **_text_fingerprint_fields("draft_clipboard", draft_text),
-            "blocked_actions": ["payments", "calls", "contact_exchange_without_user"],
-            "live_send": True,
-            "requires_explicit_authorization": True,
-        }
+        payload = SendAttemptContext(
+            action="send_message",
+            target="wechat_message_input",
+            draft_text=draft_text,
+            dry_run=dry_run,
+            planned_steps=tuple(planned_steps),
+            blocked_actions=("payments", "calls", "contact_exchange_without_user"),
+        ).initial_payload(self._base_payload("ok"))
         if dry_run:
             return payload
         if output_dir is not None:
@@ -518,14 +520,21 @@ class AppSpecificNativeGuiSessionMixin:
         outbound_verification = _verify_outbound_message(post_screen, draft_text)
         payload["outbound_message_verification"] = outbound_verification
         outbound_verified = outbound_verification.get("status") == "ok"
-        payload["evidence"] = {
-            "staged_text_verified": bool(stage_payload.get("staged_text_verified")),
-            "send_input_backend": send_result.get("input_backend"),
-            "input_cleared_after_send": input_cleared,
-            "post_action_screen_captured": post_screen_captured,
-            "outbound_message_verified": outbound_verified,
-            "post_action_observation_id": post_observation_id,
-        }
+        payload["evidence"] = EvidencePayload(
+            staging=StagingResult.from_verification(
+                stage_payload.get("staged_text_verification")
+                if isinstance(stage_payload.get("staged_text_verification"), dict)
+                else None,
+                staged_text_verified=bool(stage_payload.get("staged_text_verified")),
+            ),
+            post_send=PostSendVerification(
+                post_action_observation_id=post_observation_id,
+                input_cleared_after_send=input_cleared,
+                post_action_screen_captured=post_screen_captured,
+                outbound_message_verified=outbound_verified,
+            ),
+            send_input_backend=send_result.get("input_backend"),
+        ).to_dict()
         if not input_cleared:
             payload.update({"status": "needs_verification", "reason": "post_send_input_not_verified_clear"})
         elif not post_screen_captured:
@@ -919,20 +928,15 @@ class AppSpecificNativeGuiSessionMixin:
             "requires_explicit_authorization": True,
             "visual_only_exact_verification_allowed": False,
         }
-        payload = {
-            **self._base_payload("ok"),
-            "action": "send_message",
-            "target": "bumble_message_input",
-            "mode": "dry_run" if dry_run else "execute",
-            "planned_steps": [input_step, paste_step, type_fallback_step, ime_commit_step, send_step],
-            "draft_fingerprint": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
-            "draft_character_count": len(draft_text),
-            **_text_fingerprint_fields("draft_clipboard", draft_text),
-            "blocked_actions": list(BUMBLE_SEND_BLOCKED_GUI_ACTIONS),
-            "opening_move_policy": copy.deepcopy(BUMBLE_OPENING_MOVE_POLICY),
-            "live_send": True,
-            "requires_explicit_authorization": True,
-        }
+        payload = SendAttemptContext(
+            action="send_message",
+            target="bumble_message_input",
+            draft_text=draft_text,
+            dry_run=dry_run,
+            planned_steps=(input_step, paste_step, type_fallback_step, ime_commit_step, send_step),
+            blocked_actions=tuple(BUMBLE_SEND_BLOCKED_GUI_ACTIONS),
+            extra_fields={"opening_move_policy": copy.deepcopy(BUMBLE_OPENING_MOVE_POLICY)},
+        ).initial_payload(self._base_payload("ok"))
         if dry_run:
             return payload
         if output_dir is not None:
@@ -1132,17 +1136,23 @@ class AppSpecificNativeGuiSessionMixin:
         payload["outbound_message_verification"] = outbound_verification
         outbound_verified = outbound_verification.get("status") == "ok"
         input_cleared = bool(outbound_verification.get("input_cleared_after_send"))
-        payload["evidence"] = {
-            "staged_text_verified": bool(payload.get("staged_text_verified")),
-            "staged_exact_text_ocr_verified": bool(staged_verification.get("exact_text_ocr_verified")),
-            "send_input_backend": send_result.get("input_backend"),
-            "input_cleared_after_send": input_cleared,
-            "post_action_screen_captured": post_screen_captured,
-            "outbound_message_verified": outbound_verified,
-            "outbound_exact_text_ocr_verified": bool(outbound_verification.get("exact_text_ocr_verified")),
-            "visual_only_exact_verification_allowed": False,
-            "post_action_observation_id": post_observation_id,
-        }
+        payload["evidence"] = EvidencePayload(
+            staging=StagingResult.from_verification(
+                staged_verification,
+                staged_text_verified=bool(payload.get("staged_text_verified")),
+            ),
+            post_send=PostSendVerification(
+                post_action_observation_id=post_observation_id,
+                input_cleared_after_send=input_cleared,
+                post_action_screen_captured=post_screen_captured,
+                outbound_message_verified=outbound_verified,
+            ),
+            send_input_backend=send_result.get("input_backend"),
+            extra_fields={
+                "outbound_exact_text_ocr_verified": bool(outbound_verification.get("exact_text_ocr_verified")),
+                "visual_only_exact_verification_allowed": False,
+            },
+        ).to_dict()
         if not post_screen_captured:
             payload.update({"status": "needs_verification", "reason": "post_action_screen_not_captured"})
         elif not input_cleared:
@@ -1178,19 +1188,14 @@ class AppSpecificNativeGuiSessionMixin:
             "risk": "live_send",
             "requires_explicit_authorization": True,
         }
-        payload = {
-            **self._base_payload("ok"),
-            "action": "send_message",
-            "target": "tinder_message_input",
-            "mode": "dry_run" if dry_run else "execute",
-            "planned_steps": [input_step, paste_step, send_step],
-            "draft_fingerprint": hashlib.sha256(draft_text.encode("utf-8")).hexdigest(),
-            "draft_character_count": len(draft_text),
-            **_text_fingerprint_fields("draft_clipboard", draft_text),
-            "blocked_actions": ["like", "super_like", "unmatch", "report", "profile_edit"],
-            "live_send": True,
-            "requires_explicit_authorization": True,
-        }
+        payload = SendAttemptContext(
+            action="send_message",
+            target="tinder_message_input",
+            draft_text=draft_text,
+            dry_run=dry_run,
+            planned_steps=(input_step, paste_step, send_step),
+            blocked_actions=("like", "super_like", "unmatch", "report", "profile_edit"),
+        ).initial_payload(self._base_payload("ok"))
         if dry_run:
             return payload
         if output_dir is not None:
@@ -1435,17 +1440,23 @@ class AppSpecificNativeGuiSessionMixin:
         )
         payload["outbound_message_verification"] = outbound_verification
         outbound_verified = outbound_verification.get("status") == "ok"
-        payload["evidence"] = {
-            "staged_text_verified": payload["staged_text_verified"],
-            "staged_exact_text_ocr_verified": bool(staged_verification.get("exact_text_ocr_verified")),
-            "send_input_backend": send_result.get("input_backend"),
-            "input_cleared_after_send": outbound_verification.get("input_cleared_after_send") is True,
-            "post_action_screen_captured": post_screen_captured,
-            "outbound_message_verified": outbound_verified,
-            "outbound_exact_text_ocr_verified": bool(outbound_verification.get("exact_text_ocr_verified")),
-            "visual_only_exact_verification_allowed": False,
-            "post_action_observation_id": post_observation_id,
-        }
+        payload["evidence"] = EvidencePayload(
+            staging=StagingResult.from_verification(
+                staged_verification,
+                staged_text_verified=bool(payload["staged_text_verified"]),
+            ),
+            post_send=PostSendVerification(
+                post_action_observation_id=post_observation_id,
+                input_cleared_after_send=outbound_verification.get("input_cleared_after_send") is True,
+                post_action_screen_captured=post_screen_captured,
+                outbound_message_verified=outbound_verified,
+            ),
+            send_input_backend=send_result.get("input_backend"),
+            extra_fields={
+                "outbound_exact_text_ocr_verified": bool(outbound_verification.get("exact_text_ocr_verified")),
+                "visual_only_exact_verification_allowed": False,
+            },
+        ).to_dict()
         if not post_screen_captured:
             payload.update({"status": "needs_verification", "reason": "post_action_screen_not_captured"})
         elif outbound_verification.get("input_cleared_after_send") is not True:
