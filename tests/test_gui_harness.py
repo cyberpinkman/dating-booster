@@ -2168,6 +2168,7 @@ class GuiHarnessTests(unittest.TestCase):
 
         action = harness.run_action("open-conversation", conversation_row=2, dry_run=True)
         workflow = harness.run_workflow("chat-read-match-profile", conversation_row=1, dry_run=True)
+        scroll = harness.run_action("conversation-list-scroll-down", dry_run=True)
 
         self.assertEqual(action["status"], "ok")
         self.assertEqual(action["planned_steps"][0]["intent"], "tap_tashuo_conversation_row")
@@ -2176,6 +2177,12 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(workflow["status"], "ok")
         self.assertIn("capture_profile_read_step", [step["intent"] for step in workflow["planned_steps"]])
         self.assertTrue(all(step.get("risk") == "navigation_only" for step in workflow["planned_steps"]))
+        self.assertEqual(scroll["status"], "ok")
+        self.assertEqual(
+            scroll["planned_steps"][0]["wheel"],
+            {"x": 0.5, "y": 0.78, "delta_y": -18, "delta_x": 0, "repeats": 14, "interval_us": 18000},
+        )
+        self.assertEqual(scroll["planned_steps"][0]["risk"], "navigation_only")
 
     def test_tashuo_mac_ios_app_open_conversation_accepts_visual_tap_ratio_without_row_index(self):
         runner = FakeRunner(ocr_text="消息\n全部消息\n朵朵\n你好啊\n推荐\n飞行\n消息\n我的\n")
@@ -3411,6 +3418,24 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(return_to_chats_step["intent"], "tap_thread_back_to_chats")
         feedback_survey_step = payloads[-1]["planned_steps"][0]
         self.assertEqual(feedback_survey_step["intent"], "tap_tinder_feedback_survey_ignore")
+
+    def test_execute_planned_steps_blocks_malformed_step_before_screen_guards(self):
+        runner = FakeRunner(ocr_text="Tinder\nMessages\n")
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+        payload = {
+            **harness._base_payload("ok"),
+            "action": "malformed-step",
+            "mode": "execute",
+            "planned_steps": ["not-a-step"],
+            "blocked_actions": [],
+        }
+
+        result = harness._execute_planned_steps(payload)
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "gui_step_not_mapping")
+        self.assertEqual(result["step_index"], 1)
+        self.assertEqual(result["step"], "not-a-step")
 
     def test_tinder_open_conversation_can_target_visible_row_y_ratio_after_scroll(self):
         harness = create_adapter(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天"))

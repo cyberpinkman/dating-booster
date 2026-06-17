@@ -17,6 +17,13 @@ from dating_boost.core.send_pipeline import (  # noqa: E402
     SendAttemptContext,
     StagingResult,
 )
+from dating_boost.core.harness_steps import (  # noqa: E402
+    harness_step_validation_reason,
+    marker_step as _harness_marker_step,
+    swipe_step as _harness_swipe_step,
+    tap_step as _harness_tap_step,
+    wheel_step as _harness_wheel_step,
+)
 from dating_boost.core.target_binding import (  # noqa: E402
     RowToThreadBindingSpec,
     finish_row_to_thread_screen_verification,
@@ -1485,8 +1492,17 @@ class AppSpecificNativeGuiSessionMixin:
             return payload
         screen_state = doctor.get("screen", {}).get("state")
         window = _window_from_payload(doctor.get("window") or {})
-        requires_paywall = any(step.get("requires_tinder_subscription_paywall") for step in payload["planned_steps"])
-        requires_feedback_survey = any(step.get("requires_tinder_feedback_survey") for step in payload["planned_steps"])
+        planned_steps = payload.get("planned_steps")
+        if not isinstance(planned_steps, list):
+            payload.update({"status": "blocked", "reason": "gui_planned_steps_not_list"})
+            return payload
+        for step_index, step in enumerate(planned_steps, start=1):
+            validation_reason = harness_step_validation_reason(step)
+            if validation_reason is not None:
+                payload.update({"status": "blocked", "reason": validation_reason, "step_index": step_index, "step": step})
+                return payload
+        requires_paywall = any(step.get("requires_tinder_subscription_paywall") for step in planned_steps)
+        requires_feedback_survey = any(step.get("requires_tinder_feedback_survey") for step in planned_steps)
         if requires_paywall:
             if screen_state != TINDER_SUBSCRIPTION_PAYWALL_STATE:
                 payload.update(
@@ -1523,7 +1539,7 @@ class AppSpecificNativeGuiSessionMixin:
                 )
                 return payload
             screen_state = recovery.get("verification", {}).get("state")
-        if any(step.get("requires_verified_tinder_screen") for step in payload["planned_steps"]):
+        if any(step.get("requires_verified_tinder_screen") for step in planned_steps):
             if screen_state not in TINDER_FOREGROUND_STATES:
                 payload.update(
                     {
@@ -1533,7 +1549,7 @@ class AppSpecificNativeGuiSessionMixin:
                     }
                 )
                 return payload
-        if any(step.get("requires_verified_bumble_screen") for step in payload["planned_steps"]):
+        if any(step.get("requires_verified_bumble_screen") for step in planned_steps):
             if screen_state not in BUMBLE_FOREGROUND_STATES:
                 payload.update(
                     {
@@ -1545,7 +1561,7 @@ class AppSpecificNativeGuiSessionMixin:
                 return payload
         app_verified_screen_key = getattr(self, "app_verified_screen_key", None)
         app_foreground_states = getattr(self, "app_foreground_states", None)
-        if app_verified_screen_key and any(step.get(app_verified_screen_key) for step in payload["planned_steps"]):
+        if app_verified_screen_key and any(step.get(app_verified_screen_key) for step in planned_steps):
             if screen_state not in set(app_foreground_states or ()):
                 payload.update(
                     {
@@ -1558,7 +1574,7 @@ class AppSpecificNativeGuiSessionMixin:
         executed_steps: list[dict[str, Any]] = []
         profile_read_captures: list[dict[str, Any]] = []
         profile_read_texts: list[str] = []
-        for step in payload["planned_steps"]:
+        for step in planned_steps:
             precondition = self._verify_bumble_step_precondition(
                 window,
                 step,
@@ -2848,48 +2864,44 @@ def _verify_bumble_step_state(screen: dict[str, Any], step: dict[str, Any], *, k
 
 
 def _tap_step(intent: str, *, x: float, y: float) -> dict[str, Any]:
-    return {
-        "intent": intent,
-        "tap_ratio": {"x": x, "y": y},
-        "requires_verified_tinder_screen": True,
-        "risk": "navigation_only",
-    }
+    return _harness_tap_step(intent, x=x, y=y, requires_verified_tinder_screen=True)
 
 
 
 def _tinder_subscription_paywall_dismiss_step() -> dict[str, Any]:
-    return {
-        "intent": "tap_tinder_subscription_paywall_close",
-        "tap_ratio": {"x": 0.09, "y": 0.14},
-        "requires_tinder_subscription_paywall": True,
-        "risk": "subscription_paywall_recovery",
-        "subscription_purchase_executed": False,
-    }
+    return _harness_tap_step(
+        "tap_tinder_subscription_paywall_close",
+        x=0.09,
+        y=0.14,
+        risk="subscription_paywall_recovery",
+        requires_tinder_subscription_paywall=True,
+        subscription_purchase_executed=False,
+    )
 
 
 
 def _tinder_feedback_survey_dismiss_step() -> dict[str, Any]:
-    return {
-        "intent": "tap_tinder_feedback_survey_ignore",
-        "tap_ratio": {"x": 0.50, "y": 0.64},
-        "requires_tinder_feedback_survey": True,
-        "risk": "feedback_survey_recovery",
-        "rating_submitted": False,
-    }
+    return _harness_tap_step(
+        "tap_tinder_feedback_survey_ignore",
+        x=0.50,
+        y=0.64,
+        risk="feedback_survey_recovery",
+        requires_tinder_feedback_survey=True,
+        rating_submitted=False,
+    )
 
 
 
 def _swipe_step(intent: str, *, from_x: float, from_y: float, to_x: float, to_y: float, duration_ms: int = 350) -> dict[str, Any]:
-    return {
-        "intent": intent,
-        "swipe": {
-            "from": {"x": from_x, "y": from_y},
-            "to": {"x": to_x, "y": to_y},
-            "duration_ms": duration_ms,
-        },
-        "requires_verified_tinder_screen": True,
-        "risk": "navigation_only",
-    }
+    return _harness_swipe_step(
+        intent,
+        from_x=from_x,
+        from_y=from_y,
+        to_x=to_x,
+        to_y=to_y,
+        duration_ms=duration_ms,
+        requires_verified_tinder_screen=True,
+    )
 
 
 
@@ -2902,19 +2914,15 @@ def _wheel_step(
     delta_x: int = 0,
     repeats: int = 18,
 ) -> dict[str, Any]:
-    return {
-        "intent": intent,
-        "wheel": {
-            "x": x,
-            "y": y,
-            "delta_y": delta_y,
-            "delta_x": delta_x,
-            "repeats": repeats,
-            "interval_us": 18000,
-        },
-        "requires_verified_tinder_screen": True,
-        "risk": "navigation_only",
-    }
+    return _harness_wheel_step(
+        intent,
+        x=x,
+        y=y,
+        delta_y=delta_y,
+        delta_x=delta_x,
+        repeats=repeats,
+        requires_verified_tinder_screen=True,
+    )
 
 
 
@@ -2923,12 +2931,7 @@ def _capture_profile_read_step(*, app_id: str = "tinder") -> dict[str, Any]:
         requires_key = "requires_verified_bumble_screen"
     else:
         requires_key = "requires_verified_tinder_screen"
-    step = {
-        "intent": "capture_profile_read_step",
-        requires_key: True,
-        "risk": "navigation_only",
-        "wait_after_seconds": 0.0,
-    }
+    step = _harness_marker_step("capture_profile_read_step", **{requires_key: True}, wait_after_seconds=0.0)
     if app_id == "bumble":
         step["requires_bumble_states"] = ["bumble_browse", "bumble_profile", "bumble_self_profile"]
     return step
@@ -2936,12 +2939,12 @@ def _capture_profile_read_step(*, app_id: str = "tinder") -> dict[str, Any]:
 
 
 def _safe_expand_step() -> dict[str, Any]:
-    return {
-        "intent": "safe_expand_visible_profile_section",
-        "tap_ratio": {"x": 0.50, "y": 0.76},
-        "requires_verified_tinder_screen": True,
-        "risk": "navigation_only",
-    }
+    return _harness_tap_step(
+        "safe_expand_visible_profile_section",
+        x=0.50,
+        y=0.76,
+        requires_verified_tinder_screen=True,
+    )
 
 
 
@@ -3087,12 +3090,7 @@ def _bumble_tap_step(
     requires_states: list[str] | str | None = None,
     expected_states: list[str] | str | None = None,
 ) -> dict[str, Any]:
-    step = {
-        "intent": intent,
-        "tap_ratio": {"x": x, "y": y},
-        "requires_verified_bumble_screen": True,
-        "risk": "navigation_only",
-    }
+    step = _harness_tap_step(intent, x=x, y=y, requires_verified_bumble_screen=True)
     if requires_states is not None:
         step["requires_bumble_states"] = requires_states
     if expected_states is not None:
@@ -3102,14 +3100,14 @@ def _bumble_tap_step(
 
 
 def _bumble_bottom_tab_step(intent: str, *, x: float, y: float, expected_state: str) -> dict[str, Any]:
-    return {
-        "intent": intent,
-        "tap_ratio": {"x": x, "y": y},
-        "requires_verified_bumble_screen": True,
-        "requires_bumble_top_level_tab_bar": True,
-        "expected_bumble_states": [expected_state],
-        "risk": "navigation_only",
-    }
+    return _harness_tap_step(
+        intent,
+        x=x,
+        y=y,
+        requires_verified_bumble_screen=True,
+        requires_bumble_top_level_tab_bar=True,
+        expected_bumble_states=[expected_state],
+    )
 
 
 
@@ -3124,19 +3122,15 @@ def _bumble_wheel_step(
     requires_states: list[str] | str | None = None,
     expected_states: list[str] | str | None = None,
 ) -> dict[str, Any]:
-    step = {
-        "intent": intent,
-        "wheel": {
-            "x": x,
-            "y": y,
-            "delta_y": delta_y,
-            "delta_x": delta_x,
-            "repeats": repeats,
-            "interval_us": 18000,
-        },
-        "requires_verified_bumble_screen": True,
-        "risk": "navigation_only",
-    }
+    step = _harness_wheel_step(
+        intent,
+        x=x,
+        y=y,
+        delta_y=delta_y,
+        delta_x=delta_x,
+        repeats=repeats,
+        requires_verified_bumble_screen=True,
+    )
     if requires_states is not None:
         step["requires_bumble_states"] = requires_states
     if expected_states is not None:
@@ -3320,32 +3314,14 @@ def _launch_app_steps(
     search_result_intent: str,
     expected_app_labels: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    type_step: dict[str, Any] = {
-        "intent": "type_app_name_verified",
-        "text": app_name,
-        "risk": "navigation_only",
-        "wait_after_seconds": 0.2,
-    }
+    type_step = _harness_marker_step("type_app_name_verified", text=app_name, wait_after_seconds=0.2)
     if expected_app_labels is not None:
         type_step["expected_app_labels"] = list(expected_app_labels)
     return [
-        {
-            "intent": "open_iphone_home_screen",
-            "risk": "navigation_only",
-            "wait_after_seconds": 0.8,
-        },
-        {
-            "intent": "open_ios_spotlight",
-            "risk": "navigation_only",
-            "wait_after_seconds": 0.4,
-        },
+        _harness_marker_step("open_iphone_home_screen", wait_after_seconds=0.8),
+        _harness_marker_step("open_ios_spotlight", wait_after_seconds=0.4),
         type_step,
-        {
-            "intent": search_result_intent,
-            "tap_ratio": {"x": 0.18, "y": 0.20},
-            "risk": "navigation_only",
-            "wait_after_seconds": 2.5,
-        },
+        _harness_tap_step(search_result_intent, x=0.18, y=0.20, wait_after_seconds=2.5),
     ]
 
 

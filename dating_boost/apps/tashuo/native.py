@@ -27,6 +27,11 @@ from dating_boost.core.send_pipeline import (
     SendAttemptContext,
     StagingResult,
 )
+from dating_boost.core.harness_steps import (
+    marker_step as _harness_marker_step,
+    tap_step as _harness_tap_step,
+    wheel_step as _harness_wheel_step,
+)
 from dating_boost.core.target_binding import (
     RowToThreadBindingSpec,
     finish_row_to_thread_screen_verification,
@@ -3642,13 +3647,12 @@ def _retry_tashuo_step_postcondition_after_transition(
 
 
 def _capture_tashuo_profile_read_step() -> dict[str, Any]:
-    return {
-        "intent": "capture_profile_read_step",
-        "requires_verified_tashuo_screen": True,
-        "requires_tashuo_states": ["tashuo_recommend", "tashuo_profile", "tashuo_self_profile"],
-        "risk": "navigation_only",
-        "wait_after_seconds": 0.0,
-    }
+    return _harness_marker_step(
+        "capture_profile_read_step",
+        requires_verified_tashuo_screen=True,
+        requires_tashuo_states=["tashuo_recommend", "tashuo_profile", "tashuo_self_profile"],
+        wait_after_seconds=0.0,
+    )
 
 
 def _tashuo_tap_step(
@@ -3659,12 +3663,7 @@ def _tashuo_tap_step(
     requires_states: list[str] | str | None = None,
     expected_states: list[str] | str | None = None,
 ) -> dict[str, Any]:
-    step = {
-        "intent": intent,
-        "tap_ratio": {"x": x, "y": y},
-        "requires_verified_tashuo_screen": True,
-        "risk": "navigation_only",
-    }
+    step = _harness_tap_step(intent, x=x, y=y, requires_verified_tashuo_screen=True)
     if requires_states is not None:
         step["requires_tashuo_states"] = requires_states
     if expected_states is not None:
@@ -3673,14 +3672,14 @@ def _tashuo_tap_step(
 
 
 def _tashuo_bottom_tab_step(intent: str, *, x: float, y: float, expected_state: str) -> dict[str, Any]:
-    return {
-        "intent": intent,
-        "tap_ratio": {"x": x, "y": y},
-        "requires_verified_tashuo_screen": True,
-        "requires_tashuo_top_level_tab_bar": True,
-        "expected_tashuo_states": [expected_state],
-        "risk": "navigation_only",
-    }
+    return _harness_tap_step(
+        intent,
+        x=x,
+        y=y,
+        requires_verified_tashuo_screen=True,
+        requires_tashuo_top_level_tab_bar=True,
+        expected_tashuo_states=[expected_state],
+    )
 
 
 def _tashuo_wheel_step(
@@ -3694,19 +3693,15 @@ def _tashuo_wheel_step(
     requires_states: list[str] | str | None = None,
     expected_states: list[str] | str | None = None,
 ) -> dict[str, Any]:
-    step = {
-        "intent": intent,
-        "wheel": {
-            "x": x,
-            "y": y,
-            "delta_y": delta_y,
-            "delta_x": delta_x,
-            "repeats": repeats,
-            "interval_us": 18000,
-        },
-        "requires_verified_tashuo_screen": True,
-        "risk": "navigation_only",
-    }
+    step = _harness_wheel_step(
+        intent,
+        x=x,
+        y=y,
+        delta_y=delta_y,
+        delta_x=delta_x,
+        repeats=repeats,
+        requires_verified_tashuo_screen=True,
+    )
     if requires_states is not None:
         step["requires_tashuo_states"] = requires_states
     if expected_states is not None:

@@ -65,6 +65,7 @@ from dating_boost.core.send_verification import (
     staged_text_visual_verification_request as _staged_text_visual_verification_request,
     text_fingerprint_fields as _text_fingerprint_fields,
 )
+from dating_boost.core.harness_steps import harness_step_validation_reason as _harness_step_validation_reason
 
 GUI_HARNESS_SCHEMA_VERSION = 2
 IPHONE_MIRRORING_HARNESS_BACKEND = "iphone_mirroring_macos"
@@ -378,6 +379,9 @@ class NativeGuiHarness:
         )
 
     def _execute_step(self, window: WindowInfo, step: dict[str, Any]) -> dict[str, Any]:
+        validation_reason = _harness_step_validation_reason(step)
+        if validation_reason is not None:
+            return {"status": "blocked", "reason": validation_reason}
         if "tap_ratio" in step:
             return self._click_ratio(window, step["tap_ratio"])
         if "swipe" in step:
