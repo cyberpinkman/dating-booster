@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
-from dating_boost.core.automation import AutomationRepository
+from dating_boost.core.automation import AutomationRepository, _next_priority_queue, _prioritize_entries
 from dating_boost.core.memory.models import IdentityTrustStatus, MatchMemoryProjection
 from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.perception.observations import AppObservation
@@ -44,6 +44,171 @@ class AutomationSessionTests(unittest.TestCase):
             self.assertIn("automation report latest", payload["supported_commands"])
             self.assertTrue(payload["agent_native_capabilities"]["automation_session"])
             self.assertTrue(payload["agent_native_capabilities"]["appointment_ledger"])
+
+    def test_entry_priority_keeps_needs_reply_ahead_of_sent_waiting(self):
+        sent_entry = {"candidate_key": "row_sent", "unread_cue": "unknown"}
+        reply_entry = {"candidate_key": "row_reply", "unread_cue": "unknown"}
+        ordered = _prioritize_entries(
+            [sent_entry, reply_entry],
+            states_by_candidate={
+                "row_sent": {"state": "sent_waiting"},
+                "row_reply": {"state": "needs_reply"},
+            },
+            thread_items={
+                "row_reply": {
+                    "assessment": {
+                        "recommended_next": "reply",
+                        "continuation_opportunity": "yes",
+                    }
+                }
+            },
+        )
+
+        self.assertEqual([entry["candidate_key"] for entry in ordered], ["row_reply", "row_sent"])
+
+    def test_entry_priority_keeps_draft_ready_reply_badge_ahead_of_unsignaled_scan(self):
+        draft_ready_entry = {"candidate_key": "row_draft_ready", "unread_cue": "reply_badge"}
+        unsignaled_entry = {"candidate_key": "row_unsignaled", "unread_cue": "absent"}
+        ordered = _prioritize_entries(
+            [unsignaled_entry, draft_ready_entry],
+            states_by_candidate={
+                "row_draft_ready": {
+                    "state": "draft_ready",
+                    "candidate_type": "continuation_candidate",
+                },
+                "row_unsignaled": {
+                    "state": "needs_thread_scan",
+                    "candidate_type": "continuation_candidate",
+                },
+            },
+            thread_items={},
+        )
+
+        self.assertEqual([entry["candidate_key"] for entry in ordered], ["row_draft_ready", "row_unsignaled"])
+
+    def test_entry_priority_demotes_stale_waiting_thread_observation(self):
+        sent_entry = {"candidate_key": "row_sent", "unread_cue": "unknown"}
+        scan_later_entry = {"candidate_key": "row_scan_later", "unread_cue": "unknown"}
+        ordered = _prioritize_entries(
+            [sent_entry, scan_later_entry],
+            states_by_candidate={
+                "row_sent": {
+                    "state": "sent_waiting",
+                    "latest_inbound_fingerprint": "same_inbound",
+                },
+                "row_scan_later": {"state": "scan_later"},
+            },
+            thread_items={
+                "row_sent": {
+                    "assessment": {
+                        "recommended_next": "reply",
+                        "continuation_opportunity": "yes",
+                        "latest_inbound_fingerprint": "same_inbound",
+                    }
+                },
+                "row_scan_later": {
+                    "assessment": {
+                        "recommended_next": "reply",
+                        "continuation_opportunity": "yes",
+                    }
+                },
+            },
+        )
+
+        self.assertEqual([entry["candidate_key"] for entry in ordered], ["row_scan_later", "row_sent"])
+
+    def test_next_priority_queue_excludes_stale_activation_candidate_without_unread(self):
+        queue = _next_priority_queue(
+            [
+                {
+                    "match_id": "match_old",
+                    "candidate_key": "row_old",
+                    "state": "draft_ready",
+                    "updated_at": "2026-05-01T00:00:00Z",
+                    "unread_cue": "absent",
+                },
+                {
+                    "match_id": "match_unread_old",
+                    "candidate_key": "row_unread_old",
+                    "state": "needs_thread_scan",
+                    "updated_at": "2026-05-01T00:00:00Z",
+                    "unread_cue": "present",
+                    "candidate_type": "continuation_candidate",
+                },
+            ]
+        )
+
+        self.assertEqual([item["candidate_key"] for item in queue], ["row_unread_old"])
+
+    def test_next_priority_queue_promotes_recent_scan_later_continuation_with_inbound(self):
+        queue = _next_priority_queue(
+            [
+                {
+                    "match_id": "match_opening",
+                    "candidate_key": "row_opening",
+                    "state": "needs_thread_scan",
+                    "candidate_type": "new_match_candidate",
+                    "updated_at": "2026-05-26T00:00:00Z",
+                },
+                {
+                    "match_id": "match_reply",
+                    "candidate_key": "row_reply",
+                    "state": "scan_later",
+                    "candidate_type": "continuation_candidate",
+                    "latest_inbound_fingerprint": "reply:fresh",
+                    "updated_at": "2026-05-26T00:00:00Z",
+                },
+            ]
+        )
+
+        self.assertEqual([item["candidate_key"] for item in queue], ["row_reply", "row_opening"])
+
+    def test_next_priority_queue_promotes_pending_send_request(self):
+        queue = _next_priority_queue(
+            [
+                {
+                    "match_id": "match_scan",
+                    "candidate_key": "row_scan",
+                    "state": "needs_thread_scan",
+                    "candidate_type": "continuation_candidate",
+                    "unread_cue": "present",
+                    "updated_at": "2026-05-26T00:00:00Z",
+                },
+                {
+                    "match_id": "match_send",
+                    "candidate_key": "row_send",
+                    "state": "send_requested",
+                    "updated_at": "2026-05-26T00:00:00Z",
+                },
+            ]
+        )
+
+        self.assertEqual([item["candidate_key"] for item in queue], ["row_send", "row_scan"])
+        self.assertEqual(queue[0]["priority"], 1)
+
+    def test_next_priority_queue_promotes_draft_ready_reply_badge(self):
+        queue = _next_priority_queue(
+            [
+                {
+                    "match_id": "match_opening",
+                    "candidate_key": "row_opening",
+                    "state": "needs_thread_scan",
+                    "candidate_type": "new_match_candidate",
+                    "updated_at": "2026-05-26T00:00:00Z",
+                },
+                {
+                    "match_id": "match_reply",
+                    "candidate_key": "row_reply",
+                    "state": "draft_ready",
+                    "candidate_type": "continuation_candidate",
+                    "unread_cue": "reply_badge",
+                    "updated_at": "2026-05-26T00:00:00Z",
+                },
+            ]
+        )
+
+        self.assertEqual([item["candidate_key"] for item in queue], ["row_reply", "row_opening"])
+        self.assertEqual(queue[0]["priority"], 2)
 
     def test_session_step_processes_scan_batch_and_prevents_duplicate_sends(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -176,6 +341,188 @@ class AutomationSessionTests(unittest.TestCase):
             self.assertEqual(post_result_repeat_payload["action_requests"], [])
             self.assertIn("duplicate_send_request_suppressed", post_result_repeat_payload["warnings"])
 
+    def test_failed_send_result_allows_same_payload_retry_with_new_request_id(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "goal",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "goal_meet.json"),
+            ])
+            self._run([
+                "automation",
+                "availability",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "availability_weekend.json"),
+            ])
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            _, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(FIXTURE_DIR / "scan_batch_initial.json"),
+            ])
+            first_request = step_payload["action_requests"][0]
+
+            failed_result = dict(json.loads((FIXTURE_DIR / "action_result_ada.json").read_text()))
+            failed_result["action_request_id"] = first_request["action_request_id"]
+            failed_result["target_match_id"] = first_request["match_id"]
+            failed_result["payload_hash"] = first_request["payload_hash"]
+            failed_result["result_status"] = "failed"
+            failed_result["post_action_observation_id"] = None
+            failed_result["evidence"] = {
+                "failure_reason": "target_binding_visual_relocation_exhausted_before_stage"
+            }
+            failed_path = Path(temp_dir) / "failed_action_result.json"
+            self._write_json(failed_path, failed_result)
+
+            result_exit, _, _ = self._run([
+                "action",
+                "record-result",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(failed_path),
+            ])
+            states_exit, states_payload, _ = self._run([
+                "automation",
+                "get-state",
+                "--data-dir",
+                str(data_dir),
+            ])
+            retry_scan = json.loads((FIXTURE_DIR / "scan_batch_initial.json").read_text(encoding="utf-8"))
+            retry_scan["captured_at"] = "2026-05-26T10:01:00Z"
+            retry_scan["thread_observations"][0]["observation"]["observation_id"] = "obs_ada_002"
+            retry_scan_path = Path(temp_dir) / "retry_scan_batch.json"
+            self._write_json(retry_scan_path, retry_scan)
+            retry_exit, retry_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(retry_scan_path),
+            ])
+
+        self.assertEqual(result_exit, 0)
+        self.assertEqual(states_exit, 0)
+        state_by_match = {state["match_id"]: state for state in states_payload["states"]}
+        failed_state = state_by_match[first_request["match_id"]]
+        self.assertEqual(failed_state["state"], "draft_ready")
+        self.assertNotIn("last_outbound_payload_hash", failed_state)
+        self.assertEqual(failed_state["last_failed_outbound_payload_hash"], first_request["payload_hash"])
+        self.assertEqual(failed_state["send_retry_count"], 1)
+        self.assertEqual(retry_exit, 0)
+        self.assertEqual(len(retry_payload["action_requests"]), 1)
+        retry_request = retry_payload["action_requests"][0]
+        self.assertEqual(retry_request["payload_hash"], first_request["payload_hash"])
+        self.assertNotEqual(retry_request["action_request_id"], first_request["action_request_id"])
+        self.assertTrue(retry_request["action_request_id"].endswith("_retry1"))
+        self.assertNotIn("duplicate_send_request_suppressed", retry_payload["warnings"])
+
+    def test_stale_same_payload_hash_in_non_active_state_retries_instead_of_suppressing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "goal",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "goal_meet.json"),
+            ])
+            self._run([
+                "automation",
+                "availability",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "availability_weekend.json"),
+            ])
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            _, first_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(FIXTURE_DIR / "scan_batch_initial.json"),
+            ])
+            first_request = first_payload["action_requests"][0]
+
+            repo = AutomationRepository(data_dir)
+            states = repo.load_states()
+            for state in states:
+                if state.get("match_id") == first_request["match_id"]:
+                    state["state"] = "needs_thread_scan"
+                    state["last_outbound_action_id"] = "action_result_failed_legacy"
+                    state.pop("last_failed_outbound_payload_hash", None)
+                    state.pop("last_failed_action_request_id", None)
+                    state.pop("last_failed_action_result_event_id", None)
+                    state.pop("send_retry_count", None)
+            repo.save_states(states)
+
+            retry_scan = json.loads((FIXTURE_DIR / "scan_batch_initial.json").read_text(encoding="utf-8"))
+            retry_scan["captured_at"] = "2026-05-26T10:02:00Z"
+            retry_scan["thread_observations"][0]["observation"]["observation_id"] = "obs_ada_legacy_retry"
+            retry_scan_path = Path(temp_dir) / "retry_scan_batch.json"
+            self._write_json(retry_scan_path, retry_scan)
+            retry_exit, retry_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(retry_scan_path),
+            ])
+            retry_state = {
+                state["match_id"]: state
+                for state in AutomationRepository(data_dir).load_states()
+            }[first_request["match_id"]]
+
+        self.assertEqual(retry_exit, 0)
+        self.assertEqual(len(retry_payload["action_requests"]), 1)
+        retry_request = retry_payload["action_requests"][0]
+        self.assertEqual(retry_request["payload_hash"], first_request["payload_hash"])
+        self.assertNotEqual(retry_request["action_request_id"], first_request["action_request_id"])
+        self.assertTrue(retry_request["action_request_id"].endswith("_retry1"))
+        self.assertNotIn("duplicate_send_request_suppressed", retry_payload["warnings"])
+        self.assertEqual(retry_state["state"], "send_requested")
+        self.assertEqual(retry_state["send_retry_count"], 1)
+
     def test_session_step_blocks_send_when_target_profile_was_not_observed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -244,6 +591,89 @@ class AutomationSessionTests(unittest.TestCase):
             ])
             self.assertEqual(states_exit, 0)
             self.assertEqual(states_payload["states"][0]["state"], "needs_target_profile")
+
+    def test_session_step_requeues_revision_when_content_policy_blocks_draft(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            data_dir = root / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "goal",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "goal_meet.json"),
+            ])
+            self._run([
+                "automation",
+                "availability",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "availability_weekend.json"),
+            ])
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            scan = json.loads((FIXTURE_DIR / "scan_batch_initial.json").read_text(encoding="utf-8"))
+            scan["scan_budget"] = 1
+            scan["message_list_snapshot"]["entries"] = [scan["message_list_snapshot"]["entries"][0]]
+            first_thread = scan["thread_observations"][0]
+            scan["thread_observations"] = [first_thread]
+            planner = first_thread["planner_assessment"]
+            planner["recommended_stage"] = "soft_invite_probe"
+            planner["recommended_move"] = "soft_invite_probe"
+            planner["soft_invite_allowed"] = True
+            planner["scores"]["logistics_readiness"] = 55
+            planner["next_milestone"] = "轻量试探见面意愿，但不能直接敲定具体时间地点"
+            draft = first_thread["draft"]
+            draft["conversation_move"] = "soft_invite_probe"
+            draft["best_reply"] = "那明天19:30我们去三里屯喝一杯，你看这样行吗"
+            draft["safer_reply"] = "那明天19:30找个地方坐坐？"
+            draft["bolder_reply"] = "那明晚三里屯见，感觉可以直接兑现奖励了"
+            scan_path = root / "scan_policy_blocked_draft.json"
+            self._write_json(scan_path, scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+            states_exit, states_payload, _ = self._run([
+                "automation",
+                "get-state",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+        self.assertEqual(step_exit, 0)
+        self.assertEqual(step_payload["action_requests"], [])
+        self.assertIn("draft_blocked", step_payload["warnings"])
+        self.assertIn("draft_revision_required", step_payload["warnings"])
+        self.assertEqual(len(step_payload["scan_requests"]), 1)
+        revision_request = step_payload["scan_requests"][0]
+        self.assertEqual(revision_request["candidate_key"], "row_ada")
+        self.assertEqual(revision_request["reason"], "draft_revision_required")
+        self.assertTrue(revision_request["requires_revised_draft"])
+        self.assertIn("specific appointment timing", revision_request["draft_revision_reason"])
+        self.assertEqual(states_exit, 0)
+        states_by_key = {state["candidate_key"]: state for state in states_payload["states"]}
+        self.assertEqual(states_by_key["row_ada"]["state"], "needs_reply")
+        self.assertTrue(states_by_key["row_ada"]["draft_revision_required"])
+        self.assertIn("specific appointment timing", states_by_key["row_ada"]["draft_revision_reason"])
 
     def test_automation_context_uses_projection_plus_latest_observation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -960,6 +1390,592 @@ class AutomationSessionTests(unittest.TestCase):
         self.assertEqual(step_payload["scheduled_actions"][0]["type"], "scan_later")
         self.assertEqual(step_payload["scheduled_actions"][0]["candidate_key"], "row_new")
         self.assertEqual(step_payload["scheduled_actions"][0]["scan_cursor"], priority_scan["scan_cursor"])
+
+    def test_unread_known_continuation_beats_absent_unread_stale_new_candidate_when_budget_is_tight(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            automation_dir = data_dir / "automation"
+            automation_dir.mkdir(parents=True, exist_ok=True)
+            self._write_json(
+                automation_dir / "states.json",
+                {
+                    "schema_version": 1,
+                    "states": [
+                        {
+                            "schema_version": 1,
+                            "match_id": "match_xiaoyaowan",
+                            "candidate_key": "row_xiaoyaowan",
+                            "state": "needs_thread_scan",
+                            "candidate_type": "continuation_candidate",
+                            "seen_before": True,
+                            "last_preview_hash": "same_waiting_reply_hash",
+                            "last_session_id": "session_priority_unread_continuation",
+                        }
+                    ],
+                },
+            )
+            priority_scan = {
+                "schema_version": 1,
+                "session_id": "session_priority_unread_continuation",
+                "app_id": "tashuo",
+                "captured_at": "2026-05-26T12:00:00Z",
+                "scan_budget": 1,
+                "message_list_snapshot": {
+                    "entries": [
+                        {
+                            "candidate_key": "row_stale_old",
+                            "visible_name": "Old stale",
+                            "latest_preview": "四个月前的旧反应",
+                            "latest_preview_hash": "old_stale_hash",
+                            "timestamp_cue": "",
+                            "unread_cue": "absent",
+                            "position": 1,
+                        },
+                        {
+                            "candidate_key": "row_xiaoyaowan",
+                            "visible_name": "小药丸儿",
+                            "latest_preview": "我晚上上班呀",
+                            "latest_preview_hash": "same_waiting_reply_hash",
+                            "timestamp_cue": "",
+                            "unread_cue": "present",
+                            "position": 2,
+                        },
+                    ]
+                },
+                "thread_observations": [],
+            }
+            scan_path = Path(temp_dir) / "priority_unread_continuation_scan.json"
+            self._write_json(scan_path, priority_scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+        self.assertEqual(step_exit, 0)
+        self.assertEqual(step_payload["processed_entry_count"], 1)
+        self.assertEqual(step_payload["scan_requests"][0]["candidate_key"], "row_xiaoyaowan")
+        self.assertEqual(step_payload["scheduled_actions"][0]["candidate_key"], "row_stale_old")
+
+    def test_session_step_skips_non_chat_message_list_gates(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            automation_dir = data_dir / "automation"
+            automation_dir.mkdir(parents=True, exist_ok=True)
+            self._write_json(
+                automation_dir / "states.json",
+                {
+                    "schema_version": 1,
+                    "states": [
+                        {
+                            "schema_version": 1,
+                            "match_id": "provisional_tashuo_liked_you_gate_29_active",
+                            "candidate_key": "tashuo_liked_you_gate_29_active",
+                            "state": "needs_thread_scan",
+                            "candidate_type": "new_match_candidate",
+                            "visible_name": "29人喜欢了你",
+                            "latest_preview": "有人刚刚活跃，去打个招呼吧!",
+                            "unread_cue": "present",
+                            "last_session_id": "session_gate_filter",
+                        }
+                    ],
+                },
+            )
+            scan = {
+                "schema_version": 1,
+                "session_id": "session_gate_filter",
+                "app_id": "tashuo",
+                "captured_at": "2026-05-26T12:00:00Z",
+                "scan_budget": 2,
+                "message_list_snapshot": {
+                    "entries": [
+                        {
+                            "candidate_key": "tashuo_liked_you_gate_29_active",
+                            "candidate_type": "premium_or_liked_you_gate",
+                            "visible_name": "29人喜欢了你",
+                            "latest_preview": "有人刚刚活跃，去打个招呼吧!",
+                            "latest_preview_hash": "liked_you_gate_hash",
+                            "timestamp_cue": "",
+                            "unread_cue": "present",
+                            "position": 1,
+                        },
+                        {
+                            "candidate_key": "row_ordinary",
+                            "visible_name": "Ada",
+                            "latest_preview": "刚刚问你今天忙不忙",
+                            "latest_preview_hash": "ordinary_hash",
+                            "timestamp_cue": "刚刚",
+                            "unread_cue": "present",
+                            "position": 2,
+                        },
+                    ]
+                },
+                "thread_observations": [],
+            }
+            scan_path = Path(temp_dir) / "scan_with_gate.json"
+            self._write_json(scan_path, scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+        self.assertEqual(step_exit, 0)
+        self.assertIn("non_chat_message_list_entry_skipped", step_payload["warnings"])
+        self.assertEqual([item["candidate_key"] for item in step_payload["scan_requests"]], ["row_ordinary"])
+        queued_keys = [item["candidate_key"] for item in step_payload["next_priority_queue"]]
+        self.assertNotIn("tashuo_liked_you_gate_29_active", queued_keys)
+        self.assertIn("row_ordinary", queued_keys)
+
+    def test_session_step_queues_recent_open_chat_after_unread_continuation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            automation_dir = data_dir / "automation"
+            automation_dir.mkdir(parents=True, exist_ok=True)
+            self._write_json(
+                automation_dir / "states.json",
+                {
+                    "schema_version": 1,
+                    "states": [
+                        {
+                            "schema_version": 1,
+                            "match_id": "match_reply",
+                            "candidate_key": "row_reply",
+                            "state": "needs_thread_scan",
+                            "candidate_type": "continuation_candidate",
+                            "seen_before": True,
+                            "last_preview_hash": "reply_old_hash",
+                            "last_session_id": "session_open_chat_recent",
+                        }
+                    ],
+                },
+            )
+            scan = {
+                "schema_version": 1,
+                "session_id": "session_open_chat_recent",
+                "app_id": "tashuo",
+                "captured_at": "2026-05-26T12:00:00Z",
+                "scan_budget": 2,
+                "message_list_snapshot": {
+                    "entries": [
+                        {
+                            "candidate_key": "row_open_chat",
+                            "candidate_type": "open_chat_candidate",
+                            "visible_name": "Newly Open",
+                            "latest_preview": "你们已经可以进行会话了，开启聊天",
+                            "latest_preview_hash": "open_chat_recent_hash",
+                            "timestamp_cue": "2天前",
+                            "unread_cue": "absent",
+                            "position": 1,
+                        },
+                        {
+                            "candidate_key": "row_reply",
+                            "visible_name": "小药丸儿",
+                            "latest_preview": "我晚上上班呀",
+                            "latest_preview_hash": "reply_new_hash",
+                            "timestamp_cue": "刚刚",
+                            "unread_cue": "present",
+                            "position": 2,
+                        },
+                    ]
+                },
+                "thread_observations": [],
+            }
+            scan_path = Path(temp_dir) / "recent_open_chat_scan.json"
+            self._write_json(scan_path, scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+            states_exit, states_payload, _ = self._run([
+                "automation",
+                "get-state",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+        self.assertEqual(step_exit, 0)
+        self.assertEqual([item["candidate_key"] for item in step_payload["scan_requests"]], ["row_reply", "row_open_chat"])
+        self.assertNotIn("message_list_history_cutoff_reached", step_payload["warnings"])
+        self.assertEqual(states_exit, 0)
+        states_by_key = {state["candidate_key"]: state for state in states_payload["states"]}
+        self.assertEqual(states_by_key["row_open_chat"]["candidate_type"], "open_chat_candidate")
+        self.assertEqual(states_by_key["row_open_chat"]["state"], "needs_thread_scan")
+
+    def test_session_step_history_cutoff_skips_old_open_chat_and_lower_rows(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            scan = {
+                "schema_version": 1,
+                "session_id": "session_history_cutoff",
+                "app_id": "tashuo",
+                "captured_at": "2026-05-26T12:00:00Z",
+                "scan_cursor": {"current": "page_1", "next": "page_2", "exhausted": False},
+                "scan_budget": 5,
+                "message_list_snapshot": {
+                    "entries": [
+                        {
+                            "candidate_key": "row_recent_reply",
+                            "visible_name": "Recent",
+                            "latest_preview": "刚刚问你今天忙不忙",
+                            "latest_preview_hash": "recent_hash",
+                            "timestamp_cue": "刚刚",
+                            "unread_cue": "present",
+                            "position": 1,
+                        },
+                        {
+                            "candidate_key": "row_old_open_chat",
+                            "candidate_type": "open_chat_candidate",
+                            "visible_name": "Old Open",
+                            "latest_preview": "你们已经可以进行会话了，开启聊天",
+                            "latest_preview_hash": "old_open_chat_hash",
+                            "timestamp_cue": "4个月前",
+                            "unread_cue": "absent",
+                            "position": 2,
+                        },
+                        {
+                            "candidate_key": "row_below_old",
+                            "visible_name": "Below Old",
+                            "latest_preview": "更旧的一行",
+                            "latest_preview_hash": "below_old_hash",
+                            "timestamp_cue": "5个月前",
+                            "unread_cue": "absent",
+                            "position": 3,
+                        },
+                    ]
+                },
+                "thread_observations": [],
+            }
+            scan_path = Path(temp_dir) / "history_cutoff_scan.json"
+            self._write_json(scan_path, scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+            states_exit, states_payload, _ = self._run([
+                "automation",
+                "get-state",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+        self.assertEqual(step_exit, 0)
+        self.assertTrue(step_payload["history_cutoff_reached"])
+        self.assertEqual(step_payload["historical_entry_count"], 2)
+        self.assertIn("message_list_history_cutoff_reached", step_payload["warnings"])
+        self.assertEqual([item["candidate_key"] for item in step_payload["scan_requests"]], ["row_recent_reply"])
+        self.assertEqual(
+            [item["candidate_key"] for item in step_payload["scheduled_actions"] if item["type"] == "historical_thread_skipped"],
+            ["row_old_open_chat", "row_below_old"],
+        )
+        self.assertEqual(states_exit, 0)
+        states_by_key = {state["candidate_key"]: state for state in states_payload["states"]}
+        self.assertEqual(states_by_key["row_old_open_chat"]["state"], "historical_thread")
+        self.assertEqual(states_by_key["row_below_old"]["state"], "historical_thread")
+        queued_keys = [item["candidate_key"] for item in step_payload["next_priority_queue"]]
+        self.assertNotIn("row_old_open_chat", queued_keys)
+        self.assertNotIn("row_below_old", queued_keys)
+
+    def test_session_step_history_cutoff_treats_reply_badge_below_old_row_as_historical(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            scan = {
+                "schema_version": 1,
+                "session_id": "session_history_cutoff_reply_badge",
+                "app_id": "tashuo",
+                "captured_at": "2026-06-17T08:52:19Z",
+                "scan_cursor": {"current": "page_1", "next": None, "exhausted": True},
+                "scan_budget": 5,
+                "message_list_snapshot": {
+                    "entries": [
+                        {
+                            "candidate_key": "row_old_open_chat",
+                            "candidate_type": "open_chat_candidate",
+                            "visible_name": "Old Open",
+                            "latest_preview": "你们已经可以进行会话了，开启聊天",
+                            "latest_preview_hash": "old_open_chat_hash",
+                            "timestamp_cue": "4个月前",
+                            "unread_cue": "absent",
+                            "position": 1,
+                        },
+                        {
+                            "candidate_key": "row_reply_below_old",
+                            "candidate_type": "continuation_candidate",
+                            "visible_name": "Reply Below Old",
+                            "latest_preview": "我晚上上班呀",
+                            "latest_preview_hash": "reply_below_old_hash",
+                            "timestamp_cue": "去回复 badge",
+                            "unread_cue": "reply_badge",
+                            "position": 2,
+                        },
+                    ]
+                },
+                "thread_observations": [],
+            }
+            scan_path = Path(temp_dir) / "history_cutoff_reply_badge_scan.json"
+            self._write_json(scan_path, scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+            states_exit, states_payload, _ = self._run([
+                "automation",
+                "get-state",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+        self.assertEqual(step_exit, 0)
+        self.assertTrue(step_payload["history_cutoff_reached"])
+        self.assertEqual(step_payload["historical_entry_count"], 2)
+        self.assertEqual(step_payload["scan_requests"], [])
+        self.assertEqual(
+            [item["candidate_key"] for item in step_payload["scheduled_actions"] if item["type"] == "historical_thread_skipped"],
+            ["row_old_open_chat", "row_reply_below_old"],
+        )
+        self.assertEqual(states_exit, 0)
+        states_by_key = {state["candidate_key"]: state for state in states_payload["states"]}
+        self.assertEqual(states_by_key["row_old_open_chat"]["state"], "historical_thread")
+        self.assertEqual(states_by_key["row_reply_below_old"]["state"], "historical_thread")
+        queued_keys = [item["candidate_key"] for item in step_payload["next_priority_queue"]]
+        self.assertNotIn("row_reply_below_old", queued_keys)
+
+    def test_session_step_keeps_stable_waiting_state_without_thread_scan(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            automation_dir = data_dir / "automation"
+            automation_dir.mkdir(parents=True, exist_ok=True)
+            self._write_json(
+                automation_dir / "states.json",
+                {
+                    "schema_version": 1,
+                    "states": [
+                        {
+                            "schema_version": 1,
+                            "match_id": "match_waiting",
+                            "candidate_key": "row_waiting",
+                            "state": "waiting_for_match",
+                            "candidate_type": "continuation_candidate",
+                            "seen_before": True,
+                            "visible_name": "Waiting",
+                            "last_preview_hash": "sha256:same_outbound_preview",
+                            "last_session_id": "session_stable_waiting",
+                        }
+                    ],
+                },
+            )
+            scan = {
+                "schema_version": 1,
+                "session_id": "session_stable_waiting",
+                "app_id": "tashuo",
+                "captured_at": "2026-05-26T12:00:00Z",
+                "scan_budget": 1,
+                "message_list_snapshot": {
+                    "entries": [
+                        {
+                            "candidate_key": "row_waiting",
+                            "visible_name": "Waiting",
+                            "latest_preview": "哈哈好的!",
+                            "latest_preview_hash": "sha256:same_outbound_preview",
+                            "timestamp_cue": "",
+                            "unread_cue": "absent",
+                            "position": 1,
+                        }
+                    ]
+                },
+                "thread_observations": [],
+            }
+            scan_path = Path(temp_dir) / "stable_waiting_scan.json"
+            self._write_json(scan_path, scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+            states_exit, states_payload, _ = self._run([
+                "automation",
+                "get-state",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+        self.assertEqual(step_exit, 0)
+        self.assertEqual(step_payload["scan_requests"], [])
+        self.assertEqual(states_exit, 0)
+        self.assertEqual(states_payload["states"][0]["state"], "waiting_for_match")
+        self.assertEqual(step_payload["next_priority_queue"][0]["state"], "waiting_for_match")
+
+    def test_session_step_ignores_residual_unread_after_successful_send_when_preview_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            automation_dir = data_dir / "automation"
+            automation_dir.mkdir(parents=True, exist_ok=True)
+            self._write_json(
+                automation_dir / "states.json",
+                {
+                    "schema_version": 1,
+                    "states": [
+                        {
+                            "schema_version": 1,
+                            "match_id": "match_sent",
+                            "candidate_key": "row_sent",
+                            "state": "sent_waiting",
+                            "candidate_type": "continuation_candidate",
+                            "seen_before": True,
+                            "last_preview_hash": "sha256:same_preview",
+                            "last_outbound_action_id": "action_result_success",
+                            "last_session_id": "session_residual_unread",
+                        }
+                    ],
+                },
+            )
+            scan = {
+                "schema_version": 1,
+                "session_id": "session_residual_unread",
+                "app_id": "tashuo",
+                "captured_at": "2026-05-26T12:00:00Z",
+                "scan_budget": 1,
+                "message_list_snapshot": {
+                    "entries": [
+                        {
+                            "candidate_key": "row_sent",
+                            "visible_name": "Sent",
+                            "latest_preview": "同一个预览",
+                            "latest_preview_hash": "sha256:same_preview",
+                            "timestamp_cue": "刚刚",
+                            "unread_cue": "present",
+                            "position": 1,
+                        }
+                    ]
+                },
+                "thread_observations": [],
+            }
+            scan_path = Path(temp_dir) / "residual_unread_scan.json"
+            self._write_json(scan_path, scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+            states_exit, states_payload, _ = self._run([
+                "automation",
+                "get-state",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+        self.assertEqual(step_exit, 0)
+        self.assertEqual(step_payload["scan_requests"], [])
+        self.assertEqual(states_exit, 0)
+        self.assertEqual(states_payload["states"][0]["state"], "sent_waiting")
 
     def test_handoff_opportunity_without_existing_state_beats_new_match(self):
         with tempfile.TemporaryDirectory() as temp_dir:

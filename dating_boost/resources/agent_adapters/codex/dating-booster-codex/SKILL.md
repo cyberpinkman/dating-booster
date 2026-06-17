@@ -134,6 +134,11 @@ explicitly changes the target.
 
 Naturalness review is an internal QA step. Before showing any draft, silently apply
 `references/naturalness-checklist.md` and revise the draft if needed.
+Before live send, run a temporal fit check using current local time, latest
+inbound message time/cue when available, and freshness. If the draft assumes
+the match's current state in a way that feels off for that moment, revise to a
+neutral evidence-backed hook and continue. Do not treat this ordinary content
+QA defect as a user-facing hard stop unless no safe useful revision exists.
 
 By default, show only the final draft and at most a small number of alternatives.
 Do not show checklist results, validation notes, or reasoning about why the draft
@@ -183,15 +188,25 @@ reason to hand off.
 
 Before live send, the draft must also have strategic delta. `policy.allowed`
 only means the content is safe enough; it does not mean the reply advances the
-goal. When `topic_state` is `saturating` or `low_investment_streak >= 2`, do
-not send a draft that merely paraphrases the current topic. Add a concrete new
-handle, usually via `selected_hook` and `strategic_delta`, or stop and revise.
+goal. A managed-send draft must leave the match an easy, natural next handle to
+reply to: a specific unknown detail, a small user-side disclosure, a concrete
+scene, or a low-pressure bridge toward the next milestone. If the text is only
+a clever reaction, only paraphrases the current topic, or would likely produce
+no reply beyond "哈哈", revise instead of sending. When `topic_state` is
+`saturating` or `low_investment_streak >= 2`, do not send a draft that merely
+paraphrases the current topic. Add a concrete new handle, usually via
+`selected_hook` and `strategic_delta`, or stop and revise.
 For example, after both sides say they are slow to warm up, repeating what
 slow-warm means is not enough; bridge to a usable hook or small scene.
-Do not package an already-confirmed fact as one side of a survey-style A/B
-choice. When testing one new guess, prefer a yes/no-style hypothesis. Prefer
-lifestyle or interest hooks before work unless the match explicitly made work
-salient or showed strong work/事业 investment.
+In managed live send, avoid survey-style A/B wording; do not package
+already-confirmed facts as choices, and do not ask the match to compare two
+options when one yes/no-style hypothesis or a direct question would do the same
+job more naturally. Prefer lifestyle or interest hooks before work unless the
+match explicitly made work salient or showed strong work/事业 investment.
+If the latest turn is stale and the hook was time-sensitive, such as weather,
+current mood, current availability, "摸鱼", or what is happening right now,
+do not continue it as if it is still current; bridge to present evidence or
+choose a new handle.
 
 When one reply naturally has two jobs, such as acknowledging the previous topic
 and opening a new hook, prefer `message_sequence` with several short messages
@@ -348,7 +363,7 @@ dating-boost harness tashuo action prepare-message-page --data-dir .local/dating
 dating-boost harness tashuo stage-draft --data-dir .local/dating-boost --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
 ```
 
-If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. If already in a thread, bind that thread with `current_thread_visual_identity` and a fresh visual anchor hash from the conversation screenshot; do not use message-list row position or header OCR as target-binding evidence. The mac-ios-app runtime supports launch/observe/prepare-message-page/stage-draft and ordinary-chat managed live send. Live send must be executed by host-loop with `--managed-gui-send --harness-runtime mac-ios-app` or by a managed-session wait point resumed through that host-loop runtime, with `current_thread_visual_identity` target binding, exact staged-text verification, and post-send exact-text/input-cleared verification. Direct harness live send remains executor-internal and must not be used as an agent workaround.
+If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. For each intended visible row, record `message_list_evidence` with a row visual anchor hash, its visual anchor region, and the tap ratio chosen from visual analysis. If the list reorders between visual planning and click, the harness can return to the message page, scan the current list for that row visual anchor, reopen the target, and verify the thread again before staging. If already in a thread, bind that thread with `current_thread_visual_identity` and a fresh visual anchor hash from the conversation screenshot; do not use message-list row position or header OCR as target-binding evidence. The mac-ios-app runtime supports launch/observe/prepare-message-page/stage-draft and ordinary-chat managed live send. Live send must be executed by host-loop with `--managed-gui-send --harness-runtime mac-ios-app` or by a managed-session wait point resumed through that host-loop runtime, with `current_thread_visual_identity` target binding, exact staged-text verification, and post-send exact-text/input-cleared verification. Direct harness live send remains executor-internal and must not be used as an agent workaround.
 
 For iPhone Mirroring, use `harness tashuo observe` before choosing a bounded navigation action. It
 returns redacted page/layout hints for the four top-level tabs (`推荐`, `飞行`,
@@ -488,10 +503,14 @@ Target binding is not interchangeable with target selection. If the requested
 target has an emoji or otherwise non-OCR nickname, keep the same target and
 collect app-specific structural evidence. For mac-ios-app current-thread sends,
 use `current_thread_visual_identity` with a visual anchor hash from the opened
-conversation; for iPhone Mirroring row-open paths, row/bounds plus the
-`open-conversation` transition into an ordinary thread may be used. Blocking is
-only a fail-safe when same-target evidence cannot be collected or verified
-before any send attempt; never choose another OCR-friendly conversation.
+conversation, plus message-list row visual evidence when the target came from a
+visible list row. If the thread visual identity mismatches before staging, the
+mac-ios-app harness should return to messages, relocate the row by its visual
+anchor, reopen it, and retry verification a bounded number of times. Blocking is
+only a fail-safe when same-target visual evidence cannot be collected or verified
+before any send attempt; never choose another OCR-friendly conversation. For
+iPhone Mirroring row-open paths, row/bounds plus the `open-conversation`
+transition into an ordinary thread may be used.
 
 ## Goal-Oriented Operator Session
 
@@ -572,6 +591,14 @@ binding, staged text, and post-send verification gates as host-loop sends.
 When a managed run or stop response includes `relationship_progress_report`,
 present its Markdown as the final work report. Do not finish a bounded
 full-management workflow by only reporting action status or file paths.
+When scanning a dating-app message list, timeline is part of target selection.
+Treat `开启聊天`/new ordinary-chat-open rows as valid candidates when recent,
+but lower priority than threads where the match has recently replied. Do not
+auto-activate historical rows: if a visible row's timestamp cue, `last_activity_at`,
+`days_since_last_activity`, or `freshness_bucket` shows no progress for 7 days
+or more, mark it historical and stop scanning below it. In high-throughput mode,
+history cutoff still means the lower list is exhausted for this bounded run; it
+does not authorize infinite downward traversal.
 
 ## Tinder Host Loop
 

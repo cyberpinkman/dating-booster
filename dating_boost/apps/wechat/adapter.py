@@ -7,7 +7,7 @@ from dating_boost.apps.legacy import LegacyHarnessAdapter
 
 
 class WeChatAdapter(LegacyHarnessAdapter):
-    def doctor(self, *, capture: bool = True, output: Path | None = None) -> dict[str, Any]:
+    def doctor(self, *, capture: bool = True, output: Path | None = None, ocr: bool = True) -> dict[str, Any]:
         return self.session.doctor_wechat(capture=capture, output=output)
 
     def launch(self, *, dry_run: bool = False, output_dir: Path | None = None) -> dict[str, Any]:

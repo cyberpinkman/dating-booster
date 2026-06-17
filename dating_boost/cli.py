@@ -2906,30 +2906,32 @@ def _handle_automation_session_step(args: argparse.Namespace) -> int:
         payload = dict(replay)
         replayed_action_requests = list(payload.get("action_requests", []))
         replayed_scheduled_actions = list(payload.get("scheduled_actions", []))
-        replay_warnings = [*payload.get("warnings", []), "idempotency_replay"]
-        if replayed_action_requests:
-            replay_warnings.append("duplicate_send_request_suppressed")
-        if replayed_scheduled_actions:
-            replay_warnings.append("duplicate_scheduled_action_suppressed")
-        payload["warnings"] = _unique_cli_strings(replay_warnings)
-        payload["replayed_action_request_ids"] = [
-            item.get("action_request_id")
-            for item in replayed_action_requests
-            if isinstance(item, dict) and item.get("action_request_id")
-        ]
-        payload["replayed_scheduled_action_count"] = len(replayed_scheduled_actions)
-        payload["action_requests"] = []
-        payload["handoffs"] = []
-        payload["scan_requests"] = []
-        payload["scheduled_actions"] = []
-        payload["lock"] = {
-            "schema_version": 1,
-            "lock_name": "automation_session_step",
-            "status": "replayed",
-        }
-        _print_json(payload)
-        return 0
-
+        if replayed_action_requests and not _replayed_action_requests_still_active(args.data_dir, replayed_action_requests):
+            replay = None
+        else:
+            replay_warnings = [*payload.get("warnings", []), "idempotency_replay"]
+            if replayed_action_requests:
+                replay_warnings.append("duplicate_send_request_suppressed")
+            if replayed_scheduled_actions:
+                replay_warnings.append("duplicate_scheduled_action_suppressed")
+            payload["warnings"] = _unique_cli_strings(replay_warnings)
+            payload["replayed_action_request_ids"] = [
+                item.get("action_request_id")
+                for item in replayed_action_requests
+                if isinstance(item, dict) and item.get("action_request_id")
+            ]
+            payload["replayed_scheduled_action_count"] = len(replayed_scheduled_actions)
+            payload["action_requests"] = []
+            payload["handoffs"] = []
+            payload["scan_requests"] = []
+            payload["scheduled_actions"] = []
+            payload["lock"] = {
+                "schema_version": 1,
+                "lock_name": "automation_session_step",
+                "status": "replayed",
+            }
+            _print_json(payload)
+            return 0
     lock_result = store.acquire_lock(
         "automation_session_step",
         owner="dating-boost-cli",
@@ -3327,6 +3329,7 @@ def _build_mvp_context_pack(
     semantic_provider: str = "none",
     semantic_query: str | None = None,
 ) -> dict[str, Any]:
+    now = _now_iso()
     user_profile = _profile_to_context_dict(profile)
     if data_dir is not None:
         disclosure_repo = UserDisclosureRepository(data_dir)
@@ -3343,7 +3346,7 @@ def _build_mvp_context_pack(
                 match_id,
                 projection,
                 latest_observation=observation,
-                now=_now_iso(),
+                now=now,
                 max_items=max_memory_items,
                 reply_mode=reply_mode.value,
                 semantic_hook_provider=hook_provider,
@@ -3381,6 +3384,7 @@ def _build_mvp_context_pack(
         conversation_memory=conversation_memory,
         reply_mode=reply_mode,
         max_items=None,
+        current_time_iso=now,
     )
 
 
@@ -3730,6 +3734,29 @@ def _derive_run_id(scan_batch: dict[str, Any]) -> str:
 
 def _derive_idempotency_key(scan_batch: dict[str, Any]) -> str:
     return "idem:" + _digest(_idempotency_seed(scan_batch))
+
+
+def _replayed_action_requests_still_active(data_dir: Path, action_requests: list[Any]) -> bool:
+    active_requests: set[tuple[str, str | None]] = set()
+    for state in AutomationRepository(data_dir).load_states():
+        if state.get("state") != "send_requested":
+            continue
+        action_request_id = state.get("last_action_request_id")
+        if not action_request_id:
+            continue
+        payload_hash = state.get("last_outbound_payload_hash")
+        active_requests.add((str(action_request_id), str(payload_hash) if payload_hash else None))
+    for item in action_requests:
+        if not isinstance(item, dict):
+            continue
+        action_request_id = item.get("action_request_id")
+        if not action_request_id:
+            continue
+        payload_hash = item.get("payload_hash")
+        request_key = (str(action_request_id), str(payload_hash) if payload_hash else None)
+        if request_key not in active_requests:
+            return False
+    return True
 
 
 def _idempotency_seed(scan_batch: dict[str, Any]) -> dict[str, Any]:

@@ -248,11 +248,50 @@ class ManagedSessionTests(unittest.TestCase):
             )
 
         self.assertEqual(calls, [{"app_id": "tashuo", "runtime": "mac-ios-app"}])
-        self.assertEqual(payload["status"], "stopped")
+        self.assertEqual(payload["status"], "paused")
         self.assertEqual(payload["reason"], "mac_ios_app_process_has_no_windows")
         self.assertEqual(payload["app_precheck"]["window_probe"], window_probe)
-        self.assertEqual(payload["next_host_action"], "launch_or_focus_mac_ios_app_and_restart_managed_session")
+        self.assertEqual(payload["session"]["pause_reason"], "mac_ios_app_process_has_no_windows")
+        self.assertIsNone(payload["session"]["stop_reason"])
+        self.assertIsNone(payload["operator_stop"])
+        self.assertEqual(payload["next_host_action"], "launch_or_focus_mac_ios_app_and_resume_managed_session")
         self.assertNotEqual(payload["next_host_action"], "enable_iphone_mirroring_and_restart_managed_session")
+
+    def test_tashuo_mac_ios_runtime_window_loss_pauses_existing_session(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            harness = FakeHarness(app_id="tashuo", tashuo_payload=_app_payload("tashuo"))
+            repo = ManagedSessionRepository(
+                data_dir,
+                harness_factory=lambda app_id, runtime=None: harness.for_app(app_id),
+            )
+            start_payload = repo.start(
+                app_id="tashuo",
+                authorization=_auth("tashuo"),
+                goal=_json(FIXTURE_DIR / "goal_meet.json"),
+                availability=_json(FIXTURE_DIR / "availability_weekend.json"),
+                send_mode="stage",
+                managed_gui_send=False,
+                harness_runtime="mac-ios-app",
+            )
+            harness.tashuo_payload = _app_payload(
+                "tashuo",
+                status="blocked",
+                reason="mac_ios_app_process_has_no_windows",
+            )
+            tick_payload = repo.tick()
+
+        self.assertEqual(start_payload["status"], "active")
+        self.assertEqual(tick_payload["status"], "paused")
+        self.assertEqual(tick_payload["reason"], "mac_ios_app_process_has_no_windows")
+        self.assertEqual(tick_payload["session"]["pause_reason"], "mac_ios_app_process_has_no_windows")
+        self.assertIsNone(tick_payload["session"]["stop_reason"])
+        self.assertIsNone(tick_payload["session"]["stopped_at"])
+        self.assertEqual(
+            tick_payload["next_host_action"],
+            "launch_or_focus_mac_ios_app_and_resume_managed_session",
+        )
 
     def test_selected_runtime_scope_blocks_managed_session_default_runtime_precheck(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -318,7 +357,11 @@ class ManagedSessionTests(unittest.TestCase):
 
         self.assertEqual(
             profile["managed_session"]["runtime_precheck_failure_next_host_actions"]["mac_ios_app"],
-            "launch_or_focus_mac_ios_app_and_restart_managed_session",
+            "launch_or_focus_mac_ios_app_and_resume_managed_session",
+        )
+        self.assertEqual(
+            profile["managed_session"]["runtime_precheck_failure_statuses"]["mac_ios_app"],
+            "paused",
         )
 
     def test_wechat_unavailable_pauses_without_send_work(self):

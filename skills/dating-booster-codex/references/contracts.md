@@ -78,10 +78,25 @@ Use this shape from `dating-boost context build` as host-agent input.
   "context_pack": {
     "schema_version": 1,
     "reply_mode": "adaptive",
-    "items": []
+    "items": [
+      {
+        "label": "send_time_context",
+        "content": {
+          "current_utc": "2026-06-15T17:00:00Z",
+          "current_local": "2026-06-16T01:00:00+08:00",
+          "local_timezone": "Asia/Shanghai",
+          "local_hour": 1,
+          "local_weekday": 1
+        }
+      }
+    ]
   }
 }
 ```
+
+`send_time_context` gives the host agent enough temporal context to judge
+whether a draft fits the moment. It is an input to drafting and QA, not a
+content-specific policy rule.
 
 ## User Disclosure Profile
 
@@ -268,13 +283,17 @@ before passing a `scan_batch` to `dating-boost automation session step`.
 ```json
 {
   "entries": [
-    {
-      "candidate_key": "row_1",
-      "visible_name": "Alex",
-      "latest_preview": "你定",
-      "timestamp_cue": "昨天",
-      "unread_cue": "present"
-    }
+      {
+        "candidate_key": "row_1",
+        "visible_name": "Alex",
+        "latest_preview": "你定",
+        "timestamp_cue": "昨天",
+        "last_activity_at": "2026-05-25T10:00:00Z",
+        "days_since_last_activity": 1,
+        "freshness_bucket": "within_week",
+        "candidate_type": "continuation_candidate",
+        "unread_cue": "present"
+      }
   ]
 }
 ```
@@ -316,7 +335,19 @@ The assembled `scan_batch` shape is:
         "latest_preview": "你定",
         "latest_preview_hash": "sha256:preview",
         "timestamp_cue": "昨天",
+        "last_activity_at": "2026-05-25T10:00:00Z",
+        "days_since_last_activity": 1,
+        "freshness_bucket": "within_week",
+        "candidate_type": "continuation_candidate",
         "unread_cue": "present",
+        "message_list_evidence": {
+          "source_state": "tashuo_chat_list",
+          "selection_method": "message_list_visual_anchor_scan",
+          "visual_anchor_hash": "0123456789abcdef",
+          "visual_anchor_region": {"x1": 0.05, "y1": 0.29, "x2": 0.95, "y2": 0.39},
+          "visual_anchor_scan_region": {"x1": 0.0, "y1": 0.16, "x2": 1.0, "y2": 0.88},
+          "tap_ratio": {"x": 0.45, "y": 0.34}
+        },
         "match_identity_hints": {
           "visible_name": "Alex",
           "profile_cues": ["coffee"],

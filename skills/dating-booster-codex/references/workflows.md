@@ -388,11 +388,16 @@ Target binding is not interchangeable with target selection. If the requested
 target has an emoji or otherwise non-OCR nickname, keep the same target and
 collect app-specific structural evidence. For TaShuo mac-ios-app current-thread
 sends, use `current_thread_visual_identity` with a fresh visual anchor hash from
-the opened conversation; do not use message-list row position or header OCR as
-the binding evidence. For iPhone Mirroring row-open paths, row/bounds plus the
-`open-conversation` transition into an ordinary thread may be used. Blocking is
-only a fail-safe when same-target evidence cannot be collected or verified
-before any send attempt; never choose another OCR-friendly conversation.
+the opened conversation, and carry `message_list_evidence` with the target row's
+visual anchor when the thread was opened from the visible message list. If the
+list reorders before the click and the opened thread mismatches, the harness can
+return to messages, scan the current list for the row visual anchor, reopen, and
+verify again before staging. Do not use message-list row position or header OCR
+as the binding evidence. Blocking is only a fail-safe when same-target visual
+evidence cannot be collected or verified before any send attempt; never choose
+another OCR-friendly conversation. For iPhone Mirroring row-open paths,
+row/bounds plus the `open-conversation` transition into an ordinary thread may
+be used.
 
 ## Feedback
 
@@ -414,7 +419,7 @@ toward a goal such as meeting in person.
 4. Save availability with `dating-boost automation availability set --data-dir .local/dating-boost --input availability.json`.
 5. Start the session with `dating-boost operator session start --data-dir .local/dating-boost --authorization auth.json`.
 6. Call `dating-boost operator next --data-dir .local/dating-boost` and execute exactly the returned work item.
-7. For `scan_message_list`, observe the visible list and ingest it with `dating-boost operator ingest-observation --data-dir .local/dating-boost --input list_observation.json`.
+7. For `scan_message_list`, observe the visible list and ingest it with `dating-boost operator ingest-observation --data-dir .local/dating-boost --input list_observation.json`. On TaShuo mac-ios-app, include `message_list_evidence` for intended rows: row visual anchor hash, visual anchor region, scan region, and visually chosen tap ratio. Also include timeline evidence (`timestamp_cue`, `last_activity_at` when available, `days_since_last_activity` or `freshness_bucket`). Recent `开启聊天` rows are valid `open_chat_candidate`s after active reply-needed threads; rows 7+ days stale are `historical` and should set the scan cursor exhausted because rows below are also outside the managed window.
 8. For `open_thread`, open that candidate's thread, read `planner-authoring.md`, author `planner_assessment`, author a draft only when the planner move requires a reply, then ingest with `dating-boost operator ingest-observation --data-dir .local/dating-boost --input thread_observation.json`. For disclosure moves, include `disclosure_source` and `used_user_material_ids`; for low-investment repair, include `question_count` or `reply_shape`.
 9. For `send_message`, execute only ordinary requests with `planner_alignment: ok`; verify the sent state from a fresh observation and run `dating-boost operator record-action-result --data-dir .local/dating-boost --input action_result.json`.
 10. For `handoff`, appointment details, contact exchange, likes, unmatches, reports, or profile edits, stop automation for that match and ask the user to take over.

@@ -21,6 +21,31 @@ If `latest_inbound_messages` is empty or the turn boundary is unclear, do not
 draft as if the latest visible match bubble is fresh. Re-observe, ask the user
 for the current live message, or use an explicit reset/nudge workflow.
 
+## Content QA Means Revise First
+
+Unsupported assumptions in an ordinary chat draft are QA defects, not default
+hard stops. First rewrite the draft so it uses only visible evidence, known
+memory, or a neutral current-state hook, while keeping the same strategic move.
+Stop or hand off only when no safe and useful revision exists, the target/turn
+boundary is unclear, or policy requires confirmation.
+
+Before drafting and again before live send, perform a `temporal_fit` check:
+
+- current local send time from `send_time_context`;
+- latest inbound message time or visible time cue, when available;
+- freshness/elapsed time since the latest inbound turn;
+- whether the draft assumes the match's current activity, schedule, mood, or
+  availability;
+- whether the same wording would still feel normal at that time.
+
+If temporal fit is weak, revise the wording to a neutral evidence-backed hook
+and continue. Treat temporal fit as a judgment step over the whole draft: use
+the time context to make the reply feel like it belongs in that moment.
+If the latest turn is stale and the hook was time-sensitive, such as weather,
+current mood, current availability, "摸鱼", or what is happening right now, do
+not continue that hook as if it is still live. Either bridge to a present,
+evidence-backed handle or choose a different hook.
+
 When a `goal_plan` or planner recommendation exists, draft toward its
 `next_milestone`. Treat `topic_saturation`, `soft_invite_probe`, and
 `bridge_topic` as strategy constraints: if a topic is saturated, bridge or reset
@@ -120,12 +145,23 @@ or has no better lifestyle/interest hook available.
 - If the match asked a question or showed surprise, answer or riff before adding a new hook.
 - Do not force a question when a natural reaction would be stronger.
 - If the match delegates a choice, make one concrete choice instead of bouncing the decision back.
-- Avoid survey-style A/B wording. Use A/B only when the options are visible,
-  concrete, natural, and the choice itself has conversational payoff.
+- In managed live send, avoid survey-style A/B wording. Use one direct question,
+  one yes/no-style hypothesis, or a light statement instead. A/B is only for
+  user-reviewed drafts where the options are visible, concrete, natural, and
+  the choice itself has conversational payoff.
 - Never make an already-confirmed fact one side of an A/B choice. If the match
   already said she is slow to warm up, "聊天慢慢熟还是..." is not a real option.
 - When testing one guess, prefer a yes/no-style hypothesis or light statement:
   "你会是见面更放松一点的那种吗" reads more human than "你是 A 还是 B".
+- Before managed live send, check whether the final bubble gives the match an
+  easy next handle. A clever reaction with no question, no self-disclosure, no
+  new hook, and no bridge toward the next milestone is not relationship
+  progression; revise it before sending.
+- A question is not useful just because it is answerable. Do not turn the
+  match's latest message into a low-value confirmation question. If she says
+  "昨天雨太大了", asking whether she was also trapped by the rain only confirms
+  what the message already implies; ask the unknown follow-up instead, such as
+  what she usually does at home on rainy days.
 - Use one label at most. "夜猫子" is enough; "ESFP 夜猫子" usually sounds like tag stacking.
 - Prefer concrete words over abstract planning words.
 - If the previous user sent many messages, do not send another multi-line bundle.

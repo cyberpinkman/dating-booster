@@ -76,6 +76,7 @@ BUMBLE_OPENING_MOVE_POLICY: dict[str, Any] = {
 }
 TINDER_SUBSCRIPTION_PAYWALL_STATE = "tinder_subscription_paywall"
 TINDER_FEEDBACK_SURVEY_STATE = "tinder_feedback_survey"
+DEFAULT_POST_ACTION_OBSERVATION_DELAY_SECONDS = 2.0
 
 
 def _bumble_guardrails_payload() -> dict[str, Any]:
@@ -86,7 +87,13 @@ def _bumble_guardrails_payload() -> dict[str, Any]:
 
 
 class AppSpecificNativeGuiSessionMixin:
-    def capture_window(self, *, output: Path | None = None, window: WindowInfo | None = None) -> dict[str, Any]:
+    def capture_window(
+        self,
+        *,
+        output: Path | None = None,
+        window: WindowInfo | None = None,
+        ocr: bool = True,
+    ) -> dict[str, Any]:
         if window is None:
             window = self._window_info()
         if window is None:
@@ -115,10 +122,10 @@ class AppSpecificNativeGuiSessionMixin:
                 "state": "unknown",
                 "ocr_status": "not_run",
             }
-        ocr = self._ocr(output)
+        ocr_payload = self._ocr(output) if ocr else {"status": "skipped", "text": "", "error": None}
         app_observer = getattr(self, "app_screen_state_observer", None)
         if callable(app_observer):
-            text = ocr.get("text", "")
+            text = ocr_payload.get("text", "")
             observed = app_observer(output, text)
             text_state = observed["text_state"]
             visual = {
@@ -127,13 +134,24 @@ class AppSpecificNativeGuiSessionMixin:
                 "active_tab": observed.get("visual_active_tab", "unknown"),
                 "bottom_nav_present": observed.get("visual_bottom_nav_present", False),
             }
+            for key in (
+                "chat_list_visual_present",
+                "chat_list_visual_signal",
+                "message_list_top_anchor_present",
+                "message_list_top_anchor_signal",
+                "recommend_card_visual_present",
+                "recommend_card_visual_signal",
+                "conversation_toolbar_present",
+            ):
+                if key in observed:
+                    visual[key] = observed[key]
             state = observed["state"]
         elif self.app_id == "wechat":
-            text_state = classify_wechat_screen_text(ocr.get("text", ""))
+            text_state = classify_wechat_screen_text(ocr_payload.get("text", ""))
             visual = {"status": "not_applicable", "state": "unknown"}
             state = text_state
         elif self.app_id == "bumble":
-            text = ocr.get("text", "")
+            text = ocr_payload.get("text", "")
             text_state = classify_bumble_screen_text(text)
             visual = classify_bumble_screen_image(output)
             state = _combine_bumble_screen_states(
@@ -143,11 +161,11 @@ class AppSpecificNativeGuiSessionMixin:
                 visual_bottom_nav_present=bool(visual.get("bottom_nav_present")),
             )
         else:
-            text = ocr.get("text", "")
+            text = ocr_payload.get("text", "")
             text_state = classify_screen_text(text)
             visual = classify_screen_image(output)
             state = _combine_screen_states(text_state, visual["state"], text)
-        return {
+        payload = {
             "schema_version": GUI_HARNESS_SCHEMA_VERSION,
             "status": "ok",
             "path": str(output),
@@ -157,10 +175,22 @@ class AppSpecificNativeGuiSessionMixin:
             "visual_status": visual["status"],
             "visual_active_tab": visual.get("active_tab", "unknown"),
             "visual_bottom_nav_present": visual.get("bottom_nav_present", False),
-            "ocr_status": ocr["status"],
-            "ocr_error": ocr.get("error"),
-            "text": ocr.get("text", ""),
+            "ocr_status": ocr_payload["status"],
+            "ocr_error": ocr_payload.get("error"),
+            "text": ocr_payload.get("text", ""),
         }
+        for key in (
+            "chat_list_visual_present",
+            "chat_list_visual_signal",
+            "message_list_top_anchor_present",
+            "message_list_top_anchor_signal",
+            "recommend_card_visual_present",
+            "recommend_card_visual_signal",
+            "conversation_toolbar_present",
+        ):
+            if key in visual:
+                payload[key] = visual[key]
+        return payload
 
     def doctor_wechat(self, *, capture: bool = True, output: Path | None = None) -> dict[str, Any]:
         payload = self._base_payload("ok")
@@ -1364,8 +1394,10 @@ class AppSpecificNativeGuiSessionMixin:
     def _execute_planned_steps(self, payload: dict[str, Any], *, output_dir: Path | None = None) -> dict[str, Any]:
         if output_dir is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
-        before = output_dir / "iphone_mirroring.before_action.png" if output_dir is not None else None
-        doctor = self.doctor(capture=True, output=before)
+        capture_prefix = "mac_ios_app" if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND else "iphone_mirroring"
+        use_ocr = self.harness_backend != MAC_IOS_APP_HARNESS_BACKEND
+        before = output_dir / f"{capture_prefix}.before_action.png" if output_dir is not None else None
+        doctor = self.doctor(capture=True, output=before, ocr=use_ocr)
         payload["preflight"] = doctor
         if doctor["status"] == "blocked":
             payload.update({"status": "blocked", "reason": doctor.get("reason")})
@@ -1475,8 +1507,8 @@ class AppSpecificNativeGuiSessionMixin:
             if step["intent"] == "capture_profile_read_step":
                 output = None
                 if output_dir is not None:
-                    output = output_dir / f"iphone_mirroring.profile_read_step_{len(profile_read_captures) + 1:02d}.png"
-                screen = self.capture_window(output=output, window=window)
+                    output = output_dir / f"{capture_prefix}.profile_read_step_{len(profile_read_captures) + 1:02d}.png"
+                screen = self.capture_window(output=output, window=window, ocr=use_ocr)
                 result = {
                     "status": screen.get("status", "blocked"),
                     "screen": _redacted_screen(screen),
@@ -1486,8 +1518,8 @@ class AppSpecificNativeGuiSessionMixin:
             elif step["intent"] == "safe_expand_visible_profile_section":
                 output = None
                 if output_dir is not None:
-                    output = output_dir / f"iphone_mirroring.profile_expand_check_{len(profile_read_captures) + 1:02d}.png"
-                screen = self.capture_window(output=output, window=window)
+                    output = output_dir / f"{capture_prefix}.profile_expand_check_{len(profile_read_captures) + 1:02d}.png"
+                screen = self.capture_window(output=output, window=window, ocr=use_ocr)
                 observed_text = str(screen.get("text") or "")
                 result = {
                     "status": screen.get("status", "blocked"),
@@ -1514,7 +1546,7 @@ class AppSpecificNativeGuiSessionMixin:
                 executed_steps.append(executed_step)
                 payload.update({"status": "blocked", "reason": result.get("reason", "tinder_action_step_failed"), "executed_steps": executed_steps})
                 return payload
-            time.sleep(float(step.get("wait_after_seconds", 0.2)))
+            time.sleep(max(DEFAULT_POST_ACTION_OBSERVATION_DELAY_SECONDS, float(step.get("wait_after_seconds", 0.0))))
             postcondition = self._verify_bumble_step_postcondition(
                 window,
                 step,
@@ -1557,8 +1589,8 @@ class AppSpecificNativeGuiSessionMixin:
                 payload["field_coverage"] = _bumble_profile_field_coverage("\n".join(profile_read_texts))
             else:
                 payload["field_coverage"] = _tinder_profile_field_coverage("\n".join(profile_read_texts))
-        after = output_dir / "iphone_mirroring.after_action.png" if output_dir is not None else None
-        verification_screen = self.capture_window(output=after, window=window)
+        after = output_dir / f"{capture_prefix}.after_action.png" if output_dir is not None else None
+        verification_screen = self.capture_window(output=after, window=window, ocr=use_ocr)
         payload["verification"] = _redacted_screen(verification_screen)
         if verification_screen.get("state") == TINDER_SUBSCRIPTION_PAYWALL_STATE:
             recovery = self._dismiss_tinder_subscription_paywall(

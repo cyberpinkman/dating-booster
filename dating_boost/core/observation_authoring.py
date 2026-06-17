@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from dating_boost.core.thread_observation_contract import validate_thread_observation_contract
+
 
 OBSERVATION_AUTHORING_SCHEMA_VERSION = 1
 IDENTITY_CONFIDENCE_VALUES = {"low", "medium", "high"}
@@ -28,7 +30,11 @@ def observation_template(observation_type: str = "thread", app_id: str = "tinder
                         "latest_preview": "TODO",
                         "latest_preview_hash": "TODO_STABLE_HASH",
                         "timestamp_cue": "TODO",
+                        "last_activity_at": "",
+                        "days_since_last_activity": None,
+                        "freshness_bucket": "fresh|within_week|historical",
                         "unread_cue": "present|absent",
+                        "candidate_type": "continuation_candidate|open_chat_candidate|new_match_candidate",
                         "position": 1,
                         "identity_confidence": "medium",
                         "identity_evidence": "Visible list row and stable position.",
@@ -193,13 +199,16 @@ def _validate_thread(payload: dict[str, Any], errors: list[str]) -> None:
             errors.append(
                 f"latest_inbound_messages[{index}] must be marked is_after_latest_outbound=true; old visible messages belong in background"
             )
+    validate_thread_observation_contract(payload, path="thread", errors=errors)
 
 
 def _validate_turn_boundary_evidence(payload: dict[str, Any], errors: list[str]) -> None:
     _require_non_empty_string(payload, "latest_user_outbound_text", errors, "thread.turn_boundary_evidence")
     latest_inbound = payload.get("latest_inbound_after_user")
-    if not isinstance(latest_inbound, list) or not any(isinstance(item, str) and item.strip() for item in latest_inbound):
-        errors.append("thread.turn_boundary_evidence.latest_inbound_after_user must contain at least one message")
+    if not isinstance(latest_inbound, list):
+        errors.append("thread.turn_boundary_evidence.latest_inbound_after_user must be a list")
+    elif any(not isinstance(item, str) or not item.strip() for item in latest_inbound):
+        errors.append("thread.turn_boundary_evidence.latest_inbound_after_user must contain only non-empty strings")
     latest_user_index = payload.get("latest_user_outbound_index")
     if latest_user_index is not None and (not isinstance(latest_user_index, int) or isinstance(latest_user_index, bool)):
         errors.append("thread.turn_boundary_evidence.latest_user_outbound_index must be an integer or null")

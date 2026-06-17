@@ -314,11 +314,14 @@ class SkillPackageTests(unittest.TestCase):
             "planner_assessment",
             "goal_plan",
             "planner_recommendation",
+            "send_time_context",
             "conversation_scores",
             "topic_lifecycle",
             "soft_invite_allowed",
             "staged_verification",
             "message_list_observation.template.json",
+            "message_list_evidence",
+            "visual_anchor_region",
         ):
             self.assertIn(field_name, contracts_text)
         for phrase in (
@@ -354,6 +357,11 @@ class SkillPackageTests(unittest.TestCase):
             "给/问/接/转/停",
             "low_investment_repair",
             "self-disclosure",
+            "temporal_fit",
+            "current local send time",
+            "latest inbound message time",
+            "freshness",
+            "current activity",
         ):
             self.assertIn(phrase, drafting_text)
         self.assertNotIn("deepen_hook", drafting_text)
@@ -370,6 +378,10 @@ class SkillPackageTests(unittest.TestCase):
             "继续反问",
             "都行",
             "看情况",
+            "temporal fit",
+            "current local send time",
+            "latest inbound time",
+            "freshness",
         ):
             self.assertIn(phrase, checklist_text)
 

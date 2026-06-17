@@ -108,6 +108,97 @@ SLOW_WARM_RESTATEMENTS = (
     "熟了会",
     "慢热",
 )
+TRANSIENT_TOPIC_KEYWORDS = (
+    "天气",
+    "下雨",
+    "雨",
+    "太阳",
+    "雪",
+    "降温",
+    "升温",
+    "今天",
+    "今晚",
+    "刚才",
+    "现在",
+    "weather",
+    "rain",
+    "sun",
+    "sunny",
+    "today",
+    "tonight",
+    "now",
+)
+WEAK_STRATEGIC_DELTA_MARKERS = (
+    "keep",
+    "light exchange",
+    "natural exchange",
+    "继续聊",
+    "轻松",
+    "自然",
+    "接梗",
+    "气氛",
+)
+LOW_VALUE_CONFIRMATION_MARKERS = (
+    "是不是",
+    "是不是也",
+    "是不是还",
+    "是不是就",
+    "是不是直接",
+    "有没有",
+    "有没有也",
+    "会不会",
+    "会不会也",
+    "你是不是也",
+    "你那天是不是",
+)
+UNKNOWN_FOLLOWUP_MARKERS = (
+    "一般",
+    "平时",
+    "通常",
+    "习惯",
+    "会先",
+    "后来",
+    "最后",
+    "怎么",
+    "什么",
+    "干嘛",
+    "玩什么",
+    "做什么",
+    "哪",
+    "安排",
+    "处理",
+    "改成",
+    "变成",
+)
+ANSWERABLE_HANDLE_MARKERS = (
+    "?",
+    "？",
+    "吗",
+    "嘛",
+    "么",
+    "呢",
+    "是不是",
+    "会不会",
+    "哪",
+    "什么",
+    "怎么",
+    "谁",
+    "几",
+    "多少",
+    "我",
+    "咱",
+    "我们",
+    "下次",
+    "改天",
+    "周末",
+    "见",
+    "线下",
+    "咖啡",
+    "吃",
+    "喝",
+    "一起",
+)
+HISTORICAL_THREAD_CUTOFF_DAYS = 7
 
 
 class AutomationRepository:
@@ -430,12 +521,14 @@ class AutomationRepository:
                 state["updated_at"] = event.get("created_at", now)
                 changed = True
                 continue
-            state["last_outbound_action_id"] = event["event_id"]
+            state["last_action_result_event_id"] = event["event_id"]
             state.pop("last_action_result_error", None)
             if event.get("result_status") == "succeeded":
+                state["last_outbound_action_id"] = event["event_id"]
                 state["state"] = "sent_waiting"
             elif event.get("result_status") == "failed":
                 state["state"] = "draft_ready"
+                _release_active_send_request_after_failure(state, event_id=event["event_id"])
             state["updated_at"] = event.get("created_at", now)
             changed = True
         if changed:
@@ -464,6 +557,7 @@ class AutomationRepository:
                 state["state"] = "staged_pending_user"
             elif event.get("result_status") == "failed":
                 state["state"] = "draft_ready"
+                _release_active_send_request_after_failure(state, event_id=event["event_id"])
             else:
                 state["state"] = "stage_needs_verification"
             state["updated_at"] = event.get("created_at", now)
@@ -515,8 +609,13 @@ class AutomationRepository:
             for item in scan_batch.get("thread_observations", [])
             if item.get("candidate_key")
         }
+        visible_entries = list(scan_batch.get("message_list_snapshot", {}).get("entries", []))
+        entries_before_cutoff, historical_entries, history_cutoff_reached = _split_entries_at_history_cutoff(
+            visible_entries,
+            captured_at=str(scan_batch.get("captured_at") or now),
+        )
         entries = _prioritize_entries(
-            list(scan_batch.get("message_list_snapshot", {}).get("entries", [])),
+            entries_before_cutoff,
             states_by_candidate=states_by_candidate,
             thread_items=thread_items,
         )
@@ -532,8 +631,46 @@ class AutomationRepository:
         state_updates: list[dict[str, Any]] = []
         warnings: list[str] = []
         processed_match_count = 0
+        if history_cutoff_reached:
+            warnings.append("message_list_history_cutoff_reached")
+
+        for entry in historical_entries:
+            if _is_non_chat_message_list_entry(entry):
+                warnings.append("non_chat_message_list_entry_skipped")
+                continue
+            candidate_key = _non_empty(entry.get("candidate_key"), "candidate_key")
+            provisional_id = _provisional_match_id(entry)
+            state = states_by_match.get(provisional_id) or states_by_candidate.get(candidate_key) or _new_state(
+                match_id=provisional_id,
+                candidate_key=candidate_key,
+                session_id=session["session_id"],
+                timestamp=now,
+            )
+            state["state"] = "historical_thread"
+            state["candidate_key"] = candidate_key
+            state["candidate_type"] = "historical_thread"
+            state["visible_name"] = entry.get("visible_name")
+            state["last_preview_hash"] = entry.get("latest_preview_hash")
+            state["unread_cue"] = entry.get("unread_cue")
+            state["last_scan_cursor"] = scan_cursor
+            state["history_cutoff_reason"] = _entry_history_reason(entry, captured_at=str(scan_batch.get("captured_at") or now))
+            state["updated_at"] = scan_batch.get("captured_at", now)
+            states_by_match[state["match_id"]] = state
+            state_updates.append(_state_update(state))
+            scheduled_actions.append(
+                {
+                    "type": "historical_thread_skipped",
+                    "candidate_key": candidate_key,
+                    "visible_name": entry.get("visible_name"),
+                    "reason": state["history_cutoff_reason"],
+                    "scan_cursor": scan_cursor,
+                }
+            )
 
         for entry in processed_entries:
+            if _is_non_chat_message_list_entry(entry):
+                warnings.append("non_chat_message_list_entry_skipped")
+                continue
             candidate_key = _non_empty(entry.get("candidate_key"), "candidate_key")
             thread_item = thread_items.get(candidate_key)
             if thread_item is None:
@@ -544,10 +681,19 @@ class AutomationRepository:
                     session_id=session["session_id"],
                     timestamp=now,
                 )
+                if _stable_waiting_state_without_new_inbound(state, entry):
+                    state["visible_name"] = entry.get("visible_name")
+                    state["last_preview_hash"] = entry.get("latest_preview_hash") or state.get("last_preview_hash")
+                    state["unread_cue"] = entry.get("unread_cue")
+                    state["updated_at"] = scan_batch.get("captured_at", now)
+                    states_by_match[state["match_id"]] = state
+                    state_updates.append(_state_update(state))
+                    continue
                 state["state"] = "needs_thread_scan"
-                state["candidate_type"] = "continuation_candidate" if state.get("seen_before") else "new_match_candidate"
+                state["candidate_type"] = _candidate_type_for_entry(state, entry)
                 state["visible_name"] = entry.get("visible_name")
                 state["last_preview_hash"] = entry.get("latest_preview_hash")
+                state["unread_cue"] = entry.get("unread_cue")
                 state["updated_at"] = scan_batch.get("captured_at", now)
                 states_by_match[state["match_id"]] = state
                 scan_requests.append(
@@ -594,9 +740,10 @@ class AutomationRepository:
             state["last_inbound_observation_id"] = observation.observation_id
             state["latest_inbound_fingerprint"] = latest_fingerprint
             state["last_preview_hash"] = entry.get("latest_preview_hash")
+            state["unread_cue"] = entry.get("unread_cue")
             state["last_assessment"] = assessment
             state["updated_at"] = scan_batch.get("captured_at", observation.captured_at)
-            state["candidate_type"] = "new_match_candidate" if not state.get("seen_before") else "continuation_candidate"
+            state["candidate_type"] = _candidate_type_for_entry(state, entry)
             state["seen_before"] = True
             planner_payload: dict[str, Any] | None = None
             planner_recommendation: dict[str, Any] | None = None
@@ -708,6 +855,14 @@ class AutomationRepository:
             elif planner_recommendation and draft_payload and not _draft_aligns_with_planner(dict(draft_payload), planner_recommendation):
                 state["state"] = "needs_reply"
                 warnings.append("planner_misaligned_draft")
+                warnings.append("draft_revision_required")
+                _append_draft_revision_request(
+                    scan_requests,
+                    candidate_key=candidate_key,
+                    match_id=match_id,
+                    visible_name=observation.match_identity_hints.visible_name,
+                    reason="planner_misaligned_draft",
+                )
             elif planner_recommendation and draft_payload and (
                 strategy_block := _draft_strategy_block_reason(
                     dict(draft_payload),
@@ -715,9 +870,16 @@ class AutomationRepository:
                     observation,
                 )
             ):
-                state["state"] = "needs_reply"
-                state["draft_strategy_block_reason"] = strategy_block
+                _mark_draft_revision_required(state, reason=strategy_block)
                 warnings.append(strategy_block)
+                warnings.append("draft_revision_required")
+                _append_draft_revision_request(
+                    scan_requests,
+                    candidate_key=candidate_key,
+                    match_id=match_id,
+                    visible_name=observation.match_identity_hints.visible_name,
+                    reason=strategy_block,
+                )
             elif host_identity_confidence == "low":
                 state["state"] = "needs_reply"
                 warnings.append("low_identity_confidence")
@@ -746,6 +908,7 @@ class AutomationRepository:
             ):
                 self._queue_send_request(
                     action_requests=action_requests,
+                    scan_requests=scan_requests,
                     warnings=warnings,
                     state=state,
                     match_id=match_id,
@@ -786,6 +949,7 @@ class AutomationRepository:
                 ):
                     self._queue_send_request(
                         action_requests=action_requests,
+                        scan_requests=scan_requests,
                         warnings=warnings,
                         state=state,
                         match_id=match_id,
@@ -827,6 +991,9 @@ class AutomationRepository:
             state_updates.append(_state_update(state))
 
         for entry in over_budget_entries:
+            if _is_non_chat_message_list_entry(entry):
+                warnings.append("non_chat_message_list_entry_skipped")
+                continue
             candidate_key = _non_empty(entry.get("candidate_key"), "candidate_key")
             provisional_id = _provisional_match_id(entry)
             state = states_by_match.get(provisional_id) or states_by_candidate.get(candidate_key) or _new_state(
@@ -835,11 +1002,21 @@ class AutomationRepository:
                 session_id=session["session_id"],
                 timestamp=now,
             )
+            if _stable_waiting_state_without_new_inbound(state, entry):
+                state["visible_name"] = entry.get("visible_name")
+                state["last_preview_hash"] = entry.get("latest_preview_hash") or state.get("last_preview_hash")
+                state["unread_cue"] = entry.get("unread_cue")
+                state["last_scan_cursor"] = scan_cursor
+                state["updated_at"] = scan_batch.get("captured_at", now)
+                states_by_match[state["match_id"]] = state
+                state_updates.append(_state_update(state))
+                continue
             state["state"] = "scan_later"
             state["candidate_key"] = candidate_key
-            state["candidate_type"] = "continuation_candidate" if state.get("seen_before") else "new_match_candidate"
+            state["candidate_type"] = _candidate_type_for_entry(state, entry)
             state["visible_name"] = entry.get("visible_name")
             state["last_preview_hash"] = entry.get("latest_preview_hash")
+            state["unread_cue"] = entry.get("unread_cue")
             state["last_scan_cursor"] = scan_cursor
             state["updated_at"] = scan_batch.get("captured_at", now)
             states_by_match[state["match_id"]] = state
@@ -874,6 +1051,8 @@ class AutomationRepository:
             "scheduled_actions": scheduled_actions,
             "next_priority_queue": next_priority_queue,
             "warnings": _unique_strings(warnings),
+            "history_cutoff_reached": history_cutoff_reached,
+            "historical_entry_count": len(historical_entries),
             "machine_report_ref": str(Path("automation") / "reports" / "machine_latest.json"),
         }
 
@@ -968,6 +1147,7 @@ class AutomationRepository:
             return None
 
     def _context_pack(self, match_id: str, observation: AppObservation) -> dict[str, Any]:
+        now = self._now()
         profile = JsonMemoryRepository(self.root).load_user_profile()
         user_profile = {
             "facts": [item.to_dict() for item in profile.facts],
@@ -990,7 +1170,7 @@ class AutomationRepository:
                 match_id,
                 projection,
                 latest_observation=observation,
-                now=self._now(),
+                now=now,
                 max_items=None,
                 reply_mode=ReplyMode.ADAPTIVE.value,
             )
@@ -1037,12 +1217,14 @@ class AutomationRepository:
             conversation_memory=conversation_memory,
             reply_mode=ReplyMode.ADAPTIVE,
             max_items=None,
+            current_time_iso=now,
         )
 
     def _queue_send_request(
         self,
         *,
         action_requests: list[dict[str, Any]],
+        scan_requests: list[dict[str, Any]],
         warnings: list[str],
         state: dict[str, Any],
         match_id: str,
@@ -1099,18 +1281,30 @@ class AutomationRepository:
         context_pack = self._context_pack(match_id, observation)
         policy = evaluate_draft_content(draft, context_pack)
         if not policy.allowed:
-            state["state"] = "draft_ready"
-            state["handoff_reason"] = "draft_blocked"
+            _mark_draft_revision_required(state, reason=policy.reason)
             warnings.append("draft_blocked")
+            warnings.append("draft_revision_required")
+            _append_draft_revision_request(
+                scan_requests,
+                candidate_key=candidate_key,
+                match_id=match_id,
+                visible_name=observation.match_identity_hints.visible_name,
+                reason=policy.reason,
+            )
             return
 
         payload_messages = _draft_payload_messages(raw_draft, draft.best_reply)
         payload_hash = _draft_messages_payload_hash(payload_messages)
+        retry_suffix = _send_retry_suffix(state, payload_hash)
         if state.get("last_outbound_payload_hash") == payload_hash:
-            warnings.append("duplicate_send_request_suppressed")
-            return
+            if _state_has_active_send_request(state):
+                warnings.append("duplicate_send_request_suppressed")
+                return
+            retry_suffix = retry_suffix or _stale_same_payload_retry_suffix(state)
+        if retry_suffix:
+            state["send_retry_count"] = max(int(state.get("send_retry_count") or 0), _retry_suffix_number(retry_suffix))
 
-        action_request_id = f"action_request_{match_id}_{payload_hash[:12]}"
+        action_request_id = f"action_request_{match_id}_{payload_hash[:12]}{retry_suffix}"
         precondition = {
             "schema_version": 1,
             "action": "send_message",
@@ -1172,6 +1366,9 @@ class AutomationRepository:
         if isinstance(target_binding, dict):
             action_request["target_binding"] = dict(target_binding)
         action_requests.append(action_request)
+        state.pop("draft_revision_required", None)
+        state.pop("draft_revision_reason", None)
+        state.pop("draft_strategy_block_reason", None)
         state["state"] = "send_requested"
         state["last_action"] = "send_message"
         state["last_action_request_id"] = action_request_id
@@ -1180,6 +1377,7 @@ class AutomationRepository:
         state["last_autonomous_audit_binding"] = autonomous_audit_binding
         state["last_pre_action_observation_id"] = observation.observation_id
         state["last_draft_id"] = f"draft_{payload_hash[:12]}"
+        state.pop("last_action_result_error", None)
         state["last_disclosure_source"] = disclosure_source if disclosure_source != "none" else None
         state["used_user_material_ids"] = used_material_ids
         state["low_investment_repair_applied"] = low_investment_repair_applied
@@ -1187,6 +1385,39 @@ class AutomationRepository:
             state["last_nudged_inbound_fingerprint"] = latest_fingerprint
             state["nudge_count_since_inbound"] = int(state.get("nudge_count_since_inbound") or 0) + 1
             state["next_due_at"] = None
+
+
+def _mark_draft_revision_required(state: dict[str, Any], *, reason: str) -> None:
+    state["state"] = "needs_reply"
+    state["draft_revision_required"] = True
+    state["draft_revision_reason"] = str(reason)
+    state.pop("handoff_reason", None)
+
+
+def _append_draft_revision_request(
+    scan_requests: list[dict[str, Any]],
+    *,
+    candidate_key: str,
+    match_id: str,
+    visible_name: str | None,
+    reason: str,
+) -> None:
+    if any(
+        item.get("candidate_key") == candidate_key
+        and item.get("reason") == "draft_revision_required"
+        for item in scan_requests
+    ):
+        return
+    scan_requests.append(
+        {
+            "candidate_key": candidate_key,
+            "match_id": match_id,
+            "visible_name": visible_name,
+            "reason": "draft_revision_required",
+            "draft_revision_reason": str(reason),
+            "requires_revised_draft": True,
+        }
+    )
 
 
 def _draft_from_dict(data: dict[str, Any]) -> DraftResponse:
@@ -1472,6 +1703,58 @@ def _action_result_mismatch(event: dict[str, Any], state: dict[str, Any]) -> str
     return None
 
 
+def _send_retry_suffix(state: dict[str, Any], payload_hash: str) -> str:
+    if state.get("last_failed_outbound_payload_hash") != payload_hash:
+        return ""
+    retry_count = int(state.get("send_retry_count") or 0)
+    if retry_count <= 0:
+        return ""
+    return f"_retry{retry_count}"
+
+
+def _state_has_active_send_request(state: dict[str, Any]) -> bool:
+    return str(state.get("state") or "") in {
+        "send_requested",
+        "stage_needs_verification",
+        "staged_pending_user",
+        "sent_waiting",
+        "waiting_for_match",
+    }
+
+
+def _stale_same_payload_retry_suffix(state: dict[str, Any]) -> str:
+    retry_count = int(state.get("send_retry_count") or 0)
+    return f"_retry{retry_count if retry_count > 0 else 1}"
+
+
+def _retry_suffix_number(suffix: str) -> int:
+    if not suffix.startswith("_retry"):
+        return 0
+    try:
+        return int(suffix.removeprefix("_retry"))
+    except ValueError:
+        return 0
+
+
+def _release_active_send_request_after_failure(state: dict[str, Any], *, event_id: str) -> None:
+    payload_hash = state.get("last_outbound_payload_hash")
+    action_request_id = state.get("last_action_request_id")
+    if payload_hash:
+        state["last_failed_outbound_payload_hash"] = payload_hash
+    if action_request_id:
+        state["last_failed_action_request_id"] = action_request_id
+    state["last_failed_action_result_event_id"] = event_id
+    state["send_retry_count"] = int(state.get("send_retry_count") or 0) + 1
+    for key in (
+        "last_action_request_id",
+        "last_outbound_payload_hash",
+        "last_precondition_hash",
+        "last_autonomous_audit_binding",
+        "last_pre_action_observation_id",
+    ):
+        state.pop(key, None)
+
+
 def _stage_result_mismatch(event: dict[str, Any], state: dict[str, Any]) -> str | None:
     if event.get("target_match_id") != state.get("match_id"):
         return "target_match_id_mismatch"
@@ -1505,6 +1788,162 @@ def _prioritize_entries(
     ]
 
 
+def _split_entries_at_history_cutoff(
+    entries: list[dict[str, Any]],
+    *,
+    captured_at: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    active: list[dict[str, Any]] = []
+    historical: list[dict[str, Any]] = []
+    cutoff_reached = False
+    for entry in entries:
+        if cutoff_reached:
+            historical.append(entry)
+            continue
+        if _is_non_chat_message_list_entry(entry):
+            active.append(entry)
+            continue
+        if _entry_is_historical(entry, captured_at=captured_at):
+            cutoff_reached = True
+            historical.append(entry)
+            continue
+        active.append(entry)
+    return active, historical, cutoff_reached
+
+
+def _entry_is_historical(entry: dict[str, Any], *, captured_at: str) -> bool:
+    if _entry_has_reply_cue(entry):
+        return False
+    return _entry_history_age_days(entry, captured_at=captured_at) >= HISTORICAL_THREAD_CUTOFF_DAYS
+
+
+def _entry_has_reply_cue(entry: dict[str, Any]) -> bool:
+    cue = str(entry.get("unread_cue") or "").strip().lower()
+    if cue in {
+        "present",
+        "reply_badge",
+        "unread",
+        "new_message",
+        "new_inbound",
+        "needs_reply",
+        "go_reply",
+        "去回复",
+    }:
+        return True
+    for key in ("evidence", "identity_evidence", "timestamp_cue"):
+        if "去回复" in str(entry.get(key) or ""):
+            return True
+    return False
+
+
+def _entry_history_reason(entry: dict[str, Any], *, captured_at: str) -> str:
+    age = _entry_history_age_days(entry, captured_at=captured_at)
+    if age >= HISTORICAL_THREAD_CUTOFF_DAYS:
+        return f"last_progress_older_than_{HISTORICAL_THREAD_CUTOFF_DAYS}_days"
+    bucket = str(entry.get("freshness_bucket") or entry.get("timeline_status") or "").strip().lower()
+    if bucket:
+        return f"timeline_status:{bucket}"
+    cue = str(entry.get("timestamp_cue") or "").strip()
+    return f"historical_cutoff_reached:{cue or 'unknown_time'}"
+
+
+def _entry_history_age_days(entry: dict[str, Any], *, captured_at: str) -> float:
+    for key in (
+        "days_since_last_progress",
+        "days_since_last_activity",
+        "days_since_latest_message",
+        "age_days",
+    ):
+        value = entry.get(key)
+        try:
+            if value is not None and str(value).strip() != "":
+                return float(value)
+        except (TypeError, ValueError):
+            continue
+    bucket = str(entry.get("freshness_bucket") or entry.get("timeline_status") or "").strip().lower()
+    if bucket in {
+        "historical",
+        "history",
+        "historical_thread",
+        "historical_process",
+        "older_than_7_days",
+        "older_than_one_week",
+        "stale_history",
+    }:
+        return float(HISTORICAL_THREAD_CUTOFF_DAYS)
+    if bucket in {"fresh", "recent", "active", "current", "within_week"}:
+        return 0.0
+    captured = _parse_optional_iso(captured_at)
+    for key in ("last_progress_at", "last_activity_at", "latest_message_at", "matched_at"):
+        value = entry.get(key)
+        if not isinstance(value, str) or not value.strip() or captured is None:
+            continue
+        parsed = _parse_optional_iso(value)
+        if parsed is None:
+            continue
+        return max(0.0, (captured - parsed).total_seconds() / 86400.0)
+    cue_age = _timestamp_cue_age_days(str(entry.get("timestamp_cue") or ""), captured_at=captured_at)
+    if cue_age is not None:
+        return cue_age
+    return -1.0
+
+
+def _parse_optional_iso(value: str) -> datetime | None:
+    try:
+        return _parse_iso_utc(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _timestamp_cue_age_days(cue: str, *, captured_at: str) -> float | None:
+    normalized = cue.strip().lower()
+    if not normalized:
+        return None
+    if any(token in normalized for token in ("刚刚", "刚才", "现在", "today", "now", "current_thread")):
+        return 0.0
+    if any(token in normalized for token in ("今天", "分钟前", "小时前", "小时内", "剩余")):
+        return 0.0
+    if "昨天" in normalized:
+        return 1.0
+    if "前天" in normalized:
+        return 2.0
+    day_match = re.search(r"(\d+(?:\.\d+)?)\s*天前", normalized)
+    if day_match:
+        return float(day_match.group(1))
+    week_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:周|週|星期)\s*前", normalized)
+    if week_match:
+        return float(week_match.group(1)) * 7.0
+    month_match = re.search(r"(\d+(?:\.\d+)?)\s*个?月前", normalized)
+    if month_match:
+        return float(month_match.group(1)) * 30.0
+    year_match = re.search(r"(\d+(?:\.\d+)?)\s*年前", normalized)
+    if year_match:
+        return float(year_match.group(1)) * 365.0
+    if any(token in normalized for token in ("上周", "一周前")):
+        return 7.0
+    if any(token in normalized for token in ("上个月", "几个月", "很久", "半年前", "去年")):
+        return float(HISTORICAL_THREAD_CUTOFF_DAYS)
+    captured = _parse_optional_iso(captured_at)
+    if captured is None:
+        return None
+    date_match = re.search(r"(?:(\d{4})[-/年])?\s*(\d{1,2})[-/月](\d{1,2})日?", normalized)
+    if date_match:
+        year = int(date_match.group(1) or captured.year)
+        month = int(date_match.group(2))
+        day = int(date_match.group(3))
+        try:
+            parsed = datetime(year, month, day, tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        if parsed > captured and date_match.group(1) is None:
+            try:
+                parsed = datetime(year - 1, month, day, tzinfo=timezone.utc)
+            except ValueError:
+                return None
+        return max(0.0, (captured - parsed).total_seconds() / 86400.0)
+    return None
+
+
 def _entry_priority(
     entry: dict[str, Any],
     state: dict[str, Any] | None,
@@ -1512,14 +1951,38 @@ def _entry_priority(
 ) -> int:
     assessment = dict(thread_item.get("assessment", {})) if thread_item else {}
     latest_fingerprint = assessment.get("latest_inbound_fingerprint")
+    unread_present = _entry_has_reply_cue(entry)
+    waiting_state = state is not None and state.get("state") in {
+        "sent_waiting",
+        "waiting_for_match",
+        "staged_pending_user",
+    }
     if (state is not None and state.get("state") == "appointment_handoff") or _is_handoff_assessment(assessment):
         return 0
     if state is not None and state.get("state") == "nudge_scheduled":
         return 1
+    if (
+        state is not None
+        and unread_present
+        and state.get("state") not in {"sent_waiting", "waiting_for_match", "staged_pending_user"}
+    ):
+        return 2
+    if state is not None and unread_present and state.get("candidate_type") == "continuation_candidate":
+        return 2
+    if state is not None and state.get("state") == "needs_reply":
+        return 2
     if latest_fingerprint and state is not None and latest_fingerprint != state.get("latest_inbound_fingerprint"):
         return 2
     latest_preview_hash = entry.get("latest_preview_hash")
-    if state is not None and entry.get("unread_cue") == "present" and latest_preview_hash != state.get("last_preview_hash"):
+    if state is not None and unread_present and latest_preview_hash != state.get("last_preview_hash"):
+        return 2
+    if waiting_state:
+        return 6
+    if (
+        thread_item is not None
+        and assessment.get("recommended_next") in {"reply", "nudge_later"}
+        and assessment.get("continuation_opportunity") == "yes"
+    ):
         return 2
     if state is not None and state.get("state") == "needs_target_profile":
         return 3
@@ -1527,9 +1990,34 @@ def _entry_priority(
         return 4
     if state.get("state") == "scan_later":
         return 5
-    if state.get("state") in {"sent_waiting", "waiting_for_match", "staged_pending_user"}:
-        return 6
     return 7
+
+
+def _candidate_type_for_entry(state: dict[str, Any], entry: dict[str, Any]) -> str:
+    if state.get("seen_before"):
+        return "continuation_candidate"
+    if _entry_is_open_chat_candidate(entry):
+        return "open_chat_candidate"
+    return "new_match_candidate"
+
+
+def _entry_is_open_chat_candidate(entry: dict[str, Any]) -> bool:
+    candidate_type = str(entry.get("candidate_type") or "").strip().lower()
+    if candidate_type in {"open_chat_candidate", "new_open_chat_candidate", "ordinary_chat_open_candidate"}:
+        return True
+    preview = str(entry.get("latest_preview") or "").strip()
+    evidence = str(entry.get("evidence") or "").strip()
+    return "开启聊天" in preview or "开启聊天" in evidence
+
+
+def _stable_waiting_state_without_new_inbound(state: dict[str, Any], entry: dict[str, Any]) -> bool:
+    if state.get("state") not in {"sent_waiting", "waiting_for_match", "staged_pending_user"}:
+        return False
+    entry_hash = entry.get("latest_preview_hash")
+    state_hash = state.get("last_preview_hash")
+    if _entry_has_reply_cue(entry) and not state.get("last_outbound_action_id"):
+        return False
+    return bool(entry_hash and state_hash and entry_hash == state_hash)
 
 
 def _is_handoff_assessment(assessment: dict[str, Any]) -> bool:
@@ -1633,6 +2121,8 @@ def _state_update(state: dict[str, Any]) -> dict[str, Any]:
         "match_id": state["match_id"],
         "candidate_key": state.get("candidate_key"),
         "state": state["state"],
+        "candidate_type": state.get("candidate_type"),
+        "history_cutoff_reason": state.get("history_cutoff_reason"),
         "latest_inbound_fingerprint": state.get("latest_inbound_fingerprint"),
         "handoff_reason": state.get("handoff_reason"),
         "conversation_stage": state.get("conversation_stage"),
@@ -1653,9 +2143,11 @@ def _build_summary(
     return {
         "match_count": len(states),
         "new_match_count": sum(1 for state in states if state.get("candidate_type") == "new_match_candidate"),
+        "open_chat_candidate_count": sum(1 for state in states if state.get("candidate_type") == "open_chat_candidate"),
         "action_request_count": sum(1 for state in states if state.get("state") == "send_requested"),
         "staged_pending_user_count": sum(1 for state in states if state.get("state") == "staged_pending_user"),
         "waiting_count": sum(1 for state in states if state.get("state") in {"sent_waiting", "waiting_for_match"}),
+        "historical_thread_count": sum(1 for state in states if state.get("state") == "historical_thread"),
         "nudge_count": sum(1 for state in states if state.get("state") == "nudge_scheduled"),
         "handoff_count": sum(1 for state in states if state.get("state") == "appointment_handoff"),
         "slot_count": len(ledger),
@@ -1675,6 +2167,7 @@ def _build_summary(
 def _next_priority_queue(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
     priority = {
         "appointment_handoff": 0,
+        "send_requested": 1,
         "nudge_scheduled": 1,
         "needs_reply": 2,
         "needs_target_profile": 3,
@@ -1690,14 +2183,40 @@ def _next_priority_queue(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "match_id": state["match_id"],
             "candidate_key": state.get("candidate_key"),
             "state": state.get("state"),
-            "priority": priority.get(str(state.get("state")), 9),
+            "priority": 2
+            if state.get("state") in {"draft_ready", "needs_thread_scan"}
+            and state.get("candidate_type") == "continuation_candidate"
+            and _entry_has_reply_cue(state)
+            else 2
+            if state.get("state") == "scan_later"
+            and state.get("candidate_type") == "continuation_candidate"
+            and state.get("latest_inbound_fingerprint")
+            else priority.get(str(state.get("state")), 9),
             "next_due_at": state.get("next_due_at"),
             "last_scan_cursor": state.get("last_scan_cursor"),
+            "unread_cue": state.get("unread_cue"),
         }
         for state in states
-        if state.get("state") not in {"closed", "paused"}
+        if state.get("state") not in {"closed", "paused", "historical_thread"}
+        and not _is_non_chat_message_list_state(state)
+        and not _state_is_stale_autonomous_activation_candidate(state)
     ]
     return sorted(items, key=lambda item: (item["priority"], str(item["match_id"])))
+
+
+def _state_is_stale_autonomous_activation_candidate(state: dict[str, Any]) -> bool:
+    if _entry_has_reply_cue(state):
+        return False
+    if state.get("state") not in {"draft_ready", "needs_reply", "needs_thread_scan", "scan_later", "new_match"}:
+        return False
+    updated = state.get("updated_at") or state.get("last_activity_at") or state.get("last_progress_at")
+    if not isinstance(updated, str) or not updated.strip():
+        return False
+    parsed = _parse_optional_iso(updated)
+    now = _parse_optional_iso(_now_iso())
+    if parsed is None or now is None:
+        return False
+    return (now - parsed).total_seconds() / 86400.0 >= HISTORICAL_THREAD_CUTOFF_DAYS
 
 
 def _normalize_scan_cursor(value: Any) -> dict[str, Any]:
@@ -1910,6 +2429,61 @@ def _provisional_match_id(entry: dict[str, Any]) -> str:
     return f"provisional_{_safe_id(str(key))}"
 
 
+def _is_non_chat_message_list_entry(entry: dict[str, Any]) -> bool:
+    candidate_type = str(entry.get("candidate_type") or "").strip().lower()
+    if candidate_type in {
+        "liked_you_gate",
+        "premium_or_liked_you_gate",
+        "premium_gate",
+        "paywall_gate",
+        "non_chat_gate",
+    }:
+        return True
+    return _looks_like_non_chat_message_list_gate(
+        key=str(entry.get("candidate_key") or ""),
+        visible_name=str(entry.get("visible_name") or ""),
+        latest_preview=str(entry.get("latest_preview") or ""),
+    )
+
+
+def _is_non_chat_message_list_state(state: dict[str, Any]) -> bool:
+    candidate_type = str(state.get("candidate_type") or "").strip().lower()
+    if candidate_type in {
+        "liked_you_gate",
+        "premium_or_liked_you_gate",
+        "premium_gate",
+        "paywall_gate",
+        "non_chat_gate",
+    }:
+        return True
+    return _looks_like_non_chat_message_list_gate(
+        key=str(state.get("candidate_key") or ""),
+        visible_name=str(state.get("visible_name") or ""),
+        latest_preview=str(state.get("latest_preview") or state.get("last_preview") or ""),
+    )
+
+
+def _looks_like_non_chat_message_list_gate(*, key: str, visible_name: str, latest_preview: str) -> bool:
+    normalized_key = key.strip().lower()
+    normalized_name = visible_name.strip().lower()
+    normalized_preview = latest_preview.strip().lower()
+    if any(token in normalized_key for token in ("liked_you_gate", "premium_gate", "paywall_gate")):
+        return True
+    if "\u559c\u6b22\u4e86\u4f60" in normalized_name and (
+        "\u4eba" in normalized_name or normalized_name[:1].isdigit()
+    ):
+        return True
+    if normalized_name in {
+        "\u559c\u6b22\u4f60\u7684\u4eba",
+        "\u8c01\u559c\u6b22\u4e86\u6211",
+        "\u6709\u4eba\u559c\u6b22\u4f60",
+    }:
+        return True
+    if "\u53bb\u6253\u4e2a\u62db\u547c" in normalized_preview and "\u6d3b\u8dc3" in normalized_preview:
+        return True
+    return False
+
+
 def _safe_id(value: str) -> str:
     return "".join(char if char.isalnum() else "_" for char in value.lower()).strip("_") or "unknown"
 
@@ -1954,8 +2528,40 @@ def _draft_strategy_block_reason(
         observation=observation,
     ):
         return "draft_forced_choice_restates_confirmed_info"
+    if _draft_stale_temporal_topic_without_bridge(
+        draft_payload,
+        texts,
+        current_topic=current_topic,
+        topic=topic,
+        observation=observation,
+    ):
+        return "draft_stale_temporal_topic_without_bridge"
+    if _draft_stale_reactivation_continues_old_topic(
+        draft_payload,
+        texts,
+        current_topic=current_topic,
+        topic=topic,
+    ):
+        return "draft_stale_reactivation_continues_old_topic"
     if _draft_work_topic_not_preferred(draft_payload, texts, observation):
         return "draft_work_topic_not_preferred"
+    if any(_looks_like_ab_choice_question(line) for line in _draft_lines(texts)):
+        return "draft_ai_survey_choice_question"
+    if _draft_redundant_confirmation_question(
+        draft_payload,
+        texts,
+        current_topic=current_topic,
+        topic=topic,
+        observation=observation,
+    ):
+        return "draft_redundant_confirmation_question"
+    if _draft_lacks_answerable_relationship_handle(
+        draft_payload,
+        texts,
+        planner_recommendation=planner_recommendation,
+        current_topic=current_topic,
+    ):
+        return "draft_no_answerable_relationship_handle"
 
     if str(planner_recommendation.get("recommended_move") or "") != "low_investment_repair":
         return None
@@ -1979,6 +2585,211 @@ def _draft_strategy_block_reason(
     if current_topic and current_topic not in combined:
         return None
     return "draft_strategy_no_delta"
+
+
+def _draft_stale_temporal_topic_without_bridge(
+    draft_payload: dict[str, Any],
+    texts: list[str],
+    *,
+    current_topic: str,
+    topic: dict[str, Any],
+    observation: AppObservation,
+) -> bool:
+    age_days = _latest_inbound_age_days(topic, observation, draft_payload)
+    if age_days is None or age_days < 2:
+        return False
+    combined = "\n".join(
+        [
+            *texts,
+            current_topic,
+            str(draft_payload.get("selected_hook") or ""),
+            str(draft_payload.get("strategic_delta") or ""),
+        ]
+    )
+    if not _has_transient_topic(combined):
+        return False
+    strategic_delta = str(draft_payload.get("strategic_delta") or "")
+    selected_hook = str(draft_payload.get("selected_hook") or "")
+    if _has_non_transient_substantial_hook(strategic_delta) or _has_non_transient_substantial_hook(selected_hook):
+        return False
+    return True
+
+
+def _draft_lacks_answerable_relationship_handle(
+    draft_payload: dict[str, Any],
+    texts: list[str],
+    *,
+    planner_recommendation: dict[str, Any],
+    current_topic: str,
+) -> bool:
+    recommended_move = str(planner_recommendation.get("recommended_move") or "")
+    if recommended_move in {"wait", "slow_down_wait", "handoff"}:
+        return False
+    conversation_move = str(draft_payload.get("conversation_move") or "")
+    if conversation_move in {"wait", "slow_down_wait", "handoff"}:
+        return False
+    combined = "\n".join(texts)
+    if any(marker in combined for marker in ANSWERABLE_HANDLE_MARKERS):
+        return False
+    selected_hook = str(draft_payload.get("selected_hook") or "").strip()
+    strategic_delta = str(draft_payload.get("strategic_delta") or "").strip()
+    if selected_hook and selected_hook != current_topic and selected_hook in combined + strategic_delta:
+        return False
+    if _has_non_transient_substantial_hook(strategic_delta) and not _strategic_delta_is_weak(strategic_delta):
+        return False
+    return True
+
+
+def _draft_redundant_confirmation_question(
+    draft_payload: dict[str, Any],
+    texts: list[str],
+    *,
+    current_topic: str,
+    topic: dict[str, Any],
+    observation: AppObservation,
+) -> bool:
+    latest_texts = [
+        str(message.get("text") or "").strip()
+        for message in observation.conversation_observation.latest_inbound_messages
+    ]
+    latest_texts = [text for text in latest_texts if text]
+    if not latest_texts:
+        return False
+    latest_context = "\n".join(
+        [
+            *latest_texts,
+            current_topic,
+            *[str(item) for item in topic.get("new_information", []) if str(item).strip()],
+        ]
+    )
+    latest_normalized = _normalized_strategy_text(latest_context)
+    if not latest_normalized:
+        return False
+    selected_hook = str(draft_payload.get("selected_hook") or "")
+    strategic_delta = str(draft_payload.get("strategic_delta") or "")
+    for line in _draft_lines(texts):
+        normalized = _normalized_strategy_text(line)
+        if not normalized:
+            continue
+        if not any(marker in normalized for marker in LOW_VALUE_CONFIRMATION_MARKERS):
+            continue
+        if any(marker in normalized for marker in UNKNOWN_FOLLOWUP_MARKERS):
+            continue
+        combined = _normalized_strategy_text("\n".join([line, selected_hook, strategic_delta]))
+        if _shares_latest_context(combined, latest_normalized) or _asks_obvious_latest_consequence(
+            latest_normalized,
+            normalized,
+        ):
+            return True
+    return False
+
+
+def _asks_obvious_latest_consequence(latest_text: str, draft_text: str) -> bool:
+    if not latest_text or not draft_text:
+        return False
+    latest_constraint_markers = (
+        "太大",
+        "太晚",
+        "太累",
+        "太冷",
+        "太热",
+        "大雨",
+        "下雨",
+        "雨大",
+        "暴雨",
+    )
+    obvious_consequence_markers = (
+        "被困",
+        "困住",
+        "出不了门",
+        "不能出门",
+        "没出门",
+        "不出门",
+        "回不去",
+        "动不了",
+        "睡着",
+        "倒头就睡",
+    )
+    return any(marker in latest_text for marker in latest_constraint_markers) and any(
+        marker in draft_text for marker in obvious_consequence_markers
+    )
+
+
+def _latest_inbound_age_days(
+    topic: dict[str, Any],
+    observation: AppObservation,
+    draft_payload: dict[str, Any],
+) -> float | None:
+    for source in (topic, draft_payload):
+        for key in (
+            "latest_inbound_age_days",
+            "days_since_latest_inbound",
+            "days_since_last_inbound",
+            "days_since_last_activity",
+            "elapsed_days",
+            "age_days",
+        ):
+            value = source.get(key)
+            try:
+                if value is not None and str(value).strip() != "":
+                    return float(value)
+            except (TypeError, ValueError):
+                continue
+    captured = _parse_optional_iso(observation.captured_at)
+    if captured is None:
+        return None
+    for message in reversed(observation.conversation_observation.latest_inbound_messages):
+        if not isinstance(message, dict):
+            continue
+        for key in ("sent_at", "timestamp", "created_at", "time"):
+            value = message.get(key)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            parsed = _parse_optional_iso(value)
+            if parsed is not None:
+                return max(0.0, (captured - parsed).total_seconds() / 86400.0)
+        cue = str(message.get("timestamp_cue") or message.get("time_cue") or "")
+        cue_age = _timestamp_cue_age_days(cue, captured_at=observation.captured_at)
+        if cue_age is not None:
+            return cue_age
+    return None
+
+
+def _has_transient_topic(text: str) -> bool:
+    normalized = str(text).lower()
+    return any(marker.lower() in normalized for marker in TRANSIENT_TOPIC_KEYWORDS)
+
+
+def _has_non_transient_substantial_hook(text: str) -> bool:
+    normalized = _normalized_strategy_text(text)
+    if len(normalized) < 6:
+        return False
+    return not _has_transient_topic(text)
+
+
+def _shares_latest_context(draft_text: str, latest_text: str) -> bool:
+    if not draft_text or not latest_text:
+        return False
+    for marker in TRANSIENT_TOPIC_KEYWORDS:
+        marker_norm = _normalized_strategy_text(marker)
+        if marker_norm and marker_norm in draft_text and marker_norm in latest_text:
+            return True
+    for marker in ("上班", "下班", "慢热", "忙", "累", "晚班", "昨天", "那天"):
+        marker_norm = _normalized_strategy_text(marker)
+        if marker_norm and marker_norm in draft_text and marker_norm in latest_text:
+            return True
+    shared_chars = {
+        char
+        for char in set(draft_text)
+        if "\u4e00" <= char <= "\u9fff"
+        and char not in {"你", "我", "她", "他", "的", "了", "是", "也", "就", "那", "这", "有", "在"}
+    }
+    return len(shared_chars.intersection(set(latest_text))) >= 2
+
+
+def _strategic_delta_is_weak(text: str) -> bool:
+    normalized = str(text).lower()
+    return any(marker.lower() in normalized for marker in WEAK_STRATEGIC_DELTA_MARKERS)
 
 
 def _draft_forced_choice_restates_confirmed_info(
@@ -2041,6 +2852,42 @@ def _draft_work_topic_not_preferred(
     if not any(_is_lifestyle_hook(hook) for hook in hooks):
         return False
     return True
+
+
+def _draft_stale_reactivation_continues_old_topic(
+    draft_payload: dict[str, Any],
+    texts: list[str],
+    *,
+    current_topic: str,
+    topic: dict[str, Any],
+) -> bool:
+    risk_flags = [
+        str(item)
+        for item in draft_payload.get("risk_flags", [])
+        if str(item).strip()
+    ] if isinstance(draft_payload.get("risk_flags"), list) else []
+    stale_hooks = [
+        str(item)
+        for item in topic.get("stale_hooks", [])
+        if str(item).strip()
+    ] if isinstance(topic.get("stale_hooks"), list) else []
+    stale_reactivation = (
+        "stale_thread_reactivation" in risk_flags
+        or any("visible timestamp" in hook or "旧" in hook or "stale" in hook.lower() for hook in stale_hooks)
+    )
+    if not stale_reactivation or not current_topic:
+        return False
+
+    selected_hook = str(draft_payload.get("selected_hook") or "").strip()
+    if selected_hook and _normalized_strategy_text(selected_hook) == _normalized_strategy_text(current_topic):
+        return True
+
+    strategic_delta = str(draft_payload.get("strategic_delta") or "").strip()
+    combined = "\n".join([*texts, strategic_delta])
+    normalized_topic = _normalized_strategy_text(current_topic)
+    if not normalized_topic:
+        return False
+    return normalized_topic in _normalized_strategy_text(combined)
 
 
 def _draft_lines(texts: list[str]) -> list[str]:

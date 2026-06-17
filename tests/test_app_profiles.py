@@ -214,6 +214,8 @@ class AppProfileContractTests(unittest.TestCase):
         self.assertIn("send_message", mac_runtime["supported_live_actions"])
         self.assertEqual(mac_runtime["live_send_status"], "supported")
         self.assertNotIn("live_send_block_reason", mac_runtime)
+        self.assertTrue(mac_runtime["target_binding"]["visual_only_exact_verification_allowed"])
+        self.assertTrue(mac_runtime["live_send_requirements"]["visual_only_exact_verification_allowed"])
 
     def test_iphone_dating_apps_allow_row_to_thread_binding_for_non_ocr_nicknames(self):
         for app_id in ("tinder", "bumble", "tashuo"):
@@ -239,15 +241,36 @@ class AppProfileContractTests(unittest.TestCase):
                 required = set(profile["live_send_requirements"]["required_evidence"])
                 self.assertTrue(required)
                 self.assertLessEqual(required, known_evidence_keys)
+                runtimes = profile.get("native_gui_harness", {}).get("alternate_runtimes", {})
+                for runtime_name, runtime_profile in runtimes.items():
+                    runtime_requirements = runtime_profile.get("live_send_requirements")
+                    if not isinstance(runtime_requirements, dict):
+                        continue
+                    with self.subTest(app_id=profile["app_id"], runtime=runtime_name):
+                        runtime_required = set(runtime_requirements.get("required_evidence") or [])
+                        self.assertTrue(runtime_required)
+                        self.assertLessEqual(runtime_required, known_evidence_keys)
 
-    def test_tashuo_mac_ios_live_send_required_evidence_is_not_ocr_only(self):
+    def test_tashuo_default_and_mac_ios_live_send_required_evidence_are_runtime_specific(self):
         profile = json.loads((PROFILE_DIR / "tashuo.json").read_text(encoding="utf-8"))
-        required = set(profile["live_send_requirements"]["required_evidence"])
+        default_required = set(profile["live_send_requirements"]["required_evidence"])
+        mac_required = set(
+            profile["native_gui_harness"]["alternate_runtimes"]["mac_ios_app"]["live_send_requirements"][
+                "required_evidence"
+            ]
+        )
 
-        self.assertIn("staged_exact_text_verified", required)
-        self.assertIn("outbound_exact_text_verified", required)
-        self.assertNotIn("staged_exact_text_ocr_verified", required)
-        self.assertNotIn("outbound_exact_text_ocr_verified", required)
+        self.assertIn("staged_exact_text_ocr_verified", default_required)
+        self.assertIn("outbound_exact_text_ocr_verified", default_required)
+        self.assertNotIn("staged_exact_text_verified", default_required)
+        self.assertNotIn("outbound_exact_text_verified", default_required)
+        self.assertFalse(profile["live_send_requirements"]["visual_only_exact_verification_allowed"])
+        self.assertFalse(profile["target_binding"]["visual_only_exact_verification_allowed"])
+
+        self.assertIn("staged_exact_text_verified", mac_required)
+        self.assertIn("outbound_exact_text_verified", mac_required)
+        self.assertNotIn("staged_exact_text_ocr_verified", mac_required)
+        self.assertNotIn("outbound_exact_text_ocr_verified", mac_required)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dating_boost.core.models import ReplyMode
+
+DEFAULT_LOCAL_TIMEZONE = "Asia/Shanghai"
 
 
 SAFETY_CONSTRAINTS = [
@@ -27,6 +31,8 @@ def build_context_pack(
     conversation_memory: dict[str, Any],
     reply_mode: ReplyMode | str,
     max_items: int | None,
+    current_time_iso: str | None = None,
+    local_timezone: str = DEFAULT_LOCAL_TIMEZONE,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     recent_messages = conversation_memory.get("recent_messages")
@@ -46,6 +52,7 @@ def build_context_pack(
     _append(items, "avoid_next", conversation_memory.get("avoid_next"))
     _append(items, "appointment_constraints", conversation_memory.get("appointment_constraints"))
     _append(items, "global_slot_conflicts", conversation_memory.get("global_slot_conflicts"))
+    _append(items, "send_time_context", _send_time_context(current_time_iso, local_timezone))
     if latest_inbound_messages:
         _append(items, "latest_inbound_messages", latest_inbound_messages)
         _append(
@@ -108,3 +115,28 @@ def _reply_mode_value(reply_mode: ReplyMode | str) -> str:
     if isinstance(reply_mode, Enum):
         return str(reply_mode.value)
     return str(reply_mode)
+
+
+def _send_time_context(current_time_iso: str | None, local_timezone: str) -> dict[str, Any] | None:
+    if not current_time_iso:
+        return None
+    try:
+        parsed = datetime.fromisoformat(current_time_iso.replace("Z", "+00:00"))
+    except ValueError:
+        return {"current_utc": current_time_iso, "local_timezone": local_timezone, "time_parse_status": "invalid"}
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    utc_time = parsed.astimezone(timezone.utc)
+    try:
+        tz = ZoneInfo(local_timezone)
+    except ZoneInfoNotFoundError:
+        tz = timezone.utc
+        local_timezone = "UTC"
+    local_time = utc_time.astimezone(tz)
+    return {
+        "current_utc": utc_time.isoformat().replace("+00:00", "Z"),
+        "current_local": local_time.isoformat(),
+        "local_timezone": local_timezone,
+        "local_hour": local_time.hour,
+        "local_weekday": local_time.weekday(),
+    }

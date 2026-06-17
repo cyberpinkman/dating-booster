@@ -1,5 +1,6 @@
 import json
 import hashlib
+import re
 import struct
 import tempfile
 import unittest
@@ -43,6 +44,7 @@ class FakeRunner:
         window_info_stdout: str | list[str] | None = None,
         ax_text_area_value: str | None = None,
         ax_static_text_values: list[str] | None = None,
+        ax_navback_stdout: str = "clicked",
     ):
         self.ocr_texts = list(ocr_text) if isinstance(ocr_text, list) else [ocr_text]
         self.frontmost = frontmost
@@ -64,6 +66,8 @@ class FakeRunner:
         self.screenshot_calls = 0
         self.ax_text_area_value = ax_text_area_value
         self.ax_static_text_values = ax_static_text_values or []
+        self.ax_navback_clicks = 0
+        self.ax_navback_stdout = ax_navback_stdout
         if isinstance(window_info_stdout, list):
             self.window_info_outputs = list(window_info_stdout)
         elif isinstance(window_info_stdout, str):
@@ -95,10 +99,12 @@ class FakeRunner:
             if self.ax_text_area_value is None:
                 return _result(stdout="not_found\n")
             script = " ".join(command)
-            if "看你是做运营的，我有点好奇" in script:
-                self.ax_text_area_value = "看你是做运营的，我有点好奇"
-            elif "你好啊，接上了" in script:
-                self.ax_text_area_value = "你好啊，接上了"
+            match = re.search(r'setTextAreaValue\(window 1, 0, "((?:[^"\\]|\\.)*)"\)', script)
+            if match:
+                try:
+                    self.ax_text_area_value = json.loads(f'"{match.group(1)}"')
+                except json.JSONDecodeError:
+                    self.ax_text_area_value = match.group(1)
             else:
                 self.ax_text_area_value = "ax-set-text"
             self.focused_text = self.ax_text_area_value
@@ -108,10 +114,20 @@ class FakeRunner:
                 return _result(stdout="not_found\n")
             self.ax_text_area_value = ""
             return _result(stdout="cleared\n")
+        if command and command[0] == "osascript" and any("thin left navback" in item for item in command):
+            self.ax_navback_clicks += 1
+            return _result(stdout=f"{self.ax_navback_stdout}\n")
         if command and command[0] == "osascript" and any("focused UI element" in item for item in command):
             return _result(stdout=f"{self.focused_text}\n")
         if command and command[0] == "osascript" and any('keystroke "v"' in item for item in command):
             self.focused_text = self.clipboard_text if self.paste_focus_override is None else self.paste_focus_override
+            if self.ax_text_area_value is not None:
+                self.ax_text_area_value = self.focused_text
+            return _result(stdout="")
+        if command[:2] == ["xcrun", "swift"] and "dating_boost_core_graphics_command_v" in str(command[-1]):
+            self.focused_text = self.clipboard_text if self.paste_focus_override is None else self.paste_focus_override
+            if self.ax_text_area_value is not None:
+                self.ax_text_area_value = self.focused_text
             return _result(stdout="")
         if command and command[0] == "osascript" and any("key code 36" in item for item in command):
             if self.return_key_clears_focus:
@@ -389,7 +405,8 @@ class GuiHarnessTests(unittest.TestCase):
 
         payload = harness.launch_bumble(dry_run=True)
 
-        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "staged_text_requires_visual_verification")
         self.assertEqual(payload["target"], "bumble_app")
         self.assertEqual(payload["mode"], "dry_run")
         self.assertEqual(
@@ -420,7 +437,8 @@ class GuiHarnessTests(unittest.TestCase):
 
         payload = harness.launch_bumble(dry_run=False)
 
-        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "outbound_message_requires_visual_verification")
         type_step = next(step for step in payload["executed_steps"] if step["intent"] == "type_app_name_verified")
         self.assertTrue(type_step["result"]["retried_after_input_source_switch"])
         self.assertTrue(any("key code 49" in " ".join(command) and "control down" in " ".join(command) for command in runner.commands))
@@ -441,7 +459,8 @@ class GuiHarnessTests(unittest.TestCase):
 
         payload = harness.launch_bumble(dry_run=False)
 
-        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "outbound_message_requires_visual_verification")
         type_step = next(step for step in payload["executed_steps"] if step["intent"] == "type_app_name_verified")
         self.assertFalse(type_step["result"]["retried_after_input_source_switch"])
         self.assertFalse(type_step["result"]["ime_commit_after_typing"])
@@ -543,7 +562,8 @@ class GuiHarnessTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "staged_text_requires_visual_verification")
         self.assertEqual(payload["target_binding_verification"]["status"], "ok")
         self.assertEqual(
             payload["target_binding_verification"]["verification_method"],
@@ -930,6 +950,36 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["harness_backend"], "mac_ios_app")
         self.assertEqual(payload["reason"], "mac_ios_app_window_not_found")
 
+    def test_tashuo_mac_ios_app_capture_defaults_to_visual_without_ocr(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=_tashuo_messages_bottom_nav_png(),
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac-ios-app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screen = tashuo_native._capture_tashuo_window(
+                harness,
+                output=Path(temp_dir) / "capture.png",
+            )
+
+        self.assertEqual(screen["status"], "ok")
+        self.assertEqual(screen["ocr_status"], "skipped")
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_post_action_delay_uses_two_seconds(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=_tashuo_messages_bottom_nav_png(),
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac-ios-app")
+
+        delay = tashuo_native._tashuo_post_action_observation_delay_seconds(harness, fallback=0.45)
+
+        self.assertEqual(delay, 2.0)
+
     def test_tashuo_mac_ios_app_launch_executes_open_bundle_and_verifies_foreground(self):
         runner = FakeRunner(
             ocr_text="推荐\nsmilewen 31\n1日内活跃\n推荐\n飞行\n消息\n我的\n",
@@ -1006,10 +1056,107 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(process_probe["visible"])
         self.assertEqual(process_probe["window_count"], 0)
 
+    def test_tashuo_mac_ios_app_launch_recovers_process_with_no_windows(self):
+        class RecoverNoWindowRunner(FakeRunner):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.recovered = False
+
+            def run(self, command, *, input=None):
+                if command and command[0] == "osascript" and any(
+                    "tell application id" in item and "to quit" in item for item in command
+                ):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    self.recovered = True
+                    return _result(stdout="")
+                if command and command[0] == "osascript" and any(
+                    "visible, count of windows" in item for item in command
+                ):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stdout="true, true, 0\n")
+                if command and command[0] == "osascript" and any("get {frontmost" in item for item in command):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    if self.recovered:
+                        return _result(stdout="true, 100, 50, 350, 760, 她说\n")
+                    return _result(stdout="missing value\n")
+                return super().run(command, input=input)
+
+        runner = RecoverNoWindowRunner(
+            ocr_text="推荐\nsmilewen 31\n1日内活跃\n推荐\n飞行\n消息\n我的\n",
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.launch(dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["verification"]["status"], "ok")
+        self.assertEqual(payload["verification"]["screen"]["state"], "tashuo_recommend")
+        self.assertEqual(
+            [step["intent"] for step in payload["recovery_steps"]],
+            [
+                "quit_tashuo_mac_ios_app_without_windows",
+                "reopen_tashuo_mac_ios_app_after_no_window",
+                "reactivate_tashuo_mac_ios_app_after_no_window",
+            ],
+        )
+        self.assertTrue(any(command[:3] == ["open", "-b", "com.intelcupid.tashuo"] for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_launch_force_recovers_stuck_process_with_no_windows(self):
+        class ForceRecoverNoWindowRunner(FakeRunner):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.polite_recovered = False
+                self.force_recovered = False
+
+            def run(self, command, *, input=None):
+                if command and command[0] == "osascript" and any(
+                    "tell application id" in item and "to quit" in item for item in command
+                ):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    self.polite_recovered = True
+                    return _result(stdout="")
+                if command[:2] == ["pkill", "-x"]:
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    self.force_recovered = True
+                    return _result(stdout="")
+                if command and command[0] == "osascript" and any(
+                    "visible, count of windows" in item for item in command
+                ):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stdout="true, true, 0\n")
+                if command and command[0] == "osascript" and any("get {frontmost" in item for item in command):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    if self.force_recovered:
+                        return _result(stdout="true, 100, 50, 350, 760, 她说\n")
+                    return _result(stdout="missing value\n")
+                return super().run(command, input=input)
+
+        runner = ForceRecoverNoWindowRunner(
+            ocr_text="推荐\nsmilewen 31\n1日内活跃\n推荐\n飞行\n消息\n我的\n",
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.launch(dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["verification"]["screen"]["state"], "tashuo_recommend")
+        self.assertEqual(payload["force_recovery_steps"][0]["intent"], "force_quit_tashuo_mac_ios_process_without_windows")
+        self.assertTrue(any(command[:3] == ["pkill", "-x", "tashuo"] for command in runner.commands))
+
     def test_tashuo_mac_ios_app_observe_uses_local_runtime_capture_name(self):
         runner = FakeRunner(
-            ocr_text="消息\n待回答 (0)\n全部消息\n推荐\n飞行\n消息\n我的\n",
+            ocr_text="OCR should not be used",
             window_name="她说",
+            screenshot_bytes=_tashuo_messages_bottom_nav_png(),
         )
         harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
 
@@ -1020,11 +1167,13 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["harness_backend"], "mac_ios_app")
         self.assertEqual(payload["screen_state"], "tashuo_chat_list")
         self.assertTrue(payload["screen"]["path"].endswith("mac_ios_app.tashuo.observe.png"))
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
 
     def test_tashuo_mac_ios_app_observe_marks_managed_live_send_supported_in_layout_hints(self):
         runner = FakeRunner(
-            ocr_text="Yasmine\n你好\n点击此处输入文字\n",
+            ocr_text="OCR should not be used",
             window_name="她说",
+            screenshot_bytes=_tashuo_mac_ios_app_conversation_with_messages_png(),
         )
         harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
 
@@ -1036,6 +1185,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["layout_hints"]["managed_live_send_supported"])
         self.assertTrue(payload["layout_hints"]["live_send_supported"])
         self.assertEqual(payload["layout_hints"]["live_send_status"], "supported")
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
 
     def test_tashuo_mac_ios_app_stage_draft_dry_run_is_stage_only(self):
         runner = FakeRunner(ocr_text="Yasmine\n点击此处输入文字\n", window_name="她说")
@@ -1109,7 +1259,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["harness_backend"], "mac_ios_app")
         self.assertEqual(payload["reason"], "target_binding_structural_evidence_required")
-        self.assertIn("mac_ios_app.tashuo.before_send_message.png", captured_names)
+        self.assertNotIn("mac_ios_app.tashuo.before_send_message.png", captured_names)
         self.assertNotIn("mac_ios_app.tashuo.after_send_message.png", captured_names)
 
     def test_tashuo_mac_ios_app_send_message_rejects_fuzzy_header_ocr_binding(self):
@@ -1180,17 +1330,105 @@ class GuiHarnessTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "staged_text_requires_visual_verification")
         self.assertEqual(payload["target_binding_verification"]["status"], "ok")
         self.assertEqual(
             payload["target_binding_verification"]["verification_method"],
             "tashuo_current_thread_visual_identity",
         )
-        self.assertTrue(payload["staged_text_verified"])
+        self.assertFalse(payload["staged_text_verified"])
+        self.assertEqual(payload["visual_verification_request"]["verification_type"], "staged_text_visual")
         self.assertEqual(payload["target_binding_verification"]["visual_anchor_hamming_distance"], 0)
         self.assertNotIn("matched_marker_hashes", payload["target_binding_verification"])
 
-    def test_tashuo_mac_ios_app_send_message_blocks_current_thread_visual_identity_mismatch_before_staging(self):
+    def test_tashuo_current_thread_visual_anchor_distance_uses_calibrated_floor(self):
+        self.assertEqual(tashuo_native._tashuo_visual_anchor_max_distance({}), 12)
+        self.assertEqual(
+            tashuo_native._tashuo_visual_anchor_max_distance({"visual_anchor_max_hamming_distance": 6}),
+            12,
+        )
+        self.assertEqual(
+            tashuo_native._tashuo_visual_anchor_max_distance({"visual_anchor_max_hamming_distance": 15}),
+            15,
+        )
+
+    def test_tashuo_mac_ios_app_send_message_relocates_current_thread_visual_identity_mismatch_before_staging(self):
+        wrong_conversation_png = _tashuo_mac_ios_app_conversation_with_title_chrome_png()
+        target_conversation_png = _tashuo_mac_ios_app_conversation_with_messages_png(accent=(92, 168, 126, 255))
+        old_list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.34)
+        current_list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.62)
+        visual_region = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.84}
+        target_visual_hash = _png_average_hash(target_conversation_png, region=visual_region)
+        row_region = {"x1": 0.05, "y1": 0.29, "x2": 0.95, "y2": 0.39}
+        row_visual_hash = _png_average_hash(old_list_png, region=row_region)
+        draft = "那我们俩算慢热同盟了"
+        runner = FakeRunner(
+            ocr_text=[
+                "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
+                "别的人\n刚发来的消息\n点击此处输入文字\n",
+                "别的人\n刚发来的消息\n点击此处输入文字\n",
+                "消息\n全部消息\n小药丸儿\n我也比较慢热\n推荐\n飞行\n消息\n我的\n",
+                "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
+                "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
+                f"小药丸儿\n我也比较慢热\n{draft}\n点击此处输入文字\n",
+                f"小药丸儿\n我也比较慢热\n{draft}\n点击此处输入文字\n",
+            ],
+            screenshot_bytes=[
+                wrong_conversation_png,
+                wrong_conversation_png,
+                wrong_conversation_png,
+                current_list_png,
+                target_conversation_png,
+                target_conversation_png,
+                target_conversation_png,
+                target_conversation_png,
+            ],
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.send_message(
+            draft,
+            dry_run=False,
+            target_binding={
+                "binding_type": "current_thread_visual_identity",
+                "target_match_id": "match_xiaoyaowan",
+                "candidate_key": "xiaoyaowan_current_thread",
+                "visible_name": "小药丸儿",
+                "conversation_fingerprint": "xiaoyaowan-slow-warm-20260611",
+                "thread_evidence": {
+                    "observation_id": "obs_xiaoyaowan_current_thread",
+                    "screen_state": "tashuo_conversation",
+                    "latest_inbound_fingerprint": "xiaoyaowan:in:slow-warm",
+                    "visual_anchor_hash": target_visual_hash,
+                    "visual_anchor_region": visual_region,
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+                "message_list_evidence": {
+                    "source_state": "tashuo_chat_list",
+                    "selection_method": "message_list_visual_anchor_scan",
+                    "visual_anchor_hash": row_visual_hash,
+                    "visual_anchor_region": row_region,
+                    "visual_anchor_scan_region": {"x1": 0.0, "y1": 0.18, "x2": 1.0, "y2": 0.84},
+                    "tap_ratio": {"x": 0.45, "y": 0.34},
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "staged_text_requires_visual_verification")
+        self.assertEqual(payload["target_binding_relocation"]["status"], "ok")
+        self.assertEqual(payload["target_binding_relocation"]["attempt_count"], 1)
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+        self.assertEqual(payload["target_binding_verification"]["recovered_by"], "message_list_visual_relocation")
+        location = payload["target_binding_relocation"]["attempts"][0]["message_list_location"]
+        self.assertEqual(location["location_method"], "message_list_visual_anchor_scan")
+        self.assertAlmostEqual(location["tap_ratio"]["y"], 0.62, delta=0.04)
+        self.assertFalse(payload["staged_text_verified"])
+        self.assertTrue(any(command and command[0] == "pbcopy" for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_send_message_blocks_current_thread_visual_identity_mismatch_without_visual_relocation_evidence(self):
         conversation_png = _tashuo_mac_ios_app_conversation_with_messages_png()
         visual_region = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.84}
         runner = FakeRunner(
@@ -1198,7 +1436,10 @@ class GuiHarnessTests(unittest.TestCase):
                 "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
                 "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
             ],
-            screenshot_bytes=[conversation_png, conversation_png],
+            screenshot_bytes=[
+                conversation_png,
+                conversation_png,
+            ],
             window_name="她说",
         )
         harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
@@ -1222,10 +1463,72 @@ class GuiHarnessTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["status"], "blocked")
-        self.assertEqual(payload["reason"], "target_binding_visual_anchor_mismatch")
+        self.assertEqual(payload["reason"], "target_relocation_visual_evidence_required")
         self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
 
-    def test_tashuo_mac_ios_app_send_message_uses_input_crop_ocr_for_staged_text_verification(self):
+    def test_tashuo_mac_ios_app_send_message_retries_visual_relocation_before_exhausting(self):
+        wrong_conversation_png = _tashuo_mac_ios_app_conversation_with_title_chrome_png()
+        target_conversation_png = _tashuo_mac_ios_app_conversation_with_messages_png(accent=(92, 168, 126, 255))
+        list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.62)
+        visual_region = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.84}
+        target_visual_hash = _png_average_hash(target_conversation_png, region=visual_region)
+        row_region = {"x1": 0.05, "y1": 0.29, "x2": 0.95, "y2": 0.39}
+        runner = FakeRunner(
+            ocr_text=[
+                "小药丸儿\n我也比较慢热\n点击此处输入文字\n",
+                "别的人\n刚发来的消息\n点击此处输入文字\n",
+                "别的人\n刚发来的消息\n点击此处输入文字\n",
+                "消息\n全部消息\n其他人\n刚发来的消息\n推荐\n飞行\n消息\n我的\n",
+                "消息\n全部消息\n其他人\n刚发来的消息\n推荐\n飞行\n消息\n我的\n",
+                "消息\n全部消息\n其他人\n刚发来的消息\n推荐\n飞行\n消息\n我的\n",
+            ],
+            screenshot_bytes=[
+                wrong_conversation_png,
+                wrong_conversation_png,
+                wrong_conversation_png,
+                list_png,
+                list_png,
+                list_png,
+            ],
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.send_message(
+            "那我们俩算慢热同盟了",
+            dry_run=False,
+            target_binding={
+                "binding_type": "current_thread_visual_identity",
+                "target_match_id": "match_xiaoyaowan",
+                "candidate_key": "xiaoyaowan_current_thread",
+                "visible_name": "小药丸儿",
+                "conversation_fingerprint": "xiaoyaowan-slow-warm-20260611",
+                "thread_evidence": {
+                    "observation_id": "obs_xiaoyaowan_current_thread",
+                    "screen_state": "tashuo_conversation",
+                    "latest_inbound_fingerprint": "xiaoyaowan:in:slow-warm",
+                    "visual_anchor_hash": target_visual_hash,
+                    "visual_anchor_region": visual_region,
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+                "message_list_evidence": {
+                    "source_state": "tashuo_chat_list",
+                    "selection_method": "message_list_visual_anchor_scan",
+                    "visual_anchor_hash": "0000000000000000",
+                    "visual_anchor_region": row_region,
+                    "visual_anchor_scan_region": {"x1": 0.0, "y1": 0.18, "x2": 1.0, "y2": 0.84},
+                    "tap_ratio": {"x": 0.45, "y": 0.34},
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "target_binding_visual_relocation_exhausted")
+        self.assertEqual(len(payload["target_binding_relocation"]["attempts"]), 3)
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_send_message_skips_input_crop_ocr_for_staged_text_verification(self):
         draft = "那我们俩算慢热同盟了，我也是刚开始话少一点，熟了会自然很多"
         runner = FakeRunner(
             ocr_text=[
@@ -1247,13 +1550,15 @@ class GuiHarnessTests(unittest.TestCase):
 
         payload = harness.send_message(draft, dry_run=False, output_dir=Path(tempfile.mkdtemp()))
 
-        self.assertEqual(payload["status"], "ok")
-        self.assertTrue(payload["staged_text_verified"])
-        crop_ocr = payload["staged_text_verification"]["input_crop_ocr"]
-        self.assertTrue(crop_ocr["exact_text_ocr_verified"])
-        self.assertIn("text_hash", crop_ocr)
-        self.assertNotIn("text", crop_ocr)
-        self.assertTrue(any(command and command[0] == "sips" for command in runner.commands))
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "staged_text_requires_visual_verification")
+        self.assertTrue(payload["staged_text_verification"]["ocr_fallback_skipped"])
+        self.assertEqual(
+            payload["staged_text_verification"]["ocr_fallback_skip_reason"],
+            "mac_ios_app_visual_first_after_message_page",
+        )
+        self.assertFalse(any(command and command[0] == "sips" for command in runner.commands))
+        self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
 
     def test_tashuo_mac_ios_app_send_message_accepts_ax_exact_staged_text_verification(self):
         draft = "你好啊，接上了"
@@ -1277,12 +1582,15 @@ class GuiHarnessTests(unittest.TestCase):
 
         payload = harness.send_message(draft, dry_run=False, output_dir=Path(tempfile.mkdtemp()))
 
-        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "outbound_message_requires_visual_verification")
         self.assertTrue(payload["staged_text_verified"])
         self.assertTrue(payload["staged_text_verification"]["exact_text_ax_verified"])
         self.assertFalse(payload["staged_text_verification"]["exact_text_ocr_verified"])
         self.assertTrue(payload["evidence"]["staged_exact_text_verified"])
         self.assertTrue(payload["evidence"]["staged_exact_text_ax_verified"])
+        self.assertEqual(payload["visual_verification_request"]["verification_type"], "outbound_message_visual")
+        self.assertEqual(payload["visual_verification_request"]["verification_type"], "outbound_message_visual")
 
     def test_tashuo_mac_ios_app_send_message_accepts_ax_exact_outbound_text_verification(self):
         draft = "你好啊，接上了"
@@ -1314,8 +1622,113 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertFalse(payload["evidence"]["outbound_exact_text_ocr_verified"])
         self.assertEqual(
             payload["outbound_message_verification"]["verification_method"],
-            "tashuo_post_send_ax_static_text_then_ocr_payload_text",
+            "tashuo_post_send_ax_then_host_visual_payload_text",
         )
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_send_message_waits_for_outbound_visual_verification_when_ax_is_inconclusive(self):
+        draft = "你好啊，接上了"
+        runner = FakeRunner(
+            ocr_text=[
+                "朵朵\n你好啊\n点击此处输入文字\n",
+                "朵朵\n你好啊\n点击此处输入文字\n",
+                "乱码\n",
+                "乱码\n",
+                "OCR没有读到新气泡\n",
+            ],
+            screenshot_bytes=[
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False),
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False),
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False),
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False),
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=True),
+            ],
+            window_name="她说",
+            ax_text_area_value="",
+            ax_static_text_values=[],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.send_message(draft, dry_run=False, output_dir=Path(tempfile.mkdtemp()))
+
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "outbound_message_requires_visual_verification")
+        self.assertEqual(payload["next_host_action"], "visually_verify_outbound_message_after_live_send")
+        self.assertTrue(payload["evidence"]["staged_exact_text_ax_verified"])
+        self.assertTrue(payload["evidence"]["input_cleared_after_send"])
+        self.assertFalse(payload["evidence"]["outbound_exact_text_ax_verified"])
+        self.assertFalse(payload["evidence"]["outbound_exact_text_ocr_verified"])
+        self.assertFalse(payload["evidence"]["outbound_exact_text_visual_verified"])
+        self.assertFalse(payload["evidence"]["outbound_visual_commit_verified"])
+        self.assertFalse(payload["evidence"]["outbound_exact_text_verified"])
+        self.assertEqual(payload["visual_verification_request"]["verification_type"], "outbound_message_visual")
+        self.assertEqual(payload["visual_verification_request"]["ocr_status"], "skipped")
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_send_message_does_not_use_low_saturation_color_as_success(self):
+        draft = "你好啊，接上了"
+        runner = FakeRunner(
+            ocr_text=[
+                "海淀大橙子\n哇，那很酷\n点击此处输入文字\n",
+                "海淀大橙子\n哇，那很酷\n点击此处输入文字\n",
+                "乱码\n",
+                "乱码\n",
+                "OCR没有读到新气泡\n",
+            ],
+            screenshot_bytes=[
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False),
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False),
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False),
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False),
+                _tashuo_mac_ios_app_conversation_with_messages_png(
+                    outgoing_bubble=True,
+                    outgoing_color=(205, 242, 255, 255),
+                ),
+            ],
+            window_name="她说",
+            ax_text_area_value="",
+            ax_static_text_values=[],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.send_message(draft, dry_run=False, output_dir=Path(tempfile.mkdtemp()))
+
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "outbound_message_requires_visual_verification")
+        self.assertTrue(payload["evidence"]["staged_exact_text_ax_verified"])
+        self.assertTrue(payload["evidence"]["input_cleared_after_send"])
+        self.assertFalse(payload["evidence"]["outbound_exact_text_visual_verified"])
+        self.assertFalse(payload["evidence"]["outbound_visual_commit_verified"])
+        self.assertFalse(payload["evidence"]["outbound_exact_text_verified"])
+        self.assertEqual(payload["visual_verification_request"]["ocr_status"], "skipped")
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_send_message_waits_for_host_visual_verification_without_post_send_delta(self):
+        draft = "你好啊，接上了"
+        unchanged = _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False)
+        runner = FakeRunner(
+            ocr_text=[
+                "朵朵\n你好啊\n点击此处输入文字\n",
+                "朵朵\n你好啊\n点击此处输入文字\n",
+                "乱码\n",
+                "乱码\n",
+                "OCR没有读到新气泡\n",
+            ],
+            screenshot_bytes=[unchanged, unchanged, unchanged, unchanged, unchanged],
+            window_name="她说",
+            ax_text_area_value="",
+            ax_static_text_values=[],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.send_message(draft, dry_run=False, output_dir=Path(tempfile.mkdtemp()))
+
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "outbound_message_requires_visual_verification")
+        self.assertFalse(payload["evidence"]["outbound_exact_text_visual_verified"])
+        self.assertFalse(payload["evidence"]["outbound_visual_commit_verified"])
+        self.assertEqual(payload["visual_verification_request"]["ocr_status"], "skipped")
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
 
     def test_tashuo_mac_ios_app_send_message_is_idempotent_when_text_already_sent(self):
         draft = "你好啊，接上了"
@@ -1361,7 +1774,7 @@ class GuiHarnessTests(unittest.TestCase):
             ],
             window_name="她说",
             ax_text_area_value="missing value",
-            ax_static_text_values=["missing value", "missing value"],
+            ax_static_text_values=["朵朵", "你好啊", draft, "点击此处输入文字"],
         )
         harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
 
@@ -1371,8 +1784,8 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["already_sent"])
         self.assertTrue(payload["evidence"]["input_cleared_after_send"])
         self.assertTrue(payload["evidence"]["outbound_exact_text_verified"])
-        self.assertFalse(payload["evidence"]["outbound_exact_text_ax_verified"])
-        self.assertTrue(payload["evidence"]["outbound_exact_text_ocr_verified"])
+        self.assertTrue(payload["evidence"]["outbound_exact_text_ax_verified"])
+        self.assertFalse(payload["evidence"]["outbound_exact_text_ocr_verified"])
         self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
 
     def test_tashuo_mac_ios_app_send_message_falls_back_to_ax_set_when_paste_does_not_stage(self):
@@ -1384,11 +1797,12 @@ class GuiHarnessTests(unittest.TestCase):
                 baseline,
                 baseline,
                 "点击此处输入文字\n",
-                baseline,
+                f"朵朵\n你好啊\n你好啊，接上了\n{draft}\n点击此处输入文字\n",
                 f"朵朵\n你好啊\n你好啊，接上了\n{draft}\n点击此处输入文字\n",
             ],
             screenshot_bytes=_tashuo_mac_ios_app_conversation_with_messages_png(),
             window_name="她说",
+            paste_focus_override="没有成功写入草稿",
             ax_text_area_value="",
             ax_static_text_values=[],
         )
@@ -1396,12 +1810,14 @@ class GuiHarnessTests(unittest.TestCase):
 
         payload = harness.send_message(draft, dry_run=False, output_dir=Path(tempfile.mkdtemp()))
 
-        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "outbound_message_requires_visual_verification")
         self.assertEqual(payload["ax_set_text_area_result"]["status"], "ok")
         self.assertEqual(payload["ax_set_text_verification"]["status"], "ok")
         self.assertTrue(payload["evidence"]["staged_exact_text_verified"])
         self.assertTrue(payload["evidence"]["staged_exact_text_ax_verified"])
-        self.assertTrue(payload["evidence"]["outbound_exact_text_verified"])
+        self.assertFalse(payload["evidence"]["outbound_exact_text_verified"])
+        self.assertEqual(payload["visual_verification_request"]["verification_type"], "outbound_message_visual")
         self.assertTrue(any("DATING_BOOST_AX_SET_TEXT_AREA_VALUE" in " ".join(command) for command in runner.commands))
         self.assertIn(
             "focus_tashuo_message_input_after_accessibility_set",
@@ -1447,6 +1863,8 @@ class GuiHarnessTests(unittest.TestCase):
                 "Yasmine\n你好\n今晚聊得挺舒服的。\n发送\n",
             ],
             window_name="她说",
+            screenshot_bytes=_tashuo_mac_ios_app_conversation_with_messages_png(),
+            ax_text_area_value="",
         )
         harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
 
@@ -1463,6 +1881,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(any(command and command[0] == "pbcopy" for command in runner.commands))
         self.assertTrue(any(command[:2] == ["xcrun", "swift"] for command in runner.commands))
         self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
 
     def test_tashuo_mac_ios_app_stage_draft_clears_existing_input_before_paste(self):
         runner = FakeRunner(
@@ -1473,6 +1892,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Yasmine\n你好\n今晚聊得挺舒服的。\n发送\n",
             ],
             window_name="她说",
+            screenshot_bytes=_tashuo_mac_ios_app_conversation_with_messages_png(),
             ax_text_area_value="旧草稿",
         )
         harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
@@ -1483,6 +1903,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["pre_stage_clear_result"]["status"], "ok")
         self.assertEqual(payload["staged_text_verification"]["status"], "verified")
         self.assertTrue(payload["staged_text_verified"])
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
         clear_index = next(
             index
             for index, command in enumerate(runner.commands)
@@ -1504,6 +1925,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Yasmine\n你好\n今晚聊得挺舒服的。\n今晚聊得挺舒服的。\n发送\n",
             ],
             window_name="她说",
+            screenshot_bytes=_tashuo_mac_ios_app_conversation_with_messages_png(),
         )
         harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
 
@@ -1512,9 +1934,11 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["pre_stage_clear_result"]["status"], "blocked")
         self.assertEqual(payload["staged_text_verification"]["status"], "needs_user_verification")
-        self.assertEqual(payload["staged_text_verification"]["reason"], "staged_text_may_have_been_appended")
+        self.assertEqual(payload["staged_text_verification"]["reason"], "staged_text_not_verified")
         self.assertFalse(payload["staged_text_verified"])
-        self.assertTrue(payload["staged_text_verification"]["possible_append_to_existing_staged_text"])
+        self.assertFalse(payload["staged_text_verification"]["possible_append_to_existing_staged_text"])
+        self.assertTrue(payload["staged_text_verification"]["ocr_disabled_after_message_page"])
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
 
     def test_tashuo_mac_ios_app_stage_draft_cjk_ambiguous_ocr_needs_user_verification_not_failed(self):
         runner = FakeRunner(
@@ -1525,6 +1949,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Yasmine\n你好\n发送\n",
             ],
             window_name="她说",
+            screenshot_bytes=_tashuo_mac_ios_app_conversation_with_messages_png(),
         )
         harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
 
@@ -1591,6 +2016,112 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertAlmostEqual(fallback["tap_ratio"]["x"], 0.67)
         self.assertAlmostEqual(fallback["tap_ratio"]["y"], 0.96)
         self.assertEqual(payload["screen_state"], "tashuo_chat_list")
+
+    def test_tashuo_mac_ios_prepare_message_page_waits_for_message_list_after_tab_highlight(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_recommend_bottom_nav_png(),
+                _tashuo_recommend_content_with_messages_tab_png(),
+                _tashuo_messages_bottom_nav_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("prepare-message-page", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["screen_state"], "tashuo_chat_list")
+        self.assertEqual(payload["message_page_settle"]["status"], "ok")
+        self.assertEqual(payload["message_page_settle"]["attempt_count"], 2)
+        self.assertFalse(payload["message_page_settle"]["attempts"][0]["ready"])
+        self.assertTrue(payload["message_page_settle"]["attempts"][1]["ready"])
+        self.assertEqual(
+            payload["message_page_settle"]["attempts"][0]["screen"]["visual_active_tab"],
+            "messages",
+        )
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+
+    def test_tashuo_mac_ios_prepare_message_page_returns_from_conversation_with_ax_navback(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+                _tashuo_messages_bottom_nav_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("prepare-message-page", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["initial_visual_state"], "tashuo_conversation")
+        self.assertEqual(payload["post_navback_visual_state"], "tashuo_chat_list")
+        self.assertEqual(payload["post_navback_active_tab"], "messages")
+        self.assertEqual(payload["screen_state"], "tashuo_chat_list")
+        self.assertEqual(payload["next_host_action"], "visual_plan_message_list")
+        self.assertFalse(payload["ocr_used"])
+        self.assertEqual(runner.ax_navback_clicks, 1)
+        self.assertIn("click_tashuo_conversation_navback_accessibility", [step["intent"] for step in payload["executed_steps"]])
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+
+    def test_tashuo_mac_ios_prepare_message_page_falls_back_when_ax_navback_missing(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+                _tashuo_messages_bottom_nav_png(),
+            ],
+            ax_navback_stdout="not_found",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("prepare-message-page", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["initial_visual_state"], "tashuo_conversation")
+        self.assertEqual(payload["post_navback_visual_state"], "tashuo_chat_list")
+        self.assertEqual(payload["post_navback_active_tab"], "messages")
+        self.assertEqual(runner.ax_navback_clicks, 1)
+        intents = [step["intent"] for step in payload["executed_steps"]]
+        self.assertIn("click_tashuo_conversation_navback_accessibility", intents)
+        self.assertIn("tap_tashuo_conversation_navback_visual_fallback", intents)
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+
+    def test_tashuo_mac_ios_conversation_list_scroll_action_skips_all_ocr_captures(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action(
+                "conversation-list-scroll-down",
+                dry_run=False,
+                output_dir=Path(temp_dir),
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["harness_backend"], "mac_ios_app")
+        self.assertEqual(payload["preflight"]["screen"]["ocr_status"], "skipped")
+        self.assertEqual(payload["executed_steps"][0]["postcondition"]["screen"]["ocr_status"], "skipped")
+        self.assertEqual(payload["verification"]["ocr_status"], "skipped")
+        self.assertIn("mac_ios_app.before_action.png", payload["preflight"]["screen"]["path"])
+        self.assertIn("mac_ios_app.after_action.png", payload["verification"]["path"])
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
 
     def test_tashuo_open_chats_accepts_visual_top_level_state_when_ocr_is_unknown(self):
         runner = FakeRunner(
@@ -1685,6 +2216,69 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["screen_state"], "tashuo_conversation")
         self.assertEqual(payload["next_host_action"], "observe_current_thread")
         self.assertNotIn("executed_steps", payload)
+
+    def test_tashuo_mac_ios_app_open_conversation_waits_before_postcondition_capture(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac-ios-app")
+        sleeps: list[float] = []
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("dating_boost.apps.native_gui_session.time.sleep", side_effect=lambda seconds: sleeps.append(seconds)),
+        ):
+            payload = harness.run_action(
+                "open-conversation",
+                dry_run=False,
+                output_dir=Path(temp_dir),
+                tap_ratio={"x": 0.86, "y": 0.47},
+                visual_target_label="仿生人会爱上锅包肉吗",
+                visual_target_preview="哈哈哈哈哈",
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["executed_steps"][0]["postcondition"]["screen_state"], "tashuo_conversation")
+        self.assertIn(2.0, sleeps)
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+
+    def test_tashuo_mac_ios_conversation_list_scroll_to_top_requires_top_anchor(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_messages_top_anchor_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac-ios-app")
+        sleeps: list[float] = []
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("dating_boost.apps.tashuo.native.time.sleep", side_effect=lambda seconds: sleeps.append(seconds)),
+        ):
+            payload = harness.run_action(
+                "conversation-list-scroll-to-top",
+                dry_run=False,
+                output_dir=Path(temp_dir),
+                max_scrolls=3,
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["top_anchor_verified"])
+        self.assertEqual([attempt["top_anchor_verified"] for attempt in payload["attempts"]], [False, True])
+        self.assertEqual(len(payload["executed_steps"]), 1)
+        self.assertIn(2.0, sleeps)
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
 
     def test_tashuo_close_profile_retries_postcondition_after_transition_frame(self):
         runner = FakeRunner(
@@ -1828,6 +2422,42 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertIn("press_return_to_send_tashuo_message", intents)
         self.assertNotIn("tap_tashuo_send_button", intents)
         self.assertTrue(any("key code 36" in " ".join(command) for command in runner.commands))
+
+    def test_tashuo_default_runtime_does_not_accept_visual_commit_without_text_verification(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n点击此处输入文字\n",
+                "Yasmine\n不理解\n今晚可以聊十分钟吗？\n",
+                "Yasmine\n不理解\nOCR没有读到新气泡\n点击此处输入文字\n",
+            ],
+            screenshot_bytes=[
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False),
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False),
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False),
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=False),
+                _tashuo_mac_ios_app_conversation_with_messages_png(outgoing_bubble=True),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner)
+
+        payload = harness.send_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Yasmine"], "target_match_id": "match_tashuo"},
+        )
+
+        self.assertEqual(payload["status"], "needs_verification")
+        self.assertEqual(payload["reason"], "outbound_message_not_verified")
+        self.assertFalse(payload["evidence"]["outbound_exact_text_verified"])
+        self.assertFalse(payload["evidence"]["outbound_exact_text_visual_verified"])
+        self.assertFalse(payload["evidence"]["outbound_visual_commit_verified"])
+        self.assertFalse(payload["evidence"]["visual_only_exact_verification_allowed"])
+        self.assertEqual(
+            payload["outbound_message_verification"]["visual_commit_verification"]["status"],
+            "not_applicable",
+        )
 
     def test_tashuo_send_message_accepts_chat_list_row_structural_binding_for_emoji_nickname(self):
         runner = FakeRunner(
@@ -2007,7 +2637,7 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(any("key code 53" in command for command in joined_commands))
         self.assertTrue(any("ASCII character 8" in command for command in joined_commands))
 
-    def test_tashuo_mac_ios_app_failed_stage_cleanup_refocuses_shifted_input(self):
+    def test_tashuo_mac_ios_app_inconclusive_stage_waits_for_host_visual_verification(self):
         runner = FakeRunner(
             ocr_text=[
                 "Yasmine\n不理解\n点击此处输入文字\n",
@@ -2017,6 +2647,8 @@ class GuiHarnessTests(unittest.TestCase):
                 "Yasmine\n不理解\n点击此处输入文字\n",
             ],
             window_name="她说",
+            screenshot_bytes=_tashuo_mac_ios_app_conversation_with_messages_png(),
+            paste_focus_override="v",
         )
         harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
 
@@ -2037,13 +2669,12 @@ class GuiHarnessTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(payload["status"], "blocked")
-        self.assertEqual(payload["reason"], "staged_text_not_verified")
-        cleanup = payload["failed_stage_cleanup"]
-        self.assertEqual(cleanup["status"], "ok")
-        self.assertEqual(cleanup["input_focus_state"], "focused")
-        self.assertEqual(cleanup["input_tap_ratio"], {"x": 0.32, "y": 0.9})
-        self.assertEqual(cleanup["attempts"][0]["tap_ratio"], {"x": 0.32, "y": 0.9})
+        self.assertEqual(payload["status"], "needs_host_visual_verification")
+        self.assertEqual(payload["reason"], "staged_text_requires_visual_verification")
+        self.assertEqual(payload["next_host_action"], "visually_verify_staged_text_before_live_send")
+        self.assertNotIn("failed_stage_cleanup", payload)
+        self.assertEqual(payload["visual_verification_request"]["ocr_status"], "skipped")
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
 
     def test_classifies_tashuo_screens_and_question_gate(self):
         self.assertEqual(
@@ -3504,6 +4135,8 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_cli_passes_explicit_runtime_to_tashuo_stage_draft(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _select_runtime_scope(data_dir, "tashuo", "mac-ios-app")
             draft_path = Path(temp_dir) / "draft.txt"
             draft_path.write_text("今晚聊得挺舒服的。", encoding="utf-8")
             with _patch_cli_adapter() as harness_class:
@@ -3519,6 +4152,8 @@ class GuiHarnessTests(unittest.TestCase):
                     "harness",
                     "tashuo",
                     "stage-draft",
+                    "--data-dir",
+                    str(data_dir),
                     "--runtime",
                     "mac-ios-app",
                     "--text-file",
@@ -3534,6 +4169,8 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_cli_passes_explicit_runtime_to_tashuo_send_message(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _select_runtime_scope(data_dir, "tashuo", "mac-ios-app")
             draft_path = Path(temp_dir) / "draft.txt"
             draft_path.write_text("今晚聊得挺舒服的。", encoding="utf-8")
             with _patch_cli_adapter() as harness_class:
@@ -3551,6 +4188,8 @@ class GuiHarnessTests(unittest.TestCase):
                     "harness",
                     "tashuo",
                     "send-message",
+                    "--data-dir",
+                    str(data_dir),
                     "--runtime",
                     "mac-ios-app",
                     "--text-file",
@@ -4677,6 +5316,8 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_cli_wechat_doctor_and_screenshot_default_to_wechat_window_title(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _select_runtime_scope(data_dir, "wechat")
             output_path = Path(temp_dir) / "wechat.png"
             with _patch_cli_adapter() as harness_class:
                 harness_class.return_value.doctor.return_value = {
@@ -4689,6 +5330,8 @@ class GuiHarnessTests(unittest.TestCase):
                     "doctor",
                     "--app-id",
                     "wechat",
+                    "--data-dir",
+                    str(data_dir),
                     "--no-capture",
                     "--json",
                 ])
@@ -4703,6 +5346,8 @@ class GuiHarnessTests(unittest.TestCase):
                     "screenshot",
                     "--app-id",
                     "wechat",
+                    "--data-dir",
+                    str(data_dir),
                     "--output",
                     str(output_path),
                     "--json",
@@ -4738,6 +5383,8 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_cli_exposes_tinder_action_and_workflow_dry_runs(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _select_runtime_scope(data_dir, "tinder")
             options_path = Path(temp_dir) / "workflow-options.json"
             _write_json(options_path, {"photo_steps": 1, "scroll_steps": 1})
             action_exit, action_payload = _run_cli_json([
@@ -4745,6 +5392,8 @@ class GuiHarnessTests(unittest.TestCase):
                 "tinder",
                 "action",
                 "profile-photo-next",
+                "--data-dir",
+                str(data_dir),
                 "--dry-run",
                 "--json",
             ])
@@ -4753,6 +5402,8 @@ class GuiHarnessTests(unittest.TestCase):
                 "tinder",
                 "workflow",
                 "self-profile-read",
+                "--data-dir",
+                str(data_dir),
                 "--dry-run",
                 "--options-json",
                 str(options_path),
@@ -4768,6 +5419,8 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_cli_tinder_action_accepts_visible_name_and_target_binding_for_conversation_open(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _select_runtime_scope(data_dir, "tinder")
             binding_path = Path(temp_dir) / "target-binding.json"
             _write_json(
                 binding_path,
@@ -4796,6 +5449,8 @@ class GuiHarnessTests(unittest.TestCase):
                     "tinder",
                     "action",
                     "open-conversation",
+                    "--data-dir",
+                    str(data_dir),
                     "--options-json",
                     str(options_path),
                     "--json",
@@ -4812,6 +5467,8 @@ class GuiHarnessTests(unittest.TestCase):
 
     def test_cli_exposes_new_match_workflows_with_match_index(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _select_runtime_scope(data_dir, "tinder")
             open_options_path = Path(temp_dir) / "open-options.json"
             read_options_path = Path(temp_dir) / "read-options.json"
             _write_json(open_options_path, {"carousel_swipes": 1, "match_index": 2})
@@ -4821,6 +5478,8 @@ class GuiHarnessTests(unittest.TestCase):
                 "tinder",
                 "workflow",
                 "new-match-open",
+                "--data-dir",
+                str(data_dir),
                 "--dry-run",
                 "--options-json",
                 str(open_options_path),
@@ -4831,6 +5490,8 @@ class GuiHarnessTests(unittest.TestCase):
                 "tinder",
                 "workflow",
                 "new-match-read-profile",
+                "--data-dir",
+                str(data_dir),
                 "--dry-run",
                 "--options-json",
                 str(read_options_path),
@@ -5059,6 +5720,8 @@ def _tashuo_mac_ios_app_conversation_with_title_chrome_png() -> bytes:
 def _tashuo_mac_ios_app_conversation_with_messages_png(
     *,
     accent: tuple[int, int, int, int] = (92, 168, 126, 255),
+    outgoing_bubble: bool = True,
+    outgoing_color: tuple[int, int, int, int] = (248, 211, 59, 255),
 ) -> bytes:
     width, height = 288, 541
     pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
@@ -5071,13 +5734,50 @@ def _tashuo_mac_ios_app_conversation_with_messages_png(
     fill(0.04, 0.095, 0.095, 0.135, (35, 35, 35, 255))
     fill(0.42, 0.105, 0.58, 0.128, (25, 25, 25, 255))
     fill(0.07, 0.23, 0.49, 0.30, (246, 246, 250, 255))
-    fill(0.72, 0.36, 0.93, 0.42, (248, 211, 59, 255))
+    if outgoing_bubble:
+        fill(0.72, 0.36, 0.93, 0.42, outgoing_color)
     fill(0.07, 0.50, 0.56, 0.58, (246, 246, 250, 255))
     fill(0.10, 0.515, 0.42, 0.535, accent)
     fill(0.10, 0.545, 0.30, 0.560, accent)
     fill(0.03, 0.855, 0.97, 0.930, (246, 246, 250, 255))
     for x1, x2 in ((0.07, 0.20), (0.30, 0.43), (0.54, 0.67), (0.78, 0.93)):
         fill(x1 + 0.035, 0.944, x2 - 0.035, 0.979, (238, 238, 246, 255))
+    return _png_from_pixels(pixels, width, height)
+
+
+def _tashuo_mac_ios_app_message_list_with_target_row_png(
+    *,
+    target_center_y: float,
+    target_accent: tuple[int, int, int, int] = (92, 168, 126, 255),
+) -> bytes:
+    width, height = 288, 541
+    pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.00, 0.00, 1.00, 1.00, (255, 255, 255, 255))
+    fill(0.04, 0.08, 0.30, 0.12, (25, 25, 25, 255))
+    for center_y, accent, is_target in (
+        (0.26, (190, 120, 90, 255), False),
+        (target_center_y, target_accent, True),
+        (0.78, (120, 130, 190, 255), False),
+    ):
+        y1 = center_y - 0.05
+        y2 = center_y + 0.05
+        fill(0.05, y1, 0.95, y2, (248, 248, 252, 255))
+        if is_target:
+            fill(0.08, y1 + 0.014, 0.20, y1 + 0.074, accent)
+            fill(0.25, y1 + 0.014, 0.62, y1 + 0.036, (42, 42, 48, 255))
+            fill(0.25, y1 + 0.055, 0.88, y1 + 0.074, accent)
+            fill(0.70, y1 + 0.016, 0.88, y1 + 0.034, (245, 219, 70, 255))
+        else:
+            fill(0.08, y1 + 0.020, 0.18, y1 + 0.062, (220, 222, 232, 255))
+            fill(0.25, y1 + 0.024, 0.76, y1 + 0.040, (190, 192, 202, 255))
+    fill(0.00, 0.90, 1.00, 1.00, (255, 255, 255, 255))
+    fill(0.56, 0.93, 0.66, 0.985, (111, 74, 237, 255))
     return _png_from_pixels(pixels, width, height)
 
 
@@ -5125,6 +5825,66 @@ def _tashuo_recommend_bottom_nav_png() -> bytes:
 
 def _tashuo_messages_bottom_nav_png() -> bytes:
     return _tashuo_top_level_bottom_nav_png("messages")
+
+
+def _tashuo_messages_top_anchor_png() -> bytes:
+    width, height = 288, 541
+    pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.00, 0.90, 1.00, 1.00, (255, 255, 255, 255))
+    fill(0.08, 0.46, 0.22, 0.58, (154, 130, 112, 255))
+    fill(0.27, 0.49, 0.74, 0.52, (30, 30, 34, 255))
+    fill(0.27, 0.55, 0.62, 0.57, (180, 182, 192, 255))
+    slots = {
+        "recommend": 0.15,
+        "flight": 0.38,
+        "messages": 0.60,
+        "mine": 0.86,
+    }
+    for name, center in slots.items():
+        active = name == "messages"
+        color = (111, 74, 237, 255) if active else (145, 145, 160, 255)
+        icon_half_width = 0.030 if active else 0.020
+        label_half_width = 0.030 if active else 0.018
+        fill(center - icon_half_width, 0.930, center + icon_half_width, 0.968, color)
+        fill(center - label_half_width, 0.980, center + label_half_width, 0.990, color)
+    return _png_from_pixels(pixels, width, height)
+
+
+def _tashuo_recommend_content_with_messages_tab_png() -> bytes:
+    width, height = 288, 541
+    pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.04, 0.16, 0.96, 0.88, (88, 138, 185, 255))
+    fill(0.08, 0.22, 0.92, 0.72, (126, 172, 198, 255))
+    fill(0.08, 0.70, 0.48, 0.84, (34, 44, 48, 255))
+    fill(0.78, 0.44, 0.96, 0.56, (111, 74, 237, 255))
+    fill(0.78, 0.66, 0.96, 0.78, (245, 70, 96, 255))
+    fill(0.00, 0.90, 1.00, 1.00, (255, 255, 255, 255))
+    slots = {
+        "recommend": 0.15,
+        "flight": 0.38,
+        "messages": 0.60,
+        "mine": 0.86,
+    }
+    for name, center in slots.items():
+        active = name == "messages"
+        color = (111, 74, 237, 255) if active else (145, 145, 160, 255)
+        icon_half_width = 0.030 if active else 0.020
+        label_half_width = 0.030 if active else 0.018
+        fill(center - icon_half_width, 0.930, center + icon_half_width, 0.968, color)
+        fill(center - label_half_width, 0.980, center + label_half_width, 0.990, color)
+    return _png_from_pixels(pixels, width, height)
 
 
 def _tashuo_top_level_bottom_nav_png(active_tab: str) -> bytes:

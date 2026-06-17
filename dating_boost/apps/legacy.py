@@ -50,8 +50,8 @@ class LegacyHarnessAdapter:
     def launch(self, *, dry_run: bool = False, output_dir: Path | None = None) -> dict[str, Any]:
         return unsupported_operation_payload(self.manifest.app_id, "launch")
 
-    def doctor(self, *, capture: bool = True, output: Path | None = None) -> dict[str, Any]:
-        return self.session.doctor(capture=capture, output=output)
+    def doctor(self, *, capture: bool = True, output: Path | None = None, ocr: bool = True) -> dict[str, Any]:
+        return self.session.doctor(capture=capture, output=output, ocr=ocr)
 
     def observe(self, *, output_dir: Path | None = None) -> dict[str, Any]:
         return unsupported_operation_payload(self.manifest.app_id, "observe")

@@ -21,6 +21,7 @@ RECOVERY_KEY_ITERATIONS = 600_000
 RECOVERY_KEY_ASSOCIATED_DATA = b"dating_boost_backup_recovery_key_v1"
 KEYCHAIN_SERVICE = "dating-booster"
 LOCAL_KEY_NAME = ".dating_boost_key"
+KEYCHAIN_COMMAND_TIMEOUT_SECONDS = 5.0
 
 
 class EncryptionError(RuntimeError):
@@ -134,17 +135,21 @@ class DataKeyProvider:
         self.root = root.resolve()
         self.account = hashlib.sha256(str(self.root).encode("utf-8")).hexdigest()
         self.provider_name = self._provider_name()
+        self._existing_key_loaded = False
+        self._existing_key: bytes | None = None
 
     def load_or_create_key(self) -> bytes:
         env_key = os.environ.get("DATING_BOOST_TEST_KEY")
         if env_key:
             return _normalize_key_material(env_key.encode("utf-8"))
         if self.provider_name == "keychain":
-            existing = self._load_keychain_key()
+            existing = self.load_existing_key()
             if existing is not None:
                 return existing
             key = secrets.token_bytes(32)
             self._store_keychain_key(key)
+            self._existing_key_loaded = True
+            self._existing_key = key
             return key
         existing = self._load_local_key()
         if existing is not None:
@@ -158,7 +163,10 @@ class DataKeyProvider:
         if env_key:
             return _normalize_key_material(env_key.encode("utf-8"))
         if self.provider_name == "keychain":
-            return self._load_keychain_key()
+            if not self._existing_key_loaded:
+                self._existing_key = self._load_keychain_key()
+                self._existing_key_loaded = True
+            return self._existing_key
         return self._load_local_key()
 
     def rotate_key(self) -> bytes:
@@ -171,6 +179,8 @@ class DataKeyProvider:
             raise EncryptionError("data encryption key must be 32 bytes")
         if self.provider_name == "keychain" and not os.environ.get("DATING_BOOST_TEST_KEY"):
             self._store_keychain_key(key)
+            self._existing_key_loaded = True
+            self._existing_key = key
             return
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.root / LOCAL_KEY_NAME
@@ -198,11 +208,9 @@ class DataKeyProvider:
             raise EncryptionError("local data key is unreadable") from exc
 
     def _load_keychain_key(self) -> bytes | None:
-        result = subprocess.run(
-            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", self.account, "-w"],
-            check=False,
-            capture_output=True,
-            text=True,
+        result = _run_security_command(
+            ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", self.account, "-w"],
+            timeout_message="keychain data key lookup timed out",
         )
         if result.returncode != 0:
             return None
@@ -213,9 +221,8 @@ class DataKeyProvider:
 
     def _store_keychain_key(self, key: bytes) -> None:
         encoded = base64.b64encode(key).decode("ascii")
-        result = subprocess.run(
+        result = _run_security_command(
             [
-                "security",
                 "add-generic-password",
                 "-s",
                 KEYCHAIN_SERVICE,
@@ -225,9 +232,7 @@ class DataKeyProvider:
                 encoded,
                 "-U",
             ],
-            check=False,
-            capture_output=True,
-            text=True,
+            timeout_message="keychain data key store timed out",
         )
         if result.returncode != 0:
             raise EncryptionError(result.stderr.strip() or "failed to store keychain data key")
@@ -280,7 +285,32 @@ def _key_id(key: bytes) -> str:
 
 def _security_cli_available() -> bool:
     try:
-        result = subprocess.run(["security", "-h"], check=False, capture_output=True, text=True)
-    except OSError:
+        result = _run_security_command(["-h"], timeout_message="keychain security CLI probe timed out")
+    except (OSError, EncryptionError):
         return False
     return result.returncode in {0, 1, 64}
+
+
+def _run_security_command(args: list[str], *, timeout_message: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            ["security", *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_keychain_command_timeout_seconds(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise EncryptionError(timeout_message) from exc
+
+
+def _keychain_command_timeout_seconds() -> float:
+    raw = os.environ.get("DATING_BOOST_KEYCHAIN_TIMEOUT_SECONDS")
+    if raw:
+        try:
+            timeout = float(raw)
+        except ValueError:
+            return KEYCHAIN_COMMAND_TIMEOUT_SECONDS
+        if timeout > 0:
+            return timeout
+    return KEYCHAIN_COMMAND_TIMEOUT_SECONDS

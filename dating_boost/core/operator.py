@@ -5,7 +5,12 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.action_audit import ActionAuditRepository
-from dating_boost.core.automation import AutomationRepository, _now_iso
+from dating_boost.core.automation import (
+    AutomationRepository,
+    _next_priority_queue,
+    _now_iso,
+    _release_active_send_request_after_failure,
+)
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.scan_authoring import validate_scan_batch
 from dating_boost.core.storage import JsonStorage
@@ -102,7 +107,8 @@ class OperatorRepository:
             return self._work_payload(current, reused=True)
 
         scan_batch = self._load_pending_scan_batch()
-        if not (scan_batch is not None and session.get("accumulating_scan_pages")):
+        pending_thread_observation = _scan_batch_has_thread_observation(scan_batch)
+        if not (scan_batch is not None and (session.get("accumulating_scan_pages") or pending_thread_observation)):
             queued = self._pop_next_work_item(session)
             if queued is not None:
                 return self._work_payload(queued)
@@ -125,6 +131,10 @@ class OperatorRepository:
 
         decision = self._automation.step(scan_batch)
         session["last_decision"] = decision
+        if decision.get("history_cutoff_reached"):
+            cursor = _normalize_scan_cursor(session.get("next_scan_cursor"))
+            session["next_scan_cursor"] = {**cursor, "current": None, "next": None, "exhausted": True}
+            session["history_cutoff_reached"] = True
         self._write_session(session)
         new_work_items = _work_items_from_decision(decision, session["session_id"])
         if _should_continue_scan_before_work(session, decision):
@@ -143,6 +153,11 @@ class OperatorRepository:
                 work_items = new_work_items
             session["accumulating_scan_pages"] = False
             self._write_session(session)
+        elif pending_thread_observation:
+            existing = self._load_work_queue()
+            work_items = _non_wait_work_items(new_work_items) + existing
+            if not work_items:
+                work_items = new_work_items
         else:
             work_items = new_work_items
         self._write_work_queue(work_items)
@@ -218,6 +233,9 @@ class OperatorRepository:
             ]
             existing.append(thread)
             scan_batch["thread_observations"] = existing
+            entries = scan_batch.setdefault("message_list_snapshot", {}).setdefault("entries", [])
+            if not any(isinstance(entry, dict) and entry.get("candidate_key") == candidate_key for entry in entries):
+                entries.append(_message_list_entry_from_thread_payload(payload, candidate_key=candidate_key))
             _validate_or_raise(scan_batch)
             self._write_pending_scan_batch(scan_batch)
             self._clear_work_queue_file()
@@ -341,6 +359,7 @@ class OperatorRepository:
                     continue
                 state["state"] = "draft_ready"
                 state["last_action_result_error"] = reason
+                _release_active_send_request_after_failure(state, event_id=f"cancelled:{reason}")
                 state["updated_at"] = _now_iso()
                 state_update_count += 1
             if state_update_count:
@@ -431,6 +450,9 @@ class OperatorRepository:
         queue = self._load_work_queue()
         if not queue:
             return None
+        states = self._automation.load_states()
+        queue = _merge_missing_priority_open_threads(queue, states)
+        queue = _prioritize_work_queue(queue, states)
         if _cycle_send_limit_reached(session, queue[0]):
             return {
                 "schema_version": 1,
@@ -536,6 +558,8 @@ class OperatorRepository:
                 "handoff_count": len(decision.get("handoffs", [])),
                 "scan_request_count": len(decision.get("scan_requests", [])),
                 "scheduled_action_count": len(decision.get("scheduled_actions", [])),
+                "history_cutoff_reached": bool(decision.get("history_cutoff_reached")),
+                "historical_entry_count": int(decision.get("historical_entry_count") or 0),
                 "warnings": decision.get("warnings", []),
             }
         return payload
@@ -650,6 +674,8 @@ def _decision_has_no_immediate_work(decision: dict[str, Any]) -> bool:
 
 
 def _should_continue_scan_before_work(session: dict[str, Any], decision: dict[str, Any]) -> bool:
+    if decision.get("history_cutoff_reached"):
+        return False
     if not _can_continue_scan(session):
         return False
     if session.get("management_mode") == "high-throughput":
@@ -675,8 +701,62 @@ def _cycle_send_limit_reached(session: dict[str, Any], work_item: dict[str, Any]
     return int(session.get("cycle_send_count") or 0) >= limit
 
 
+def _scan_batch_has_thread_observation(scan_batch: dict[str, Any] | None) -> bool:
+    if not isinstance(scan_batch, dict):
+        return False
+    return any(isinstance(item, dict) for item in scan_batch.get("thread_observations", []))
+
+
 def _non_wait_work_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [item for item in items if item.get("work_item_type") not in {"wait", "scheduled_wait"}]
+
+
+def _prioritize_work_queue(work_items: list[dict[str, Any]], states: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if len(work_items) <= 1:
+        return list(work_items)
+    priority_queue = _next_priority_queue(states)
+    candidate_ranks: dict[str, tuple[int, int]] = {}
+    match_ranks: dict[str, tuple[int, int]] = {}
+    for index, item in enumerate(priority_queue):
+        rank = (_safe_priority(item.get("priority")), index)
+        candidate_key = item.get("candidate_key")
+        if isinstance(candidate_key, str) and candidate_key:
+            candidate_ranks[candidate_key] = rank
+        match_id = item.get("match_id")
+        if isinstance(match_id, str) and match_id:
+            match_ranks[match_id] = rank
+
+    def sort_key(indexed: tuple[int, dict[str, Any]]) -> tuple[int, int, int, int]:
+        original_index, item = indexed
+        work_type = str(item.get("work_item_type") or "")
+        type_priority = {
+            "blocked": 0,
+            "handoff": 1,
+            "send_message": 2,
+            "open_thread": 3,
+            "observe_current_thread": 3,
+            "scheduled_wait": 8,
+            "wait": 9,
+        }.get(work_type, 7)
+        rank = candidate_ranks.get(str(item.get("candidate_key") or ""))
+        if rank is None:
+            rank = match_ranks.get(str(item.get("match_id") or ""))
+        if rank is None:
+            rank = (9, original_index)
+        return (type_priority, rank[0], rank[1], original_index)
+
+    return [item for _, item in sorted(enumerate(work_items), key=sort_key)]
+
+
+def _merge_missing_priority_open_threads(work_items: list[dict[str, Any]], states: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return list(work_items)
+
+
+def _safe_priority(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 9
 
 
 def _normalize_scan_cursor(value: Any) -> dict[str, Any]:
@@ -708,6 +788,30 @@ def _candidate_key_from_thread_payload(payload: dict[str, Any]) -> str:
     return f"current_thread_{digest}"
 
 
+def _message_list_entry_from_thread_payload(payload: dict[str, Any], *, candidate_key: str) -> dict[str, Any]:
+    observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
+    hints = observation.get("match_identity_hints") if isinstance(observation.get("match_identity_hints"), dict) else {}
+    assessment = payload.get("assessment") if isinstance(payload.get("assessment"), dict) else {}
+    visible_name = str(hints.get("visible_name") or candidate_key)
+    latest_preview = str(assessment.get("latest_match_message") or assessment.get("latest_user_message") or "")
+    return {
+        "candidate_key": candidate_key,
+        "visible_name": visible_name,
+        "latest_preview": latest_preview,
+        "latest_preview_hash": f"sha256:{hashlib.sha256(latest_preview.encode('utf-8')).hexdigest()}",
+        "timestamp_cue": payload.get("timestamp_cue") or "current_thread",
+        "unread_cue": payload.get("unread_cue") or "unknown",
+        "identity_confidence": payload.get("identity_confidence") or "medium",
+        "identity_evidence": payload.get("identity_evidence") or "Current thread observation.",
+        "match_identity_hints": {
+            "visible_name": visible_name,
+            "profile_cues": list(hints.get("profile_cues") or []) if isinstance(hints.get("profile_cues"), list) else [],
+            "conversation_fingerprint": hints.get("conversation_fingerprint") or assessment.get("latest_inbound_fingerprint") or "",
+        },
+        "evidence": "Synthetic message-list entry from current thread observation.",
+    }
+
+
 def _scan_batch_from_current_thread_payload(
     payload: dict[str, Any],
     *,
@@ -715,10 +819,6 @@ def _scan_batch_from_current_thread_payload(
     candidate_key: str,
 ) -> dict[str, Any]:
     observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
-    hints = observation.get("match_identity_hints") if isinstance(observation.get("match_identity_hints"), dict) else {}
-    assessment = payload.get("assessment") if isinstance(payload.get("assessment"), dict) else {}
-    visible_name = str(hints.get("visible_name") or candidate_key)
-    latest_preview = str(assessment.get("latest_match_message") or assessment.get("latest_user_message") or "")
     scan_batch = {
         "schema_version": 1,
         "session_id": payload.get("session_id") or session_id,
@@ -732,22 +832,7 @@ def _scan_batch_from_current_thread_payload(
         },
         "message_list_snapshot": {
             "entries": [
-                {
-                    "candidate_key": candidate_key,
-                    "visible_name": visible_name,
-                    "latest_preview": latest_preview,
-                    "latest_preview_hash": f"sha256:{hashlib.sha256(latest_preview.encode('utf-8')).hexdigest()}",
-                    "timestamp_cue": payload.get("timestamp_cue") or "current_thread",
-                    "unread_cue": payload.get("unread_cue") or "unknown",
-                    "identity_confidence": payload.get("identity_confidence") or "medium",
-                    "identity_evidence": payload.get("identity_evidence") or "Current thread observation.",
-                    "match_identity_hints": {
-                        "visible_name": visible_name,
-                        "profile_cues": list(hints.get("profile_cues") or []) if isinstance(hints.get("profile_cues"), list) else [],
-                        "conversation_fingerprint": hints.get("conversation_fingerprint") or assessment.get("latest_inbound_fingerprint") or "",
-                    },
-                    "evidence": "Synthetic single-entry scan batch from current thread.",
-                }
+                _message_list_entry_from_thread_payload(payload, candidate_key=candidate_key)
             ]
         },
         "thread_observations": [],

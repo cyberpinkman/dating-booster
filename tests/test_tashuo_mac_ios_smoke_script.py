@@ -73,6 +73,8 @@ class TaShuoMacIosManagedSmokeScriptTests(unittest.TestCase):
                 "capabilities": {
                     "agent_native_capabilities": {"supported_app_profiles": ["tashuo"]},
                 },
+                "runtime_select_mac_ios_app": {"status": "selected"},
+                "runtime_status_mac_ios_app": {"status": "selected"},
                 "support_session_start": {"status": "active", "session_id": "support_1"},
                 "harness_doctor_mac_ios_app": {
                     "status": "blocked",

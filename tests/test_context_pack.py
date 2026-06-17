@@ -107,6 +107,23 @@ class ContextPackTests(unittest.TestCase):
             pack["safety_constraints"],
         )
 
+    def test_context_pack_includes_send_time_context_when_provided(self):
+        pack = build_context_pack(
+            user_profile={},
+            match_profile={},
+            conversation_memory={},
+            reply_mode=ReplyMode.ADAPTIVE,
+            max_items=None,
+            current_time_iso="2026-06-15T17:00:00Z",
+        )
+
+        items = {item["label"]: item["content"] for item in pack["items"]}
+
+        self.assertEqual(items["send_time_context"]["local_timezone"], "Asia/Shanghai")
+        self.assertEqual(items["send_time_context"]["current_local"], "2026-06-16T01:00:00+08:00")
+        self.assertEqual(items["send_time_context"]["local_hour"], 1)
+        self.assertNotIn("is_daytime_work_context", items["send_time_context"])
+
     def test_context_pack_item_content_is_a_snapshot(self):
         user_profile = {
             "boundaries": [{"content": {"text": "Do not claim overseas study"}}]

@@ -78,7 +78,7 @@ class AppAdapter(Protocol):
     def observe(self, *, output_dir: Path | None = None) -> dict[str, Any]:
         ...
 
-    def doctor(self, *, capture: bool = True, output: Path | None = None) -> dict[str, Any]:
+    def doctor(self, *, capture: bool = True, output: Path | None = None, ocr: bool = True) -> dict[str, Any]:
         ...
 
     def run_action(

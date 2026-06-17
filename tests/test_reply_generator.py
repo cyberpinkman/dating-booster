@@ -96,9 +96,17 @@ class ReplyGeneratorTests(unittest.TestCase):
             "survey-style a/b",
             "already-confirmed",
             "yes/no-style",
+            "temporal_fit",
+            "current send time",
+            "latest inbound message time",
+            "elapsed freshness",
+            "time-sensitive",
+            "stale delay",
             "lifestyle or interest",
             "work topic",
             "no strategic delta",
+            "clever reaction",
+            "autonomous relationship progression",
             "hard facts",
         ):
             self.assertIn(phrase, system_prompt)

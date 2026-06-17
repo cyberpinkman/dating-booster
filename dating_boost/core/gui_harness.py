@@ -84,7 +84,7 @@ class NativeGuiHarness:
         self.harness_backend = runtime or IPHONE_MIRRORING_HARNESS_BACKEND
         self.runtime_config: dict[str, Any] = {}
 
-    def doctor(self, *, capture: bool = True, output: Path | None = None) -> dict[str, Any]:
+    def doctor(self, *, capture: bool = True, output: Path | None = None, ocr: bool = True) -> dict[str, Any]:
         payload = self._base_payload("ok")
         payload["checks"] = self._command_checks()
         if not self.platform.startswith("darwin"):
@@ -124,7 +124,7 @@ class NativeGuiHarness:
             return payload
 
         if capture:
-            screen = self.capture_window(output=output, window=window)
+            screen = self.capture_window(output=output, window=window, ocr=ocr)
             payload["screen"] = _redacted_screen(screen)
             if screen["state"] in {"iphone_mirroring_locked", "screen_permission_prompt"}:
                 payload.update({"status": "blocked", "reason": screen["state"]})
@@ -132,7 +132,13 @@ class NativeGuiHarness:
                 payload.update({"status": "degraded", "reason": "ocr_unavailable"})
         return payload
 
-    def capture_window(self, *, output: Path | None = None, window: WindowInfo | None = None) -> dict[str, Any]:
+    def capture_window(
+        self,
+        *,
+        output: Path | None = None,
+        window: WindowInfo | None = None,
+        ocr: bool = True,
+    ) -> dict[str, Any]:
         if window is None:
             window = self._window_info()
         if window is None:
@@ -161,7 +167,7 @@ class NativeGuiHarness:
                 "state": "unknown",
                 "ocr_status": "not_run",
             }
-        ocr = self._ocr(output)
+        ocr_payload = self._ocr(output) if ocr else {"status": "skipped", "text": "", "error": None}
         return {
             "schema_version": GUI_HARNESS_SCHEMA_VERSION,
             "status": "ok",
@@ -172,9 +178,9 @@ class NativeGuiHarness:
             "visual_status": "not_applicable",
             "visual_active_tab": "unknown",
             "visual_bottom_nav_present": False,
-            "ocr_status": ocr["status"],
-            "ocr_error": ocr.get("error"),
-            "text": ocr.get("text", ""),
+            "ocr_status": ocr_payload["status"],
+            "ocr_error": ocr_payload.get("error"),
+            "text": ocr_payload.get("text", ""),
         }
 
     def _activate_window(self) -> dict[str, Any]:

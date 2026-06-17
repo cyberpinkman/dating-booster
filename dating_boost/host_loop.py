@@ -532,7 +532,7 @@ class HostLoopSupervisor:
                         "resumed_current_send_work_item_completed",
                         current=resumed_current,
                     ), 0
-            if not resume or self._operator_session_status() != "active":
+            if self._operator_session_status() != "active":
                 start = self._start_operator_session()
                 if start.get("status") != "active":
                     return self._finish("blocked", "operator_session_not_active", extra={"start": start}), 0
@@ -677,6 +677,8 @@ class HostLoopSupervisor:
             return requested
         if self.fixture_host is not None and (self.fixture_host / "current_thread_observation.json").exists():
             return "current-thread"
+        if self.fixture_host is not None and (self.fixture_host / "message_list_observation.json").exists():
+            return "message-list"
         command = ["harness", self.args.app_id, "observe", "--data-dir", str(self.data_dir), "--json"]
         harness_runtime = str(getattr(self.args, "harness_runtime", "") or "").strip()
         if harness_runtime:
@@ -926,6 +928,24 @@ class HostLoopSupervisor:
         sequence_timing_enabled = len(payload_messages) > 1
         message_sequence_window_seconds = _managed_sequence_window_seconds(len(payload_messages))
         progress_path = _managed_sequence_progress_path(self.work_dir, work_item)
+        result_path = self._work_file(work_item, "action_result")
+        if result_path.exists():
+            result = _read_json(result_path)
+            _validate_action_result(result, work_item)
+            recorded = self._run_cli_json(
+                "operator",
+                "record-action-result",
+                "--data-dir",
+                str(self.data_dir),
+                "--input",
+                str(result_path),
+            )
+            self.action_results_recorded.append(recorded)
+            self._append_timeline("action_result", work_item, {"path": str(result_path), "recorded": recorded})
+            if progress_path.exists():
+                progress_path.unlink()
+            self._clear_host_work_item(work_item, consume=True)
+            return None
         sequence_progress = _managed_sequence_progress_load(progress_path, work_item)
         harness_payloads: list[dict[str, Any]] = []
         message_results: list[dict[str, Any]] = list(sequence_progress.get("message_results") or [])
@@ -936,11 +956,122 @@ class HostLoopSupervisor:
             for result in message_results
             if isinstance(result, dict) and result.get("status") == "ok"
         }
-        required_evidence = _managed_gui_send_required_evidence(self.args.app_id)
         harness_runtime = str(getattr(self.args, "harness_runtime", "") or "").strip()
+        required_evidence = _managed_gui_send_required_evidence(self.args.app_id, harness_runtime)
         sequence_work_item = dict(work_item)
         if isinstance(sequence_progress.get("target_binding"), dict):
             sequence_work_item["target_binding"] = sequence_progress["target_binding"]
+        pending_visual_result = _managed_sequence_pending_visual_result(message_results)
+        if pending_visual_result is not None:
+            pending_message = _managed_sequence_message_by_index(
+                payload_messages,
+                int(pending_visual_result.get("index") or 0),
+            )
+            if pending_message is None:
+                return self._finish(
+                    "blocked",
+                    "message_sequence_pending_visual_message_missing",
+                    current=work_item,
+                    extra={
+                        "completed_message_count": sum(1 for result in message_results if result.get("status") == "ok"),
+                        "message_results": message_results,
+                        "next_host_action": "observe_current_thread_and_replan_sequence",
+                    },
+                )
+            visual_confirmation_path = _managed_sequence_visual_confirmation_path(
+                self.work_dir,
+                work_item,
+                int(pending_message["index"]),
+            )
+            if sequence_timing_enabled:
+                expired = _managed_sequence_expiry(
+                    sequence_started_at,
+                    window_seconds=message_sequence_window_seconds,
+                )
+                if expired is not None and not visual_confirmation_path.exists():
+                    return self._finish(
+                        "blocked",
+                        "message_sequence_window_expired",
+                        current=work_item,
+                        extra={
+                            **expired,
+                            "completed_message_count": sum(1 for result in message_results if result.get("status") == "ok"),
+                            "failed_message_index": pending_message.get("index"),
+                            "message_results": message_results,
+                            "next_host_action": "observe_current_thread_and_replan_sequence",
+                        },
+                    )
+            if not visual_confirmation_path.exists():
+                _write_json(
+                    _template_path(visual_confirmation_path),
+                    _managed_sequence_visual_confirmation_template(work_item, pending_message, pending_visual_result),
+                )
+                return self._finish(
+                    "waiting_for_host",
+                    "outbound_message_requires_visual_verification",
+                    current=work_item,
+                    extra={
+                        "expected_input": str(visual_confirmation_path),
+                        "next_host_action": "visually_verify_sequence_outbound_message_and_resume",
+                        "completed_message_count": sum(1 for result in message_results if result.get("status") == "ok"),
+                        "pending_message_index": pending_message.get("index"),
+                        "message_results": message_results,
+                    },
+                )
+            visual_confirmation = _read_json(visual_confirmation_path)
+            validation_reason = _validate_managed_sequence_visual_confirmation(
+                visual_confirmation,
+                work_item,
+                pending_message,
+            )
+            if validation_reason is not None:
+                return self._finish(
+                    "blocked",
+                    validation_reason,
+                    current=work_item,
+                    extra={
+                        "expected_input": str(visual_confirmation_path),
+                        "completed_message_count": sum(1 for result in message_results if result.get("status") == "ok"),
+                        "failed_message_index": pending_message.get("index"),
+                        "message_results": message_results,
+                    },
+                )
+            confirmation_evidence = _managed_sequence_visual_confirmation_evidence(
+                visual_confirmation,
+                pending_visual_result,
+            )
+            pending_visual_result["status"] = "ok"
+            pending_visual_result["post_action_observation_id"] = (
+                visual_confirmation.get("post_action_observation_id")
+                or pending_visual_result.get("post_action_observation_id")
+            )
+            pending_visual_result["evidence"] = _managed_gui_send_message_evidence(confirmation_evidence)
+            pending_visual_result["sent_at"] = str(
+                pending_visual_result.get("sent_at")
+                or visual_confirmation.get("confirmed_at")
+                or _now_iso()
+            )
+            pending_visual_result["host_visual_verification"] = {
+                "status": "ok",
+                "path": str(visual_confirmation_path),
+            }
+            sequence_last_sent_at = str(pending_visual_result.get("sent_at") or sequence_last_sent_at or "")
+            if visual_confirmation_path.exists():
+                visual_confirmation_path.unlink()
+            _managed_sequence_progress_save(
+                progress_path,
+                work_item,
+                message_results=message_results,
+                target_binding=sequence_work_item.get("target_binding") if isinstance(sequence_work_item.get("target_binding"), dict) else None,
+                sequence_started_at=sequence_started_at,
+                last_message_sent_at=sequence_last_sent_at or None,
+                message_sequence_window_seconds=message_sequence_window_seconds,
+            )
+        completed_indices = {
+            int(result.get("index") or 0)
+            for result in message_results
+            if isinstance(result, dict) and result.get("status") == "ok"
+        }
         for message in payload_messages:
             if int(message["index"]) in completed_indices:
                 continue
@@ -1055,12 +1186,60 @@ class HostLoopSupervisor:
             message_result = _managed_gui_send_message_result(message, harness_payload)
             message_results.append(message_result)
             self._append_timeline("managed_gui_send", message_work_item, {"harness": _redacted_managed_send_payload(harness_payload)})
+            harness_evidence = _managed_gui_send_normalized_evidence(
+                harness_payload.get("evidence") if isinstance(harness_payload.get("evidence"), dict) else {}
+            )
             if harness_payload.get("status") == "needs_host_visual_verification":
+                reason = str(harness_payload.get("reason") or "visual_verification_required")
+                if reason == "outbound_message_requires_visual_verification" and sequence_timing_enabled:
+                    sent_at = _now_iso()
+                    message_results[-1]["status"] = "visual_verification_pending"
+                    message_results[-1]["sent_at"] = sent_at
+                    message_results[-1]["evidence"] = _managed_gui_send_message_evidence(harness_evidence)
+                    if isinstance(harness_payload.get("visual_verification_request"), dict):
+                        message_results[-1]["visual_verification_request"] = harness_payload.get("visual_verification_request")
+                    sequence_last_sent_at = sent_at
+                    sequence_work_item["target_binding"] = _managed_gui_send_refreshed_target_binding(
+                        sequence_work_item.get("target_binding") if isinstance(sequence_work_item.get("target_binding"), dict) else None,
+                        harness_payload,
+                    )
+                    visual_confirmation_path = _managed_sequence_visual_confirmation_path(
+                        self.work_dir,
+                        work_item,
+                        int(message["index"]),
+                    )
+                    _write_json(
+                        _template_path(visual_confirmation_path),
+                        _managed_sequence_visual_confirmation_template(work_item, message, message_results[-1]),
+                    )
+                    _managed_sequence_progress_save(
+                        progress_path,
+                        work_item,
+                        message_results=message_results,
+                        target_binding=sequence_work_item.get("target_binding") if isinstance(sequence_work_item.get("target_binding"), dict) else None,
+                        sequence_started_at=sequence_started_at,
+                        last_message_sent_at=sequence_last_sent_at,
+                        message_sequence_window_seconds=message_sequence_window_seconds,
+                    )
+                    return self._finish(
+                        "waiting_for_host",
+                        reason,
+                        current=work_item,
+                        extra={
+                            "expected_input": str(visual_confirmation_path),
+                            "next_host_action": "visually_verify_sequence_outbound_message_and_resume",
+                            "managed_gui_send": _redacted_managed_send_payload(harness_payload),
+                            "completed_message_count": sum(1 for result in message_results if result.get("status") == "ok"),
+                            "pending_message_index": message.get("index"),
+                            "message_results": message_results,
+                        },
+                    )
                 return self._finish(
                     "waiting_for_host",
-                    str(harness_payload.get("reason") or "staged_text_requires_visual_verification"),
+                    reason,
                     current=work_item,
                     extra={
+                        "expected_input": str(result_path) if reason == "outbound_message_requires_visual_verification" else None,
                         "managed_gui_send": _redacted_managed_send_payload(harness_payload),
                         "completed_message_count": max(len(message_results) - 1, 0),
                         "failed_message_index": message.get("index"),
@@ -1079,9 +1258,6 @@ class HostLoopSupervisor:
                         "message_results": message_results,
                     },
                 )
-            harness_evidence = _managed_gui_send_normalized_evidence(
-                harness_payload.get("evidence") if isinstance(harness_payload.get("evidence"), dict) else {}
-            )
             if not harness_payload.get("post_action_observation_id"):
                 return self._finish(
                     "blocked",
@@ -1573,7 +1749,11 @@ def _message_list_template(work_item: dict[str, Any], profile: dict[str, Any]) -
                     "latest_preview": "TODO",
                     "latest_preview_hash": "TODO_STABLE_HASH",
                     "timestamp_cue": "TODO",
+                    "last_activity_at": "",
+                    "days_since_last_activity": None,
+                    "freshness_bucket": "fresh|within_week|historical",
                     "unread_cue": "present|absent",
+                    "candidate_type": "continuation_candidate|open_chat_candidate|new_match_candidate",
                     "position": 1,
                     "identity_confidence": "medium",
                     "identity_evidence": "Visible row, stable name, and preview.",
@@ -2019,6 +2199,101 @@ def _managed_sequence_progress_path(work_dir: Path, work_item: dict[str, Any]) -
     return work_dir / f"managed_sequence_progress.{_safe_name(str(work_item.get('work_item_id') or 'send'))}.json"
 
 
+def _managed_sequence_visual_confirmation_path(work_dir: Path, work_item: dict[str, Any], message_index: int) -> Path:
+    safe_work_id = _safe_name(str(work_item.get("work_item_id") or "send"))
+    return work_dir / f"managed_sequence_visual_verification.{safe_work_id}.{int(message_index):02d}.json"
+
+
+def _managed_sequence_pending_visual_result(message_results: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for result in message_results:
+        if isinstance(result, dict) and result.get("status") == "visual_verification_pending":
+            return result
+    return None
+
+
+def _managed_sequence_message_by_index(messages: list[dict[str, Any]], message_index: int) -> dict[str, Any] | None:
+    for message in messages:
+        if int(message.get("index") or 0) == int(message_index):
+            return message
+    return None
+
+
+def _managed_sequence_visual_confirmation_template(
+    work_item: dict[str, Any],
+    message: dict[str, Any],
+    pending_result: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "action_request_id": work_item.get("action_request_id"),
+        "payload_hash": work_item.get("payload_hash"),
+        "message_index": int(message.get("index") or 0),
+        "message_hash": message.get("message_hash"),
+        "post_action_observation_id": pending_result.get("post_action_observation_id") or "",
+        "result_status": "unknown",
+        "post_send_visible_text": "",
+        "evidence": {
+            "verification": "Set result_status to succeeded only after a fresh visual post-send observation confirms this exact outbound bubble and an empty input box.",
+            "host_visual_outbound_exact_text_verified": False,
+            "input_cleared_after_send": False,
+            "post_action_screen_captured": False,
+        },
+    }
+
+
+def _validate_managed_sequence_visual_confirmation(
+    payload: dict[str, Any],
+    work_item: dict[str, Any],
+    message: dict[str, Any],
+) -> str | None:
+    if payload.get("action_request_id") != work_item.get("action_request_id"):
+        return "managed_sequence_visual_confirmation_action_request_id_mismatch"
+    if payload.get("payload_hash") != work_item.get("payload_hash"):
+        return "managed_sequence_visual_confirmation_payload_hash_mismatch"
+    if int(payload.get("message_index") or 0) != int(message.get("index") or 0):
+        return "managed_sequence_visual_confirmation_message_index_mismatch"
+    if payload.get("message_hash") != message.get("message_hash"):
+        return "managed_sequence_visual_confirmation_message_hash_mismatch"
+    if payload.get("result_status") != "succeeded":
+        return "managed_sequence_visual_confirmation_not_succeeded"
+    visible_text = payload.get("post_send_visible_text")
+    if not isinstance(visible_text, str) or not visible_text.strip():
+        return "managed_sequence_visual_confirmation_visible_text_missing"
+    if visible_text != message.get("text"):
+        return "managed_sequence_visual_confirmation_visible_text_mismatch"
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, dict):
+        return "managed_sequence_visual_confirmation_evidence_missing"
+    outbound_verified = bool(
+        evidence.get("outbound_exact_text_verified")
+        or evidence.get("host_visual_outbound_exact_text_verified")
+        or evidence.get("outbound_exact_text_visual_verified_by_host")
+    )
+    if not outbound_verified:
+        return "managed_sequence_visual_confirmation_outbound_exact_text_missing"
+    if evidence.get("input_cleared_after_send") is not True:
+        return "managed_sequence_visual_confirmation_input_cleared_missing"
+    if evidence.get("post_action_screen_captured") is not True:
+        return "managed_sequence_visual_confirmation_post_screen_missing"
+    return None
+
+
+def _managed_sequence_visual_confirmation_evidence(
+    confirmation: dict[str, Any],
+    pending_result: dict[str, Any],
+) -> dict[str, Any]:
+    pending_evidence = pending_result.get("evidence") if isinstance(pending_result.get("evidence"), dict) else {}
+    confirmation_evidence = confirmation.get("evidence") if isinstance(confirmation.get("evidence"), dict) else {}
+    merged = {**pending_evidence, **confirmation_evidence}
+    if (
+        confirmation_evidence.get("host_visual_outbound_exact_text_verified")
+        or confirmation_evidence.get("outbound_exact_text_visual_verified_by_host")
+    ):
+        merged["outbound_message_verified"] = True
+        merged["outbound_exact_text_verified"] = True
+    return _managed_gui_send_normalized_evidence(merged)
+
+
 def _managed_sequence_window_seconds(message_count: int) -> int:
     return max(1, int(message_count or 1)) * MESSAGE_SEQUENCE_SECONDS_PER_MESSAGE
 
@@ -2172,8 +2447,20 @@ def _single_message_work_item(work_item: dict[str, Any], message: dict[str, Any]
     return single
 
 
-def _managed_gui_send_required_evidence(app_id: str) -> tuple[str, ...]:
-    return manifest_for_app(app_id).required_send_evidence
+def _managed_gui_send_required_evidence(app_id: str, runtime: str | None = None) -> tuple[str, ...]:
+    manifest = manifest_for_app(app_id)
+    runtime_key = _normalized_harness_runtime(str(runtime or ""))
+    if runtime_key and runtime_key != "default":
+        runtime_profile = manifest.runtime_profiles.get(runtime_key)
+        requirements = (
+            runtime_profile.get("live_send_requirements")
+            if isinstance(runtime_profile, dict) and isinstance(runtime_profile.get("live_send_requirements"), dict)
+            else {}
+        )
+        evidence = requirements.get("required_evidence")
+        if isinstance(evidence, list) and evidence:
+            return tuple(str(item) for item in evidence)
+    return manifest.required_send_evidence
 
 
 def _target_binding_for_work_item(work_item: dict[str, Any], pending_scan_batch: dict[str, Any] | None) -> dict[str, Any]:
@@ -2207,6 +2494,39 @@ def _target_binding_for_work_item(work_item: dict[str, Any], pending_scan_batch:
         required.append(str(binding.get("visible_name") or visible_name).strip())
     if fingerprint:
         binding.setdefault("conversation_fingerprint", fingerprint)
+    if isinstance(entry, dict):
+        for evidence_key in ("message_list_evidence", "selection_evidence"):
+            evidence = entry.get(evidence_key)
+            if isinstance(evidence, dict) and evidence_key not in binding:
+                binding[evidence_key] = dict(evidence)
+    if isinstance(thread, dict):
+        thread_binding = thread.get("target_binding")
+        if isinstance(thread_binding, dict):
+            for key, value in thread_binding.items():
+                if key == "thread_evidence" and isinstance(value, dict):
+                    existing_evidence = (
+                        dict(binding.get("thread_evidence"))
+                        if isinstance(binding.get("thread_evidence"), dict)
+                        else {}
+                    )
+                    existing_evidence.update(value)
+                    binding["thread_evidence"] = existing_evidence
+                else:
+                    binding.setdefault(key, value)
+        if not target_binding_structural_evidence_present("tashuo", binding):
+            derived_binding = _derive_tashuo_current_thread_target_binding(thread, binding)
+            if isinstance(derived_binding, dict):
+                for key, value in derived_binding.items():
+                    if key == "thread_evidence" and isinstance(value, dict):
+                        existing_evidence = (
+                            dict(binding.get("thread_evidence"))
+                            if isinstance(binding.get("thread_evidence"), dict)
+                            else {}
+                        )
+                        existing_evidence.update(value)
+                        binding["thread_evidence"] = existing_evidence
+                    else:
+                        binding.setdefault(key, value)
 
     unique_required: list[str] = []
     for item in required:
@@ -2215,6 +2535,68 @@ def _target_binding_for_work_item(work_item: dict[str, Any], pending_scan_batch:
             unique_required.append(text)
     binding["required_visible_text"] = unique_required
     return binding
+
+
+def _derive_tashuo_current_thread_target_binding(
+    thread: dict[str, Any],
+    binding: dict[str, Any],
+) -> dict[str, Any] | None:
+    observation = thread.get("observation")
+    if not isinstance(observation, dict) or observation.get("app_id") != "tashuo":
+        return None
+    hints = observation.get("match_identity_hints")
+    if not isinstance(hints, dict):
+        hints = {}
+    visible_name = _stripped_or_none(binding.get("visible_name")) or _stripped_or_none(hints.get("visible_name"))
+    fingerprint = (
+        _stripped_or_none(binding.get("conversation_fingerprint"))
+        or _stripped_or_none(hints.get("conversation_fingerprint"))
+    )
+    assessment = thread.get("assessment")
+    latest_inbound_fingerprint = (
+        _stripped_or_none(assessment.get("latest_inbound_fingerprint"))
+        if isinstance(assessment, dict)
+        else None
+    )
+    observation_id = _stripped_or_none(observation.get("observation_id"))
+    screenshot_path = _thread_screenshot_path(thread, observation)
+    if not (visible_name and fingerprint and latest_inbound_fingerprint and observation_id and screenshot_path):
+        return None
+    if not screenshot_path.exists():
+        return None
+    try:
+        from dating_boost.apps.tashuo.native import (
+            TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION,
+            _tashuo_visual_anchor_hash_for_path,
+        )
+    except Exception:
+        return None
+    anchor_region = dict(TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION)
+    anchor = _tashuo_visual_anchor_hash_for_path(screenshot_path, region=anchor_region)
+    visual_anchor_hash = _stripped_or_none(anchor.get("visual_anchor_hash")) if isinstance(anchor, dict) else None
+    if not visual_anchor_hash:
+        return None
+    return {
+        "binding_type": "current_thread_visual_identity",
+        "visible_name": visible_name,
+        "conversation_fingerprint": fingerprint,
+        "thread_evidence": {
+            "observation_id": observation_id,
+            "screen_state": "tashuo_conversation",
+            "latest_inbound_fingerprint": latest_inbound_fingerprint,
+            "visual_anchor_hash": visual_anchor_hash,
+            "visual_anchor_region": anchor_region,
+        },
+    }
+
+
+def _thread_screenshot_path(thread: dict[str, Any], observation: dict[str, Any]) -> Path | None:
+    for value in (thread.get("screenshot_ref"), observation.get("raw_ref")):
+        if not isinstance(value, str) or not value.strip():
+            continue
+        path = Path(value.strip())
+        return path if path.is_absolute() else ROOT / path
+    return None
 
 
 def _target_profile_ready_for_work_item(work_item: dict[str, Any], pending_scan_batch: dict[str, Any] | None) -> bool:
@@ -2450,6 +2832,8 @@ def _next_host_action_for_block_reason(reason: str | None) -> str | None:
         return "stop_do_not_send_recover_current_thread_binding"
     if reason == "staged_text_requires_visual_verification":
         return "visually_verify_staged_text_before_live_send"
+    if reason == "outbound_message_requires_visual_verification":
+        return "visually_verify_outbound_message_after_live_send_and_write_action_result"
     if isinstance(reason, str) and reason.startswith("runtime_live_send_not_supported:"):
         return "choose_supported_runtime_or_stage_only"
     return None

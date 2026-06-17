@@ -105,8 +105,9 @@ class ManagedSessionRepository:
         next_host_action = "run_managed_session_wait_loop"
         if app_check["status"] != "ok":
             policy = _managed_session_policy(app_id)
-            initial_status = str(policy.get("precheck_failure_status") or "stopped")
-            stop_reason = str(app_check.get("reason") or policy.get("precheck_failure_reason") or "app_unavailable")
+            initial_status = _precheck_failure_status(policy, runtime=normalized_runtime)
+            failure_reason = str(app_check.get("reason") or policy.get("precheck_failure_reason") or "app_unavailable")
+            stop_reason = failure_reason if initial_status == "stopped" else None
             stopped_at = now if initial_status == "stopped" else None
             next_host_action = _precheck_failure_next_host_action(
                 policy,
@@ -129,6 +130,7 @@ class ManagedSessionRepository:
             "updated_at": now,
             "stopped_at": stopped_at,
             "stop_reason": stop_reason,
+            "pause_reason": failure_reason if initial_status == "paused" else None,
             "last_tick_at": None,
             "last_scan_at": None,
             "last_app_precheck": app_check,
@@ -146,7 +148,13 @@ class ManagedSessionRepository:
             except (FileNotFoundError, ValueError):
                 stopped_operator = {"status": "not_found"}
         return {
-            **_payload(initial_status, reason=stop_reason, app_id=app_id, session=session, app_precheck=app_check),
+            **_payload(
+                initial_status,
+                reason=stop_reason or session.get("pause_reason"),
+                app_id=app_id,
+                session=session,
+                app_precheck=app_check,
+            ),
             "operator_session": operator_start,
             "operator_stop": stopped_operator,
             "memory_review": memory_review if memory_review.get("needs_memory_review") else None,
@@ -265,15 +273,17 @@ class ManagedSessionRepository:
         session["last_app_precheck"] = app_check
         if app_check["status"] != "ok":
             policy = _managed_session_policy(app_id)
-            failure_status = str(policy.get("precheck_failure_status") or "stopped")
+            failure_status = _precheck_failure_status(policy, runtime=runtime)
+            failure_reason = str(app_check.get("reason") or policy.get("precheck_failure_reason") or "app_unavailable")
             session["status"] = failure_status
-            session["stop_reason"] = app_check.get("reason") or policy.get("precheck_failure_reason") or "app_unavailable"
+            session["stop_reason"] = failure_reason if failure_status == "stopped" else None
+            session["pause_reason"] = failure_reason if failure_status == "paused" else None
             if failure_status == "stopped":
                 session["stopped_at"] = now
             self._write_session(session)
             return _payload(
                 failure_status,
-                reason=str(session["stop_reason"]),
+                reason=failure_reason,
                 app_id=app_id,
                 session=session,
                 app_precheck=app_check,
@@ -282,6 +292,7 @@ class ManagedSessionRepository:
             )
         if session.get("status") == "paused" and app_check["status"] == "ok":
             session["status"] = "active"
+            session["pause_reason"] = None
 
         existing_operator_work = _operator_has_pending_work(self._operator.get_state_payload())
         automation_states = self._automation.load_states()
@@ -492,6 +503,16 @@ def _normalize_runtime(value: Any) -> str | None:
 
 def _runtime_key(value: str | None) -> str:
     return (value or "").strip().replace("-", "_")
+
+
+def _precheck_failure_status(policy: dict[str, Any], *, runtime: str | None) -> str:
+    runtime_key = _runtime_key(runtime)
+    runtime_statuses = policy.get("runtime_precheck_failure_statuses")
+    if runtime_key and isinstance(runtime_statuses, dict):
+        configured = runtime_statuses.get(runtime_key)
+        if isinstance(configured, str) and configured.strip():
+            return configured
+    return str(policy.get("precheck_failure_status") or "stopped")
 
 
 def _precheck_failure_next_host_action(

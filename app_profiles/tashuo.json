@@ -82,7 +82,33 @@
         "supported_live_actions": [
           "send_message"
         ],
-        "live_send_status": "supported"
+        "live_send_status": "supported",
+        "target_binding": {
+          "allowed_structural_binding_types": [
+            "current_thread_visual_identity"
+          ],
+          "visual_only_exact_verification_allowed": true
+        },
+        "live_send_requirements": {
+          "authorization_fields": [
+            "autonomous_send",
+            "live_send",
+            "allowed_actions",
+            "requires_post_action_verification"
+          ],
+          "required_evidence": [
+            "staged_text_verified",
+            "staged_exact_text_verified",
+            "input_cleared_after_send",
+            "post_action_screen_captured",
+            "outbound_message_verified",
+            "outbound_exact_text_verified"
+          ],
+          "exact_text_verification": true,
+          "post_action_verification": true,
+          "outbound_bubble_verification": true,
+          "visual_only_exact_verification_allowed": true
+        }
       }
     },
     "supported_stage_actions": [
@@ -234,9 +260,9 @@
     ]
   },
   "post_send_verification": [
-    "Record succeeded only after a fresh TaShuo screenshot shows the exact sent text in the thread.",
-    "After pressing Return, the input placeholder must reappear and a fresh TaShuo screenshot must show the exact sent text in the thread.",
-    "If exact text or input-cleared evidence is not verifiable, record unknown or block managed send."
+    "For mac-ios-app ordinary chat, record succeeded after exact staged-text verification, Return, input-cleared evidence, and a fresh visual post-send screenshot showing a new outbound-bubble visual commit; OCR/AX text can strengthen evidence but must not be the only gate.",
+    "For iPhone Mirroring, keep requiring text/OCR evidence for the exact sent payload plus input-cleared evidence.",
+    "If neither exact text nor the approved mac-ios-app visual commit path is verifiable, record unknown or block managed send."
   ],
   "known_gui_pitfalls": [
     "TaShuo full query tashuo may not surface the app in iOS search; use tashu, do not press a trailing space in Spotlight, and verify the 她说 app result before tapping.",
@@ -249,10 +275,10 @@
     "If Cmd+V or paste produces a literal shortcut key such as v, an IME candidate, or any wrong text, cancel/refocus/backspace-clean it, verify the input is empty or safe, and block instead of continuing.",
     "TaShuo live send requires target-specific binding evidence. For mac-ios-app current-thread send, use current_thread_visual_identity with a fresh visual_anchor_hash; do not use message-list row position or header OCR as the binding evidence. For iPhone Mirroring row-open paths, row-to-thread structural evidence remains allowed.",
     "Emoji or otherwise non-OCR nicknames are valid targets in any message-list row; bind the intended row with chat_list_row_to_thread evidence instead of switching to an OCR-friendly conversation.",
-    "Ordinary conversation classification can use the persistent bottom input toolbar and four tool buttons as page-structure evidence; exact payload verification requires text or approved visual evidence, while mac-ios-app current-thread target binding must use a visual anchor hash.",
+    "Ordinary conversation classification can use the persistent bottom input toolbar and four tool buttons as page-structure evidence; mac-ios-app post-send verification uses exact staged text plus visual commit evidence instead of OCR as the blocking source, while current-thread target binding must use a visual anchor hash.",
     "For mac-ios-app task startup, use prepare-message-page: determine the top-level page from the visual bottom-tab highlight, tap the messages tab if needed, then hand off to visual message-list planning without OCR-first fallback or fixed row-coordinate thread entry.",
     "TaShuo ordinary chat sends with Return; do not plan or execute a Send-button click.",
-    "Visible bubble evidence can support diagnosis but cannot replace exact verification of the payload text.",
+    "Visible bubble evidence alone is not enough; for mac-ios-app it must be paired with exact staged-text verification, input-cleared evidence, and a post-send visual delta in the outbound bubble region.",
     "Non-ABC input sources can leave app names in the iOS Spotlight candidate bar; verify the app result after typing before tapping."
   ],
   "unsupported_actions": [
@@ -478,11 +504,11 @@
     ],
     "required_evidence": [
       "staged_text_verified",
-      "staged_exact_text_verified",
+      "staged_exact_text_ocr_verified",
       "input_cleared_after_send",
       "post_action_screen_captured",
       "outbound_message_verified",
-      "outbound_exact_text_verified"
+      "outbound_exact_text_ocr_verified"
     ],
     "exact_text_verification": true,
     "post_action_verification": true,
@@ -493,8 +519,11 @@
     "precheck_failure_status": "stopped",
     "precheck_failure_reason": "iphone_mirroring_unavailable",
     "precheck_failure_next_host_action": "enable_iphone_mirroring_and_restart_managed_session",
+    "runtime_precheck_failure_statuses": {
+      "mac_ios_app": "paused"
+    },
     "runtime_precheck_failure_next_host_actions": {
-      "mac_ios_app": "launch_or_focus_mac_ios_app_and_restart_managed_session"
+      "mac_ios_app": "launch_or_focus_mac_ios_app_and_resume_managed_session"
     },
     "default_max_threads_per_cycle": 5,
     "high_throughput_max_threads_per_cycle": 12,

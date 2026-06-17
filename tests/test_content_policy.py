@@ -296,6 +296,5 @@ class ContentPolicyTests(unittest.TestCase):
         self.assertTrue(decision.allowed)
         self.assertEqual(decision.severity, "low")
 
-
 if __name__ == "__main__":
     unittest.main()

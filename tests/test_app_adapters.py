@@ -337,10 +337,12 @@ class AppAdapterArchitectureTests(unittest.TestCase):
             manifest_for_app("bumble").required_send_evidence,
         )
         self.assertIn("staged_exact_text_ocr_verified", _managed_gui_send_required_evidence("bumble"))
-        self.assertIn("staged_exact_text_verified", _managed_gui_send_required_evidence("tashuo"))
-        self.assertIn("outbound_exact_text_verified", _managed_gui_send_required_evidence("tashuo"))
-        self.assertNotIn("staged_exact_text_ocr_verified", _managed_gui_send_required_evidence("tashuo"))
-        self.assertNotIn("outbound_exact_text_ocr_verified", _managed_gui_send_required_evidence("tashuo"))
+        self.assertIn("staged_exact_text_ocr_verified", _managed_gui_send_required_evidence("tashuo"))
+        self.assertIn("outbound_exact_text_ocr_verified", _managed_gui_send_required_evidence("tashuo"))
+        self.assertIn("staged_exact_text_verified", _managed_gui_send_required_evidence("tashuo", "mac-ios-app"))
+        self.assertIn("outbound_exact_text_verified", _managed_gui_send_required_evidence("tashuo", "mac-ios-app"))
+        self.assertNotIn("staged_exact_text_ocr_verified", _managed_gui_send_required_evidence("tashuo", "mac-ios-app"))
+        self.assertNotIn("outbound_exact_text_ocr_verified", _managed_gui_send_required_evidence("tashuo", "mac-ios-app"))
 
     def test_manifest_declares_cli_aliases_for_app_specific_compat_commands(self):
         from dating_boost.apps.registry import manifest_for_app

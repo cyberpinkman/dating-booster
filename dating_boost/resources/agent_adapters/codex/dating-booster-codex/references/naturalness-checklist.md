@@ -26,6 +26,19 @@ critique, review, or debug output.
 - Does it make an already-confirmed fact one side of an A/B choice?
 - If the draft only needs to test one guess, would a yes/no-style question sound more human than "A 还是 B"?
 - Is it leading with work when lifestyle or interest hooks are available and the match has not made work salient?
+- Temporal fit: did the draft check current local send time, latest inbound time/cue, and freshness before assuming
+  what the match is doing, feeling, or available for right now?
+- If the latest turn is stale, is the draft accidentally treating a
+  time-sensitive hook like weather, current mood, availability, or "摸鱼" as if
+  it is still happening now?
+- If the wording depends on "what is happening now", would it still feel normal at this time? If not, revise to a
+  neutral evidence-backed hook and keep moving; do not stop unless no safe useful revision exists.
+- For managed live send, does the final draft give the match a natural next
+  handle to answer? If it is only a clever reaction with no new handle, it is
+  not enough.
+- Is the "next handle" only confirming what the match just implied? If yes,
+  ask the unknown follow-up instead. "昨天雨太大了" does not need "是不是也被困住了";
+  it can lead to "这种雨天你在家一般会干嘛".
 - Does it have 标签堆叠, such as "ESFP 夜猫子", when one label would be enough?
 - Is it too polished, balanced, or explanatory for the user's previous style?
 
@@ -115,3 +128,14 @@ dating-context hooks like camping, coffee, movies, music, pets, or food.
 Better:
 
 > 你露营会是那种到地方就开始放空的人吗哈哈
+
+Bad:
+
+> 这天气还挺会接梗，雨负责铺气氛，太阳负责收尾😂
+
+Issue: weather was a stale, time-sensitive hook and this reaction gives no next
+handle. It is hard for the match to answer beyond "哈哈".
+
+Better:
+
+> 昨天那雨确实适合直接切室内模式😂 这种雨天你在家一般会干嘛

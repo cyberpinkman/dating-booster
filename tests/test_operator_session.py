@@ -189,6 +189,69 @@ class OperatorSessionTests(unittest.TestCase):
         self.assertEqual(open_payload["work_item"]["work_item_type"], "open_thread")
         self.assertEqual(open_payload["work_item"]["candidate_key"], "row_ada")
 
+    def test_high_throughput_stops_scan_when_message_list_history_cutoff_reached(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+                "--management-mode",
+                "high-throughput",
+                "--max-pages-per-cycle",
+                "3",
+            ])
+            self._run(["operator", "next", "--data-dir", str(data_dir)])
+            page = _message_list_observation()
+            page["app_id"] = "tashuo"
+            page["captured_at"] = "2026-05-26T12:00:00Z"
+            page["scan_cursor"] = {"current": "page_1", "next": "page_2", "exhausted": False}
+            page["scan_budget"] = 5
+            page["message_list_snapshot"]["entries"] = [
+                {
+                    "candidate_key": "row_recent",
+                    "visible_name": "Recent",
+                    "latest_preview": "刚刚问你今天忙不忙",
+                    "latest_preview_hash": "recent_hash",
+                    "timestamp_cue": "刚刚",
+                    "unread_cue": "present",
+                    "position": 1,
+                },
+                {
+                    "candidate_key": "row_old_open_chat",
+                    "candidate_type": "open_chat_candidate",
+                    "visible_name": "Old Open",
+                    "latest_preview": "你们已经可以进行会话了，开启聊天",
+                    "latest_preview_hash": "old_open_hash",
+                    "timestamp_cue": "4个月前",
+                    "unread_cue": "absent",
+                    "position": 2,
+                },
+            ]
+            page_path = Path(temp_dir) / "history_cutoff_operator_page.json"
+            self._write_json(page_path, page)
+            self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(page_path),
+            ])
+
+            next_exit, next_payload, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
+
+        self.assertEqual(next_exit, 0)
+        self.assertEqual(next_payload["decision_summary"]["history_cutoff_reached"], True)
+        self.assertEqual(next_payload["work_item"]["work_item_type"], "open_thread")
+        self.assertEqual(next_payload["work_item"]["candidate_key"], "row_recent")
+        self.assertNotEqual(next_payload["work_item"].get("reason"), "scan_page_continuation_required")
+
     def test_operator_start_warns_for_old_memory_review_without_blocking(self):
         from dating_boost.core.memory.review_queue import ReviewItem, ReviewQueueRepository
 
@@ -363,6 +426,111 @@ class OperatorSessionTests(unittest.TestCase):
             ])
             self.assertEqual(next_after_result_exit, 0)
             self.assertEqual(next_after_result["work_item"]["work_item_type"], "scan_message_list")
+
+    def test_operator_prioritizes_new_thread_observation_before_stale_open_queue(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            list_path = Path(temp_dir) / "operator_list.json"
+            self._write_json(list_path, _message_list_observation())
+            self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(list_path),
+            ])
+            open_exit, open_payload, _ = self._run([
+                "operator",
+                "next",
+                "--data-dir",
+                str(data_dir),
+            ])
+            self.assertEqual(open_exit, 0)
+            self.assertEqual(open_payload["work_item"]["work_item_type"], "open_thread")
+            self.assertEqual(open_payload["work_item"]["candidate_key"], "row_ada")
+
+            thread_path = Path(temp_dir) / "operator_thread.json"
+            self._write_json(thread_path, _thread_observation("row_ada"))
+            ingest_thread_exit, ingest_thread, _ = self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(thread_path),
+            ])
+            send_exit, send_payload, _ = self._run([
+                "operator",
+                "next",
+                "--data-dir",
+                str(data_dir),
+            ])
+
+            self.assertEqual(ingest_thread_exit, 0)
+            self.assertEqual(ingest_thread["status"], "ok")
+            self.assertEqual(send_exit, 0)
+            self.assertEqual(send_payload["work_item"]["work_item_type"], "send_message")
+            self.assertEqual(send_payload["work_item"]["candidate_key"], "row_ada")
+            queued = json.loads((data_dir / "operator" / "work_queue.json").read_text(encoding="utf-8"))
+            queued_keys = [item.get("candidate_key") for item in queued["work_items"]]
+            self.assertIn("row_bea", queued_keys)
+
+    def test_operator_ingest_thread_adds_synthetic_entry_when_pending_scan_has_other_candidate(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+                "--initial-surface",
+                "current-thread",
+            ])
+            first_thread_path = Path(temp_dir) / "ada_thread.json"
+            self._write_json(first_thread_path, _thread_observation("row_ada"))
+            self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(first_thread_path),
+            ])
+            second_thread_path = Path(temp_dir) / "bea_thread.json"
+            self._write_json(second_thread_path, _thread_observation("row_bea"))
+            ingest_exit, ingest_payload, _ = self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(second_thread_path),
+            ])
+
+            pending = json.loads((data_dir / "operator" / "pending_scan_batch.json").read_text(encoding="utf-8"))
+            entry_keys = [entry["candidate_key"] for entry in pending["message_list_snapshot"]["entries"]]
+            thread_keys = [thread["candidate_key"] for thread in pending["thread_observations"]]
+
+            self.assertEqual(ingest_exit, 0)
+            self.assertEqual(ingest_payload["status"], "ok")
+            self.assertIn("row_ada", entry_keys)
+            self.assertIn("row_bea", entry_keys)
+            self.assertIn("row_bea", thread_keys)
 
     def test_current_thread_session_ingests_thread_without_message_list_and_records_stage_result(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -728,6 +896,64 @@ class OperatorSessionTests(unittest.TestCase):
         self.assertEqual(limited_payload["work_item"]["reason"], "cycle_send_limit_reached")
         self.assertEqual(state_exit, 0)
         self.assertEqual(state_payload["work_queue"][0]["candidate_key"], "row_zara")
+
+    def test_operator_does_not_merge_invisible_state_into_current_work_queue(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            operator_dir = data_dir / "operator"
+            automation_dir = data_dir / "automation"
+            self._write_json(
+                operator_dir / "work_queue.json",
+                {
+                    "schema_version": 1,
+                    "work_items": [
+                        {
+                            "schema_version": 1,
+                            "work_item_id": "work_open_thread_row_visible",
+                            "work_item_type": "open_thread",
+                            "candidate_key": "row_visible",
+                            "visible_name": "Visible",
+                            "reason": "thread_observation_required",
+                        }
+                    ],
+                },
+            )
+            self._write_json(
+                automation_dir / "states.json",
+                {
+                    "schema_version": 1,
+                    "states": [
+                        {
+                            "schema_version": 1,
+                            "match_id": "match_invisible",
+                            "candidate_key": "row_invisible",
+                            "state": "needs_thread_scan",
+                            "candidate_type": "continuation_candidate",
+                            "visible_name": "Invisible",
+                            "unread_cue": "present",
+                            "next_due_at": None,
+                            "last_scan_cursor": None,
+                            "updated_at": "2026-05-26T00:00:00Z",
+                        }
+                    ],
+                },
+            )
+
+            exit_code, payload, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["work_item"]["work_item_type"], "open_thread")
+        self.assertEqual(payload["work_item"]["candidate_key"], "row_visible")
 
     def test_operator_handoff_does_not_stick_as_current_work(self):
         with tempfile.TemporaryDirectory() as temp_dir:

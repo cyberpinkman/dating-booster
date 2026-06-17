@@ -65,6 +65,38 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         if "tashuo" not in _supported_app_profiles(capabilities):
             return _finish(args, steps, "blocked", "tashuo_not_supported", support_session_id)
 
+        runtime_select = _run_cli(
+            steps,
+            "runtime_select_mac_ios_app",
+            "runtime",
+            "select",
+            "--data-dir",
+            str(args.data_dir),
+            "--app-id",
+            "tashuo",
+            "--runtime",
+            "mac-ios-app",
+            "--json",
+            allow_failure=True,
+        )
+        if runtime_select.get("status") != "selected":
+            return _finish(
+                args,
+                steps,
+                "blocked",
+                str(runtime_select.get("reason") or "runtime_select_failed"),
+                support_session_id,
+            )
+        _run_cli(
+            steps,
+            "runtime_status_mac_ios_app",
+            "runtime",
+            "status",
+            "--data-dir",
+            str(args.data_dir),
+            "--json",
+        )
+
         support = _run_cli(
             steps,
             "support_session_start",
@@ -111,6 +143,8 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
                 "prepare-message-page",
                 "--runtime",
                 "mac-ios-app",
+                "--data-dir",
+                str(args.data_dir),
                 "--output-dir",
                 str(args.work_dir),
                 "--json",
