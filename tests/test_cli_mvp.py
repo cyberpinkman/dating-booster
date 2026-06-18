@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
+from dating_boost.core.draft_evidence import ConversationThreadRepository, LatestTurnRepository, UserMemoryRepository
 from dating_boost.core.memory.models import (
     EvidenceRef,
     IdentityTrustStatus,
@@ -46,6 +47,11 @@ class CliMvpTests(unittest.TestCase):
                 ])
             import_payload = json.loads(import_output.getvalue())
             match_id = import_payload["match_id"]
+            UserMemoryRepository(data_dir).ensure_profile_source(
+                app_id="tinder",
+                runtime="default",
+                observed_at="2026-06-06T12:00:00Z",
+            )
 
             with redirect_stdout(output):
                 draft_exit = main([
@@ -87,6 +93,7 @@ class CliMvpTests(unittest.TestCase):
                     "--input",
                     "tests/fixtures/intelligence/user_profile.json",
                 ])
+            _prepare_draft_evidence_fixture(data_dir, "match_alex")
 
             output = StringIO()
             with redirect_stdout(output):
@@ -121,6 +128,7 @@ class CliMvpTests(unittest.TestCase):
                     "--input",
                     "tests/fixtures/intelligence/user_profile.json",
                 ])
+            _prepare_draft_evidence_fixture(data_dir, "match_alex")
             match_id = "match_untrusted"
             observation = load_observation(Path("tests/fixtures/intelligence/app_observation_chat.json"))
             ObservationRepository(data_dir).save_observation(match_id, observation)
@@ -232,6 +240,37 @@ class CliMvpTests(unittest.TestCase):
             self.assertIn("stale", {item["reason"] for item in diagnostic_items["excluded_memory"]})
             self.assertIn("budget", {item["reason"] for item in diagnostic_items["excluded_memory"]})
 
+    def test_context_build_can_include_draft_evidence_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            with redirect_stdout(StringIO()):
+                main([
+                    "init-profile",
+                    "--data-dir",
+                    str(data_dir),
+                    "--input",
+                    "tests/fixtures/intelligence/user_profile.json",
+                ])
+            _prepare_draft_evidence_fixture(data_dir, "match_alex")
+
+            exit_code, payload = self._run_json([
+                "context",
+                "build",
+                "--data-dir",
+                str(data_dir),
+                "--match-id",
+                "match_alex",
+                "--mode",
+                "adaptive",
+                "--include-draft-evidence",
+            ])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["draft_evidence"]["status"], "ok")
+            self.assertRegex(payload["draft_evidence"]["evidence_id"], r"^draft_evidence_[0-9a-f]{16}$")
+            self.assertIn("context_pack", payload)
+
     def test_draft_can_use_openai_backend_without_scripted_output(self):
         class FakeOpenAIBackend:
             created_models: list[str] = []
@@ -240,6 +279,12 @@ class CliMvpTests(unittest.TestCase):
                 self.created_models.append(model)
 
             def generate_structured(self, system_prompt, user_prompt, schema):
+                if "ai_or_weird_probability" in schema.get("required", []):
+                    return {
+                        "ai_or_weird_probability": 20,
+                        "reason": "unit test self review pass",
+                        "supplemental_prompt": "",
+                    }
                 return {
                     "best_reply": "OpenAI path reply.",
                     "safer_reply": "OpenAI safer reply.",
@@ -267,6 +312,7 @@ class CliMvpTests(unittest.TestCase):
                     "--input",
                     "tests/fixtures/intelligence/user_profile.json",
                 ])
+            _prepare_draft_evidence_fixture(data_dir, "match_alex")
 
             output = StringIO()
             with patch("dating_boost.cli.OpenAIBackend", FakeOpenAIBackend):
@@ -413,6 +459,7 @@ class CliMvpTests(unittest.TestCase):
                     "--input",
                     str(profile_path),
                 ])
+            _prepare_draft_evidence_fixture(data_dir, "match_alex")
 
             output = StringIO()
             with redirect_stdout(output):
@@ -435,7 +482,7 @@ class CliMvpTests(unittest.TestCase):
             self.assertEqual(init_exit, 0)
             self.assertEqual(draft_exit, 2)
             self.assertEqual(payload["status"], "blocked")
-            self.assertFalse(payload["policy"]["allowed"])
+            self.assertFalse(payload["draft_review"]["allowed_for_display"])
             self.assertNotIn("best_reply", payload)
             self.assertNotIn("draft", payload)
             self.assertNotIn("I studied overseas too", output.getvalue())
@@ -511,6 +558,31 @@ class CliMvpTests(unittest.TestCase):
         with redirect_stdout(output):
             exit_code = main(argv)
         return exit_code, json.loads(output.getvalue())
+
+
+def _prepare_draft_evidence_fixture(data_dir: Path, match_id: str) -> None:
+    observation = load_observation(Path("tests/fixtures/intelligence/app_observation_chat.json"))
+    ObservationRepository(data_dir).save_observation(match_id, observation)
+    MemoryRepository(data_dir).save_projection(
+        match_id,
+        MatchMemoryProjection(
+            match_id=match_id,
+            identity_status=IdentityTrustStatus.TRUSTED,
+            trusted_for_context=True,
+            trusted_for_managed_send=True,
+            updated_at=observation.captured_at,
+            matched_at="2026-05-25T00:00:00Z",
+            profile_last_observed_at=observation.captured_at,
+            profile_source_runtime={"app_id": observation.app_id, "runtime": "default"},
+        ),
+    )
+    ConversationThreadRepository(data_dir).overwrite_from_observation(match_id, observation)
+    LatestTurnRepository(data_dir).overwrite_from_observation(match_id, observation)
+    UserMemoryRepository(data_dir).ensure_profile_source(
+        app_id=observation.app_id,
+        runtime=observation.provenance.get("runtime") or observation.provenance.get("harness_runtime") or "default",
+        observed_at=observation.captured_at,
+    )
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
+from dating_boost.core.draft_evidence import UserMemoryRepository
 
 
 FIXTURE_DIR = Path("tests/fixtures/automation")
@@ -418,6 +419,21 @@ class OperatorSessionTests(unittest.TestCase):
                 for state in states_payload["automation"]["states"]
             }
             self.assertEqual(state_by_candidate["row_ada"]["state"], "sent_waiting")
+            thread = json.loads(
+                (data_dir / "matches" / send_payload["work_item"]["match_id"] / "conversation_thread.json")
+                .read_text(encoding="utf-8")
+            )
+            latest_turn = json.loads(
+                (data_dir / "matches" / send_payload["work_item"]["match_id"] / "latest_turn.json")
+                .read_text(encoding="utf-8")
+            )
+            outbound_texts = [
+                message["text"]
+                for message in thread["messages"]
+                if message.get("direction") == "outbound"
+            ]
+            self.assertIn("那先欠你一顿好吃的，具体吃啥我认真想一下", outbound_texts)
+            self.assertEqual(latest_turn["status"], "cleared")
             next_after_result_exit, next_after_result, _ = self._run([
                 "operator",
                 "next",
@@ -1405,6 +1421,16 @@ class OperatorSessionTests(unittest.TestCase):
             "--input",
             "tests/fixtures/intelligence/user_self_interview.json",
         ])
+        UserMemoryRepository(data_dir).ensure_profile_source(
+            app_id="wechat",
+            runtime="default",
+            observed_at="2026-05-26T00:00:00Z",
+        )
+        UserMemoryRepository(data_dir).ensure_profile_source(
+            app_id="tinder",
+            runtime="default",
+            observed_at="2026-05-26T00:00:00Z",
+        )
 
     def _run(self, argv):
         output = StringIO()
@@ -1460,6 +1486,17 @@ def _thread_observation(candidate_key):
             payload = dict(item)
             payload["schema_version"] = 1
             payload["observation_type"] = "thread"
+            if isinstance(payload.get("draft"), dict):
+                payload["draft"] = {
+                    **payload["draft"],
+                    "draft_generation_id": "draft_generation_operator_fixture",
+                    "draft_self_review_summary": {
+                        "schema_version": 1,
+                        "ai_or_weird_probability": 0,
+                        "status": "ok",
+                        "source": "unit_fixture",
+                    },
+                }
             return payload
     raise AssertionError(f"missing fixture thread observation: {candidate_key}")
 

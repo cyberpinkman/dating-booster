@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
+from dating_boost.core.draft_evidence import UserMemoryRepository
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.support import SupportLogRepository
 
@@ -549,6 +550,11 @@ class SupportLogTests(unittest.TestCase):
                 "tests/fixtures/intelligence/app_observation_chat.json",
             ])
             match_id = str(import_payload["match_id"])
+            UserMemoryRepository(data_dir).ensure_profile_source(
+                app_id="tinder",
+                runtime="default",
+                observed_at="2026-06-04T00:00:00Z",
+            )
             self._run(["data", "migrate", "--data-dir", str(data_dir), "--json"])
             _, start_payload = self._run([
                 "support",

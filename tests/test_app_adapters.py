@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
+from dating_boost.core.draft_generation_audit import DraftGenerationAuditRepository
 from dating_boost.core.gui_harness import NativeGuiHarness
 from dating_boost.core.live_send_contract import live_send_action_request_block_reason
 
@@ -385,6 +386,129 @@ class AppAdapterArchitectureTests(unittest.TestCase):
 
         self.assertEqual(reason, "draft_review_audit_not_found")
 
+    def test_live_send_contract_rejects_missing_draft_generation_audit_when_bound(self):
+        draft_text = "hi"
+        payload_hash = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
+        action_request = _live_action_request(
+            draft_text=draft_text,
+            payload_hash=payload_hash,
+            draft_review_id="draft_review_fixture",
+        )
+        action_request.update(
+            {
+                "draft_evidence_id": "draft_evidence_fixture",
+                "draft_generation_id": "draft_generation_missing",
+                "latest_turn_id": "latest_turn_fixture",
+                "conversation_thread_revision": 2,
+                "draft_self_review_summary": {
+                    "schema_version": 1,
+                    "ai_or_weird_probability": 20,
+                    "status": "ok",
+                },
+            }
+        )
+        authorization = _live_authorization()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            _write_draft_review_record(
+                data_dir,
+                review_id="draft_review_fixture",
+                payload_hash=payload_hash,
+                target_match_id="match_bumble",
+            )
+            reason = live_send_action_request_block_reason(
+                action_request,
+                draft_text,
+                authorization=authorization,
+                app_id="bumble",
+                data_dir=data_dir,
+            )
+
+        self.assertEqual(reason, "draft_generation_audit_not_found")
+
+    def test_live_send_contract_rejects_missing_draft_generation_binding_when_data_dir_is_available(self):
+        draft_text = "hi"
+        payload_hash = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
+        action_request = _live_action_request(
+            draft_text=draft_text,
+            payload_hash=payload_hash,
+            draft_review_id="draft_review_fixture",
+        )
+        authorization = _live_authorization()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            _write_draft_review_record(
+                data_dir,
+                review_id="draft_review_fixture",
+                payload_hash=payload_hash,
+                target_match_id="match_bumble",
+            )
+            reason = live_send_action_request_block_reason(
+                action_request,
+                draft_text,
+                authorization=authorization,
+                app_id="bumble",
+                data_dir=data_dir,
+            )
+
+        self.assertEqual(reason, "action_request_draft_generation_required")
+
+    def test_live_send_contract_accepts_bound_draft_generation_audit(self):
+        draft_text = "hi"
+        payload_hash = hashlib.sha256(draft_text.encode("utf-8")).hexdigest()
+        action_request = _live_action_request(
+            draft_text=draft_text,
+            payload_hash=payload_hash,
+            draft_review_id="draft_review_fixture",
+        )
+        action_request.update(
+            {
+                "draft_evidence_id": "draft_evidence_fixture",
+                "draft_generation_id": "draft_generation_fixture",
+                "latest_turn_id": "latest_turn_fixture",
+                "conversation_thread_revision": 2,
+                "draft_self_review_summary": {
+                    "schema_version": 1,
+                    "ai_or_weird_probability": 20,
+                    "status": "ok",
+                },
+            }
+        )
+        authorization = _live_authorization()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            _write_draft_review_record(
+                data_dir,
+                review_id="draft_review_fixture",
+                payload_hash=payload_hash,
+                target_match_id="match_bumble",
+            )
+            DraftGenerationAuditRepository(data_dir).append_generation(
+                generation_id="draft_generation_fixture",
+                evidence_id="draft_evidence_fixture",
+                prompt_id="draft_prompt_fixture",
+                status="ok",
+                primary_reason=None,
+                prompt_hash="prompt_hash",
+                context_hash="context_hash",
+                draft_hash="draft_hash",
+                attempt_count=1,
+                self_review_attempts=[{"ai_or_weird_probability": 20, "reason": "", "supplemental_prompt_hash": ""}],
+                created_at="2026-06-18T00:00:00Z",
+            )
+            reason = live_send_action_request_block_reason(
+                action_request,
+                draft_text,
+                authorization=authorization,
+                app_id="bumble",
+                data_dir=data_dir,
+            )
+
+        self.assertIsNone(reason)
+
     def test_host_loop_required_send_evidence_comes_from_adapter_manifest(self):
         from dating_boost.apps.registry import manifest_for_app
         from dating_boost.host_loop import _managed_gui_send_required_evidence
@@ -514,6 +638,89 @@ class AppAdapterArchitectureTests(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["reason"], "unsupported_native_harness_for_app")
         self.assertEqual(payload["app_id"], "hinge")
+
+
+def _live_action_request(*, draft_text: str, payload_hash: str, draft_review_id: str) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "action_request_id": "act_bumble_send",
+        "action": "send_message",
+        "app_id": "bumble",
+        "match_id": "match_bumble",
+        "candidate_key": "bumble_ada",
+        "payload_text": draft_text,
+        "payload_hash": payload_hash,
+        "precondition_hash": "pre_hash",
+        "planner_alignment": "ok",
+        "conversation_stage": "warmup",
+        "conversation_move": "bridge_topic",
+        "autonomous_audit_binding": {
+            "binding_type": "autonomous_authorization",
+            "authorization_id": "auth_bumble_live",
+            "action": "send_message",
+            "target_match_id": "match_bumble",
+            "payload_hash": payload_hash,
+            "precondition_hash": "pre_hash",
+        },
+        "requires_post_action_verification": True,
+        "draft_review_id": draft_review_id,
+        "policy": {"allowed": True, "draft_review_id": draft_review_id},
+        "target_binding": {
+            "required_visible_text": ["Ada"],
+            "target_match_id": "match_bumble",
+            "candidate_key": "bumble_ada",
+        },
+    }
+
+
+def _live_authorization() -> dict[str, object]:
+    return {
+        "authorization_id": "auth_bumble_live",
+        "scope": "send_chat_messages",
+        "app_id": "bumble",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "allowed_actions": ["send_message"],
+        "autonomous_send": True,
+        "live_send": True,
+        "requires_post_action_verification": True,
+    }
+
+
+def _write_draft_review_record(
+    data_dir: Path,
+    *,
+    review_id: str,
+    payload_hash: str,
+    target_match_id: str,
+) -> None:
+    path = data_dir / "audit" / "draft_reviews.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "schema_version": 1,
+        "review_id": review_id,
+        "created_at": "2026-06-18T00:00:00Z",
+        "mode": "managed_live",
+        "target_match_id": target_match_id,
+        "payload_hash": payload_hash,
+        "payload_format": "single_message",
+        "message_count": 1,
+        "status": "ok",
+        "allowed_for_display": True,
+        "allowed_for_stage": True,
+        "allowed_for_managed_send": True,
+        "requires_user_confirmation": False,
+        "primary_reason": None,
+        "finding_codes": [],
+        "findings": [],
+        "revision_hint_count": 0,
+        "context_manifest": {},
+        "draft_payload_hash": "draft_payload_hash",
+        "context_pack_hash": "context_pack_hash",
+        "draft_topic_labels": [],
+        "draft_character_count": len(payload_hash),
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":

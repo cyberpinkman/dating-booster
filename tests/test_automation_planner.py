@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
+from dating_boost.core.draft_evidence import UserMemoryRepository
 
 
 FIXTURE_DIR = Path("tests/fixtures/automation")
@@ -81,6 +82,11 @@ class AutomationPlannerTests(unittest.TestCase):
             self.assertEqual(action_request["planner_alignment"], "ok")
             self.assertEqual(action_request["next_milestone"], "从猫桥到她平时在家状态")
             self.assertRegex(action_request["draft_review_id"], r"^draft_review_[0-9a-f]{16}$")
+            self.assertRegex(action_request["draft_evidence_id"], r"^draft_evidence_[0-9a-f]{16}$")
+            self.assertEqual(action_request["draft_generation_id"], "draft_generation_fixture")
+            self.assertRegex(action_request["latest_turn_id"], r"^latest_turn_[0-9a-f]{16}$")
+            self.assertIsInstance(action_request["conversation_thread_revision"], int)
+            self.assertEqual(action_request["draft_self_review_summary"]["ai_or_weird_probability"], 0)
             self.assertEqual(action_request["draft_review_summary"]["allowed_for_managed_send"], True)
             self.assertEqual(action_request["policy"]["draft_review_id"], action_request["draft_review_id"])
             self.assertEqual(action_request["policy"]["allowed"], action_request["draft_review_summary"]["allowed_for_managed_send"])
@@ -117,6 +123,36 @@ class AutomationPlannerTests(unittest.TestCase):
             self.assertEqual(step_payload["action_requests"], [])
             self.assertIn("planner_assessment_required", step_payload["warnings"])
             self.assertEqual(step_payload["state_updates"][0]["state"], "needs_reply")
+
+    def test_session_step_blocks_draft_without_generation_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(self._auth_for_app(temp_dir)),
+            ])
+            scan_path = Path(temp_dir) / "missing_generation_scan.json"
+            self._write_json(scan_path, _planner_scan(include_generation_contract=False))
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+            self.assertEqual(step_exit, 0)
+            self.assertEqual(step_payload["action_requests"], [])
+            self.assertIn("draft_generation_required", step_payload["warnings"])
 
     def test_draft_alignment_requires_matching_move_not_explanation_substring(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -685,6 +721,11 @@ class AutomationPlannerTests(unittest.TestCase):
             "--input",
             "tests/fixtures/intelligence/user_self_interview.json",
         ])
+        UserMemoryRepository(data_dir).ensure_profile_source(
+            app_id="wechat",
+            runtime="default",
+            observed_at="2026-05-26T08:00:00Z",
+        )
 
     def _run(self, argv):
         output = StringIO()
@@ -724,6 +765,7 @@ def _planner_scan(
     appointment_slot=None,
     reciprocity=None,
     draft_overrides=None,
+    include_generation_contract=True,
 ):
     why_this_works = (
         "It follows planner move bridge_topic and moves from cats to her home-life rhythm."
@@ -849,6 +891,19 @@ def _planner_scan(
                     "mode_notes": "Adaptive mode.",
                     "persona_divergence": "low",
                     "stance_divergence": "low",
+                    **(
+                        {
+                            "draft_generation_id": "draft_generation_fixture",
+                            "draft_self_review_summary": {
+                                "schema_version": 1,
+                                "ai_or_weird_probability": 0,
+                                "status": "ok",
+                                "source": "unit_fixture",
+                            },
+                        }
+                        if include_generation_contract
+                        else {}
+                    ),
                     **(draft_overrides or {}),
                 },
             }

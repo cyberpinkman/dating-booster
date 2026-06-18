@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.draft_generation_audit import DraftGenerationAuditRepository
 from dating_boost.core.draft_review_audit import DraftReviewAuditRepository
 from dating_boost.core.production_store import ProductionDataStore
 
@@ -243,6 +244,9 @@ def live_send_action_request_block_reason(
         )
         if draft_review_reason is not None:
             return draft_review_reason
+        draft_generation_reason = _draft_generation_binding_block_reason(action_request, data_dir=data_dir)
+        if draft_generation_reason is not None:
+            return draft_generation_reason
     return None
 
 
@@ -265,6 +269,31 @@ def _planner_evidence_block_reason(action_request: dict[str, Any]) -> str | None
     ):
         return "action_request_planner_context_required"
     return None
+
+
+def _draft_generation_binding_block_reason(action_request: dict[str, Any], *, data_dir: Path) -> str | None:
+    generation_id = _stripped_or_none(action_request.get("draft_generation_id"))
+    evidence_id = _stripped_or_none(action_request.get("draft_evidence_id"))
+    if generation_id is None:
+        return "action_request_draft_generation_required"
+    if evidence_id is None:
+        return "action_request_draft_evidence_required"
+    if _stripped_or_none(action_request.get("latest_turn_id")) is None:
+        return "action_request_latest_turn_required"
+    if not isinstance(action_request.get("conversation_thread_revision"), int):
+        return "action_request_conversation_thread_required"
+    self_review = action_request.get("draft_self_review_summary")
+    if not isinstance(self_review, dict):
+        return "action_request_draft_self_review_required"
+    probability = self_review.get("ai_or_weird_probability")
+    if not isinstance(probability, int) or isinstance(probability, bool) or probability < 0 or probability > 100:
+        return "action_request_draft_self_review_invalid"
+    if probability > 40:
+        return "action_request_draft_self_review_not_passed"
+    return DraftGenerationAuditRepository(data_dir).generation_block_reason(
+        generation_id,
+        evidence_id=evidence_id,
+    )
 
 
 def _expected_action_payload_hash(action_request: dict[str, Any], draft_text: str) -> tuple[str, str | None]:

@@ -1206,6 +1206,17 @@ class OperatorHostLoopTests(unittest.TestCase):
                 },
                 "requires_post_action_verification": True,
                 "draft_review_id": "draft_review_fixture",
+                "draft_evidence_id": "draft_evidence_fixture",
+                "draft_generation_id": "draft_generation_fixture",
+                "latest_turn_id": "latest_turn_fixture",
+                "conversation_thread_revision": 1,
+                "draft_self_review_summary": {
+                    "schema_version": 1,
+                    "status": "ok",
+                    "ai_or_weird_probability": 20,
+                    "attempts": 1,
+                    "source": "unit_fixture",
+                },
                 "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
             }
@@ -1288,6 +1299,17 @@ class OperatorHostLoopTests(unittest.TestCase):
                 ),
                 "pre_action_observation_id": "obs_before",
                 "draft_review_id": "draft_review_fixture",
+                "draft_evidence_id": "draft_evidence_fixture",
+                "draft_generation_id": "draft_generation_fixture",
+                "latest_turn_id": "latest_turn_fixture",
+                "conversation_thread_revision": 1,
+                "draft_self_review_summary": {
+                    "schema_version": 1,
+                    "status": "ok",
+                    "ai_or_weird_probability": 20,
+                    "attempts": 1,
+                    "source": "unit_fixture",
+                },
                 "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "planner_alignment": "ok",
                 "conversation_stage": "rapport_building",
@@ -1433,6 +1455,17 @@ class OperatorHostLoopTests(unittest.TestCase):
                 ),
                 "pre_action_observation_id": "obs_before",
                 "draft_review_id": "draft_review_fixture",
+                "draft_evidence_id": "draft_evidence_fixture",
+                "draft_generation_id": "draft_generation_fixture",
+                "latest_turn_id": "latest_turn_fixture",
+                "conversation_thread_revision": 1,
+                "draft_self_review_summary": {
+                    "schema_version": 1,
+                    "status": "ok",
+                    "ai_or_weird_probability": 20,
+                    "attempts": 1,
+                    "source": "unit_fixture",
+                },
                 "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 "planner_alignment": "ok",
                 "conversation_stage": "warmup",
@@ -3989,6 +4022,32 @@ def _write_draft_review_audit(data_dir: Path, work_item: dict) -> None:
     }
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    generation_id = str(work_item.get("draft_generation_id") or "").strip()
+    evidence_id = str(work_item.get("draft_evidence_id") or "").strip()
+    if generation_id and evidence_id:
+        generation_path = data_dir / "audit" / "draft_generations.jsonl"
+        generation_record = {
+            "schema_version": 1,
+            "generation_id": generation_id,
+            "evidence_id": evidence_id,
+            "prompt_id": "prompt_fixture",
+            "status": "ok",
+            "primary_reason": None,
+            "prompt_hash": "prompt_hash_fixture",
+            "context_hash": "context_hash_fixture",
+            "draft_hash": payload_hash,
+            "attempt_count": 1,
+            "self_review_attempts": [
+                {
+                    "ai_or_weird_probability": 20,
+                    "reason": "fixture_passed",
+                    "supplemental_prompt_hash": "",
+                }
+            ],
+            "created_at": "2026-05-26T00:00:00Z",
+        }
+        with generation_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(generation_record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def _wechat_managed_work_item(payload_text: str, payload_hash: str) -> dict:
@@ -4017,6 +4076,17 @@ def _wechat_managed_work_item(payload_text: str, payload_hash: str) -> dict:
         },
         "requires_post_action_verification": True,
         "draft_review_id": "draft_review_fixture",
+        "draft_evidence_id": "draft_evidence_fixture",
+        "draft_generation_id": "draft_generation_fixture",
+        "latest_turn_id": "latest_turn_fixture",
+        "conversation_thread_revision": 1,
+        "draft_self_review_summary": {
+            "schema_version": 1,
+            "status": "ok",
+            "ai_or_weird_probability": 20,
+            "attempts": 1,
+            "source": "unit_fixture",
+        },
         "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
         "planner_alignment": "ok",
         "conversation_stage": "rapport_building",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.draft_evidence import ConversationThreadRepository, LatestTurnRepository
 from dating_boost.core.identity import resolve_match_identity
 from dating_boost.core.memory.extractors import events_from_observation
 from dating_boost.core.memory.repositories import MemoryRepository
@@ -41,6 +42,8 @@ def store_observation_with_memory(root: Path, observation: AppObservation) -> di
     for event in events:
         memory_repo.append_event(identity.match_id, event)
     projection = memory_repo.rebuild_projection(identity.match_id)
+    ConversationThreadRepository(root).overwrite_from_observation(identity.match_id, observation)
+    LatestTurnRepository(root).overwrite_from_observation(identity.match_id, observation)
 
     return {
         "status": "ok",

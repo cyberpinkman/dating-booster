@@ -29,11 +29,16 @@ def reduce_match_memory(match_id: str, events: list[MemoryEvent]) -> MatchMemory
     trusted_for_context = True
     trusted_for_managed_send = False
     updated_at = ""
+    matched_at: str | None = None
+    profile_last_observed_at: str | None = None
+    profile_source_runtime: dict[str, Any] = {}
     last_event_id: str | None = None
 
     for event in events:
         if event.match_id != match_id:
             continue
+        if matched_at is None:
+            matched_at = event.created_at
         updated_at = event.created_at
         last_event_id = event.event_id
 
@@ -67,6 +72,11 @@ def reduce_match_memory(match_id: str, events: list[MemoryEvent]) -> MatchMemory
             MemoryEventType.CONVERSATION_FACT_OBSERVED,
             MemoryEventType.INFERENCE_RECORDED,
         }:
+            if event.event_type == MemoryEventType.PROFILE_FACT_OBSERVED:
+                profile_last_observed_at = event.created_at
+                runtime = _profile_source_runtime_from_event(event)
+                if runtime:
+                    profile_source_runtime = runtime
             fact_payload = event.payload.get("fact")
             if isinstance(fact_payload, dict):
                 fact = MemoryFact.from_dict(fact_payload)
@@ -172,9 +182,30 @@ def reduce_match_memory(match_id: str, events: list[MemoryEvent]) -> MatchMemory
         identity_status=identity_status,
         trusted_for_context=trusted_for_context,
         trusted_for_managed_send=trusted_for_managed_send,
+        matched_at=matched_at,
+        profile_last_observed_at=profile_last_observed_at,
+        profile_source_runtime=profile_source_runtime,
         last_event_id=last_event_id,
         updated_at=updated_at,
     )
+
+
+def _profile_source_runtime_from_event(event: MemoryEvent) -> dict[str, Any]:
+    for key in ("profile_source_runtime", "source_runtime", "runtime"):
+        value = event.payload.get(key)
+        if isinstance(value, dict):
+            return dict(value)
+    if event.evidence is not None:
+        metadata = dict(event.evidence.metadata)
+        app_id = metadata.get("app_id")
+        runtime = metadata.get("runtime")
+        if app_id or runtime:
+            return {
+                key: str(value)
+                for key, value in {"app_id": app_id, "runtime": runtime}.items()
+                if value
+            }
+    return {}
 
 
 def _upsert_fact(

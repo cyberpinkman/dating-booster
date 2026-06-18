@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.apps.registry import supported_app_ids
+from dating_boost.core.draft_evidence import UserMemoryRepository
 from dating_boost.core.live_send_contract import target_binding_structural_evidence_present, validate_live_send_contract
 from dating_boost.core.managed_gui_send import (
     ManagedGuiSendError,
@@ -960,6 +961,12 @@ class HostLoopSupervisor:
             path = self.fixture_host / filename
             if path.exists():
                 self._run_cli_json(*prefix, str(path))
+        runtime = _normalized_harness_runtime(str(getattr(self.args, "harness_runtime", "") or "")) or "default"
+        UserMemoryRepository(self.data_dir).ensure_profile_source(
+            app_id=str(self.args.app_id),
+            runtime=runtime,
+            observed_at=_now_iso(),
+        )
 
     def _authorization_path(self) -> Path:
         path = self.args.authorization or self._fixture_file("auth.json")

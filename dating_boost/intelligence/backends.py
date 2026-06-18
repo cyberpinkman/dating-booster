@@ -29,15 +29,36 @@ class ModelBackend(Protocol):
 class ScriptedBackend:
     """Deterministic backend for tests and local scripted flows."""
 
-    def __init__(self, payload: Mapping[str, object]):
-        self._payload = deepcopy(dict(payload))
+    def __init__(self, payload: Mapping[str, object] | list[Mapping[str, object]]):
+        if isinstance(payload, list):
+            self._payloads = [deepcopy(dict(item)) for item in payload]
+        else:
+            self._payloads = [deepcopy(dict(payload))]
+        self._cursor = 0
 
     @property
     def capabilities(self) -> Collection[BackendCapability]:
         return frozenset({BackendCapability.GENERATE_STRUCTURED})
 
     def generate_structured(self, system_prompt: str, user_prompt: str, schema: Mapping[str, object]) -> dict[str, object]:
-        return deepcopy(self._payload)
+        if self._cursor >= len(self._payloads):
+            if _schema_requires(schema, "ai_or_weird_probability"):
+                return {
+                    "ai_or_weird_probability": 0,
+                    "reason": "scripted default self review pass",
+                    "supplemental_prompt": "",
+                }
+            payload = self._payloads[-1]
+        else:
+            payload = self._payloads[self._cursor]
+            self._cursor += 1
+        if _schema_requires(schema, "ai_or_weird_probability") and "ai_or_weird_probability" not in payload:
+            return {
+                "ai_or_weird_probability": 0,
+                "reason": "scripted default self review pass",
+                "supplemental_prompt": "",
+            }
+        return deepcopy(payload)
 
 
 class OpenAIBackend:
@@ -136,3 +157,8 @@ def _load_json_object(text: str) -> dict[str, object]:
         raise RuntimeError("OpenAI structured response was not valid JSON.") from exc
 
     return _coerce_to_dict(value)
+
+
+def _schema_requires(schema: Mapping[str, object], field: str) -> bool:
+    required = schema.get("required")
+    return isinstance(required, list) and field in required

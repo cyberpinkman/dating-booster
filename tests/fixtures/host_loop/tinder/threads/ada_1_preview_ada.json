@@ -113,6 +113,14 @@
     "mode_notes": "Adaptive mode.",
     "disclosure_source": "none",
     "used_user_material_ids": [],
+    "draft_generation_id": "draft_generation_fixture_ada_reward",
+    "draft_self_review_summary": {
+      "schema_version": 1,
+      "status": "ok",
+      "ai_or_weird_probability": 20,
+      "attempts": 1,
+      "source": "fixture_host"
+    },
     "question_count": 0,
     "reply_shape": "statement",
     "persona_divergence": "low",

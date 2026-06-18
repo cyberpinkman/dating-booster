@@ -263,6 +263,9 @@ class MatchMemoryProjection:
     trusted_for_context: bool = True
     trusted_for_managed_send: bool = False
     updated_at: str = ""
+    matched_at: str | None = None
+    profile_last_observed_at: str | None = None
+    profile_source_runtime: dict[str, Any] = field(default_factory=dict)
     schema_version: int = MATCH_MEMORY_PROJECTION_SCHEMA_VERSION
     facts: list[MemoryFact] = field(default_factory=list)
     inferences: list[MemoryFact] = field(default_factory=list)
@@ -293,6 +296,7 @@ class MatchMemoryProjection:
             for item in self.resolved_commitments
         ]
         self.feedback_preferences = dict(self.feedback_preferences)
+        self.profile_source_runtime = dict(self.profile_source_runtime)
         self.conflicts = [
             item if isinstance(item, MemoryConflict) else MemoryConflict.from_dict(dict(item))
             for item in self.conflicts
@@ -306,6 +310,9 @@ class MatchMemoryProjection:
             "trusted_for_context": self.trusted_for_context,
             "trusted_for_managed_send": self.trusted_for_managed_send,
             "updated_at": self.updated_at,
+            "matched_at": self.matched_at,
+            "profile_last_observed_at": self.profile_last_observed_at,
+            "profile_source_runtime": dict(self.profile_source_runtime),
             "facts": [fact.to_dict() for fact in self.facts],
             "inferences": [fact.to_dict() for fact in self.inferences],
             "conversation_threads": [dict(item) for item in self.conversation_threads],
@@ -325,6 +332,9 @@ class MatchMemoryProjection:
             trusted_for_context=bool(data.get("trusted_for_context", True)),
             trusted_for_managed_send=bool(data.get("trusted_for_managed_send", False)),
             updated_at=str(data.get("updated_at", "")),
+            matched_at=data.get("matched_at"),
+            profile_last_observed_at=data.get("profile_last_observed_at"),
+            profile_source_runtime=dict(data.get("profile_source_runtime", {})),
             facts=[MemoryFact.from_dict(item) for item in data.get("facts", [])],
             inferences=[MemoryFact.from_dict(item) for item in data.get("inferences", [])],
             conversation_threads=[dict(item) for item in data.get("conversation_threads", [])],

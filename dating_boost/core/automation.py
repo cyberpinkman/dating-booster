@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.context_pack import build_context_pack
+from dating_boost.core.draft_evidence import build_draft_evidence
+from dating_boost.core.draft_generation_audit import DraftGenerationAuditRepository
 from dating_boost.core.draft_review_audit import DraftReviewAuditRepository
 from dating_boost.core.goals import DEFAULT_GOAL_TYPE, get_goal_type_definition
 from dating_boost.core.memory.ingest import store_observation_with_memory
@@ -1231,7 +1233,66 @@ class AutomationRepository:
             if str(item).strip()
         ] if isinstance(raw_draft.get("used_user_material_ids"), list) else []
 
-        context_pack = self._context_pack(match_id, observation)
+        evidence = build_draft_evidence(
+            self.root,
+            match_id,
+            reply_mode=ReplyMode.ADAPTIVE,
+            observation=observation,
+            draft_kind=str(raw_draft.get("draft_kind") or "reply"),
+            now=self._now(),
+            app_id=observation.app_id,
+            runtime=observation.provenance.get("runtime") or observation.provenance.get("harness_runtime") or "default",
+            require_user_profile_source=True,
+        )
+        if evidence.status != "ok":
+            _mark_draft_revision_required(state, reason=evidence.primary_reason or "draft_evidence_blocked")
+            warnings.append(evidence.primary_reason or "draft_evidence_blocked")
+            warnings.append("draft_evidence_required")
+            _append_draft_revision_request(
+                scan_requests,
+                candidate_key=candidate_key,
+                match_id=match_id,
+                visible_name=observation.match_identity_hints.visible_name,
+                reason=evidence.primary_reason or "draft_evidence_blocked",
+            )
+            return
+
+        generation_contract_reason = _host_supplied_generation_contract_block_reason(raw_draft)
+        if generation_contract_reason is not None:
+            _mark_draft_revision_required(state, reason=generation_contract_reason)
+            warnings.append(generation_contract_reason)
+            warnings.append("draft_generation_required")
+            _append_draft_revision_request(
+                scan_requests,
+                candidate_key=candidate_key,
+                match_id=match_id,
+                visible_name=observation.match_identity_hints.visible_name,
+                reason=generation_contract_reason,
+            )
+            return
+
+        generation_binding = _host_supplied_generation_binding(
+            self.root,
+            evidence_id=evidence.evidence_id,
+            context_pack=evidence.context_pack,
+            draft_payload=raw_draft,
+            created_at=self._now(),
+        )
+        self_review_probability = int(generation_binding["draft_self_review_summary"]["ai_or_weird_probability"])
+        if self_review_probability > 40:
+            _mark_draft_revision_required(state, reason="draft_self_review_probability_high")
+            warnings.append("draft_self_review_probability_high")
+            warnings.append("draft_revision_required")
+            _append_draft_revision_request(
+                scan_requests,
+                candidate_key=candidate_key,
+                match_id=match_id,
+                visible_name=observation.match_identity_hints.visible_name,
+                reason="draft_self_review_probability_high",
+            )
+            return
+
+        context_pack = evidence.context_pack
         review = review_draft(
             raw_draft,
             context_pack,
@@ -1318,6 +1379,11 @@ class AutomationRepository:
                 "requires_user_confirmation": review.requires_user_confirmation,
                 "draft_review_id": review.review_id,
             },
+            "draft_evidence_id": evidence.evidence_id,
+            "draft_generation_id": generation_binding["draft_generation_id"],
+            "latest_turn_id": evidence.latest_turn_id,
+            "conversation_thread_revision": evidence.conversation_thread_revision,
+            "draft_self_review_summary": generation_binding["draft_self_review_summary"],
             "draft_review_id": review.review_id,
             "draft_review_summary": review.summary,
             "planner_revision": planner_recommendation.get("planner_revision") if planner_recommendation else None,
@@ -1609,6 +1675,66 @@ def _action_result_mismatch(event: dict[str, Any], state: dict[str, Any]) -> str
         return "payload_hash_mismatch"
     if event.get("pre_action_observation_id") != state.get("last_pre_action_observation_id"):
         return "pre_action_observation_id_mismatch"
+    return None
+
+
+def _host_supplied_generation_binding(
+    root: Path,
+    *,
+    evidence_id: str,
+    context_pack: dict[str, Any],
+    draft_payload: dict[str, Any],
+    created_at: str,
+) -> dict[str, Any]:
+    raw_summary = draft_payload.get("draft_self_review_summary")
+    if not isinstance(raw_summary, dict):
+        raise ValueError("draft_self_review_summary is required")
+    probability = int(raw_summary["ai_or_weird_probability"])
+    source = str(raw_summary.get("source") or "host_supplied")
+    reason = str(raw_summary.get("reason") or "")
+    prompt_id = str(draft_payload.get("draft_prompt_id") or "host_supplied_draft_prompt")
+    draft_hash = payload_digest(draft_payload)
+    context_hash = payload_digest(context_pack)
+    generation_id = str(
+        draft_payload["draft_generation_id"]
+    )
+    self_review_summary = {
+        "schema_version": 1,
+        "ai_or_weird_probability": probability,
+        "status": "ok" if probability <= 40 else "needs_revision",
+        "source": source,
+        "reason": reason,
+    }
+    DraftGenerationAuditRepository(root).append_generation(
+        generation_id=generation_id,
+        evidence_id=evidence_id,
+        prompt_id=prompt_id,
+        status="ok" if probability <= 40 else "blocked",
+        primary_reason=None if probability <= 40 else "draft_self_review_probability_high",
+        prompt_hash=str(draft_payload.get("draft_prompt_hash") or "host_supplied"),
+        context_hash=context_hash,
+        draft_hash=draft_hash,
+        attempt_count=1,
+        self_review_attempts=[self_review_summary],
+        created_at=created_at,
+    )
+    return {
+        "draft_generation_id": generation_id,
+        "draft_self_review_summary": self_review_summary,
+    }
+
+
+def _host_supplied_generation_contract_block_reason(draft_payload: dict[str, Any]) -> str | None:
+    if not str(draft_payload.get("draft_generation_id") or "").strip():
+        return "draft_generation_required"
+    raw_summary = draft_payload.get("draft_self_review_summary")
+    if not isinstance(raw_summary, dict):
+        return "draft_self_review_required"
+    probability = raw_summary.get("ai_or_weird_probability")
+    if not isinstance(probability, int) or isinstance(probability, bool) or probability < 0 or probability > 100:
+        return "draft_self_review_invalid"
+    if probability > 40:
+        return "draft_self_review_probability_high"
     return None
 
 

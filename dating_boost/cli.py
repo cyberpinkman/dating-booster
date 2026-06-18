@@ -26,6 +26,7 @@ from dating_boost.core.capabilities import build_capabilities
 from dating_boost.core.context_pack import build_context_pack
 from dating_boost.core.daemon import DaemonRepository
 from dating_boost.core.diagnostics import DiagnosticsRepository
+from dating_boost.core.draft_evidence import DraftEvidencePack, build_draft_evidence
 from dating_boost.core.draft_review_audit import DraftReviewAuditRepository
 from dating_boost.core.feedback import create_feedback_event
 from dating_boost.core.live_send_contract import (
@@ -72,7 +73,8 @@ from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.storage import StorageError
 from dating_boost.core.support import SupportLogRepository, classify_text_topics, context_source_manifest
 from dating_boost.intelligence.backends import ModelBackend, OpenAIBackend, ScriptedBackend
-from dating_boost.intelligence.reply_generator import DraftResponse, generate_reply
+from dating_boost.intelligence.draft_generation import DraftGenerationResult, generate_reply_with_refinement
+from dating_boost.intelligence.reply_generator import DraftResponse
 from dating_boost.evals.runner import run_conversation_eval, run_memory_eval, run_memory_review_eval
 from dating_boost.perception.fixture_loader import load_observation
 from dating_boost.perception.observations import AppObservation
@@ -543,6 +545,8 @@ def main(argv: list[str] | None = None) -> int:
     draft_parser.add_argument("--model", default="gpt-4.1-mini")
     draft_parser.add_argument("--scripted-backend-output", type=Path)
     draft_parser.add_argument("--debug-context", action="store_true")
+    draft_parser.add_argument("--draft-kind", choices=["reply", "opener"], default="reply")
+    draft_parser.add_argument("--reactivation-requested", action="store_true")
     draft_parser.set_defaults(handler=_handle_draft)
 
     context_parser = subparsers.add_parser("context", help="Agent-native context commands.")
@@ -556,6 +560,9 @@ def main(argv: list[str] | None = None) -> int:
     context_build_parser.add_argument("--mode", required=True, choices=[mode.value for mode in ReplyMode])
     context_build_parser.add_argument("--max-memory-items", type=int)
     context_build_parser.add_argument("--include-memory-diagnostics", action="store_true")
+    context_build_parser.add_argument("--include-draft-evidence", action="store_true")
+    context_build_parser.add_argument("--draft-kind", choices=["reply", "opener"], default="reply")
+    context_build_parser.add_argument("--reactivation-requested", action="store_true")
     context_build_parser.add_argument("--semantic-provider", choices=["none", "lexical"], default="none")
     context_build_parser.add_argument("--semantic-query", default=None)
     context_build_parser.set_defaults(handler=_handle_context_build)
@@ -2683,24 +2690,76 @@ def _match_record(data_dir: Path, match_id: str) -> dict[str, object] | None:
 
 
 def _handle_draft(args: argparse.Namespace) -> int:
-    repo = JsonMemoryRepository(args.data_dir)
-    profile = repo.load_user_profile()
     reply_mode = ReplyMode(args.mode)
     backend = _select_backend(args)
     observation = ObservationRepository(args.data_dir).load_latest_observation(args.match_id)
-    context_pack = _build_mvp_context_pack(profile, args.match_id, reply_mode, observation, args.data_dir)
-    draft = generate_reply(context_pack, reply_mode, backend)
-    review = review_draft(draft, context_pack, mode="display")
+    evidence = build_draft_evidence(
+        args.data_dir,
+        args.match_id,
+        reply_mode=reply_mode,
+        observation=observation,
+        draft_kind=args.draft_kind,
+        user_reactivated=bool(args.reactivation_requested),
+        now=_now_iso(),
+        app_id=observation.app_id if observation else None,
+        runtime=_observation_runtime(observation),
+        require_user_profile_source=True,
+    )
+    if evidence.status != "ok":
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "blocked",
+                "match_id": args.match_id,
+                "mode": reply_mode.value,
+                "evidence_status": evidence.status,
+                "draft_evidence": evidence.public_dict(),
+            }
+        )
+        return 2
+
+    generation = generate_reply_with_refinement(
+        evidence,
+        backend=backend,
+        audit_root=args.data_dir,
+    )
+    _record_support_draft_generation(args.data_dir, evidence=evidence, generation=generation, command="draft")
+    if generation.status != "ok" or generation.draft is None or generation.draft_payload is None:
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "blocked",
+                "match_id": args.match_id,
+                "mode": reply_mode.value,
+                "evidence_status": evidence.status,
+                "draft_evidence": evidence.public_dict(),
+                "draft_generation_summary": generation.summary(),
+                "self_review_attempts": generation.summary()["self_review_attempts"],
+            }
+        )
+        return 2
+
+    draft = generation.draft
+    context_pack = evidence.context_pack
+    disclosure_profile = UserDisclosureRepository(args.data_dir).load_profile_or_none()
+    review = review_draft(
+        generation.draft_payload,
+        context_pack,
+        mode="display",
+        observation=observation,
+        planner_recommendation=evidence.planner_recommendation,
+        disclosure_profile=disclosure_profile,
+    )
     DraftReviewAuditRepository(args.data_dir).append_review(
         review,
-        draft_payload=_draft_to_dict(draft),
+        draft_payload=generation.draft_payload,
         context_pack=context_pack,
         mode="display",
         target_match_id=args.match_id,
     )
     _record_support_draft_review(
         args.data_dir,
-        draft_payload=_draft_to_dict(draft),
+        draft_payload=generation.draft_payload,
         context_pack=context_pack,
         review=review,
         command="draft",
@@ -2712,6 +2771,9 @@ def _handle_draft(args: argparse.Namespace) -> int:
                 "status": "blocked",
                 "match_id": args.match_id,
                 "mode": reply_mode.value,
+                "evidence_status": evidence.status,
+                "draft_generation_summary": generation.summary(),
+                "self_review_attempts": generation.summary()["self_review_attempts"],
                 "draft_review": _draft_review_public_dict(review),
             }
         )
@@ -2721,12 +2783,17 @@ def _handle_draft(args: argparse.Namespace) -> int:
         "status": review.status,
         "match_id": args.match_id,
         "mode": reply_mode.value,
+        "evidence_status": evidence.status,
+        "draft_evidence": evidence.public_dict(),
+        "draft_generation_summary": generation.summary(),
+        "self_review_attempts": generation.summary()["self_review_attempts"],
         "best_reply": draft.best_reply,
-        "draft": _draft_to_dict(draft),
+        "draft": generation.draft_payload,
         "draft_review": _draft_review_public_dict(review),
     }
     if args.debug_context:
         payload["context_pack"] = context_pack
+        payload["draft_prompt"] = generation.prompt.public_dict()
     _print_json(payload)
     return 0
 
@@ -2741,9 +2808,35 @@ def _handle_context_build(args: argparse.Namespace) -> int:
             }
         )
         return 2
-    profile = JsonMemoryRepository(args.data_dir).load_user_profile()
     reply_mode = ReplyMode(args.mode)
     observation = ObservationRepository(args.data_dir).load_latest_observation(args.match_id)
+    if args.include_draft_evidence:
+        evidence = build_draft_evidence(
+            args.data_dir,
+            args.match_id,
+            reply_mode=reply_mode,
+            observation=observation,
+            draft_kind=args.draft_kind,
+            user_reactivated=bool(args.reactivation_requested),
+            now=_now_iso(),
+            app_id=observation.app_id if observation else None,
+            runtime=_observation_runtime(observation),
+            max_memory_items=args.max_memory_items,
+            require_user_profile_source=True,
+        )
+        payload: dict[str, Any] = {
+            "schema_version": 1,
+            "status": evidence.status,
+            "match_id": args.match_id,
+            "mode": reply_mode.value,
+            "draft_evidence": evidence.public_dict(),
+        }
+        if evidence.status == "ok":
+            payload["context_pack"] = evidence.context_pack
+        _print_json(payload)
+        return 0 if evidence.status == "ok" else 2
+
+    profile = JsonMemoryRepository(args.data_dir).load_user_profile()
     context_pack = _build_mvp_context_pack(
         profile,
         args.match_id,
@@ -3237,7 +3330,12 @@ def _select_backend(args: argparse.Namespace) -> ModelBackend:
     if backend_name == "scripted":
         if args.scripted_backend_output is None:
             raise ValueError("--backend scripted requires --scripted-backend-output")
-        return ScriptedBackend(_read_json_object(args.scripted_backend_output))
+        scripted_payload = _read_json_payload(args.scripted_backend_output)
+        if isinstance(scripted_payload, dict):
+            return ScriptedBackend(scripted_payload)
+        if isinstance(scripted_payload, list) and all(isinstance(item, dict) for item in scripted_payload):
+            return ScriptedBackend(scripted_payload)
+        raise ValueError("--scripted-backend-output must contain a JSON object or array of objects")
     if args.scripted_backend_output is not None:
         raise ValueError("--scripted-backend-output can only be used with --backend scripted")
     return OpenAIBackend(model=args.model)
@@ -3469,6 +3567,13 @@ def _conversation_memory_from_observation(observation: AppObservation) -> dict[s
     }
 
 
+def _observation_runtime(observation: AppObservation | None) -> str | None:
+    if observation is None:
+        return None
+    runtime = observation.provenance.get("runtime") or observation.provenance.get("harness_runtime")
+    return str(runtime) if runtime else "default"
+
+
 def _observation_summary(observation: AppObservation) -> str:
     profile_text = observation.profile_observation.profile_text.strip()
     messages = observation.conversation_observation.visible_messages
@@ -3593,6 +3698,42 @@ def _record_support_draft_review(
                 "draft_payload": draft_payload,
                 "context_pack": context_pack,
                 "draft_review": review.to_dict(),
+            },
+            sensitive_kind="draft",
+        )
+    except Exception:
+        return
+
+
+def _record_support_draft_generation(
+    data_dir: Path,
+    *,
+    evidence: DraftEvidencePack,
+    generation: DraftGenerationResult,
+    command: str,
+) -> None:
+    try:
+        repository = SupportLogRepository(data_dir)
+        active = repository.active_session()
+        if not active:
+            return
+        repository.record_event(
+            session_id=str(active["session_id"]),
+            event_type="draft_generation",
+            payload={
+                "command": command,
+                "target_match_id": evidence.match_id,
+                "evidence_id": evidence.evidence_id,
+                "generation_id": generation.generation_id,
+                "status": generation.status,
+                "primary_reason": generation.primary_reason,
+                "draft_generation_summary": generation.summary(),
+                "evidence_manifest": evidence.evidence_manifest,
+            },
+            sensitive={
+                "draft_evidence": evidence.to_dict(),
+                "draft_prompt": generation.prompt.to_dict(),
+                "draft_payload": generation.draft_payload,
             },
             sensitive_kind="draft",
         )

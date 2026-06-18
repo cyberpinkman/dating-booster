@@ -286,6 +286,29 @@ def _write_draft_review_audit(
     }
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    generation_path = data_dir / "audit" / "draft_generations.jsonl"
+    generation_record = {
+        "schema_version": 1,
+        "generation_id": "draft_generation_fixture",
+        "evidence_id": "draft_evidence_fixture",
+        "prompt_id": "prompt_fixture",
+        "status": "ok",
+        "primary_reason": None,
+        "prompt_hash": "prompt_hash_fixture",
+        "context_hash": "context_hash_fixture",
+        "draft_hash": payload_hash,
+        "attempt_count": 1,
+        "self_review_attempts": [
+            {
+                "ai_or_weird_probability": 20,
+                "reason": "fixture_passed",
+                "supplemental_prompt_hash": "",
+            }
+        ],
+        "created_at": "2026-05-26T00:00:00Z",
+    }
+    with generation_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(generation_record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def _live_send_auth(app_id: str, *, authorization_id: str, allowed_match_ids: list[str] | None = None) -> dict[str, object]:
@@ -327,6 +350,22 @@ def _planner_evidence() -> dict[str, object]:
         "planner_alignment": "ok",
         "conversation_stage": "rapport_building",
         "conversation_move": "warm_reciprocal_question",
+    }
+
+
+def _draft_generation_binding() -> dict[str, object]:
+    return {
+        "draft_evidence_id": "draft_evidence_fixture",
+        "draft_generation_id": "draft_generation_fixture",
+        "latest_turn_id": "latest_turn_fixture",
+        "conversation_thread_revision": 1,
+        "draft_self_review_summary": {
+            "schema_version": 1,
+            "status": "ok",
+            "ai_or_weird_probability": 20,
+            "attempts": 1,
+            "source": "unit_fixture",
+        },
     }
 
 
@@ -5135,6 +5174,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "confirmation_precondition_hash": create_payload["precondition_hash"],
                 "requires_post_action_verification": True,
                 "draft_review_id": "draft_review_fixture",
+                **_draft_generation_binding(),
                 "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                 **_planner_evidence(),
                 "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
@@ -5205,6 +5245,7 @@ class GuiHarnessTests(unittest.TestCase):
                         ),
                         "requires_post_action_verification": True,
                         "draft_review_id": "draft_review_fixture",
+                        **_draft_generation_binding(),
                         "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                         **_planner_evidence(),
                         "target_binding": {
@@ -5277,6 +5318,7 @@ class GuiHarnessTests(unittest.TestCase):
                         ),
                         "requires_post_action_verification": True,
                         "draft_review_id": "draft_review_fixture",
+                        **_draft_generation_binding(),
                         "policy": {"allowed": True, "draft_review_id": "draft_review_fixture"},
                         **_planner_evidence(),
                         "target_binding": {

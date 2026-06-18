@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.action_audit import ActionAuditRepository
+from dating_boost.core.draft_evidence import ConversationThreadRepository, LatestTurnRepository
 from dating_boost.core.automation import (
     AutomationRepository,
     _next_priority_queue,
@@ -261,9 +262,11 @@ class OperatorRepository:
     def record_action_result(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._validate_confirmation_contract(payload)
         session = self._load_session()
+        current_work_item = dict(session.get("current_work_item") or {})
         event = ActionAuditRepository(self.root).append_action_result(payload, created_at=_now_iso())
         self._automation.apply_action_result(event)
         if event.get("action") == "send_message":
+            self._record_successful_conversation_turn(event, current_work_item)
             session["cycle_send_count"] = int(session.get("cycle_send_count") or 0) + 1
             self._write_session(session)
         self._clear_current_work_item(
@@ -281,6 +284,28 @@ class OperatorRepository:
             "result_status": event["result_status"],
             "path": "audit/action_results.jsonl",
         }
+
+    def _record_successful_conversation_turn(self, event: dict[str, Any], work_item: dict[str, Any]) -> None:
+        if event.get("result_status") != "succeeded":
+            return
+        if event.get("action_request_id") != work_item.get("action_request_id"):
+            return
+        match_id = str(work_item.get("match_id") or event.get("target_match_id") or "").strip()
+        if not match_id:
+            return
+        confirmed_messages = _confirmed_outbound_payload_messages(event, work_item)
+        if not confirmed_messages:
+            return
+        latest_repo = LatestTurnRepository(self.root)
+        latest_turn = latest_repo.load(match_id)
+        ConversationThreadRepository(self.root).append_confirmed_outbound_turn(
+            match_id,
+            latest_turn=latest_turn,
+            payload_messages=confirmed_messages,
+            action_request_id=str(event.get("action_request_id") or ""),
+            created_at=str(event.get("created_at") or _now_iso()),
+        )
+        latest_repo.clear(match_id, reason="outbound_confirmed", cleared_at=str(event.get("created_at") or _now_iso()))
 
     def record_stage_result(self, payload: dict[str, Any]) -> dict[str, Any]:
         session = self._load_session()
@@ -626,6 +651,53 @@ def _work_items_from_decision(decision: dict[str, Any], session_id: str) -> list
             "next_priority_queue": decision.get("next_priority_queue", []),
         }
     ]
+
+
+def _confirmed_outbound_payload_messages(event: dict[str, Any], work_item: dict[str, Any]) -> list[dict[str, Any]]:
+    payload_messages = [
+        dict(item)
+        for item in work_item.get("payload_messages", [])
+        if isinstance(item, dict) and str(item.get("text") or "").strip()
+    ]
+    if not payload_messages and str(work_item.get("payload_text") or "").strip():
+        text = str(work_item["payload_text"])
+        payload_messages = [
+            {
+                "index": 1,
+                "text": text,
+                "message_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "character_count": len(text),
+            }
+        ]
+    if not payload_messages:
+        return []
+
+    message_results = [dict(item) for item in event.get("message_results", []) if isinstance(item, dict)]
+    if message_results:
+        by_index = {int(item.get("index") or 0): item for item in message_results}
+        confirmed: list[dict[str, Any]] = []
+        for message in sorted(payload_messages, key=lambda item: int(item.get("index") or 0)):
+            result = by_index.get(int(message.get("index") or 0))
+            if not result or result.get("status") != "ok":
+                break
+            if result.get("message_hash") and result.get("message_hash") != message.get("message_hash"):
+                break
+            if not result.get("post_action_observation_id"):
+                break
+            confirmed.append(message)
+        return confirmed
+
+    evidence = event.get("evidence") if isinstance(event.get("evidence"), dict) else {}
+    expected_text = "\n".join(str(message.get("text") or "") for message in payload_messages)
+    observed_text = str(
+        evidence.get("post_send_visible_text")
+        or evidence.get("outbound_visible_text")
+        or evidence.get("sent_text")
+        or ""
+    )
+    if observed_text != expected_text:
+        return []
+    return payload_messages
 
 
 def _session_config(
