@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
+from dating_boost.core import managed_session as managed_session_core
 from dating_boost.core.automation import AutomationRepository
 from dating_boost.core.managed_session import ManagedSessionRepository
 
@@ -84,6 +85,17 @@ class ManagedSessionTests(unittest.TestCase):
         self.assertEqual(payload["agent_native_capabilities"]["managed_session_default_scan_interval_seconds"], 120)
         self.assertTrue(payload["agent_native_capabilities"]["managed_session_harness_runtime_selection"])
         self.assertIn("bumble", payload["agent_native_capabilities"]["managed_session_app_profiles"])
+        self.assertEqual(
+            payload["agent_native_capabilities"]["managed_session_background_model"],
+            "bounded_user_explicit_session_not_global_daemon",
+        )
+        self.assertFalse(payload["agent_native_capabilities"]["managed_session_global_background"])
+        self.assertFalse(payload["agent_native_capabilities"]["managed_session_global_background_required"])
+        self.assertEqual(
+            payload["agent_native_capabilities"]["managed_session_global_background_reason"],
+            "intentional_safety_boundary",
+        )
+        self.assertFalse(payload["agent_native_capabilities"]["repo_computer_use_execution_backend_required"])
 
     def test_cli_start_persists_high_throughput_session_config(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -360,8 +372,40 @@ class ManagedSessionTests(unittest.TestCase):
             "launch_or_focus_mac_ios_app_and_resume_managed_session",
         )
         self.assertEqual(
+            profile["managed_session"]["runtime_precheck_failure_reason_next_host_actions"]["mac_ios_app"][
+                "host_appleevents_unavailable"
+            ],
+            "check_host_automation_system_events_permission_and_resume_managed_session",
+        )
+        self.assertEqual(
             profile["managed_session"]["runtime_precheck_failure_statuses"]["mac_ios_app"],
             "paused",
+        )
+
+    def test_tashuo_mac_ios_host_appleevents_precheck_action_preserves_diagnostic(self):
+        profile = _json(Path("app_profiles") / "tashuo.json")
+        app_check = managed_session_core._safe_app_check(
+            {
+                "status": "blocked",
+                "reason": "host_appleevents_unavailable",
+                "preflight": {
+                    "window_probe": {"frontmost_probe_status": "blocked"},
+                    "diagnostic": {"category": "host_appleevents_unavailable"},
+                },
+            },
+            app_id="tashuo",
+        )
+
+        self.assertEqual(app_check["reason"], "host_appleevents_unavailable")
+        self.assertEqual(app_check["diagnostic"]["category"], "host_appleevents_unavailable")
+        self.assertEqual(app_check["window_probe"]["frontmost_probe_status"], "blocked")
+        self.assertEqual(
+            managed_session_core._precheck_failure_next_host_action(
+                profile["managed_session"],
+                app_check,
+                runtime="mac-ios-app",
+            ),
+            "check_host_automation_system_events_permission_and_resume_managed_session",
         )
 
     def test_wechat_unavailable_pauses_without_send_work(self):

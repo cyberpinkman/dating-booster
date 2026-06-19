@@ -435,6 +435,11 @@ toward a goal such as meeting in person.
 Use this when the user wants a bounded managed window without keeping the host
 agent active between events. The local runner performs tokenless checks and
 returns only when host work is needed, paused, blocked, or stopped.
+Do not reinterpret this as a requirement for an always-on background agent:
+`managed_session_global_background=false` is the intended safety boundary for
+this Codex workflow. Do not add a repo-level Computer Use execution backend;
+Computer Use is a host capability when available, while Dating Booster's
+managed-send contract stays in `managed-session`/`host-loop`.
 Multi-thread management is global: managed-session/operator serially chooses
 the next candidate by opportunity priority, and app runtimes execute only the
 current work item. High-throughput is an explicit testing mode, not the

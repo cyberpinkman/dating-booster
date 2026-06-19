@@ -123,6 +123,67 @@ class TaShuoMacIosManagedSmokeScriptTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertIn("prepare_message_page_mac_ios_app", calls)
         self.assertIn("mac_ios_app_process_has_no_windows", module._RECOVERABLE_DOCTOR_REASONS)
+        self.assertNotIn("host_appleevents_unavailable", module._RECOVERABLE_DOCTOR_REASONS)
+
+    def test_host_appleevents_unavailable_doctor_result_blocks_smoke(self):
+        module = _load_smoke_module()
+        calls = []
+
+        def fake_run_cli(steps, name, *command, allow_failure=False):
+            calls.append(name)
+            payloads = {
+                "capabilities": {
+                    "agent_native_capabilities": {"supported_app_profiles": ["tashuo"]},
+                },
+                "runtime_select_mac_ios_app": {"status": "selected"},
+                "runtime_status_mac_ios_app": {"status": "selected"},
+                "support_session_start": {"status": "active", "session_id": "support_1"},
+                "harness_doctor_mac_ios_app": {
+                    "status": "blocked",
+                    "reason": "host_appleevents_unavailable",
+                    "diagnostic": {
+                        "category": "host_appleevents_unavailable",
+                    },
+                },
+                "support_session_stop": {"status": "stopped"},
+            }
+            payload = payloads[name]
+            steps.append(
+                {
+                    "name": name,
+                    "status": payload.get("status") or "ok",
+                    "returncode": 0,
+                    "reason": payload.get("reason"),
+                    "payload": payload,
+                }
+            )
+            return payload
+
+        original_run_cli = module._run_cli
+        module._run_cli = fake_run_cli
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                args = SimpleNamespace(
+                    data_dir=root / "data",
+                    work_dir=root / "work",
+                    authorization=root / "auth.json",
+                    goal=root / "goal.json",
+                    availability=root / "availability.json",
+                    management_mode="conservative",
+                    max_threads_per_cycle=1,
+                    max_pages_per_cycle=1,
+                    cycle_send_limit=0,
+                    skip_prepare_message_page=False,
+                    json=True,
+                )
+                payload = module.run_smoke(args)
+        finally:
+            module._run_cli = original_run_cli
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "host_appleevents_unavailable")
+        self.assertNotIn("prepare_message_page_mac_ios_app", calls)
 
 
 if __name__ == "__main__":

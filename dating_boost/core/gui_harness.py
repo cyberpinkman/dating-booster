@@ -116,8 +116,9 @@ class NativeGuiHarness:
                 else "iphone_mirroring_window_not_found"
             )
             if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND:
-                payload["window_probe"] = self._mac_ios_window_probe()
-                reason = _mac_ios_window_failure_reason(payload["window_probe"], default=reason)
+                failure = mac_ios_window_failure_payload(self, activation=activate, default=reason)
+                payload.update(failure)
+                reason = str(failure.get("reason") or reason)
             payload.update({"status": "blocked", "reason": reason})
             return payload
         payload["window"] = window.to_dict()
@@ -747,7 +748,16 @@ def _parse_mac_ios_process_probe(stdout: str) -> dict[str, Any] | None:
     }
 
 
-def _mac_ios_window_failure_reason(window_probe: dict[str, Any], *, default: str) -> str:
+def _mac_ios_window_failure_reason(
+    window_probe: dict[str, Any],
+    *,
+    activation: dict[str, Any] | None = None,
+    default: str,
+) -> str:
+    if _contains_host_appleevents_unavailable_error(activation) or _contains_host_appleevents_unavailable_error(
+        window_probe
+    ):
+        return "host_appleevents_unavailable"
     processes = window_probe.get("processes")
     if not isinstance(processes, list) or not processes:
         return default
@@ -762,6 +772,62 @@ def _mac_ios_window_failure_reason(window_probe: dict[str, Any], *, default: str
     ):
         return "mac_ios_app_process_has_no_windows"
     return default
+
+
+def mac_ios_window_failure_payload(
+    session: Any,
+    *,
+    activation: dict[str, Any] | None = None,
+    default: str = "mac_ios_app_window_not_found",
+) -> dict[str, Any]:
+    probe = session._mac_ios_window_probe() if hasattr(session, "_mac_ios_window_probe") else {}
+    reason = _mac_ios_window_failure_reason(probe, activation=activation, default=default)
+    payload: dict[str, Any] = {"reason": reason}
+    if isinstance(probe, dict):
+        payload["window_probe"] = probe
+    if reason == "host_appleevents_unavailable":
+        payload["diagnostic"] = _host_appleevents_unavailable_diagnostic()
+    return payload
+
+
+def _contains_host_appleevents_unavailable_error(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        text = value.lower()
+        return any(
+            marker in text
+            for marker in (
+                "-10827",
+                "connection invalid",
+                "hiservices-xpcservice",
+            )
+        )
+    if isinstance(value, dict):
+        return any(_contains_host_appleevents_unavailable_error(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_host_appleevents_unavailable_error(item) for item in value)
+    return False
+
+
+def _host_appleevents_unavailable_diagnostic() -> dict[str, Any]:
+    return {
+        "category": "host_appleevents_unavailable",
+        "summary": (
+            "The host process cannot query macOS System Events/AppleEvents. "
+            "This is not evidence that the TaShuo mac-ios-app window is missing."
+        ),
+        "likely_causes": [
+            "Host Automation permission for System Events is missing, stale, or broken.",
+            "macOS AppleEvents/HiServices returned an environment-level connection error.",
+            "The host app may need to be restarted, reinstalled, or re-authorized in Privacy & Security.",
+        ],
+        "do_not_infer": [
+            "Do not treat this as a missing TaShuo window.",
+            "Do not infer that Dating Booster needs a repo-level Computer Use execution backend.",
+            "Do not infer that managed sessions need a persistent global background agent.",
+        ],
+    }
 
 
 def _looks_like_iphone_mirroring_window(window: WindowInfo) -> bool:

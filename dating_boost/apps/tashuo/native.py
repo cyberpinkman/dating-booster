@@ -362,6 +362,17 @@ def _tashuo_mac_ios_window_recoverable_reason(reason: Any) -> bool:
     return str(reason or "") in {"mac_ios_app_process_has_no_windows", "mac_ios_app_window_not_found"}
 
 
+def _tashuo_window_missing_payload(
+    session: Any,
+    *,
+    mac_reason: str = "mac_ios_app_window_not_found",
+    iphone_reason: str = "iphone_mirroring_window_not_found",
+) -> dict[str, Any]:
+    if _is_mac_ios_app_session(session):
+        return platform.mac_ios_window_failure_payload(session, default=mac_reason)
+    return {"reason": iphone_reason}
+
+
 def _recover_tashuo_mac_ios_app_window(session: Any, *, bundle_id: str, process_name: str) -> list[dict[str, Any]]:
     recovery_steps: list[dict[str, Any]] = []
     quit_result = session.runner.run(
@@ -1885,8 +1896,7 @@ def _verify_tashuo_target_binding(
         return {**base, "status": "blocked", "reason": "target_binding_not_target_specific"}
     window = session._window_info()
     if window is None:
-        reason = "mac_ios_app_window_not_found" if _is_mac_ios_app_session(session) else "iphone_mirroring_window_not_found"
-        return {**base, "status": "blocked", "reason": reason}
+        return {**base, "status": "blocked", **_tashuo_window_missing_payload(session)}
     output = output_dir / f"{_tashuo_capture_prefix(session)}.target_binding.png" if output_dir is not None else None
     screen = _capture_tashuo_window(session, output=output, window=window)
     observed_text = str(screen.get("text") or "")
@@ -1975,8 +1985,7 @@ def _verify_tashuo_current_thread_visual_identity(
         return {**base, "status": "blocked", "reason": "target_binding_structural_evidence_required"}
     window = session._window_info()
     if window is None:
-        reason = "mac_ios_app_window_not_found" if _is_mac_ios_app_session(session) else "iphone_mirroring_window_not_found"
-        return {**base, "status": "blocked", "reason": reason}
+        return {**base, "status": "blocked", **_tashuo_window_missing_payload(session)}
     output = output_dir / f"{_tashuo_capture_prefix(session)}.target_binding.png" if output_dir is not None else None
     screen = _capture_tashuo_window(session, output=output, window=window)
     screen_path = str(screen.get("path") or "")
@@ -2039,7 +2048,7 @@ def _recover_tashuo_current_thread_visual_identity_mismatch(
         return {**base, **evidence, "status": "blocked"}
     window = session._window_info()
     if window is None:
-        return {**base, "status": "blocked", "reason": "mac_ios_app_window_not_found"}
+        return {**base, "status": "blocked", **_tashuo_window_missing_payload(session)}
 
     attempts: list[dict[str, Any]] = []
     for attempt_index in range(1, max_attempts + 1):
@@ -2489,7 +2498,7 @@ def _verify_tashuo_chat_list_row_target_binding(
         return structural_block
     window = session._window_info()
     if window is None:
-        return base.with_status("blocked", spec.window_missing_reason)
+        return {**base.to_dict(), "status": "blocked", **_tashuo_window_missing_payload(session)}
     output = output_dir / f"{_tashuo_capture_prefix(session)}.target_binding.png" if output_dir is not None else None
     screen = _capture_tashuo_window(session, output=output, window=window, ocr=not _is_mac_ios_app_session(session))
     observed_text = str(screen.get("text") or "")

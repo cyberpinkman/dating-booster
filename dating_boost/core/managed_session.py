@@ -480,6 +480,13 @@ def _safe_app_check(payload: dict[str, Any], *, app_id: str) -> dict[str, Any]:
             window_probe = preflight.get("window_probe")
     if isinstance(window_probe, dict):
         result["window_probe"] = window_probe
+    diagnostic = payload.get("diagnostic")
+    if not isinstance(diagnostic, dict):
+        preflight = payload.get("preflight")
+        if isinstance(preflight, dict):
+            diagnostic = preflight.get("diagnostic")
+    if isinstance(diagnostic, dict):
+        result["diagnostic"] = diagnostic
     if _unread_marker_present(layout):
         result["unread_possible"] = True
     if layout.get("reply_required_marker_present") or layout.get("reply_deadline_marker_present"):
@@ -521,7 +528,20 @@ def _precheck_failure_next_host_action(
     *,
     runtime: str | None,
 ) -> str:
+    reason = str(app_check.get("reason") or "").strip()
     runtime_key = _runtime_key(runtime)
+    runtime_reason_actions = policy.get("runtime_precheck_failure_reason_next_host_actions")
+    if runtime_key and reason and isinstance(runtime_reason_actions, dict):
+        configured_reasons = runtime_reason_actions.get(runtime_key)
+        if isinstance(configured_reasons, dict):
+            configured = configured_reasons.get(reason)
+            if isinstance(configured, str) and configured.strip():
+                return configured
+    reason_actions = policy.get("precheck_failure_reason_next_host_actions")
+    if reason and isinstance(reason_actions, dict):
+        configured = reason_actions.get(reason)
+        if isinstance(configured, str) and configured.strip():
+            return configured
     runtime_actions = policy.get("runtime_precheck_failure_next_host_actions")
     if runtime_key and isinstance(runtime_actions, dict):
         configured = runtime_actions.get(runtime_key)

@@ -48,7 +48,8 @@ Load this package's `skill-package.json` and compare it with the capabilities JS
 - `storage_capabilities.encrypted_default` must be true for public production.
 - `storage_capabilities.backup_requires_recovery_passphrase` must be true for public backups.
 - `agent_native_capabilities.ci_tested_version` should match the installed tool version.
-- `agent_native_capabilities.local_daemon` should be true for public production workflows.
+- `agent_native_capabilities.local_daemon` should be true for public production workflows. This means the local CLI/launchd support exists; it does not mean Dating Booster should run a persistent dating listener or add a repo-level Computer Use backend.
+- `agent_native_capabilities.managed_session_global_background` should be false unless the product explicitly ships a separate always-on background agent. Do not treat false as a missing capability for bounded managed sessions.
 - `diagnostic_capabilities.local_redacted_bundle` should be true.
 - `diagnostic_capabilities.support_log`, `encrypted_evidence_vault`, `topic_provenance`, and `clipboard_fingerprint` should be true for private-beta support.
 - If `source_spec_commit` differs from the local repo commit, report a warning. Continue only if version, schema, and command checks pass.
@@ -365,6 +366,14 @@ dating-boost harness tashuo stage-draft --data-dir .local/dating-boost --runtime
 
 If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. For each intended visible row, record `message_list_evidence` with a row visual anchor hash, its visual anchor region, and the tap ratio chosen from visual analysis. If the list reorders between visual planning and click, the harness can return to the message page, scan the current list for that row visual anchor, reopen the target, and verify the thread again before staging. If already in a thread, bind that thread with `current_thread_visual_identity` and a fresh visual anchor hash from the conversation screenshot; do not use message-list row position or header OCR as target-binding evidence. The mac-ios-app runtime supports launch/observe/prepare-message-page/stage-draft and ordinary-chat managed live send. Live send must be executed by host-loop with `--managed-gui-send --harness-runtime mac-ios-app` or by a managed-session wait point resumed through that host-loop runtime, with `current_thread_visual_identity` target binding, exact staged-text verification, and post-send exact-text/input-cleared verification. Direct harness live send remains executor-internal and must not be used as an agent workaround.
 
+If `harness doctor` or `prepare-message-page` returns
+`host_appleevents_unavailable`, stop and diagnose the host macOS Automation /
+System Events chain. This is not a TaShuo window-discovery failure, and it is
+not evidence that the repository needs a Computer Use execution backend or a
+persistent global background session. For Codex, check that the Codex app is
+installed normally, restarted after permission changes, and authorized under
+Privacy & Security > Automation for System Events.
+
 For iPhone Mirroring, use `harness tashuo observe` before choosing a bounded navigation action. It
 returns redacted page/layout hints for the four top-level tabs (`推荐`, `飞行`,
 `消息`, `我的`), visible chat rows, conversation pages, thread profiles, and
@@ -551,6 +560,13 @@ internal QA; do not show it by default.
 Use `managed-session` when the user explicitly asks for a bounded auto-managed
 window. It is not a global background agent. Tinder stops when iPhone Mirroring
 is unavailable; WeChat runs until the user stops it and pauses while unreadable.
+If capabilities report `managed_session_global_background=false`, treat that as
+the intended safety boundary for this workflow, not as a request to implement a
+persistent daemon. Dating Booster also must not add a repo-level Computer Use
+execution backend: Computer Use is a host-agent capability when a host exposes
+it, while managed live send remains the `managed-session`/`host-loop`
+contract with target binding, staged-text verification, and post-action
+verification.
 Full-object management lives in the global managed-session/operator layer:
 the runner serially processes multiple candidates by opportunity priority, while
 each app runtime only executes the current work item. Use conservative mode for

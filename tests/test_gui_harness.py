@@ -454,6 +454,12 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["agent_native_capabilities"]["wechat_draft_stage_harness"])
         self.assertTrue(payload["agent_native_capabilities"]["managed_gui_send"])
         self.assertFalse(payload["agent_native_capabilities"]["managed_gui_send_default"])
+        self.assertFalse(payload["agent_native_capabilities"]["repo_computer_use_execution_backend"])
+        self.assertFalse(payload["agent_native_capabilities"]["repo_computer_use_execution_backend_required"])
+        self.assertEqual(
+            payload["agent_native_capabilities"]["computer_use_execution_model"],
+            "host_agent_capability_when_available_not_repo_backend",
+        )
         self.assertTrue(payload["agent_native_capabilities"]["wechat_live_send_harness"])
         self.assertFalse(payload["agent_native_capabilities"]["live_gui_harness"])
 
@@ -1027,6 +1033,98 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["harness_backend"], "mac_ios_app")
         self.assertEqual(payload["reason"], "mac_ios_app_window_not_found")
+
+    def test_tashuo_mac_ios_app_doctor_reports_host_appleevents_unavailable(self):
+        class AppleEventsUnavailableRunner(FakeRunner):
+            def run(self, command: list[str], *, input: str | None = None):
+                if command and command[0] == "osascript" and any("System Events" in item for item in command):
+                    return _result(
+                        stderr=(
+                            "Connection Invalid error for service com.apple.hiservices-xpcservice\n"
+                            "execution error: 发生 \"-10827\" 类型错误. (-10827)\n"
+                        ),
+                        returncode=1,
+                    )
+                return super().run(command, input=input)
+
+        runner = AppleEventsUnavailableRunner(ocr_text="")
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.doctor(capture=False)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["harness_backend"], "mac_ios_app")
+        self.assertEqual(payload["reason"], "host_appleevents_unavailable")
+        self.assertEqual(payload["diagnostic"]["category"], "host_appleevents_unavailable")
+        self.assertIn("window_probe", payload)
+        self.assertNotEqual(payload["reason"], "mac_ios_app_window_not_found")
+
+    def test_tashuo_mac_ios_target_binding_window_failures_report_host_appleevents_unavailable(self):
+        class AppleEventsUnavailableRunner(FakeRunner):
+            def run(self, command: list[str], *, input: str | None = None):
+                if command and command[0] == "osascript" and any("System Events" in item for item in command):
+                    return _result(
+                        stderr=(
+                            "Connection Invalid error for service com.apple.hiservices-xpcservice\n"
+                            "execution error: 发生 \"-10827\" 类型错误. (-10827)\n"
+                        ),
+                        returncode=1,
+                    )
+                return super().run(command, input=input)
+
+        runner = AppleEventsUnavailableRunner(ocr_text="")
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+        current_thread_binding = {
+            "binding_type": "current_thread_visual_identity",
+            "target_match_id": "match_tashuo",
+            "candidate_key": "current_thread",
+            "conversation_fingerprint": "conv-fingerprint",
+            "thread_evidence": {
+                "observation_id": "obs_1",
+                "screen_state": "tashuo_conversation",
+                "latest_inbound_fingerprint": "inbound-1",
+                "visual_anchor_hash": "abcd",
+            },
+        }
+        row_binding = {
+            "binding_type": "chat_list_row_to_thread",
+            "target_match_id": "match_tashuo",
+            "candidate_key": "row_thread",
+            "selection_evidence": {
+                "row_index": 1,
+                "source_state": "tashuo_chat_list",
+                "opened_state": "tashuo_conversation",
+                "target_scope": "ordinary_conversation",
+                "open_action": "open-conversation",
+            },
+        }
+        relocation_binding = {
+            **current_thread_binding,
+            "message_list_evidence": {
+                "source_state": "tashuo_chat_list",
+                "selection_method": "message_list_visual_anchor_scan",
+                "visual_anchor_hash": "1234",
+                "visual_anchor_region": {"x1": 0.1, "y1": 0.2, "x2": 0.9, "y2": 0.3},
+                "visual_anchor_scan_region": {"x1": 0.0, "y1": 0.18, "x2": 1.0, "y2": 0.84},
+                "tap_ratio": {"x": 0.45, "y": 0.34},
+            },
+        }
+
+        current_result = tashuo_native._verify_tashuo_current_thread_visual_identity(
+            harness,
+            current_thread_binding,
+        )
+        row_result = tashuo_native._verify_tashuo_chat_list_row_target_binding(harness, row_binding)
+        relocation_result = tashuo_native._recover_tashuo_current_thread_visual_identity_mismatch(
+            harness,
+            relocation_binding,
+        )
+
+        for result in (current_result, row_result, relocation_result):
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["reason"], "host_appleevents_unavailable")
+            self.assertEqual(result["diagnostic"]["category"], "host_appleevents_unavailable")
+            self.assertIn("window_probe", result)
 
     def test_tashuo_mac_ios_app_capture_defaults_to_visual_without_ocr(self):
         runner = FakeRunner(

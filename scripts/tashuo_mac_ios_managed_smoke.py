@@ -154,65 +154,83 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
                 final_status = "blocked"
                 final_reason = str(prepare.get("reason") or "prepare_message_page_failed")
 
-        start_args = [
-            "managed-session",
-            "start",
-            "--app-id",
-            "tashuo",
-            "--data-dir",
-            str(args.data_dir),
-            "--authorization",
-            str(args.authorization),
-            "--goal",
-            str(args.goal),
-            "--availability",
-            str(args.availability),
-            "--send-mode",
-            "stage",
-            "--harness-runtime",
-            "mac-ios-app",
-            "--management-mode",
-            args.management_mode,
-            "--json",
-        ]
-        if args.max_threads_per_cycle is not None:
-            start_args.extend(["--max-threads-per-cycle", str(args.max_threads_per_cycle)])
-        if args.max_pages_per_cycle is not None:
-            start_args.extend(["--max-pages-per-cycle", str(args.max_pages_per_cycle)])
-        if args.cycle_send_limit is not None:
-            start_args.extend(["--cycle-send-limit", str(args.cycle_send_limit)])
-        managed_start = _run_cli(steps, "managed_session_start_mac_ios_app", *start_args, allow_failure=True)
-        if managed_start.get("status") not in {"active", "paused"}:
-            final_status = "blocked"
-            final_reason = str(managed_start.get("reason") or final_reason or "managed_session_not_active")
-
-        if managed_start.get("status") == "active":
-            tick = _run_cli(
-                steps,
-                "managed_session_tick_mac_ios_app",
+        managed_started = False
+        if final_status == "ok":
+            start_args = [
                 "managed-session",
-                "tick",
+                "start",
+                "--app-id",
+                "tashuo",
                 "--data-dir",
                 str(args.data_dir),
+                "--authorization",
+                str(args.authorization),
+                "--goal",
+                str(args.goal),
+                "--availability",
+                str(args.availability),
+                "--send-mode",
+                "stage",
+                "--harness-runtime",
+                "mac-ios-app",
+                "--management-mode",
+                args.management_mode,
+                "--json",
+            ]
+            if args.max_threads_per_cycle is not None:
+                start_args.extend(
+                    ["--max-threads-per-cycle", str(args.max_threads_per_cycle)]
+                )
+            if args.max_pages_per_cycle is not None:
+                start_args.extend(
+                    ["--max-pages-per-cycle", str(args.max_pages_per_cycle)]
+                )
+            if args.cycle_send_limit is not None:
+                start_args.extend(["--cycle-send-limit", str(args.cycle_send_limit)])
+            managed_start = _run_cli(
+                steps,
+                "managed_session_start_mac_ios_app",
+                *start_args,
+                allow_failure=True,
+            )
+            if managed_start.get("status") not in {"active", "paused"}:
+                final_status = "blocked"
+                final_reason = str(
+                    managed_start.get("reason")
+                    or final_reason
+                    or "managed_session_not_active"
+                )
+
+            if managed_start.get("status") in {"active", "paused"}:
+                managed_started = True
+            if managed_start.get("status") == "active":
+                tick = _run_cli(
+                    steps,
+                    "managed_session_tick_mac_ios_app",
+                    "managed-session",
+                    "tick",
+                    "--data-dir",
+                    str(args.data_dir),
+                    "--json",
+                    allow_failure=True,
+                )
+                if tick.get("status") not in {"host_work_required", "no_work", "paused", "stopped"}:
+                    final_status = "blocked"
+                    final_reason = str(tick.get("reason") or "managed_session_tick_failed")
+
+        if managed_started:
+            _run_cli(
+                steps,
+                "managed_session_stop",
+                "managed-session",
+                "stop",
+                "--data-dir",
+                str(args.data_dir),
+                "--reason",
+                "tashuo_mac_ios_app_smoke_complete",
                 "--json",
                 allow_failure=True,
             )
-            if tick.get("status") not in {"host_work_required", "no_work", "paused", "stopped"}:
-                final_status = "blocked"
-                final_reason = str(tick.get("reason") or "managed_session_tick_failed")
-
-        _run_cli(
-            steps,
-            "managed_session_stop",
-            "managed-session",
-            "stop",
-            "--data-dir",
-            str(args.data_dir),
-            "--reason",
-            "tashuo_mac_ios_app_smoke_complete",
-            "--json",
-            allow_failure=True,
-        )
     except SmokeCommandError as exc:
         final_status = "blocked"
         final_reason = exc.reason

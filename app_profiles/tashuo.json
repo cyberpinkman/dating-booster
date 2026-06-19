@@ -525,6 +525,11 @@
     "runtime_precheck_failure_next_host_actions": {
       "mac_ios_app": "launch_or_focus_mac_ios_app_and_resume_managed_session"
     },
+    "runtime_precheck_failure_reason_next_host_actions": {
+      "mac_ios_app": {
+        "host_appleevents_unavailable": "check_host_automation_system_events_permission_and_resume_managed_session"
+      }
+    },
     "default_max_threads_per_cycle": 5,
     "high_throughput_max_threads_per_cycle": 12,
     "default_max_pages_per_cycle": 1,
