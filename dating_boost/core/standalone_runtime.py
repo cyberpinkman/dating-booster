@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from dating_boost.core.managed_session import ManagedSessionRepository
 from dating_boost.core.operator import OperatorRepository
+from dating_boost.core.standalone_actions import StandaloneActionExecutor
 from dating_boost.core.standalone_observation import StandaloneObservationProvider
 
 
@@ -18,9 +19,11 @@ class StandaloneAgentRuntime:
         *,
         observation_provider: StandaloneObservationProvider,
         harness_factory: Callable[..., Any] | None = None,
+        action_executor: StandaloneActionExecutor | None = None,
     ):
         self.root = root
         self.observation_provider = observation_provider
+        self.action_executor = action_executor
         self.managed = ManagedSessionRepository(root, harness_factory=harness_factory)
         self.operator = OperatorRepository(root)
 
@@ -99,6 +102,16 @@ class StandaloneAgentRuntime:
             }
 
         if work_type == "send_message":
+            if self.action_executor is not None:
+                try:
+                    return self.action_executor.execute(work_item, app_id=app_id)
+                except Exception as exc:  # noqa: BLE001 - injected executors must not crash the runtime loop.
+                    return _blocked(
+                        "action_executor_failed",
+                        work_item=work_item,
+                        work_item_type=work_type,
+                        error_type=type(exc).__name__,
+                    )
             return {
                 "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
                 "status": "needs_action_executor",
