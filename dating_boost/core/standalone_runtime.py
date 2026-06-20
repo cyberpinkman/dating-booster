@@ -153,3 +153,109 @@ def _blocked(reason: str, *, work_item: dict[str, Any], work_item_type: str | No
         "work_item": work_item,
         **extra,
     }
+
+
+class StandaloneDraftPlanner:
+    def __init__(self, root: Path, *, backend_config: dict[str, Any]):
+        self.root = root
+        self.backend_config = dict(backend_config)
+
+    def draft_for_match(self, *, match_id: str, mode: str) -> dict[str, Any]:
+        from dating_boost.core.draft_evidence import build_draft_evidence
+        from dating_boost.core.draft_review_audit import DraftReviewAuditRepository
+        from dating_boost.core.models import ReplyMode
+        from dating_boost.core.repositories import ObservationRepository
+        from dating_boost.intelligence.backend_factory import create_model_backend
+        from dating_boost.intelligence.draft_generation import generate_reply_with_refinement
+        from dating_boost.policy.draft_review import review_draft
+
+        reply_mode = ReplyMode(mode)
+        observation = ObservationRepository(self.root).load_latest_observation(match_id)
+        evidence = build_draft_evidence(
+            self.root,
+            match_id,
+            reply_mode=reply_mode,
+            observation=observation,
+            draft_kind="reply",
+            user_reactivated=False,
+            now=None,
+            app_id=observation.app_id if observation else None,
+            runtime=_observation_runtime(observation),
+            require_user_profile_source=True,
+        )
+        if evidence.status != "ok":
+            return {
+                "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
+                "status": "blocked",
+                "reason": evidence.primary_reason,
+                "draft_evidence": evidence.public_dict(),
+            }
+
+        try:
+            generation = generate_reply_with_refinement(
+                evidence,
+                backend=create_model_backend(self.backend_config),
+                audit_root=self.root,
+            )
+        except Exception as exc:  # noqa: BLE001 - standalone planner must stop with a structured wait point.
+            return {
+                "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
+                "status": "blocked",
+                "reason": "draft_generation_failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "draft_evidence": evidence.public_dict(),
+            }
+        if generation.status != "ok" or generation.draft_payload is None:
+            return {
+                "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
+                "status": "blocked",
+                "reason": generation.primary_reason,
+                "draft_evidence": evidence.public_dict(),
+                "draft_generation_summary": generation.summary(),
+            }
+
+        try:
+            review = review_draft(
+                generation.draft_payload,
+                evidence.context_pack,
+                mode="managed_live",
+                observation=observation,
+                planner_recommendation=evidence.planner_recommendation,
+            )
+        except Exception as exc:  # noqa: BLE001 - policy/review failures must not crash the standalone loop.
+            return {
+                "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
+                "status": "blocked",
+                "reason": "draft_review_failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "draft_evidence": evidence.public_dict(),
+                "draft_generation_summary": generation.summary(),
+            }
+        DraftReviewAuditRepository(self.root).append_review(
+            review,
+            draft_payload=generation.draft_payload,
+            context_pack=evidence.context_pack,
+            mode="managed_live",
+            target_match_id=match_id,
+        )
+        return {
+            "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
+            "status": "ok" if review.allowed_for_managed_send else "blocked",
+            "reason": None if review.allowed_for_managed_send else review.primary_reason,
+            "match_id": match_id,
+            "mode": reply_mode.value,
+            "draft_evidence": evidence.public_dict(),
+            "draft": generation.draft_payload,
+            "draft_generation_summary": generation.summary(),
+            "draft_review": review.to_dict(),
+        }
+
+
+def _observation_runtime(observation: Any) -> str | None:
+    if observation is None:
+        return None
+    provenance = observation.provenance if isinstance(observation.provenance, dict) else {}
+    runtime = provenance.get("runtime") or provenance.get("harness_runtime")
+    return str(runtime) if runtime else "default"

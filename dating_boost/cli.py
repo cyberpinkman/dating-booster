@@ -72,7 +72,8 @@ from dating_boost.core.skill_doctor import run_skill_doctor
 from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.storage import StorageError
 from dating_boost.core.support import SupportLogRepository, classify_text_topics, context_source_manifest
-from dating_boost.intelligence.backends import ModelBackend, OpenAIBackend, ScriptedBackend
+from dating_boost.intelligence.backend_factory import create_model_backend
+from dating_boost.intelligence.backends import ModelBackend
 from dating_boost.intelligence.draft_generation import DraftGenerationResult, generate_reply_with_refinement
 from dating_boost.intelligence.reply_generator import DraftResponse
 from dating_boost.evals.runner import run_conversation_eval, run_memory_eval, run_memory_review_eval
@@ -3496,15 +3497,10 @@ def _select_backend(args: argparse.Namespace) -> ModelBackend:
     if backend_name == "scripted":
         if args.scripted_backend_output is None:
             raise ValueError("--backend scripted requires --scripted-backend-output")
-        scripted_payload = _read_json_payload(args.scripted_backend_output)
-        if isinstance(scripted_payload, dict):
-            return ScriptedBackend(scripted_payload)
-        if isinstance(scripted_payload, list) and all(isinstance(item, dict) for item in scripted_payload):
-            return ScriptedBackend(scripted_payload)
-        raise ValueError("--scripted-backend-output must contain a JSON object or array of objects")
+        return create_model_backend({"type": "scripted", "path": str(args.scripted_backend_output)})
     if args.scripted_backend_output is not None:
         raise ValueError("--scripted-backend-output can only be used with --backend scripted")
-    return OpenAIBackend(model=args.model)
+    return create_model_backend({"type": "openai", "model": args.model})
 
 
 def _handle_feedback(args: argparse.Namespace) -> int:
