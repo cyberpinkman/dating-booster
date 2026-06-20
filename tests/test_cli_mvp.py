@@ -315,7 +315,7 @@ class CliMvpTests(unittest.TestCase):
             _prepare_draft_evidence_fixture(data_dir, "match_alex")
 
             output = StringIO()
-            with patch("dating_boost.cli.OpenAIBackend", FakeOpenAIBackend):
+            with patch("dating_boost.intelligence.backend_factory.OpenAIBackend", FakeOpenAIBackend):
                 with redirect_stdout(output):
                     exit_code = main([
                         "draft",
