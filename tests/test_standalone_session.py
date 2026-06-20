@@ -1,10 +1,17 @@
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
+from dating_boost.cli import main
 from dating_boost.core.capabilities import build_capabilities
 from dating_boost.core.standalone_session import StandaloneSessionRepository
+
+
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
+SCRIPTED_REPLY_PATH = FIXTURE_DIR / "intelligence" / "scripted_reply.json"
 
 
 class StandaloneSessionTests(unittest.TestCase):
@@ -112,6 +119,144 @@ class StandaloneSessionTests(unittest.TestCase):
         self.assertEqual(caps["standalone_agent_default_mode"], "fixture_or_manual_first")
         self.assertFalse(caps["standalone_agent_live_gui_default"])
         self.assertTrue(caps["standalone_agent_uses_existing_operator_contract"])
+        self.assertIn("standalone-session start", payload["supported_commands"])
+
+
+class StandaloneSessionCliTests(unittest.TestCase):
+    def _run_cli(self, argv):
+        buffer = StringIO()
+        with redirect_stdout(buffer):
+            code = main(argv)
+        return code, json.loads(buffer.getvalue())
+
+    def test_cli_start_status_stop(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            fixture_dir = Path(temp_dir) / "fixtures"
+            fixture_dir.mkdir()
+            auth_path = Path(temp_dir) / "auth.json"
+            auth_path.write_text(json.dumps(_auth("tinder")), encoding="utf-8")
+            start_exit, start_payload = self._run_cli(
+                [
+                    "standalone-session",
+                    "start",
+                    "--data-dir",
+                    str(data_dir),
+                    "--authorization",
+                    str(auth_path),
+                    "--app-id",
+                    "tinder",
+                    "--send-mode",
+                    "stage",
+                    "--observation-fixture-dir",
+                    str(fixture_dir),
+                    "--backend",
+                    "scripted",
+                    "--scripted-backend-output",
+                    str(SCRIPTED_REPLY_PATH),
+                    "--json",
+                ]
+            )
+            status_exit, status_payload = self._run_cli(
+                [
+                    "standalone-session",
+                    "status",
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ]
+            )
+            stop_exit, stop_payload = self._run_cli(
+                [
+                    "standalone-session",
+                    "stop",
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(start_exit, 0)
+        self.assertEqual(start_payload["status"], "active")
+        self.assertEqual(status_exit, 0)
+        self.assertEqual(status_payload["status"], "active")
+        self.assertEqual(stop_exit, 0)
+        self.assertEqual(stop_payload["status"], "stopped")
+
+    def test_cli_start_then_tick_consumes_fixture_work(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            fixture_dir = Path(temp_dir) / "fixtures"
+            fixture_dir.mkdir()
+            (fixture_dir / "message_list.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "observation_type": "message_list",
+                        "app_id": "tinder",
+                        "captured_at": "2026-06-20T00:00:00Z",
+                        "message_list_snapshot": {"entries": []},
+                        "scan_cursor": {"current": None, "next": None, "exhausted": True},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            auth_path = Path(temp_dir) / "auth.json"
+            auth_path.write_text(json.dumps(_auth("tinder")), encoding="utf-8")
+            start_exit, _start_payload = self._run_cli(
+                [
+                    "standalone-session",
+                    "start",
+                    "--data-dir",
+                    str(data_dir),
+                    "--authorization",
+                    str(auth_path),
+                    "--app-id",
+                    "tinder",
+                    "--send-mode",
+                    "stage",
+                    "--observation-fixture-dir",
+                    str(fixture_dir),
+                    "--backend",
+                    "scripted",
+                    "--scripted-backend-output",
+                    str(SCRIPTED_REPLY_PATH),
+                    "--json",
+                ]
+            )
+            tick_exit, tick_payload = self._run_cli(
+                [
+                    "standalone-session",
+                    "tick",
+                    "--data-dir",
+                    str(data_dir),
+                    "--json",
+                ]
+            )
+
+        self.assertEqual(start_exit, 0)
+        self.assertEqual(tick_exit, 0)
+        self.assertEqual(tick_payload["status"], "work_consumed")
+        self.assertEqual(tick_payload["work_item_type"], "scan_message_list")
+
+
+def _auth(app_id: str) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "authorization_id": f"auth_{app_id}",
+        "scope": "send_chat_messages",
+        "app_id": app_id,
+        "expires_at": "2026-12-31T00:00:00Z",
+        "allowed_match_ids": [],
+        "allowed_actions": ["send_message"],
+        "autonomous_send": False,
+        "autonomous_nudge": False,
+        "goal_ids": [],
+        "quiet_hours": [],
+        "requires_post_action_verification": True,
+        "created_at": "2026-06-20T00:00:00Z",
+        "revoked_at": None,
+    }
 
 
 if __name__ == "__main__":

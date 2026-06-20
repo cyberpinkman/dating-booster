@@ -804,6 +804,36 @@ def main(argv: list[str] | None = None) -> int:
     managed_stop_parser.add_argument("--json", action="store_true")
     managed_stop_parser.set_defaults(handler=_handle_managed_session_stop)
 
+    standalone_parser = subparsers.add_parser("standalone-session", help="Standalone local agent session commands.")
+    standalone_subparsers = standalone_parser.add_subparsers(dest="standalone_session_command", required=True)
+    standalone_start_parser = standalone_subparsers.add_parser("start")
+    standalone_start_parser.add_argument("--data-dir", required=True, type=Path)
+    standalone_start_parser.add_argument("--authorization", required=True, type=Path)
+    standalone_start_parser.add_argument("--app-id", required=True, choices=SUPPORTED_MANAGED_SESSION_APPS)
+    standalone_start_parser.add_argument("--runtime")
+    standalone_start_parser.add_argument("--send-mode", choices=["stage", "live"], default="stage")
+    standalone_start_parser.add_argument("--managed-gui-send", action="store_true")
+    standalone_start_parser.add_argument("--observation-fixture-dir", required=True, type=Path)
+    standalone_start_parser.add_argument("--backend", choices=["scripted", "openai"], default="scripted")
+    standalone_start_parser.add_argument("--model", default="gpt-4.1-mini")
+    standalone_start_parser.add_argument("--scripted-backend-output", type=Path)
+    standalone_start_parser.add_argument("--scan-interval", type=int, default=120)
+    standalone_start_parser.add_argument("--json", action="store_true")
+    standalone_start_parser.set_defaults(handler=_handle_standalone_session_start)
+    standalone_tick_parser = standalone_subparsers.add_parser("tick")
+    standalone_tick_parser.add_argument("--data-dir", required=True, type=Path)
+    standalone_tick_parser.add_argument("--json", action="store_true")
+    standalone_tick_parser.set_defaults(handler=_handle_standalone_session_tick)
+    standalone_status_parser = standalone_subparsers.add_parser("status")
+    standalone_status_parser.add_argument("--data-dir", required=True, type=Path)
+    standalone_status_parser.add_argument("--json", action="store_true")
+    standalone_status_parser.set_defaults(handler=_handle_standalone_session_status)
+    standalone_stop_parser = standalone_subparsers.add_parser("stop")
+    standalone_stop_parser.add_argument("--data-dir", required=True, type=Path)
+    standalone_stop_parser.add_argument("--reason", default="manual_stop")
+    standalone_stop_parser.add_argument("--json", action="store_true")
+    standalone_stop_parser.set_defaults(handler=_handle_standalone_session_stop)
+
     operator_parser = subparsers.add_parser("operator", help="Goal-oriented managed operator session commands.")
     operator_subparsers = operator_parser.add_subparsers(dest="operator_command", required=True)
 
@@ -3217,6 +3247,142 @@ def _handle_managed_session_stop(args: argparse.Namespace) -> int:
     payload = ManagedSessionRepository(args.data_dir).stop(reason=args.reason)
     _print_json(payload)
     return 0
+
+
+def _handle_standalone_session_start(args: argparse.Namespace) -> int:
+    from dating_boost.core.standalone_observation import FixtureObservationProvider, fixture_harness_factory
+    from dating_boost.core.standalone_session import StandaloneSessionRepository
+
+    repository = StandaloneSessionRepository(args.data_dir)
+    current = repository.status()
+    if current.get("status") == "active":
+        payload = {
+            "schema_version": 1,
+            "status": "blocked",
+            "reason": "standalone_session_already_active",
+            "session": current.get("session"),
+        }
+        _print_json(payload)
+        return 2
+
+    if args.send_mode == "live" and not args.managed_gui_send:
+        payload = {"schema_version": 1, "status": "blocked", "reason": "managed_gui_send_required_for_live_mode"}
+        _print_json(payload)
+        return 2
+
+    fixture_dir = args.observation_fixture_dir.expanduser().resolve()
+    if not fixture_dir.is_dir():
+        payload = {"schema_version": 1, "status": "blocked", "reason": "observation_fixture_dir_not_found"}
+        _print_json(payload)
+        return 2
+
+    backend_payload = _standalone_backend_payload(args)
+    if backend_payload.get("status") == "blocked":
+        _print_json(backend_payload)
+        return 2
+    backend = backend_payload["backend"]
+    provider = FixtureObservationProvider(fixture_dir)
+    try:
+        managed_payload = ManagedSessionRepository(
+            args.data_dir,
+            harness_factory=fixture_harness_factory(provider),
+        ).start(
+            app_id=args.app_id,
+            authorization=_read_json_object(args.authorization),
+            goal=None,
+            availability=None,
+            send_mode=args.send_mode,
+            managed_gui_send=args.managed_gui_send,
+            scan_interval_seconds=args.scan_interval,
+            harness_runtime=args.runtime,
+        )
+    except ValueError as exc:
+        managed_payload = {"schema_version": 1, "status": "blocked", "reason": str(exc)}
+    if managed_payload.get("status") not in {"active", "paused"}:
+        _print_json(managed_payload)
+        return 2
+
+    payload = repository.start(
+        app_id=args.app_id,
+        runtime=args.runtime,
+        send_mode=args.send_mode,
+        observation_source={"type": "fixture_dir", "path": str(fixture_dir)},
+        backend=backend,
+        scan_interval_seconds=args.scan_interval,
+        managed_gui_send=bool(args.managed_gui_send),
+    )
+    payload["managed_session"] = managed_payload
+    if payload.get("status") != "active":
+        ManagedSessionRepository(args.data_dir).stop(reason="standalone_session_start_failed")
+    _print_json(payload)
+    return 0 if payload.get("status") == "active" else 2
+
+
+def _handle_standalone_session_tick(args: argparse.Namespace) -> int:
+    from dating_boost.core.standalone_observation import FixtureObservationProvider, fixture_harness_factory
+    from dating_boost.core.standalone_runtime import StandaloneAgentRuntime
+    from dating_boost.core.standalone_session import StandaloneSessionRepository
+
+    repository = StandaloneSessionRepository(args.data_dir)
+    status = repository.status()
+    session = status.get("session") if isinstance(status.get("session"), dict) else None
+    if not isinstance(session, dict):
+        _print_json(status)
+        return 2
+    source = session.get("observation_source") if isinstance(session.get("observation_source"), dict) else {}
+    source_path = source.get("path")
+    if not isinstance(source_path, str) or not source_path.strip():
+        payload = {"schema_version": 1, "status": "blocked", "reason": "standalone_observation_fixture_dir_required"}
+        _print_json(payload)
+        return 2
+    fixture_dir = Path(source_path).expanduser().resolve()
+    if not fixture_dir.is_dir():
+        payload = {"schema_version": 1, "status": "blocked", "reason": "observation_fixture_dir_not_found"}
+        _print_json(payload)
+        return 2
+    provider = FixtureObservationProvider(fixture_dir)
+    payload = StandaloneAgentRuntime(
+        args.data_dir,
+        observation_provider=provider,
+        harness_factory=fixture_harness_factory(provider),
+    ).tick()
+    repository.record_tick(payload)
+    _print_json(payload)
+    return 0 if payload.get("status") not in {"blocked", "error"} else 2
+
+
+def _handle_standalone_session_status(args: argparse.Namespace) -> int:
+    from dating_boost.core.standalone_session import StandaloneSessionRepository
+
+    payload = StandaloneSessionRepository(args.data_dir).status()
+    _print_json(payload)
+    return 0 if payload.get("status") != "not_found" else 2
+
+
+def _handle_standalone_session_stop(args: argparse.Namespace) -> int:
+    from dating_boost.core.standalone_session import StandaloneSessionRepository
+
+    payload = StandaloneSessionRepository(args.data_dir).stop(reason=args.reason)
+    payload["managed_session"] = ManagedSessionRepository(args.data_dir).stop(reason=args.reason)
+    _print_json(payload)
+    return 0
+
+
+def _standalone_backend_payload(args: argparse.Namespace) -> dict[str, Any]:
+    if args.backend == "scripted":
+        if args.scripted_backend_output is None:
+            return {"schema_version": 1, "status": "blocked", "reason": "scripted_backend_output_required"}
+        path = args.scripted_backend_output.expanduser().resolve()
+        if not path.is_file():
+            return {"schema_version": 1, "status": "blocked", "reason": "scripted_backend_output_not_found"}
+        return {
+            "schema_version": 1,
+            "status": "ok",
+            "backend": {"type": "scripted", "model": args.model, "path": str(path)},
+        }
+    if args.scripted_backend_output is not None:
+        return {"schema_version": 1, "status": "blocked", "reason": "scripted_backend_output_only_for_scripted_backend"}
+    return {"schema_version": 1, "status": "ok", "backend": {"type": args.backend, "model": args.model}}
 
 
 def _handle_operator_session_start(args: argparse.Namespace) -> int:
