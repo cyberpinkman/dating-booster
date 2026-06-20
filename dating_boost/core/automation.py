@@ -1238,7 +1238,7 @@ class AutomationRepository:
             match_id,
             reply_mode=ReplyMode.ADAPTIVE,
             observation=observation,
-            draft_kind=str(raw_draft.get("draft_kind") or "reply"),
+            draft_kind="nudge" if is_nudge else "reply",
             now=self._now(),
             app_id=observation.app_id,
             runtime=observation.provenance.get("runtime") or observation.provenance.get("harness_runtime") or "default",

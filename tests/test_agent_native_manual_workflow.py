@@ -94,7 +94,7 @@ class AgentNativeManualWorkflowTests(unittest.TestCase):
             self.assertIn("日料", self._context_item(context_payload, "conversation_summary"))
             self.assertIn("take_the_lead", " ".join(self._context_item(context_payload, "match_hooks")))
             self.assertEqual(policy_exit, 0)
-            self.assertTrue(policy_payload["policy"]["allowed"])
+            self.assertTrue(policy_payload["draft_review"]["allowed_for_display"])
             self.assertNotIn("亲亲", policy_text)
             self.assertEqual(feedback_exit, 0)
             self.assertEqual(feedback_payload["status"], "ok")

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
+from dating_boost.core.draft_evidence import UserMemoryRepository
 from dating_boost.core.production_store import ProductionDataStore
 
 
@@ -350,6 +351,11 @@ class ProductionReliabilityTests(unittest.TestCase):
                 "--input",
                 "tests/fixtures/intelligence/user_self_interview.json",
             ]
+        )
+        UserMemoryRepository(data_dir).ensure_profile_source(
+            app_id="tinder",
+            runtime="default",
+            observed_at="2026-05-26T00:00:00Z",
         )
 
     def _run(self, argv):

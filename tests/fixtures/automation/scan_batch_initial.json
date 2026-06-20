@@ -197,7 +197,14 @@
         "missing_info": [],
         "mode_notes": "Adaptive mode.",
         "persona_divergence": "low",
-        "stance_divergence": "low"
+        "stance_divergence": "low",
+        "draft_generation_id": "draft_generation_automation_fixture",
+        "draft_self_review_summary": {
+          "schema_version": 1,
+          "ai_or_weird_probability": 0,
+          "status": "ok",
+          "source": "unit_fixture"
+        }
       }
     },
     {

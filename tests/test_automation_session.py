@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from dating_boost.cli import main
 from dating_boost.core.automation import AutomationRepository, _next_priority_queue, _prioritize_entries
+from dating_boost.core.draft_evidence import UserMemoryRepository
 from dating_boost.core.memory.models import IdentityTrustStatus, MatchMemoryProjection
 from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.perception.observations import AppObservation
@@ -674,6 +675,47 @@ class AutomationSessionTests(unittest.TestCase):
         self.assertEqual(states_by_key["row_ada"]["state"], "needs_reply")
         self.assertTrue(states_by_key["row_ada"]["draft_revision_required"])
         self.assertEqual(states_by_key["row_ada"]["draft_revision_reason"], "content_soft_invite_detail")
+
+    def test_non_nudge_send_cannot_bypass_latest_turn_by_declaring_nudge_draft_kind(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            scan = json.loads((FIXTURE_DIR / "scan_batch_initial.json").read_text(encoding="utf-8"))
+            first_thread = scan["thread_observations"][0]
+            first_thread["observation"]["conversation_observation"]["visible_messages"] = [
+                {"sender": "user", "text": "你猜猜会有什么奖励"},
+                {"sender": "user", "text": "那我来定"},
+            ]
+            first_thread["draft"]["draft_kind"] = "nudge"
+            observation = AppObservation.from_dict(first_thread["observation"])
+            repo = AutomationRepository(data_dir)
+            ingest = repo._store_observation(observation)
+            action_requests: list[dict] = []
+            scan_requests: list[dict] = []
+            warnings: list[str] = []
+            state = {
+                "match_id": ingest["match_id"],
+                "candidate_key": "row_ada",
+                "state": "needs_reply",
+            }
+
+            repo._queue_send_request(
+                action_requests=action_requests,
+                scan_requests=scan_requests,
+                warnings=warnings,
+                state=state,
+                match_id=ingest["match_id"],
+                candidate_key="row_ada",
+                observation=observation,
+                draft_payload=first_thread["draft"],
+                latest_fingerprint="ada:in:reward-choice",
+                is_nudge=False,
+                authorization=json.loads((FIXTURE_DIR / "auth_send.json").read_text(encoding="utf-8")),
+            )
+
+        self.assertEqual(action_requests, [])
+        self.assertIn("latest_turn_required", warnings)
+        self.assertIn("draft_evidence_required", warnings)
 
     def test_automation_context_uses_projection_plus_latest_observation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2275,6 +2317,11 @@ class AutomationSessionTests(unittest.TestCase):
             "--input",
             "tests/fixtures/intelligence/user_self_interview.json",
         ])
+        UserMemoryRepository(data_dir).ensure_profile_source(
+            app_id="tinder",
+            runtime="default",
+            observed_at="2026-05-26T00:00:00Z",
+        )
 
     def _run(self, argv):
         output = StringIO()
@@ -2385,6 +2432,13 @@ def _nudge_draft():
         "mode_notes": "Adaptive mode.",
         "persona_divergence": "low",
         "stance_divergence": "low",
+        "draft_generation_id": "draft_generation_nudge_fixture",
+        "draft_self_review_summary": {
+            "schema_version": 1,
+            "ai_or_weird_probability": 0,
+            "status": "ok",
+            "source": "unit_fixture",
+        },
     }
 
 

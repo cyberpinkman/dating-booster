@@ -406,7 +406,7 @@ def build_draft_evidence(
                 user_memory=user_projection,
             )
 
-    if draft_kind != "opener" and (latest_turn is None or int(latest_turn.get("message_count") or 0) < 1):
+    if draft_kind not in {"opener", "nudge"} and (latest_turn is None or int(latest_turn.get("message_count") or 0) < 1):
         return _blocked_pack(
             match_id=match_id,
             reply_mode=reply_mode_value,

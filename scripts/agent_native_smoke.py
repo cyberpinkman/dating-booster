@@ -12,6 +12,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.draft_evidence import UserMemoryRepository
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "intelligence"
@@ -447,6 +449,11 @@ def _run_smoke(data_dir: Path) -> int:
         command_key="operator_user_ingest_interview",
         commands=commands,
     )
+    UserMemoryRepository(operator_data_dir).ensure_profile_source(
+        app_id="tinder",
+        runtime="default",
+        observed_at="2026-05-26T00:00:00Z",
+    )
     _run_cli(
         "user",
         "readiness",
@@ -528,7 +535,18 @@ def _run_smoke(data_dir: Path) -> int:
         command_key="operator_next_send",
         commands=commands,
     )
-    operator_request = operator_send["work_item"]
+    operator_request = operator_send.get("work_item")
+    if (
+        not isinstance(operator_request, dict)
+        or operator_request.get("work_item_type") != "send_message"
+        or not operator_request.get("action_request_id")
+    ):
+        raise RuntimeError(
+            "operator smoke expected send_message work item; got "
+            f"{operator_request.get('work_item_type') if isinstance(operator_request, dict) else type(operator_request).__name__} "
+            "with decision "
+            f"{operator_send.get('decision_summary')}"
+        )
     operator_action_path = data_dir / "operator_action_result.json"
     _write_json(
         operator_action_path,
@@ -986,6 +1004,17 @@ def _operator_thread_observation(scan_batch: dict[str, Any], candidate_key: str)
             thread = dict(item)
             thread["schema_version"] = 1
             thread["observation_type"] = "thread"
+            if isinstance(thread.get("draft"), dict):
+                thread["draft"] = {
+                    **thread["draft"],
+                    "draft_generation_id": "draft_generation_operator_fixture",
+                    "draft_self_review_summary": {
+                        "schema_version": 1,
+                        "ai_or_weird_probability": 0,
+                        "status": "ok",
+                        "source": "smoke_fixture",
+                    },
+                }
             return thread
     raise ValueError(f"missing thread observation for {candidate_key}")
 
