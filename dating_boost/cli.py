@@ -253,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     daemon_run_parser = daemon_subparsers.add_parser("run")
     daemon_run_parser.add_argument("--data-dir", required=True, type=Path)
     daemon_run_parser.add_argument("--once", action="store_true")
+    daemon_run_parser.add_argument("--standalone-tick", action="store_true")
     daemon_run_parser.add_argument("--json", action="store_true")
     daemon_run_parser.set_defaults(handler=_handle_daemon_run)
     for command, handler in (
@@ -1214,8 +1215,16 @@ def _handle_safety_status(args: argparse.Namespace) -> int:
 
 
 def _handle_daemon_run(args: argparse.Namespace) -> int:
-    payload = DaemonRepository(args.data_dir).run(once=args.once, owner="dating-boostd", now=_now_iso())
+    payload = DaemonRepository(args.data_dir).run(
+        once=args.once,
+        owner="dating-boostd",
+        now=_now_iso(),
+        standalone_tick=bool(args.standalone_tick),
+    )
     _print_json(payload)
+    standalone_tick = payload.get("standalone_tick") if isinstance(payload.get("standalone_tick"), dict) else None
+    if standalone_tick and standalone_tick.get("status") == "blocked":
+        return 2
     return 0 if payload.get("status") != "blocked" else 2
 
 

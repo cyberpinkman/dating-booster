@@ -26,7 +26,7 @@ class DaemonRepository:
         self._storage = JsonStorage(self.root)
         self._store = ProductionDataStore(self.root)
 
-    def run(self, *, once: bool, owner: str, now: str) -> dict[str, Any]:
+    def run(self, *, once: bool, owner: str, now: str, standalone_tick: bool = False) -> dict[str, Any]:
         run_id = f"daemon_{os.getpid()}_{int(time.time())}"
         lock = self._store.acquire_lock("daemon", owner=owner, run_id=run_id, now=now)
         if not lock.acquired:
@@ -41,12 +41,14 @@ class DaemonRepository:
             running = self._write_state(status="running", owner=owner, stop_reason=None, now=now)
             self._append_event("heartbeat", {"owner": owner, "once": once, "run_id": run_id}, now=now)
             if once:
+                standalone_payload = _run_standalone_tick(self.root) if standalone_tick else None
                 stopped = self._write_state(status="stopped", owner=owner, stop_reason="once_completed", now=now)
                 return {
                     "schema_version": DAEMON_STATE_SCHEMA_VERSION,
                     "status": "stopped",
                     "stop_reason": "once_completed",
                     "state": stopped,
+                    "standalone_tick": standalone_payload,
                     "lock": self._store.release_lock("daemon", run_id=run_id),
                 }
             interval = _heartbeat_interval()
@@ -217,6 +219,43 @@ def _heartbeat_interval() -> float:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _run_standalone_tick(root: Path) -> dict[str, Any] | None:
+    from dating_boost.core.standalone_observation import FixtureObservationProvider, fixture_harness_factory
+    from dating_boost.core.standalone_runtime import StandaloneAgentRuntime
+    from dating_boost.core.standalone_session import StandaloneSessionRepository
+
+    repository = StandaloneSessionRepository(root)
+    status = repository.status()
+    if status.get("status") != "active":
+        return None
+    session = status.get("session") if isinstance(status.get("session"), dict) else {}
+    source = session.get("observation_source") if isinstance(session.get("observation_source"), dict) else {}
+    if source.get("type") != "fixture_dir":
+        return {"schema_version": 1, "status": "blocked", "reason": "unsupported_standalone_observation_source"}
+    source_path = source.get("path")
+    if not isinstance(source_path, str) or not source_path.strip():
+        return {"schema_version": 1, "status": "blocked", "reason": "standalone_observation_fixture_dir_required"}
+    fixture_dir = Path(source_path).expanduser().resolve()
+    if not fixture_dir.is_dir():
+        return {"schema_version": 1, "status": "blocked", "reason": "observation_fixture_dir_not_found"}
+    provider = FixtureObservationProvider(fixture_dir)
+    try:
+        tick = StandaloneAgentRuntime(
+            root,
+            observation_provider=provider,
+            harness_factory=fixture_harness_factory(provider),
+        ).tick()
+    except Exception as exc:  # noqa: BLE001 - daemon run-once must return a structured payload.
+        tick = {
+            "schema_version": 1,
+            "status": "blocked",
+            "reason": "standalone_tick_failed",
+            "error_type": type(exc).__name__,
+        }
+    repository.record_tick(tick)
+    return tick
 
 
 def daemon_entry(argv: list[str] | None = None) -> int:
