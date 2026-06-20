@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dating_boost.core.standalone_actions import StageOnlyActionExecutor
+from dating_boost.core.standalone_actions import StandaloneManagedGuiSendExecutor, StageOnlyActionExecutor
 from dating_boost.core.standalone_observation import FixtureObservationProvider
 from dating_boost.core.standalone_runtime import StandaloneAgentRuntime
 
@@ -127,6 +127,36 @@ class StandaloneActionExecutorTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason"], "action_executor_failed")
         self.assertEqual(result["error_type"], "RuntimeError")
+
+    def test_standalone_managed_gui_send_executor_remains_blocked(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executor = StandaloneManagedGuiSendExecutor(Path(temp_dir) / "data")
+
+            result = executor.execute(
+                {
+                    "work_item_type": "send_message",
+                    "action_request_id": "act_1",
+                    "target_match_id": "match_ada",
+                    "payload_hash": "hash_1",
+                },
+                app_id="tinder",
+            )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "standalone_live_gui_send_not_enabled")
+        self.assertEqual(result["next_host_action"], "use_host_loop_live_send_or_stage_mode")
+
+    def test_standalone_managed_gui_send_executor_validates_send_binding(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            executor = StandaloneManagedGuiSendExecutor(Path(temp_dir) / "data")
+
+            result = executor.execute(
+                {"work_item_type": "send_message", "action_request_id": "act_1"},
+                app_id="tinder",
+            )
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "invalid_send_work_item:target_match_id")
 
 
 if __name__ == "__main__":

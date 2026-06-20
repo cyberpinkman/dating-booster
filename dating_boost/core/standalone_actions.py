@@ -68,6 +68,29 @@ class StageOnlyActionExecutor:
         }
 
 
+class StandaloneManagedGuiSendExecutor:
+    def __init__(self, root: Path):
+        self.root = root
+
+    def execute(self, work_item: dict[str, Any], *, app_id: str) -> dict[str, Any]:
+        block_reason = _send_work_item_block_reason(work_item)
+        if block_reason:
+            return {
+                "schema_version": 1,
+                "status": "blocked",
+                "reason": block_reason,
+                "action_request_id": work_item.get("action_request_id"),
+            }
+        return {
+            "schema_version": 1,
+            "status": "blocked",
+            "reason": "standalone_live_gui_send_not_enabled",
+            "action_request_id": work_item.get("action_request_id"),
+            "app_id": app_id,
+            "next_host_action": "use_host_loop_live_send_or_stage_mode",
+        }
+
+
 def _stage_payload(work_item: dict[str, Any], *, app_id: str) -> dict[str, Any]:
     text = str(work_item.get("payload_text") or "")
     action_request_id = _required_str(work_item.get("action_request_id"))

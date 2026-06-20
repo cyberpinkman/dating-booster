@@ -6,7 +6,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from dating_boost.apps.registry import host_loop_app_ids, manifest_for_app
 from dating_boost.core.live_send_contract import validate_live_send_contract
@@ -20,6 +20,63 @@ class ManagedGuiSendError(RuntimeError):
     pass
 
 
+class ManagedGuiSendArgsPort(Protocol):
+    app_id: str
+    harness_runtime: str | None
+
+
+class ManagedGuiSendHostPort(Protocol):
+    args: ManagedGuiSendArgsPort
+    data_dir: Path
+    work_dir: Path
+    staged_verifications: list[dict[str, Any]]
+    action_results_recorded: list[dict[str, Any]]
+
+    def _finish(
+        self,
+        status: str,
+        reason: str,
+        *,
+        current: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def _runtime_live_send_block_reason(self) -> str | None:
+        raise NotImplementedError
+
+    def _target_profile_block_reason(self, work_item: dict[str, Any]) -> str | None:
+        raise NotImplementedError
+
+    def _authorization_path(self) -> Path:
+        raise NotImplementedError
+
+    def _live_send_action_request(self, work_item: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def _run_cli_json(
+        self,
+        *args: str,
+        allow_error: bool = False,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def _append_timeline(
+        self,
+        event_type: str,
+        work_item: dict[str, Any] | None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        raise NotImplementedError
+
+    def _work_file(self, work_item: dict[str, Any], kind: str) -> Path:
+        raise NotImplementedError
+
+    def _clear_host_work_item(self, work_item: dict[str, Any], *, consume: bool = False) -> None:
+        raise NotImplementedError
+
+
 class ManagedGuiSendRunner:
     """Host-loop managed live-send transaction runner.
 
@@ -29,7 +86,7 @@ class ManagedGuiSendRunner:
     creating a separate generic sender that hides app-specific harness behavior.
     """
 
-    def __init__(self, host: Any):
+    def __init__(self, host: ManagedGuiSendHostPort):
         self.host = host
 
     def handle(self, work_item: dict[str, Any]) -> dict[str, Any] | None:
@@ -310,7 +367,7 @@ class ManagedGuiSendRunner:
 
 
 def _handle_pending_visual_confirmation(
-    host: Any,
+    host: ManagedGuiSendHostPort,
     work_item: dict[str, Any],
     payload_messages: list[dict[str, Any]],
     message_results: list[dict[str, Any]],
@@ -450,7 +507,7 @@ def _handle_pending_visual_confirmation(
 
 
 def _send_single_message_via_harness(
-    host: Any,
+    host: ManagedGuiSendHostPort,
     work_item: dict[str, Any],
     sequence_work_item: dict[str, Any],
     message: dict[str, Any],
@@ -507,7 +564,7 @@ def _send_single_message_via_harness(
 
 
 def _handle_harness_visual_wait(
-    host: Any,
+    host: ManagedGuiSendHostPort,
     work_item: dict[str, Any],
     message: dict[str, Any],
     message_results: list[dict[str, Any]],
@@ -593,7 +650,7 @@ def _handle_harness_visual_wait(
 
 
 def _finish_successful_managed_gui_send(
-    host: Any,
+    host: ManagedGuiSendHostPort,
     work_item: dict[str, Any],
     *,
     payload_messages: list[dict[str, Any]],
