@@ -59,8 +59,9 @@
   },
   "stage_send_verification": [
     "Managed TaShuo draft staging is supported only inside harness tashuo send-message.",
-    "Paste the draft into a verified TaShuo ordinary conversation input first; direct typing is only a no-newline fallback when paste does not stage, and IME space commit follows direct typing before final verification.",
-    "After paste, direct typing, or IME space commit, exact text evidence must verify staged text equals payload_text before pressing Return; mac-ios-app may satisfy this through Accessibility text evidence.",
+    "Paste the draft into a verified TaShuo ordinary conversation input first; mac-ios-app may use Accessibility set-text as a verified fallback when paste does not stage.",
+    "Direct typing is never allowed for Chinese, emoji, or other non-ASCII payload text; it is only a printable-ASCII fallback after paste and Accessibility set-text fail.",
+    "After paste, Accessibility set-text, direct typing, or IME space commit, exact text evidence must verify staged text equals payload_text before pressing Return; mac-ios-app may satisfy this through Accessibility text evidence.",
     "TaShuo ordinary chat sends with Return; there is no Send button to click.",
     "Visible bubble evidence alone is not exact-text verification unless paired with exact text evidence from OCR, Accessibility, or an approved visual verification flow.",
     "Question-gate replies may be drafted for user review, but current harness question-gate staging/sending is not supported."

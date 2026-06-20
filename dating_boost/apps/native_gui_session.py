@@ -2800,12 +2800,12 @@ def _screen_region_stats(screen: dict[str, Any], x1: float, y1: float, x2: float
 
 
 def _direct_type_fallback_allowed(text: str) -> bool:
-    return bool(text) and "\n" not in text
+    return direct_text_entry_block_reason(text) is None
 
 
 
 def _bumble_direct_type_fallback_allowed(text: str) -> bool:
-    return bool(text) and "\n" not in text and all(32 <= ord(char) <= 126 for char in text)
+    return direct_text_entry_block_reason(text) is None
 
 
 

@@ -1415,7 +1415,7 @@ def send_tashuo_message(
         "intent": "type_tashuo_message_input_if_paste_did_not_stage",
         "risk": "live_send_precondition",
         "fallback_only": True,
-        "requires_direct_type_safe_draft": True,
+        "requires_printable_ascii_draft": True,
         "requires_exact_text_verification_after_direct_type": True,
     }
     ime_commit_step = {
@@ -1641,12 +1641,12 @@ def send_tashuo_message(
                 payload["staging_input_backend"] = ax_set_result.get("input_backend")
                 staged_text = str(staged_screen.get("text") or "")
                 staged_input_placeholder_visible = _tashuo_input_placeholder_visible(staged_text)
-        direct_type_fallback_candidate = (
+        direct_type_input_candidate = (
             staged_verification.get("status") != "ok"
-            and platform._direct_type_fallback_allowed(draft_text)
             and staged_input_placeholder_visible
         )
-        if direct_type_fallback_candidate and _contains_cjk(draft_text):
+        direct_type_block_reason = platform.direct_text_entry_block_reason(draft_text)
+        if direct_type_input_candidate and direct_type_block_reason is not None:
             cleanup_result = _cleanup_failed_tashuo_stage(
                 session,
                 window,
@@ -1659,10 +1659,14 @@ def send_tashuo_message(
             payload["staged_text_verified"] = False
             payload.update({
                 "status": "blocked",
-                "reason": "cjk_direct_type_not_supported",
+                "reason": direct_type_block_reason,
                 "executed_steps": executed_steps,
             })
             return payload
+        direct_type_fallback_candidate = (
+            direct_type_input_candidate
+            and platform._direct_type_fallback_allowed(draft_text)
+        )
         if direct_type_fallback_candidate:
             type_result = session._type_text_into_frontmost_app(draft_text)
             executed_steps.append({**type_fallback_step, "result": type_result})

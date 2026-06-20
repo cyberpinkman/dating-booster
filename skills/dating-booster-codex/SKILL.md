@@ -112,6 +112,11 @@ For Tinder, Bumble ordinary chat, TaShuo ordinary chat, or macOS WeChat fully
 managed sending, use `managed-session` or `dating-boost-host-loop` with
 `--managed-gui-send`. Direct `harness <app> send-message --authorization
 --action-request` is executor-internal only; do not handcraft action requests.
+Codex or Computer Use "request approval" prompts authorize tool execution only;
+they are not Dating Booster send authorization and cannot replace the managed
+action request, draft review, target binding, staged-text verification, or
+post-action verification. If the managed send channel is blocked, do not fall
+back to manual Computer Use typing or Return-send as a workaround.
 
 ## Runtime Scope
 
@@ -492,6 +497,13 @@ in some apps after staging, but success still requires staged-text and outbound
 bubble verification from a fresh observation. If the sent text differs from the
 requested payload, record `result_status` as `failed` or `unknown`, not
 `succeeded`.
+
+Never direct-type Chinese, emoji, or other non-ASCII payload text through
+AppleScript, Computer Use, or a host text box. Use clipboard paste or a
+supported Accessibility set-text operation, then exact verification. Direct
+keystroke fallback is only acceptable for printable ASCII payloads, after paste
+fails and before any submit action; if the payload contains Chinese text, block
+with `cjk_direct_type_not_supported` instead of trying to type it.
 
 If paste produces a literal shortcut key such as `v`, an IME candidate, or any
 other wrong text, cancel the candidate if present, re-focus the exact input box,

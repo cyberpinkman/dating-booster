@@ -228,6 +228,10 @@ target-chat binding. The harness must verify the target chat, verify the staged
 text exactly before the app-specific submit action, and verify the outbound
 bubble from fresh post-action evidence before the result can be recorded as
 `succeeded`. TaShuo's app-specific submit action is Return.
+Host tool approval prompts, including Codex "request approval", only approve
+the local tool action. They do not create Dating Booster send authorization and
+must not replace the managed action request, draft review, target binding,
+staged-text verification, or post-action verification.
 
 The action `expand-visible-profile-section` is a bounded tap for a visibly
 folded profile section such as `查看所有...项信息`. Use it only after a fresh
@@ -367,6 +371,13 @@ different, record the action result with `result_status: "failed"` when the
 mismatch is clear, or `result_status: "unknown"` when verification is
 inconclusive. Do not send a second recovery message until the current mismatch
 is recorded and a fresh thread observation produces a new action request.
+
+Do not direct-type Chinese, emoji, or other non-ASCII payload text through
+AppleScript, Computer Use, or a host text box. Payload staging must use
+clipboard paste or a supported Accessibility set-text operation followed by
+exact staged-text verification. Direct keystroke fallback is only for printable
+ASCII payloads after paste fails; Chinese payloads must block with
+`cjk_direct_type_not_supported` instead of being typed.
 
 If paste produces a literal shortcut key such as `v`, an IME candidate, or any
 other wrong text, cancel the candidate if present, re-focus the exact input box,

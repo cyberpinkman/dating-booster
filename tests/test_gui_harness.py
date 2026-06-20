@@ -462,6 +462,42 @@ class GuiHarnessTests(unittest.TestCase):
         )
         self.assertTrue(payload["agent_native_capabilities"]["wechat_live_send_harness"])
         self.assertFalse(payload["agent_native_capabilities"]["live_gui_harness"])
+        guidance = payload["managed_live_send_guidance"]
+        self.assertIn(
+            "do_not_use_host_tool_approval_as_send_authorization",
+            guidance["forbidden_actions"],
+        )
+        self.assertIn(
+            "do_not_direct_type_non_ascii_or_cjk_payload_text",
+            guidance["forbidden_actions"],
+        )
+        self.assertEqual(
+            guidance["host_tool_approval_scope"],
+            "tool_execution_only_not_dating_booster_send_authorization",
+        )
+        self.assertEqual(
+            guidance["payload_text_entry_policy"]["blocked_reason_for_cjk"],
+            "cjk_direct_type_not_supported",
+        )
+
+    def test_direct_text_entry_blocks_cjk_before_osascript_keystroke(self):
+        runner = FakeRunner(ocr_text="")
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness._type_text_into_frontmost_app("你好")
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "cjk_direct_type_not_supported")
+        self.assertFalse(any("keystroke" in " ".join(command) for command in runner.commands))
+
+    def test_direct_text_entry_allows_printable_ascii_fallback(self):
+        runner = FakeRunner(ocr_text="")
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness._type_text_into_frontmost_app("hi")
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(any('keystroke "hi"' in " ".join(command) for command in runner.commands))
 
     def test_cli_generic_harness_blocks_unknown_app_before_native_execution(self):
         with _patch_cli_adapter() as harness_class:

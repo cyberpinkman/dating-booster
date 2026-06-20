@@ -43,7 +43,7 @@ class AgentNativeCliTests(unittest.TestCase):
             self.assertEqual(payload["schema_versions"]["action_result"], 1)
             self.assertEqual(payload["schema_versions"]["stage_result"], 1)
             self.assertEqual(payload["schema_versions"]["action_correction"], 1)
-            self.assertEqual(payload["schema_versions"]["reply_draft"], 3)
+            self.assertEqual(payload["schema_versions"]["reply_draft"], 4)
             self.assertEqual(payload["schema_versions"]["draft_review"], 1)
             self.assertEqual(payload["schema_versions"]["user_disclosure_profile"], 1)
             self.assertEqual(payload["schema_versions"]["user_readiness"], 1)

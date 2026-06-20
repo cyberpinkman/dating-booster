@@ -74,6 +74,28 @@ WECHAT_HARNESS_BACKEND = "macos_wechat_desktop"
 HARNESS_BACKEND = IPHONE_MIRRORING_HARNESS_BACKEND
 
 
+def _contains_cjk_text(text: str) -> bool:
+    return any(
+        "\u3400" <= char <= "\u9fff"
+        or "\uf900" <= char <= "\ufaff"
+        or "\U00020000" <= char <= "\U0002ebef"
+        for char in text
+    )
+
+
+def direct_text_entry_block_reason(text: str) -> str | None:
+    """Return why AppleScript direct keystroke is unsafe for payload text."""
+    if text == "":
+        return "empty_direct_text_entry"
+    if "\n" in text or "\r" in text:
+        return "multiline_direct_text_entry_not_supported"
+    if _contains_cjk_text(text):
+        return "cjk_direct_type_not_supported"
+    if any(ord(char) < 32 or ord(char) > 126 for char in text):
+        return "non_ascii_direct_type_not_supported"
+    return None
+
+
 class NativeGuiHarness:
     def __init__(
         self,
@@ -494,6 +516,9 @@ class NativeGuiHarness:
         }
 
     def _type_text_without_ime_commit(self, text: str, *, failure_reason: str) -> dict[str, Any]:
+        block_reason = direct_text_entry_block_reason(text)
+        if block_reason is not None:
+            return {"status": "blocked", "reason": block_reason, "input_backend": "blocked_direct_keystroke"}
         type_result = self.runner.run(
             ["osascript", "-e", f'tell application "System Events" to keystroke {_applescript_string_literal(text)}']
         )
@@ -502,6 +527,9 @@ class NativeGuiHarness:
         return {"status": "ok", "input_backend": "applescript_direct_keystroke", "ime_commit_key": None}
 
     def _type_text_with_ime_commit(self, text: str, *, failure_reason: str) -> dict[str, Any]:
+        block_reason = direct_text_entry_block_reason(text)
+        if block_reason is not None:
+            return {"status": "blocked", "reason": block_reason, "input_backend": "blocked_direct_keystroke"}
         type_result = self.runner.run(
             ["osascript", "-e", f'tell application "System Events" to keystroke {_applescript_string_literal(text)}']
         )
@@ -563,6 +591,9 @@ class NativeGuiHarness:
         }
 
     def _type_text_into_frontmost_app(self, text: str) -> dict[str, Any]:
+        block_reason = direct_text_entry_block_reason(text)
+        if block_reason is not None:
+            return {"status": "blocked", "reason": block_reason, "input_backend": "blocked_direct_keystroke"}
         result = self.runner.run(
             [
                 "osascript",
