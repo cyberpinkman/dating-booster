@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "observation_type": "message_list",
+  "app_id": "tinder",
+  "captured_at": "2026-06-20T00:00:00Z",
+  "message_list_snapshot": {
+    "entries": []
+  },
+  "scan_cursor": {
+    "current": null,
+    "next": null,
+    "exhausted": true
+  }
+}

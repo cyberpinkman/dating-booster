@@ -252,9 +252,9 @@ For Codex, Claude Code, OpenClaw, and Hermes, host-native remains the default ro
 Initial standalone mode is fixture/manual-first:
 
 ```bash
-dating-boost standalone-session start --data-dir .local/dating-boost --app-id tinder --send-mode stage --observation-fixture-dir tests/fixtures/standalone --backend scripted --scripted-backend-output tests/fixtures/intelligence/scripted_reply.json --json
-dating-boost standalone-session tick --data-dir .local/dating-boost --json
-dating-boost standalone-session stop --data-dir .local/dating-boost --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization tests/fixtures/standalone/auth_tinder_stage.json --app-id tinder --send-mode stage --observation-fixture-dir tests/fixtures/standalone --backend scripted --scripted-backend-output tests/fixtures/intelligence/scripted_reply.json --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session stop --data-dir .local/dating-boost --json
 ```
 
 Do not use standalone mode to bypass host-loop live-send rules. Live send still requires the same operator-generated action request, user authorization, runtime scope, target binding, exact staged-text verification, and post-action evidence.

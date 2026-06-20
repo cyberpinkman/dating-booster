@@ -123,10 +123,19 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         architecture = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+        standalone_fixture = ROOT / "tests" / "fixtures" / "standalone"
+        standalone_auth = standalone_fixture / "auth_tinder_stage.json"
+        standalone_message_list = standalone_fixture / "message_list.json"
 
         self.assertIn("standalone-session", readme)
+        self.assertIn("DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start", readme)
+        self.assertIn("--authorization tests/fixtures/standalone/auth_tinder_stage.json", readme)
         self.assertIn("host-native remains the default", agents)
+        self.assertIn("DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start", agents)
+        self.assertIn("--authorization tests/fixtures/standalone/auth_tinder_stage.json", agents)
         self.assertIn("Standalone Agent Runtime", architecture)
+        self.assertTrue(standalone_auth.exists())
+        self.assertTrue(standalone_message_list.exists())
 
     def test_agent_adapter_docs_separate_shared_and_host_specific_contracts(self):
         adapter_root = ROOT / "agent_adapters"
