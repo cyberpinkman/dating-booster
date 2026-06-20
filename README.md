@@ -70,6 +70,18 @@ TaShuo mac-ios-app 真实托管 smoke 入口：
 python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json
 ```
 
+## Standalone Agent Runtime
+
+`standalone-session` is the opt-in migration path from host-native workflows to a local Dating Booster agent. Host-native remains the default production route. The first standalone mode consumes the same managed-session/operator contracts with fixture or manual observations; live GUI send remains disabled unless the existing authorization, target binding, staged-text verification, and post-action verification contracts are satisfied.
+
+Example fixture start:
+
+```bash
+dating-boost standalone-session start --data-dir .local/dating-boost --app-id tinder --send-mode stage --observation-fixture-dir tests/fixtures/standalone --backend scripted --scripted-backend-output tests/fixtures/intelligence/scripted_reply.json --json
+dating-boost standalone-session tick --data-dir .local/dating-boost --json
+dating-boost standalone-session status --data-dir .local/dating-boost --json
+```
+
 ## 给人类的快速开始
 
 如果你只是想试用，最稳定的方式是把仓库链接交给你的 host agent，并明确告诉它：

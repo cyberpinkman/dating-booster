@@ -119,6 +119,15 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
         self.assertIn("docs/architecture.md", docs_readme)
         self.assertIn("docs/architecture.md", root_readme)
 
+    def test_docs_describe_standalone_as_opt_in(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        architecture = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+
+        self.assertIn("standalone-session", readme)
+        self.assertIn("host-native remains the default", agents)
+        self.assertIn("Standalone Agent Runtime", architecture)
+
     def test_agent_adapter_docs_separate_shared_and_host_specific_contracts(self):
         adapter_root = ROOT / "agent_adapters"
         shared_text = (adapter_root / "shared" / "README.md").read_text(encoding="utf-8").lower()

@@ -245,6 +245,20 @@ dating-boost managed-session run --wait --data-dir .local/dating-boost --json
 
 不要启动新的 `dating-boost-host-loop run` 来处理同一个 wait point，因为新 run 会创建新的 operator session。
 
+## Standalone session
+
+For Codex, Claude Code, OpenClaw, and Hermes, host-native remains the default route. Use `standalone-session` only when the user explicitly asks to run Dating Booster's local standalone agent runtime.
+
+Initial standalone mode is fixture/manual-first:
+
+```bash
+dating-boost standalone-session start --data-dir .local/dating-boost --app-id tinder --send-mode stage --observation-fixture-dir tests/fixtures/standalone --backend scripted --scripted-backend-output tests/fixtures/intelligence/scripted_reply.json --json
+dating-boost standalone-session tick --data-dir .local/dating-boost --json
+dating-boost standalone-session stop --data-dir .local/dating-boost --json
+```
+
+Do not use standalone mode to bypass host-loop live-send rules. Live send still requires the same operator-generated action request, user authorization, runtime scope, target binding, exact staged-text verification, and post-action evidence.
+
 ## Host loop
 
 ```bash

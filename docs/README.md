@@ -107,6 +107,9 @@ four axes that should not be mixed in one-off patches:
 - Host loop: `dating-boost-host-loop` supervises work directories,
   authorization, recovery, and staged/live send mode checks。监督 work dir、授权、
   恢复和 send mode 检查。
+- Standalone session: `dating-boost standalone-session` consumes
+  managed-session/operator work without a host agent, starting with
+  fixture/manual observations and stage mode.
 - GUI platform harness: `dating_boost/core/gui_harness.py` owns native
   app-window mechanics such as screenshots, OCR, gestures, clipboard, paste,
   and IME commit。平台自动化能力只应在这里。

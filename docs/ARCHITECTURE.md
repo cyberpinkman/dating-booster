@@ -27,6 +27,17 @@ core, but they must not fork domain rules.
 核心模块保持 host-agnostic、尽量 app-agnostic，并且不绑定模型供应商。Host-specific
 包和 app-specific harness 只能编排核心能力，不能复制或分叉领域规则。
 
+## Standalone Agent Runtime
+
+The standalone runtime is a new consumer of existing managed-session and operator contracts. It does not fork policy, planner, memory, app adapter, runtime scope, or managed-send rules.
+
+Migration order:
+
+1. fixture/manual observations.
+2. local `ModelBackend` draft planning.
+3. daemon-supervised run-once ticks.
+4. live GUI staging and send only through existing verification contracts.
+
 ## Extension Priorities
 
 | Priority | Axis | Immediate shape | Long-term shape |
