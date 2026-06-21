@@ -83,6 +83,12 @@ DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir 
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session status --data-dir .local/dating-boost --json
 ```
 
+TaShuo standalone stage-only smoke:
+
+```bash
+DATING_BOOST_KEY_PROVIDER=local python3 scripts/tashuo_mac_ios_standalone_smoke.py --authorization auth.json --vision-backend openai --backend openai --json
+```
+
 ### Fixture and cross-app development
 
 Tinder fixture start:

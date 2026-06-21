@@ -93,7 +93,14 @@ class StandaloneSessionRepository:
         session["stop_reason"] = reason
         self._storage.write_json(STANDALONE_SESSION_PATH, session)
         self._append_event("stop", {"session_id": session["session_id"], "reason": reason})
-        return _payload("stopped", session=session, reason=reason)
+        last_tick = session.get("last_tick") if isinstance(session.get("last_tick"), dict) else {}
+        return _payload(
+            "stopped",
+            session=session,
+            reason=reason,
+            last_blocking_reason=last_tick.get("reason"),
+            relationship_progress_report=last_tick.get("relationship_progress_report"),
+        )
 
     def record_tick(self, tick: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(tick, dict):

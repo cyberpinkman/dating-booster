@@ -110,6 +110,30 @@ class StandaloneSessionTests(unittest.TestCase):
         self.assertEqual(invalid_tick["status"], "blocked")
         self.assertEqual(invalid_tick["reason"], "invalid_tick_payload")
 
+    def test_stop_reports_last_tick_blocking_reason_and_progress_report(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = StandaloneSessionRepository(Path(temp_dir) / "data")
+            repo.start(
+                app_id="tinder",
+                runtime=None,
+                send_mode="stage",
+                observation_source={"type": "fixture_dir", "path": "tests/fixtures/standalone"},
+                backend={"type": "scripted", "path": "tests/fixtures/intelligence/scripted_reply.json"},
+                scan_interval_seconds=120,
+            )
+            repo.record_tick(
+                {
+                    "status": "blocked",
+                    "reason": "standalone_tick_no_work",
+                    "relationship_progress_report": {"summary": {"waiting_count": 1}},
+                }
+            )
+            stopped = repo.stop(reason="manual_stop")
+
+        self.assertEqual(stopped["status"], "stopped")
+        self.assertEqual(stopped["last_blocking_reason"], "standalone_tick_no_work")
+        self.assertEqual(stopped["relationship_progress_report"], {"summary": {"waiting_count": 1}})
+
     def test_capabilities_expose_standalone_runtime_contract(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             payload = build_capabilities(data_dir=Path(temp_dir) / "data")
