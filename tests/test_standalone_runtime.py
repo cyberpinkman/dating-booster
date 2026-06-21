@@ -1,15 +1,25 @@
 import json
+import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
+from dating_boost.cli import main
+from dating_boost.core.draft_evidence import UserMemoryRepository
 from dating_boost.core.managed_session import ManagedSessionRepository
+from dating_boost.core.standalone_actions import StageOnlyActionExecutor
 from dating_boost.core.standalone_observation import (
     FixtureObservationProvider,
     _thread_fixture_name,
     fixture_harness_factory,
 )
 from dating_boost.core.standalone_runtime import StandaloneAgentRuntime
+
+
+AUTOMATION_FIXTURE_DIR = Path("tests/fixtures/automation")
 
 
 class FixtureObservationProviderTests(unittest.TestCase):
@@ -245,6 +255,56 @@ class StandaloneRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["reason"], "observation_ingest_failed")
         self.assertEqual(payload["error_type"], "FileNotFoundError")
 
+    def test_fixture_runtime_reaches_stage_recorded_through_operator_send_message(self):
+        with patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-05-26T00:00:00Z"}):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                data_dir = Path(temp_dir) / "data"
+                fixture_dir = Path(temp_dir) / "fixtures"
+                fixture_dir.mkdir()
+                _init_profile(data_dir)
+                (fixture_dir / "message_list.json").write_text(
+                    json.dumps(_single_candidate_message_list_observation("row_ada"), ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                (fixture_dir / "thread_row_ada.json").write_text(
+                    json.dumps(_thread_observation("row_ada"), ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                provider = FixtureObservationProvider(fixture_dir)
+                managed = ManagedSessionRepository(
+                    data_dir,
+                    harness_factory=fixture_harness_factory(provider),
+                )
+                started = managed.start(
+                    app_id="tinder",
+                    authorization=json.loads((AUTOMATION_FIXTURE_DIR / "auth_send.json").read_text(encoding="utf-8")),
+                    goal=None,
+                    availability=None,
+                    send_mode="stage",
+                    managed_gui_send=False,
+                )
+                runtime = StandaloneAgentRuntime(
+                    data_dir,
+                    observation_provider=provider,
+                    harness_factory=fixture_harness_factory(provider),
+                    action_executor=StageOnlyActionExecutor(data_dir, send_mode="stage"),
+                )
+
+                scan_tick = runtime.tick()
+                open_tick = runtime.tick()
+                final_tick = runtime.tick()
+
+        self.assertEqual(started["status"], "active")
+        self.assertEqual(scan_tick["status"], "work_consumed")
+        self.assertEqual(scan_tick["work_item_type"], "scan_message_list")
+        self.assertEqual(open_tick["status"], "work_consumed")
+        self.assertEqual(open_tick["work_item_type"], "open_thread")
+        self.assertEqual(final_tick["status"], "stage_recorded")
+        self.assertEqual(final_tick["result_status"], "succeeded")
+        self.assertEqual(final_tick["recorded"]["status"], "ok")
+        self.assertNotEqual(final_tick.get("reason"), "operator_draft_work_item_not_available")
+        self.assertNotEqual(final_tick.get("status"), "needs_operator_draft_work_item")
+
 
 def _auth(app_id: str) -> dict[str, object]:
     return {
@@ -263,6 +323,98 @@ def _auth(app_id: str) -> dict[str, object]:
         "created_at": "2026-06-20T00:00:00Z",
         "revoked_at": None,
     }
+
+
+def _init_profile(data_dir: Path) -> None:
+    _run_cli(
+        [
+            "init-profile",
+            "--data-dir",
+            str(data_dir),
+            "--input",
+            "tests/fixtures/intelligence/user_profile.json",
+        ]
+    )
+    _run_cli(
+        [
+            "user",
+            "ingest-profile",
+            "--data-dir",
+            str(data_dir),
+            "--input",
+            "tests/fixtures/intelligence/user_dating_profile.json",
+        ]
+    )
+    _run_cli(
+        [
+            "user",
+            "ingest-interview",
+            "--data-dir",
+            str(data_dir),
+            "--input",
+            "tests/fixtures/intelligence/user_self_interview.json",
+        ]
+    )
+    UserMemoryRepository(data_dir).ensure_profile_source(
+        app_id="tinder",
+        runtime="default",
+        observed_at="2026-05-26T00:00:00Z",
+    )
+
+
+def _run_cli(argv: list[str]) -> dict[str, object]:
+    output = StringIO()
+    with redirect_stdout(output):
+        code = main(argv)
+    if code != 0:
+        raise AssertionError(output.getvalue())
+    return json.loads(output.getvalue())
+
+
+def _message_list_observation() -> dict[str, object]:
+    scan = json.loads((AUTOMATION_FIXTURE_DIR / "scan_batch_initial.json").read_text(encoding="utf-8"))
+    return {
+        "schema_version": 1,
+        "observation_type": "message_list",
+        "session_id": scan["session_id"],
+        "app_id": scan["app_id"],
+        "captured_at": scan["captured_at"],
+        "scan_cursor": scan["scan_cursor"],
+        "scan_budget": scan["scan_budget"],
+        "provenance": scan["provenance"],
+        "message_list_snapshot": scan["message_list_snapshot"],
+    }
+
+
+def _single_candidate_message_list_observation(candidate_key: str) -> dict[str, object]:
+    payload = _message_list_observation()
+    entries = payload["message_list_snapshot"]["entries"]
+    payload["message_list_snapshot"]["entries"] = [
+        entry for entry in entries if entry["candidate_key"] == candidate_key
+    ]
+    return payload
+
+
+def _thread_observation(candidate_key: str) -> dict[str, object]:
+    scan = json.loads((AUTOMATION_FIXTURE_DIR / "scan_batch_initial.json").read_text(encoding="utf-8"))
+    for item in scan["thread_observations"]:
+        if item["candidate_key"] == candidate_key:
+            payload = dict(item)
+            payload["schema_version"] = 1
+            payload["observation_type"] = "thread"
+            if isinstance(payload.get("draft"), dict):
+                payload["draft"] = {
+                    **payload["draft"],
+                    "draft_generation_id": "draft_generation_standalone_runtime_fixture",
+                    "draft_self_review_summary": {
+                        "schema_version": 1,
+                        "ai_or_weird_probability": 0,
+                        "status": "ok",
+                        "source": "unit_fixture",
+                    },
+                }
+            return payload
+    raise AssertionError(f"missing fixture thread observation: {candidate_key}")
 
 
 if __name__ == "__main__":

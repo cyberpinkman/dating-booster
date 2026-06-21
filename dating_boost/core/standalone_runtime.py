@@ -20,16 +20,22 @@ class StandaloneAgentRuntime:
         observation_provider: StandaloneObservationProvider,
         harness_factory: Callable[..., Any] | None = None,
         action_executor: StandaloneActionExecutor | None = None,
+        draft_planner: "StandaloneDraftPlanner | None" = None,
     ):
         self.root = root
         self.observation_provider = observation_provider
         self.action_executor = action_executor
+        self.draft_planner = draft_planner
         self.managed = ManagedSessionRepository(root, harness_factory=harness_factory)
         self.operator = OperatorRepository(root)
 
     def tick(self) -> dict[str, Any]:
         managed_payload = self.managed.tick()
         if managed_payload.get("status") != "host_work_required":
+            if managed_payload.get("status") == "no_work":
+                continuation = self._consume_operator_continuation(managed_payload=managed_payload)
+                if continuation is not None:
+                    return continuation
             return {
                 "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
                 "status": str(managed_payload.get("status") or "unknown"),
@@ -44,6 +50,37 @@ class StandaloneAgentRuntime:
                 "reason": "managed_session_missing_work_item",
             }
         return self.consume_work_item(work_item, managed_payload=managed_payload)
+
+    def _consume_operator_continuation(self, *, managed_payload: dict[str, Any]) -> dict[str, Any] | None:
+        state = self.operator.get_state_payload()
+        operator_session = state.get("operator_session") if isinstance(state.get("operator_session"), dict) else {}
+        if operator_session.get("status") != "active":
+            return None
+        has_continuation = (
+            isinstance(operator_session.get("current_work_item"), dict)
+            or isinstance(state.get("pending_scan_batch"), dict)
+            or bool(state.get("work_queue"))
+        )
+        if not has_continuation:
+            return None
+        operator_payload = self.operator.next_work_item()
+        work_item = operator_payload.get("work_item") if isinstance(operator_payload, dict) else None
+        if not isinstance(work_item, dict):
+            return None
+        work_type = str(work_item.get("work_item_type") or "")
+        if work_type in {"wait", "scheduled_wait"}:
+            return None
+        app_id = managed_payload.get("app_id") or operator_session.get("app_id")
+        return self.consume_work_item(
+            work_item,
+            managed_payload={
+                "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
+                "status": "host_work_required",
+                "app_id": app_id,
+                "operator": operator_payload,
+                "managed_session": managed_payload,
+            },
+        )
 
     def consume_work_item(self, work_item: dict[str, Any], *, managed_payload: dict[str, Any]) -> dict[str, Any]:
         app_id = managed_payload.get("app_id") or work_item.get("app_id")

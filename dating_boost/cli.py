@@ -3421,7 +3421,7 @@ def _handle_standalone_session_start(args: argparse.Namespace) -> int:
 
 def _handle_standalone_session_tick(args: argparse.Namespace) -> int:
     from dating_boost.core.standalone_provider_factory import build_standalone_runtime_ports
-    from dating_boost.core.standalone_runtime import StandaloneAgentRuntime
+    from dating_boost.core.standalone_runtime import StandaloneAgentRuntime, StandaloneDraftPlanner
     from dating_boost.core.standalone_session import StandaloneSessionRepository
 
     repository = StandaloneSessionRepository(args.data_dir)
@@ -3439,6 +3439,7 @@ def _handle_standalone_session_tick(args: argparse.Namespace) -> int:
         observation_provider=ports["observation_provider"],
         harness_factory=ports["harness_factory"],
         action_executor=ports["action_executor"],
+        draft_planner=StandaloneDraftPlanner(args.data_dir, backend_config=session.get("backend") or {}),
     ).tick()
     repository.record_tick(payload)
     _print_json(payload)

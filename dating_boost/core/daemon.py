@@ -223,7 +223,7 @@ def _now_iso() -> str:
 
 def _run_standalone_tick(root: Path) -> dict[str, Any] | None:
     from dating_boost.core.standalone_provider_factory import build_standalone_runtime_ports
-    from dating_boost.core.standalone_runtime import StandaloneAgentRuntime
+    from dating_boost.core.standalone_runtime import StandaloneAgentRuntime, StandaloneDraftPlanner
     from dating_boost.core.standalone_session import StandaloneSessionRepository
 
     repository = StandaloneSessionRepository(root)
@@ -240,6 +240,7 @@ def _run_standalone_tick(root: Path) -> dict[str, Any] | None:
             observation_provider=ports["observation_provider"],
             harness_factory=ports["harness_factory"],
             action_executor=ports["action_executor"],
+            draft_planner=StandaloneDraftPlanner(root, backend_config=session.get("backend") or {}),
         ).tick()
     except Exception as exc:  # noqa: BLE001 - daemon run-once must return a structured payload.
         tick = {
