@@ -8,6 +8,7 @@ from dating_boost.core.action_audit import ActionAuditRepository
 from dating_boost.core.draft_evidence import ConversationThreadRepository, LatestTurnRepository
 from dating_boost.core.automation import (
     AutomationRepository,
+    HISTORICAL_THREAD_CUTOFF_DAYS,
     _next_priority_queue,
     _now_iso,
     _release_active_send_request_after_failure,
@@ -21,8 +22,12 @@ STICKY_WORK_ITEM_TYPES = {"scan_message_list", "observe_current_thread", "open_t
 INITIAL_SURFACES = {"message-list", "current-thread"}
 MANAGEMENT_MODES = {"conservative", "high-throughput"}
 DEFAULT_MAX_THREADS_PER_CYCLE = 5
-DEFAULT_MAX_PAGES_PER_CYCLE = 1
+DEFAULT_MAX_PAGES_PER_CYCLE = 50
 DEFAULT_CYCLE_SEND_LIMIT = 1
+DEFAULT_MESSAGE_LIST_SCAN_BOUNDARY = {
+    "type": "first_historical_row",
+    "history_cutoff_days": HISTORICAL_THREAD_CUTOFF_DAYS,
+}
 
 
 class OperatorRepository:
@@ -40,6 +45,7 @@ class OperatorRepository:
         max_threads_per_cycle: int = DEFAULT_MAX_THREADS_PER_CYCLE,
         max_pages_per_cycle: int = DEFAULT_MAX_PAGES_PER_CYCLE,
         cycle_send_limit: int = DEFAULT_CYCLE_SEND_LIMIT,
+        message_list_scan_boundary: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if initial_surface not in INITIAL_SURFACES:
             raise ValueError("initial_surface must be message-list or current-thread")
@@ -48,6 +54,7 @@ class OperatorRepository:
             max_threads_per_cycle=max_threads_per_cycle,
             max_pages_per_cycle=max_pages_per_cycle,
             cycle_send_limit=cycle_send_limit,
+            message_list_scan_boundary=message_list_scan_boundary,
         )
         automation_session = self._automation.start_session(authorization, session_config=session_config)
         if automation_session.get("status") != "active":
@@ -137,6 +144,26 @@ class OperatorRepository:
             session["next_scan_cursor"] = {**cursor, "current": None, "next": None, "exhausted": True}
             session["history_cutoff_reached"] = True
         self._write_session(session)
+        if _scan_guard_reached_before_history_cutoff(session, decision):
+            work_item = {
+                "schema_version": 1,
+                "work_item_id": f"work_blocked_scan_guard_{session['session_id']}",
+                "work_item_type": "blocked",
+                "reason": "message_list_scan_guard_reached_before_history_cutoff",
+                "message_list_scan_boundary": dict(
+                    session.get("message_list_scan_boundary") or DEFAULT_MESSAGE_LIST_SCAN_BOUNDARY
+                ),
+                "page_guard": {
+                    "pages_scanned_current_cycle": int(session.get("pages_scanned_current_cycle") or 0),
+                    "max_pages_per_cycle": max(
+                        1,
+                        int(session.get("max_pages_per_cycle") or DEFAULT_MAX_PAGES_PER_CYCLE),
+                    ),
+                },
+                "next_scan_cursor": _normalize_scan_cursor(session.get("next_scan_cursor")),
+            }
+            self._write_work_queue([])
+            return self._work_payload(work_item, decision=decision)
         new_work_items = _work_items_from_decision(decision, session["session_id"])
         if _should_continue_scan_before_work(session, decision):
             accumulated = self._load_work_queue() + _non_wait_work_items(new_work_items)
@@ -706,6 +733,7 @@ def _session_config(
     max_threads_per_cycle: int,
     max_pages_per_cycle: int,
     cycle_send_limit: int,
+    message_list_scan_boundary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     mode = str(management_mode or "conservative")
     if mode not in MANAGEMENT_MODES:
@@ -715,6 +743,7 @@ def _session_config(
         "max_threads_per_cycle": max(1, int(max_threads_per_cycle or DEFAULT_MAX_THREADS_PER_CYCLE)),
         "max_pages_per_cycle": max(1, int(max_pages_per_cycle or DEFAULT_MAX_PAGES_PER_CYCLE)),
         "cycle_send_limit": max(1, int(cycle_send_limit or DEFAULT_CYCLE_SEND_LIMIT)),
+        "message_list_scan_boundary": dict(message_list_scan_boundary or DEFAULT_MESSAGE_LIST_SCAN_BOUNDARY),
     }
 
 
@@ -736,23 +765,23 @@ def _scan_work_item(session: dict[str, Any], *, reason: str) -> dict[str, Any]:
     }
 
 
-def _decision_has_no_immediate_work(decision: dict[str, Any]) -> bool:
-    return not (
-        decision.get("action_requests")
-        or decision.get("handoffs")
-        or decision.get("scan_requests")
-        or decision.get("scheduled_actions")
-    )
-
-
 def _should_continue_scan_before_work(session: dict[str, Any], decision: dict[str, Any]) -> bool:
     if decision.get("history_cutoff_reached"):
         return False
     if not _can_continue_scan(session):
         return False
-    if session.get("management_mode") == "high-throughput":
-        return True
-    return _decision_has_no_immediate_work(decision)
+    return True
+
+
+def _scan_guard_reached_before_history_cutoff(session: dict[str, Any], decision: dict[str, Any]) -> bool:
+    if decision.get("history_cutoff_reached"):
+        return False
+    cursor = _normalize_scan_cursor(session.get("next_scan_cursor"))
+    if cursor.get("exhausted") or not cursor.get("current"):
+        return False
+    pages_scanned = int(session.get("pages_scanned_current_cycle") or 0)
+    max_pages = max(1, int(session.get("max_pages_per_cycle") or DEFAULT_MAX_PAGES_PER_CYCLE))
+    return pages_scanned >= max_pages
 
 
 def _can_continue_scan(session: dict[str, Any]) -> bool:

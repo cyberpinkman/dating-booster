@@ -22,7 +22,7 @@ from dating_boost.core.managed_gui_send import (
     _validate_managed_sequence_visual_confirmation,
     _work_item_payload_text,
 )
-from dating_boost.core.operator import OperatorRepository
+from dating_boost.core.operator import DEFAULT_MESSAGE_LIST_SCAN_BOUNDARY, OperatorRepository
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.relationship_report import (
     RELATIONSHIP_PROGRESS_NEXT_ACTION,
@@ -132,7 +132,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--initial-surface", choices=["auto", "message-list", "current-thread"], default="auto")
     parser.add_argument("--management-mode", choices=["conservative", "high-throughput"], default="conservative")
     parser.add_argument("--max-threads-per-cycle", type=int, default=5)
-    parser.add_argument("--max-pages-per-cycle", type=int, default=1)
+    parser.add_argument("--max-pages-per-cycle", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--cycle-send-limit", type=int, default=1)
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--max-steps", type=int, default=20)
@@ -512,6 +512,12 @@ class HostLoopSupervisor:
 
     def _run_unlocked(self, *, resume: bool = False) -> tuple[dict[str, Any], int]:
         try:
+            if getattr(self.args, "max_pages_per_cycle", None) is not None:
+                return self._finish(
+                    "blocked",
+                    "message_list_scan_boundary_framework_controlled",
+                    extra={"message_list_scan_boundary": dict(DEFAULT_MESSAGE_LIST_SCAN_BOUNDARY)},
+                ), 0
             self._bootstrap_fixture_profile()
             self._preflight()
             if resume:
@@ -605,8 +611,6 @@ class HostLoopSupervisor:
             str(getattr(self.args, "management_mode", "conservative") or "conservative"),
             "--max-threads-per-cycle",
             str(getattr(self.args, "max_threads_per_cycle", 5) or 5),
-            "--max-pages-per-cycle",
-            str(getattr(self.args, "max_pages_per_cycle", 1) or 1),
             "--cycle-send-limit",
             str(getattr(self.args, "cycle_send_limit", 1) or 1),
         )

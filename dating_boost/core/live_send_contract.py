@@ -46,6 +46,11 @@ def managed_live_send_guidance(reason: str | None = None) -> dict[str, Any]:
         },
         "preferred_cli": "python3 -m dating_boost.cli",
         "preferred_host_loop_cli": "python3 -m dating_boost.host_loop",
+        "managed_session_config_confirmation_required": True,
+        "managed_session_config_confirmation_flow": (
+            "run managed-session start once, present proposed_config to the user, "
+            "then rerun with --config-confirm managed-session-config:<hash> only after confirmation"
+        ),
         "canonical_commands": {
             "capabilities": "python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost",
             "readiness": "python3 -m dating_boost.cli user readiness --data-dir .local/dating-boost --mode autonomous --json",
@@ -53,6 +58,11 @@ def managed_live_send_guidance(reason: str | None = None) -> dict[str, Any]:
                 "python3 -m dating_boost.cli managed-session start --app-id <app_id> --data-dir .local/dating-boost "
                 "--authorization auth.json --goal goal.json --availability availability.json "
                 "--send-mode live --managed-gui-send --json"
+            ),
+            "managed_start_confirmed": (
+                "python3 -m dating_boost.cli managed-session start --app-id <app_id> --data-dir .local/dating-boost "
+                "--authorization auth.json --goal goal.json --availability availability.json "
+                "--send-mode live --managed-gui-send --config-confirm managed-session-config:<hash> --json"
             ),
             "managed_run": "python3 -m dating_boost.cli managed-session run --data-dir .local/dating-boost --wait --json",
             "host_loop_live": (

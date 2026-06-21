@@ -61,7 +61,6 @@ investment.
 
 - `--management-mode conservative|high-throughput`.
 - `--max-threads-per-cycle N`.
-- `--max-pages-per-cycle N`.
 - `--cycle-send-limit N`.
 - `--harness-runtime <runtime>` for app profiles with alternate local runtimes,
   such as TaShuo `mac-ios-app`.
@@ -69,6 +68,8 @@ investment.
 Conservative mode is the production default. High-throughput mode is only for
 explicit link testing and must not bypass authorization, target binding, staged
 text verification, or post-send verification.
+Do not ask the user to configure page depth. Message-list scanning is
+framework-controlled and stops at the first row with no progress for 7 days.
 Before real GUI work, select the target app/runtime in the data dir with
 `runtime select`. Harness, host-loop, and managed-session commands in that data
 dir must keep the same app/runtime. When TaShuo is being managed through the

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from dating_boost.apps.registry import create_adapter, managed_session_policy, supported_app_ids
-from dating_boost.core.automation import AutomationRepository
+from dating_boost.core.automation import AutomationRepository, HISTORICAL_THREAD_CUTOFF_DAYS
 from dating_boost.core.operator import (
     DEFAULT_CYCLE_SEND_LIMIT,
     DEFAULT_MAX_PAGES_PER_CYCLE,
@@ -29,6 +29,20 @@ MANAGED_WAKE_EVENTS_PATH = Path("managed_session") / "wake_events.jsonl"
 SUPPORTED_MANAGED_APPS = set(supported_app_ids())
 DEFAULT_SCAN_INTERVAL_SECONDS = 120
 DEFAULT_NUDGE_DELAY_MINUTES = 30
+MANAGED_SESSION_SCAN_BOUNDARY = {
+    "type": "first_historical_row",
+    "history_cutoff_days": HISTORICAL_THREAD_CUTOFF_DAYS,
+}
+MANAGED_SESSION_USER_CONFIGURABLE_FIELDS = [
+    "send_mode",
+    "managed_gui_send",
+    "management_mode",
+    "max_threads_per_cycle",
+    "cycle_send_limit",
+    "scan_interval_seconds",
+    "nudge_delay_minutes",
+    "harness_runtime",
+]
 
 
 AdapterFactory = Callable[..., Any]
@@ -585,11 +599,6 @@ def _resolve_session_config(
         if mode == "high-throughput"
         else "default_max_threads_per_cycle"
     )
-    default_pages_key = (
-        "high_throughput_max_pages_per_cycle"
-        if mode == "high-throughput"
-        else "default_max_pages_per_cycle"
-    )
     return {
         "management_mode": mode,
         "max_threads_per_cycle": max(
@@ -600,19 +609,52 @@ def _resolve_session_config(
                 or DEFAULT_MAX_THREADS_PER_CYCLE
             ),
         ),
-        "max_pages_per_cycle": max(
-            1,
-            int(
-                max_pages_per_cycle
-                or policy.get(default_pages_key)
-                or DEFAULT_MAX_PAGES_PER_CYCLE
-            ),
-        ),
+        "max_pages_per_cycle": DEFAULT_MAX_PAGES_PER_CYCLE,
+        "message_list_scan_boundary": dict(MANAGED_SESSION_SCAN_BOUNDARY),
         "cycle_send_limit": max(
             1,
             int(cycle_send_limit or policy.get("cycle_send_limit") or DEFAULT_CYCLE_SEND_LIMIT),
         ),
     }
+
+
+def managed_session_proposed_config(
+    policy: dict[str, Any],
+    *,
+    app_id: str,
+    send_mode: str,
+    managed_gui_send: bool,
+    scan_interval_seconds: int,
+    nudge_delay_minutes: int,
+    management_mode: str,
+    max_threads_per_cycle: int | None,
+    cycle_send_limit: int | None,
+    harness_runtime: str | None,
+) -> dict[str, Any]:
+    session_config = _resolve_session_config(
+        policy,
+        management_mode=management_mode,
+        max_threads_per_cycle=max_threads_per_cycle,
+        max_pages_per_cycle=None,
+        cycle_send_limit=cycle_send_limit,
+    )
+    return {
+        "app_id": app_id,
+        "send_mode": send_mode,
+        "managed_gui_send": bool(managed_gui_send),
+        "scan_interval_seconds": max(1, int(scan_interval_seconds)),
+        "nudge_delay_minutes": max(1, int(nudge_delay_minutes)),
+        "harness_runtime": _normalize_runtime(harness_runtime),
+        "management_mode": session_config["management_mode"],
+        "max_threads_per_cycle": session_config["max_threads_per_cycle"],
+        "cycle_send_limit": session_config["cycle_send_limit"],
+        "message_list_scan_boundary": dict(MANAGED_SESSION_SCAN_BOUNDARY),
+    }
+
+
+def managed_session_config_confirm_token(proposed_config: dict[str, Any]) -> str:
+    stable = json.dumps(proposed_config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return f"managed-session-config:{hashlib.sha256(stable.encode('utf-8')).hexdigest()[:16]}"
 
 
 def _wake_reasons(

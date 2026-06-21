@@ -11,7 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from dating_boost.apps.registry import adapter_manifests, create_adapter, manifest_for_app, supported_app_ids
+from dating_boost.apps.registry import adapter_manifests, create_adapter, managed_session_policy, manifest_for_app, supported_app_ids
 from dating_boost.core.agent_adapters import (
     install_claude_code_adapter,
     install_codex_adapter,
@@ -36,7 +36,14 @@ from dating_boost.core.live_send_contract import (
     managed_live_send_guidance,
     validate_live_send_contract,
 )
-from dating_boost.core.managed_session import ManagedSessionRepository
+from dating_boost.core.managed_session import (
+    DEFAULT_NUDGE_DELAY_MINUTES,
+    MANAGED_SESSION_SCAN_BOUNDARY,
+    MANAGED_SESSION_USER_CONFIGURABLE_FIELDS,
+    ManagedSessionRepository,
+    managed_session_config_confirm_token,
+    managed_session_proposed_config,
+)
 from dating_boost.core.memory.ingest import store_observation_with_memory
 from dating_boost.core.memory.models import (
     CommitmentMemory,
@@ -774,9 +781,10 @@ def main(argv: list[str] | None = None) -> int:
     managed_start_parser.add_argument("--nudge-delay-minutes", type=int, default=30)
     managed_start_parser.add_argument("--management-mode", choices=["conservative", "high-throughput"], default="conservative")
     managed_start_parser.add_argument("--max-threads-per-cycle", type=int)
-    managed_start_parser.add_argument("--max-pages-per-cycle", type=int)
+    managed_start_parser.add_argument("--max-pages-per-cycle", type=int, help=argparse.SUPPRESS)
     managed_start_parser.add_argument("--cycle-send-limit", type=int)
     managed_start_parser.add_argument("--harness-runtime")
+    managed_start_parser.add_argument("--config-confirm")
     managed_start_parser.add_argument("--json", action="store_true")
     managed_start_parser.set_defaults(handler=_handle_managed_session_start)
     managed_tick_parser = managed_session_subparsers.add_parser("tick")
@@ -820,6 +828,7 @@ def main(argv: list[str] | None = None) -> int:
     standalone_start_parser.add_argument("--model", default="gpt-4.1-mini")
     standalone_start_parser.add_argument("--scripted-backend-output", type=Path)
     standalone_start_parser.add_argument("--scan-interval", type=int, default=120)
+    standalone_start_parser.add_argument("--config-confirm")
     standalone_start_parser.add_argument("--json", action="store_true")
     standalone_start_parser.set_defaults(handler=_handle_standalone_session_start)
     standalone_tick_parser = standalone_subparsers.add_parser("tick")
@@ -854,7 +863,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     operator_session_start_parser.add_argument("--management-mode", choices=["conservative", "high-throughput"], default="conservative")
     operator_session_start_parser.add_argument("--max-threads-per-cycle", type=int, default=5)
-    operator_session_start_parser.add_argument("--max-pages-per-cycle", type=int, default=1)
+    operator_session_start_parser.add_argument("--max-pages-per-cycle", type=int, help=argparse.SUPPRESS)
     operator_session_start_parser.add_argument("--cycle-send-limit", type=int, default=1)
     operator_session_start_parser.set_defaults(handler=_handle_operator_session_start)
 
@@ -3195,6 +3204,42 @@ def _handle_automation_resume(args: argparse.Namespace) -> int:
 
 def _handle_managed_session_start(args: argparse.Namespace) -> int:
     try:
+        if args.max_pages_per_cycle is not None:
+            payload = {
+                "schema_version": 1,
+                "status": "blocked",
+                "reason": "message_list_scan_boundary_framework_controlled",
+                "message_list_scan_boundary": dict(MANAGED_SESSION_SCAN_BOUNDARY),
+                "user_configurable_fields": list(MANAGED_SESSION_USER_CONFIGURABLE_FIELDS),
+            }
+            _print_json(payload)
+            return 2
+        proposed_config = managed_session_proposed_config(
+            managed_session_policy(args.app_id),
+            app_id=args.app_id,
+            send_mode=args.send_mode,
+            managed_gui_send=args.managed_gui_send,
+            scan_interval_seconds=args.scan_interval,
+            nudge_delay_minutes=args.nudge_delay_minutes,
+            management_mode=args.management_mode,
+            max_threads_per_cycle=args.max_threads_per_cycle,
+            cycle_send_limit=args.cycle_send_limit,
+            harness_runtime=args.harness_runtime,
+        )
+        required_confirm_token = managed_session_config_confirm_token(proposed_config)
+        if args.config_confirm != required_confirm_token:
+            payload = {
+                "schema_version": 1,
+                "status": "blocked",
+                "reason": "managed_session_config_confirmation_required",
+                "required_confirm_token": required_confirm_token,
+                "proposed_config": proposed_config,
+                "user_configurable_fields": list(MANAGED_SESSION_USER_CONFIGURABLE_FIELDS),
+                "framework_controlled_fields": ["message_list_scan_boundary"],
+                "next_host_action": "present_managed_session_config_and_get_user_confirmation",
+            }
+            _print_json(payload)
+            return 2
         payload = ManagedSessionRepository(args.data_dir).start(
             app_id=args.app_id,
             authorization=_read_json_object(args.authorization),
@@ -3289,6 +3334,32 @@ def _handle_standalone_session_start(args: argparse.Namespace) -> int:
     backend_payload = _standalone_backend_payload(args)
     if backend_payload.get("status") == "blocked":
         _print_json(backend_payload)
+        return 2
+    proposed_config = managed_session_proposed_config(
+        managed_session_policy(args.app_id),
+        app_id=args.app_id,
+        send_mode=args.send_mode,
+        managed_gui_send=args.managed_gui_send,
+        scan_interval_seconds=args.scan_interval,
+        nudge_delay_minutes=DEFAULT_NUDGE_DELAY_MINUTES,
+        management_mode="conservative",
+        max_threads_per_cycle=None,
+        cycle_send_limit=None,
+        harness_runtime=args.runtime,
+    )
+    required_confirm_token = managed_session_config_confirm_token(proposed_config)
+    if args.config_confirm != required_confirm_token:
+        payload = {
+            "schema_version": 1,
+            "status": "blocked",
+            "reason": "managed_session_config_confirmation_required",
+            "required_confirm_token": required_confirm_token,
+            "proposed_config": proposed_config,
+            "user_configurable_fields": list(MANAGED_SESSION_USER_CONFIGURABLE_FIELDS),
+            "framework_controlled_fields": ["message_list_scan_boundary"],
+            "next_host_action": "present_managed_session_config_and_get_user_confirmation",
+        }
+        _print_json(payload)
         return 2
     backend = backend_payload["backend"]
     provider = FixtureObservationProvider(fixture_dir)
@@ -3396,6 +3467,16 @@ def _standalone_backend_payload(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _handle_operator_session_start(args: argparse.Namespace) -> int:
+    if args.max_pages_per_cycle is not None:
+        _print_json(
+            {
+                "schema_version": 1,
+                "status": "blocked",
+                "reason": "message_list_scan_boundary_framework_controlled",
+                "message_list_scan_boundary": dict(MANAGED_SESSION_SCAN_BOUNDARY),
+            }
+        )
+        return 2
     try:
         payload = OperatorRepository(args.data_dir).start_session(
             _read_json_object(args.authorization),

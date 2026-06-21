@@ -58,7 +58,7 @@ dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --run
 
 选择后，同一个 `data-dir` 下的 harness、host-loop、managed-session 只能使用这个 app/runtime。请求其他 app，或 TaShuo 漏传 `--runtime mac-ios-app` 导致请求 default runtime，会被 `runtime_scope_mismatch` 阻断，不会唤起 iPhone Mirroring、微信或其他无关 app。切换目标时先 `runtime clear`，再重新 select。
 
-生产默认使用 `--management-mode conservative`。链路压测可显式使用 `--management-mode high-throughput --max-threads-per-cycle N --max-pages-per-cycle N --cycle-send-limit N`，但高吞吐只提高每轮预算，不绕过 live-send 授权、target binding、staged-text verification 或 post-send verification。
+生产默认使用 `--management-mode conservative`。链路压测可显式使用 `--management-mode high-throughput --max-threads-per-cycle N --cycle-send-limit N`，但高吞吐只提高每轮处理/发送预算，不绕过 live-send 授权、target binding、staged-text verification 或 post-send verification。消息列表页深不由用户设置，框架会扫描到第一个 7 天无进展的历史行后停止。
 
 TaShuo 本地 iOS app 托管需要显式传 `--harness-runtime mac-ios-app`。如果 scope 已选择 mac-ios-app 而命令漏传 runtime，系统会阻断，不会回落到 app profile 默认的 iPhone Mirroring。
 

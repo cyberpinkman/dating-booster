@@ -83,6 +83,12 @@ class ManagedSessionTests(unittest.TestCase):
         self.assertTrue(payload["agent_native_capabilities"]["multi_thread_managed_session"])
         self.assertEqual(payload["agent_native_capabilities"]["managed_session_management_modes"], ["conservative", "high-throughput"])
         self.assertEqual(payload["agent_native_capabilities"]["managed_session_default_scan_interval_seconds"], 120)
+        self.assertEqual(
+            payload["agent_native_capabilities"]["managed_session_message_list_scan_boundary"],
+            {"type": "first_historical_row", "history_cutoff_days": 7},
+        )
+        self.assertNotIn("managed_session_default_max_pages_per_cycle", payload["agent_native_capabilities"])
+        self.assertNotIn("managed_session_high_throughput_max_pages_per_cycle", payload["agent_native_capabilities"])
         self.assertTrue(payload["agent_native_capabilities"]["managed_session_harness_runtime_selection"])
         self.assertIn("bumble", payload["agent_native_capabilities"]["managed_session_app_profiles"])
         self.assertEqual(
@@ -97,7 +103,56 @@ class ManagedSessionTests(unittest.TestCase):
         )
         self.assertFalse(payload["agent_native_capabilities"]["repo_computer_use_execution_backend_required"])
 
-    def test_cli_start_persists_high_throughput_session_config(self):
+    def test_cli_start_requires_user_confirmed_session_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            auth_path = Path(temp_dir) / "auth.json"
+            _write_json(auth_path, _auth("tashuo"))
+            start_args = [
+                "managed-session",
+                "start",
+                "--app-id",
+                "tashuo",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(auth_path),
+                "--goal",
+                str(FIXTURE_DIR / "goal_meet.json"),
+                "--availability",
+                str(FIXTURE_DIR / "availability_weekend.json"),
+                "--management-mode",
+                "high-throughput",
+                "--max-threads-per-cycle",
+                "8",
+                "--cycle-send-limit",
+                "2",
+                "--harness-runtime",
+                "mac-ios-app",
+                "--json",
+            ]
+            with patch(
+                "dating_boost.core.managed_session.create_adapter",
+                side_effect=lambda app_id, runtime=None: FakeHarness(app_id=app_id, tashuo_payload=_app_payload("tashuo")),
+            ):
+                exit_code, payload = self._run_cli(start_args)
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "managed_session_config_confirmation_required")
+        self.assertTrue(payload["required_confirm_token"].startswith("managed-session-config:"))
+        self.assertEqual(payload["proposed_config"]["cycle_send_limit"], 2)
+        self.assertEqual(payload["proposed_config"]["max_threads_per_cycle"], 8)
+        self.assertEqual(
+            payload["proposed_config"]["message_list_scan_boundary"],
+            {"type": "first_historical_row", "history_cutoff_days": 7},
+        )
+        self.assertIn("cycle_send_limit", payload["user_configurable_fields"])
+        self.assertNotIn("max_pages_per_cycle", payload["user_configurable_fields"])
+        self.assertFalse((data_dir / "managed_session" / "session.json").exists())
+
+    def test_cli_start_rejects_user_supplied_max_pages_per_cycle(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
             self._init_profile(data_dir)
@@ -120,30 +175,77 @@ class ManagedSessionTests(unittest.TestCase):
                     str(FIXTURE_DIR / "goal_meet.json"),
                     "--availability",
                     str(FIXTURE_DIR / "availability_weekend.json"),
+                    "--max-pages-per-cycle",
+                    "3",
+                    "--json",
+                ])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "message_list_scan_boundary_framework_controlled")
+        self.assertEqual(
+            payload["message_list_scan_boundary"],
+            {"type": "first_historical_row", "history_cutoff_days": 7},
+        )
+
+    def test_cli_help_hides_max_pages_per_cycle(self):
+        managed_help = self._help_text(["managed-session", "start", "--help"])
+        operator_help = self._help_text(["operator", "session", "start", "--help"])
+
+        self.assertNotIn("--max-pages-per-cycle", managed_help)
+        self.assertNotIn("--max-pages-per-cycle", operator_help)
+
+    def test_cli_start_persists_high_throughput_session_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            auth_path = Path(temp_dir) / "auth.json"
+            _write_json(auth_path, _auth("tashuo"))
+            with patch(
+                "dating_boost.core.managed_session.create_adapter",
+                side_effect=lambda app_id, runtime=None: FakeHarness(app_id=app_id, tashuo_payload=_app_payload("tashuo")),
+            ):
+                start_args = [
+                    "managed-session",
+                    "start",
+                    "--app-id",
+                    "tashuo",
+                    "--data-dir",
+                    str(data_dir),
+                    "--authorization",
+                    str(auth_path),
+                    "--goal",
+                    str(FIXTURE_DIR / "goal_meet.json"),
+                    "--availability",
+                    str(FIXTURE_DIR / "availability_weekend.json"),
                     "--management-mode",
                     "high-throughput",
                     "--max-threads-per-cycle",
                     "8",
-                    "--max-pages-per-cycle",
-                    "3",
                     "--cycle-send-limit",
                     "2",
                     "--harness-runtime",
                     "mac-ios-app",
                     "--json",
-                ])
+                ]
+                confirm_exit, confirm_payload = self._run_cli(start_args)
+                exit_code, payload = self._run_cli(
+                    start_args[:-1] + ["--config-confirm", confirm_payload["required_confirm_token"], "--json"]
+                )
 
             session = json.loads((data_dir / "managed_session" / "session.json").read_text(encoding="utf-8"))
             operator_session = json.loads((data_dir / "operator" / "session.json").read_text(encoding="utf-8"))
 
+        self.assertEqual(confirm_exit, 2)
+        self.assertEqual(confirm_payload["reason"], "managed_session_config_confirmation_required")
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "active")
         expected = {
             "management_mode": "high-throughput",
             "max_threads_per_cycle": 8,
-            "max_pages_per_cycle": 3,
             "cycle_send_limit": 2,
             "harness_runtime": "mac-ios-app",
+            "message_list_scan_boundary": {"type": "first_historical_row", "history_cutoff_days": 7},
         }
         for key, value in expected.items():
             self.assertEqual(session[key], value)
@@ -632,7 +734,7 @@ class ManagedSessionTests(unittest.TestCase):
                 "dating_boost.core.managed_session.create_adapter",
                 side_effect=lambda app_id, runtime=None: FakeHarness(app_id=app_id, tinder_payload=_app_payload("tinder")),
             ):
-                start_exit, start_payload = self._run_cli([
+                start_args = [
                     "managed-session",
                     "start",
                     "--app-id",
@@ -648,10 +750,16 @@ class ManagedSessionTests(unittest.TestCase):
                     "--scan-interval",
                     "3600",
                     "--json",
-                ])
+                ]
+                confirm_exit, confirm_payload = self._run_cli(start_args)
+                start_exit, start_payload = self._run_cli(
+                    start_args[:-1] + ["--config-confirm", confirm_payload["required_confirm_token"], "--json"]
+                )
             status_exit, status_payload = self._run_cli(["managed-session", "status", "--data-dir", str(data_dir), "--json"])
             stop_exit, stop_payload = self._run_cli(["managed-session", "stop", "--data-dir", str(data_dir), "--json"])
 
+        self.assertEqual(confirm_exit, 2)
+        self.assertEqual(confirm_payload["reason"], "managed_session_config_confirmation_required")
         self.assertEqual(start_exit, 0)
         self.assertEqual(start_payload["status"], "active")
         self.assertEqual(status_exit, 0)
@@ -735,6 +843,14 @@ class ManagedSessionTests(unittest.TestCase):
         with redirect_stdout(output):
             exit_code = main(argv)
         return exit_code, json.loads(output.getvalue())
+
+    def _help_text(self, argv):
+        output = StringIO()
+        with redirect_stdout(output):
+            with self.assertRaises(SystemExit) as raised:
+                main(argv)
+        self.assertEqual(raised.exception.code, 0)
+        return output.getvalue()
 
 
 def _app_payload(app_id, *, status="ok", reason=None, raw_text=""):

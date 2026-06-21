@@ -471,8 +471,6 @@
     "precheck_failure_next_host_action": "enable_iphone_mirroring_and_restart_managed_session",
     "default_max_threads_per_cycle": 5,
     "high_throughput_max_threads_per_cycle": 12,
-    "default_max_pages_per_cycle": 1,
-    "high_throughput_max_pages_per_cycle": 3,
     "cycle_send_limit": 1,
     "message_list_pagination_supported": true
   },

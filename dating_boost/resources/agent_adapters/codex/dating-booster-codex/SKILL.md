@@ -584,6 +584,17 @@ the runner serially processes multiple candidates by opportunity priority, while
 each app runtime only executes the current work item. Use conservative mode for
 production and high-throughput mode only when the user explicitly wants link
 testing or pressure testing.
+Managed session configuration must be shown to the user before start, and the
+user must choose or confirm the user-configurable fields: `send_mode`,
+`managed_gui_send`, `management_mode`, `max_threads_per_cycle`,
+`cycle_send_limit`, `scan_interval_seconds`, `nudge_delay_minutes`, and
+`harness_runtime`. Do not ask the user to choose max_pages_per_cycle. Message
+list depth is framework controlled: scan until the first row with no progress for 7 days,
+then treat that row and lower rows as outside the bounded managed window. If
+`managed-session start` returns
+`managed_session_config_confirmation_required`, present the proposed config to
+the user and rerun only after the user confirms the returned
+`managed-session-config:<hash>` token.
 When `run --wait` returns `no_work`, do not keep analyzing screenshots or spend
 tokens. When it returns `host_work_required`, process the included operator work
 item. When using the host-loop supervisor for that work, run
@@ -601,7 +612,7 @@ dating-boost managed-session stop --data-dir .local/dating-boost --json
 ```
 
 For explicit high-throughput testing, add
-`--management-mode high-throughput --max-threads-per-cycle N --max-pages-per-cycle N --cycle-send-limit N`.
+`--management-mode high-throughput --max-threads-per-cycle N --cycle-send-limit N`.
 For TaShuo local Mac iOS app managed sessions, add
 `--harness-runtime mac-ios-app`. If the runtime scope is already selected for
 mac-ios-app and this flag is omitted, the run must block with
@@ -612,6 +623,10 @@ For a real TaShuo mac-ios-app managed smoke check without sending messages, use
 summarize all-object state, waiting reasons, next wake, and the next priority
 queue while the session remains active. Stop/final responses include the
 user-facing `relationship_progress_report` when available.
+For any bounded full-management workflow, the final response must present relationship_progress_report.markdown
+or the latest available `relationship_progress_snapshot` as the product work report.
+Do not replace it with a Codex-style action summary. A short action summary may
+precede the report, but it is not sufficient on its own.
 
 For live sends, use `--send-mode live --managed-gui-send` only with explicit
 authorization. The returned work item still goes through the same target

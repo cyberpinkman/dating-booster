@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--availability", type=Path, required=True)
     parser.add_argument("--management-mode", choices=["conservative", "high-throughput"], default="conservative")
     parser.add_argument("--max-threads-per-cycle", type=int)
-    parser.add_argument("--max-pages-per-cycle", type=int)
+    parser.add_argument("--max-pages-per-cycle", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--cycle-send-limit", type=int)
     parser.add_argument("--skip-prepare-message-page", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -51,6 +51,16 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     args.work_dir.mkdir(parents=True, exist_ok=True)
     steps: list[dict[str, Any]] = []
     support_session_id: str | None = None
+    if getattr(args, "max_pages_per_cycle", None) is not None:
+        payload = _finish(
+            args,
+            steps,
+            "blocked",
+            "message_list_scan_boundary_framework_controlled",
+            support_session_id,
+        )
+        payload["message_list_scan_boundary"] = {"type": "first_historical_row", "history_cutoff_days": 7}
+        return payload
     final_status = "ok"
     final_reason = None
     try:
@@ -180,10 +190,6 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             if args.max_threads_per_cycle is not None:
                 start_args.extend(
                     ["--max-threads-per-cycle", str(args.max_threads_per_cycle)]
-                )
-            if args.max_pages_per_cycle is not None:
-                start_args.extend(
-                    ["--max-pages-per-cycle", str(args.max_pages_per_cycle)]
                 )
             if args.cycle_send_limit is not None:
                 start_args.extend(["--cycle-send-limit", str(args.cycle_send_limit)])

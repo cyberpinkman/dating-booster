@@ -63,6 +63,32 @@ class TaShuoMacIosManagedSmokeScriptTests(unittest.TestCase):
         self.assertEqual(summary["window_probe"]["processes"][0]["window_count"], 0)
         self.assertNotIn("stdout", summary["window_probe"]["processes"][0])
 
+    def test_smoke_rejects_user_supplied_max_pages_per_cycle(self):
+        module = _load_smoke_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            args = SimpleNamespace(
+                data_dir=root / "data",
+                work_dir=root / "work",
+                authorization=root / "auth.json",
+                goal=root / "goal.json",
+                availability=root / "availability.json",
+                management_mode="conservative",
+                max_threads_per_cycle=None,
+                max_pages_per_cycle=1,
+                cycle_send_limit=None,
+                skip_prepare_message_page=False,
+                json=True,
+            )
+            payload = module.run_smoke(args)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "message_list_scan_boundary_framework_controlled")
+        self.assertEqual(
+            payload["message_list_scan_boundary"],
+            {"type": "first_historical_row", "history_cutoff_days": 7},
+        )
+
     def test_window_not_found_doctor_result_continues_to_prepare_message_page(self):
         module = _load_smoke_module()
         calls = []
@@ -111,7 +137,7 @@ class TaShuoMacIosManagedSmokeScriptTests(unittest.TestCase):
                     availability=root / "availability.json",
                     management_mode="conservative",
                     max_threads_per_cycle=1,
-                    max_pages_per_cycle=1,
+                    max_pages_per_cycle=None,
                     cycle_send_limit=0,
                     skip_prepare_message_page=False,
                     json=True,
@@ -172,7 +198,7 @@ class TaShuoMacIosManagedSmokeScriptTests(unittest.TestCase):
                     availability=root / "availability.json",
                     management_mode="conservative",
                     max_threads_per_cycle=1,
-                    max_pages_per_cycle=1,
+                    max_pages_per_cycle=None,
                     cycle_send_limit=0,
                     skip_prepare_message_page=False,
                     json=True,

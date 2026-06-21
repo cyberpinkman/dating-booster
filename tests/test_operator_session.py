@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from dating_boost.cli import main
 from dating_boost.core.draft_evidence import UserMemoryRepository
+from dating_boost.core.operator import OperatorRepository
 
 
 FIXTURE_DIR = Path("tests/fixtures/automation")
@@ -60,8 +61,6 @@ class OperatorSessionTests(unittest.TestCase):
                 "high-throughput",
                 "--max-threads-per-cycle",
                 "7",
-                "--max-pages-per-cycle",
-                "2",
                 "--cycle-send-limit",
                 "3",
             ])
@@ -79,9 +78,37 @@ class OperatorSessionTests(unittest.TestCase):
         self.assertEqual(next_exit, 0)
         self.assertEqual(work_item["work_item_type"], "scan_message_list")
         self.assertEqual(work_item["management_mode"], "high-throughput")
-        self.assertEqual(work_item["page_budget_remaining"], 2)
         self.assertEqual(work_item["thread_budget_remaining"], 7)
         self.assertEqual(work_item["scan_cursor"], {"current": None, "next": None, "exhausted": False})
+        self.assertEqual(
+            start_payload["message_list_scan_boundary"],
+            {"type": "first_historical_row", "history_cutoff_days": 7},
+        )
+
+    def test_operator_cli_rejects_user_supplied_max_pages_per_cycle(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            exit_code, payload, _ = self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+                "--max-pages-per-cycle",
+                "2",
+            ])
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "message_list_scan_boundary_framework_controlled")
+        self.assertEqual(
+            payload["message_list_scan_boundary"],
+            {"type": "first_historical_row", "history_cutoff_days": 7},
+        )
+        self.assertFalse((data_dir / "operator" / "session.json").exists())
 
     def test_operator_continues_message_list_scan_when_cursor_not_exhausted(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -95,8 +122,6 @@ class OperatorSessionTests(unittest.TestCase):
                 str(data_dir),
                 "--authorization",
                 str(FIXTURE_DIR / "auth_send.json"),
-                "--max-pages-per-cycle",
-                "2",
             ])
             first_next_exit, first_next, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
             self.assertEqual(first_next_exit, 0)
@@ -132,7 +157,7 @@ class OperatorSessionTests(unittest.TestCase):
         self.assertEqual(work_item["work_item_type"], "scan_message_list")
         self.assertEqual(work_item["reason"], "scan_page_continuation_required")
         self.assertEqual(work_item["scan_cursor"]["current"], "page_2")
-        self.assertEqual(work_item["page_budget_remaining"], 1)
+        self.assertGreaterEqual(work_item["page_budget_remaining"], 1)
 
     def test_high_throughput_scans_page_budget_before_processing_first_page_work(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -148,8 +173,6 @@ class OperatorSessionTests(unittest.TestCase):
                 str(FIXTURE_DIR / "auth_send.json"),
                 "--management-mode",
                 "high-throughput",
-                "--max-pages-per-cycle",
-                "2",
             ])
             self._run(["operator", "next", "--data-dir", str(data_dir)])
             first_page = _single_candidate_message_list_observation("row_ada")
@@ -190,6 +213,56 @@ class OperatorSessionTests(unittest.TestCase):
         self.assertEqual(open_payload["work_item"]["work_item_type"], "open_thread")
         self.assertEqual(open_payload["work_item"]["candidate_key"], "row_ada")
 
+    def test_operator_continues_scan_to_history_cutoff_before_opening_threads(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            first_next_exit, first_next, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
+            self.assertEqual(first_next_exit, 0)
+            self.assertEqual(first_next["work_item"]["work_item_type"], "scan_message_list")
+            first_page = _message_list_observation()
+            first_page["app_id"] = "tashuo"
+            first_page["captured_at"] = "2026-05-26T12:00:00Z"
+            first_page["scan_cursor"] = {"current": "page_1", "next": "page_2", "exhausted": False}
+            first_page["message_list_snapshot"]["entries"] = [
+                {
+                    "candidate_key": "row_recent_reply",
+                    "visible_name": "Recent Reply",
+                    "latest_preview": "刚刚问你今天忙不忙",
+                    "latest_preview_hash": "recent_hash",
+                    "timestamp_cue": "刚刚",
+                    "unread_cue": "present",
+                    "position": 1,
+                }
+            ]
+            first_path = Path(temp_dir) / "first_page_recent.json"
+            self._write_json(first_path, first_page)
+            self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(first_path),
+            ])
+
+            continuation_exit, continuation_payload, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
+
+        self.assertEqual(continuation_exit, 0)
+        work_item = continuation_payload["work_item"]
+        self.assertEqual(work_item["work_item_type"], "scan_message_list")
+        self.assertEqual(work_item["reason"], "scan_page_continuation_required")
+        self.assertEqual(work_item["scan_cursor"], {"current": "page_2", "next": None, "exhausted": False})
+
     def test_high_throughput_stops_scan_when_message_list_history_cutoff_reached(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
@@ -204,8 +277,6 @@ class OperatorSessionTests(unittest.TestCase):
                 str(FIXTURE_DIR / "auth_send.json"),
                 "--management-mode",
                 "high-throughput",
-                "--max-pages-per-cycle",
-                "3",
             ])
             self._run(["operator", "next", "--data-dir", str(data_dir)])
             page = _message_list_observation()
@@ -252,6 +323,51 @@ class OperatorSessionTests(unittest.TestCase):
         self.assertEqual(next_payload["work_item"]["work_item_type"], "open_thread")
         self.assertEqual(next_payload["work_item"]["candidate_key"], "row_recent")
         self.assertNotEqual(next_payload["work_item"].get("reason"), "scan_page_continuation_required")
+
+    def test_internal_page_guard_blocks_before_opening_threads_without_history_cutoff(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            auth = json.loads((FIXTURE_DIR / "auth_send.json").read_text(encoding="utf-8"))
+            OperatorRepository(data_dir).start_session(
+                auth,
+                management_mode="high-throughput",
+                max_pages_per_cycle=1,
+            )
+            self._run(["operator", "next", "--data-dir", str(data_dir)])
+            page = _message_list_observation()
+            page["app_id"] = "tashuo"
+            page["captured_at"] = "2026-05-26T12:00:00Z"
+            page["scan_cursor"] = {"current": "page_1", "next": "page_2", "exhausted": False}
+            page["scan_budget"] = 5
+            page["message_list_snapshot"]["entries"] = [
+                {
+                    "candidate_key": "row_recent",
+                    "visible_name": "Recent",
+                    "latest_preview": "刚刚问你今天忙不忙",
+                    "latest_preview_hash": "recent_hash",
+                    "timestamp_cue": "刚刚",
+                    "unread_cue": "present",
+                    "position": 1,
+                }
+            ]
+            page_path = Path(temp_dir) / "guard_page.json"
+            self._write_json(page_path, page)
+            self._run([
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(page_path),
+            ])
+
+            next_exit, next_payload, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
+
+        self.assertEqual(next_exit, 0)
+        self.assertEqual(next_payload["work_item"]["work_item_type"], "blocked")
+        self.assertEqual(next_payload["work_item"]["reason"], "message_list_scan_guard_reached_before_history_cutoff")
+        self.assertEqual(next_payload["decision_summary"]["history_cutoff_reached"], False)
 
     def test_operator_start_warns_for_old_memory_review_without_blocking(self):
         from dating_boost.core.memory.review_queue import ReviewItem, ReviewQueueRepository

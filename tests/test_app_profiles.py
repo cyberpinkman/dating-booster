@@ -96,8 +96,6 @@ class AppProfileContractTests(unittest.TestCase):
                 for key in (
                     "default_max_threads_per_cycle",
                     "high_throughput_max_threads_per_cycle",
-                    "default_max_pages_per_cycle",
-                    "high_throughput_max_pages_per_cycle",
                     "cycle_send_limit",
                     "message_list_pagination_supported",
                 ):

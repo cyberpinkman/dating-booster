@@ -232,7 +232,7 @@ dating-boost managed-session status --data-dir .local/dating-boost --json
 dating-boost managed-session stop --data-dir .local/dating-boost --json
 ```
 
-生产默认 `--management-mode conservative`；真实链路压测可显式使用 `--management-mode high-throughput --max-threads-per-cycle N --max-pages-per-cycle N --cycle-send-limit N`。高吞吐只提高每轮扫描/处理预算，不绕过授权、target binding、staged-text verification 或 post-send verification。
+生产默认 `--management-mode conservative`；真实链路压测可显式使用 `--management-mode high-throughput --max-threads-per-cycle N --cycle-send-limit N`。高吞吐只提高每轮处理/发送预算，不绕过授权、target binding、staged-text verification 或 post-send verification。不要让用户设置 `max_pages_per_cycle`；消息列表扫描到第一个 7 天无进展的历史行后停止，后面的行不属于本轮托管窗口。
 TaShuo 本地 iOS app 托管必须显式传 `--harness-runtime mac-ios-app`。如果当前 `runtime select` 已选择 mac-ios-app 而命令漏传 runtime，会被 `runtime_scope_mismatch` 阻断，不允许回落到默认 iPhone Mirroring runtime。
 `managed-session run/tick` 返回 `relationship_progress_snapshot`，用于 host 展示本轮全对象状态摘要、下一优先队列和每个对象下一步；`managed-session stop` 和 host-loop final response 返回用户可读 `relationship_progress_report`。
 

@@ -136,26 +136,28 @@ class StandaloneSessionCliTests(unittest.TestCase):
             fixture_dir.mkdir()
             auth_path = Path(temp_dir) / "auth.json"
             auth_path.write_text(json.dumps(_auth("tinder")), encoding="utf-8")
+            start_args = [
+                "standalone-session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(auth_path),
+                "--app-id",
+                "tinder",
+                "--send-mode",
+                "stage",
+                "--observation-fixture-dir",
+                str(fixture_dir),
+                "--backend",
+                "scripted",
+                "--scripted-backend-output",
+                str(SCRIPTED_REPLY_PATH),
+                "--json",
+            ]
+            confirm_exit, confirm_payload = self._run_cli(start_args)
             start_exit, start_payload = self._run_cli(
-                [
-                    "standalone-session",
-                    "start",
-                    "--data-dir",
-                    str(data_dir),
-                    "--authorization",
-                    str(auth_path),
-                    "--app-id",
-                    "tinder",
-                    "--send-mode",
-                    "stage",
-                    "--observation-fixture-dir",
-                    str(fixture_dir),
-                    "--backend",
-                    "scripted",
-                    "--scripted-backend-output",
-                    str(SCRIPTED_REPLY_PATH),
-                    "--json",
-                ]
+                start_args[:-1] + ["--config-confirm", confirm_payload["required_confirm_token"], "--json"]
             )
             status_exit, status_payload = self._run_cli(
                 [
@@ -176,12 +178,54 @@ class StandaloneSessionCliTests(unittest.TestCase):
                 ]
             )
 
+        self.assertEqual(confirm_exit, 2)
+        self.assertEqual(confirm_payload["reason"], "managed_session_config_confirmation_required")
         self.assertEqual(start_exit, 0)
         self.assertEqual(start_payload["status"], "active")
         self.assertEqual(status_exit, 0)
         self.assertEqual(status_payload["status"], "active")
         self.assertEqual(stop_exit, 0)
         self.assertEqual(stop_payload["status"], "stopped")
+
+    def test_cli_start_requires_managed_session_config_confirmation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            fixture_dir = Path(temp_dir) / "fixtures"
+            fixture_dir.mkdir()
+            auth_path = Path(temp_dir) / "auth.json"
+            auth_path.write_text(json.dumps(_auth("tinder")), encoding="utf-8")
+
+            start_args = [
+                "standalone-session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(auth_path),
+                "--app-id",
+                "tinder",
+                "--send-mode",
+                "stage",
+                "--observation-fixture-dir",
+                str(fixture_dir),
+                "--backend",
+                "scripted",
+                "--scripted-backend-output",
+                str(SCRIPTED_REPLY_PATH),
+                "--json",
+            ]
+            confirm_exit, confirm_payload = self._run_cli(start_args)
+
+        self.assertEqual(confirm_exit, 2)
+        self.assertEqual(confirm_payload["status"], "blocked")
+        self.assertEqual(confirm_payload["reason"], "managed_session_config_confirmation_required")
+        self.assertTrue(confirm_payload["required_confirm_token"].startswith("managed-session-config:"))
+        self.assertEqual(
+            confirm_payload["proposed_config"]["message_list_scan_boundary"],
+            {"type": "first_historical_row", "history_cutoff_days": 7},
+        )
+        self.assertFalse((data_dir / "managed_session" / "session.json").exists())
+        self.assertFalse((data_dir / "standalone_session" / "session.json").exists())
 
     def test_cli_start_then_tick_consumes_fixture_work(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -203,26 +247,28 @@ class StandaloneSessionCliTests(unittest.TestCase):
             )
             auth_path = Path(temp_dir) / "auth.json"
             auth_path.write_text(json.dumps(_auth("tinder")), encoding="utf-8")
+            start_args = [
+                "standalone-session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(auth_path),
+                "--app-id",
+                "tinder",
+                "--send-mode",
+                "stage",
+                "--observation-fixture-dir",
+                str(fixture_dir),
+                "--backend",
+                "scripted",
+                "--scripted-backend-output",
+                str(SCRIPTED_REPLY_PATH),
+                "--json",
+            ]
+            confirm_exit, confirm_payload = self._run_cli(start_args)
             start_exit, _start_payload = self._run_cli(
-                [
-                    "standalone-session",
-                    "start",
-                    "--data-dir",
-                    str(data_dir),
-                    "--authorization",
-                    str(auth_path),
-                    "--app-id",
-                    "tinder",
-                    "--send-mode",
-                    "stage",
-                    "--observation-fixture-dir",
-                    str(fixture_dir),
-                    "--backend",
-                    "scripted",
-                    "--scripted-backend-output",
-                    str(SCRIPTED_REPLY_PATH),
-                    "--json",
-                ]
+                start_args[:-1] + ["--config-confirm", confirm_payload["required_confirm_token"], "--json"]
             )
             tick_exit, tick_payload = self._run_cli(
                 [
@@ -234,6 +280,8 @@ class StandaloneSessionCliTests(unittest.TestCase):
                 ]
             )
 
+        self.assertEqual(confirm_exit, 2)
+        self.assertEqual(confirm_payload["reason"], "managed_session_config_confirmation_required")
         self.assertEqual(start_exit, 0)
         self.assertEqual(tick_exit, 0)
         self.assertEqual(tick_payload["status"], "work_consumed")

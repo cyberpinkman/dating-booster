@@ -430,7 +430,7 @@ toward a goal such as meeting in person.
 4. Save availability with `dating-boost automation availability set --data-dir .local/dating-boost --input availability.json`.
 5. Start the session with `dating-boost operator session start --data-dir .local/dating-boost --authorization auth.json`.
 6. Call `dating-boost operator next --data-dir .local/dating-boost` and execute exactly the returned work item.
-7. For `scan_message_list`, observe the visible list and ingest it with `dating-boost operator ingest-observation --data-dir .local/dating-boost --input list_observation.json`. On TaShuo mac-ios-app, include `message_list_evidence` for intended rows: row visual anchor hash, visual anchor region, scan region, and visually chosen tap ratio. Also include timeline evidence (`timestamp_cue`, `last_activity_at` when available, `days_since_last_activity` or `freshness_bucket`). Recent `开启聊天` rows are valid `open_chat_candidate`s after active reply-needed threads; rows 7+ days stale are `historical` and should set the scan cursor exhausted because rows below are also outside the managed window.
+7. For `scan_message_list`, observe the visible list and ingest it with `dating-boost operator ingest-observation --data-dir .local/dating-boost --input list_observation.json`. On TaShuo mac-ios-app, include `message_list_evidence` for intended rows: row visual anchor hash, visual anchor region, scan region, and visually chosen tap ratio. Also include timeline evidence (`timestamp_cue`, `last_activity_at` when available, `days_since_last_activity` or `freshness_bucket`). Recent `开启聊天` rows are valid `open_chat_candidate`s after active reply-needed threads. Do not ask the user to configure page depth; keep scanning the message list until the first row with no progress for 7 days, then mark that row and lower rows `historical` because they are outside the managed window.
 8. For `open_thread`, open that candidate's thread, read `planner-authoring.md`, author `planner_assessment`, author a draft only when the planner move requires a reply, then ingest with `dating-boost operator ingest-observation --data-dir .local/dating-boost --input thread_observation.json`. For disclosure moves, include `disclosure_source` and `used_user_material_ids`; for low-investment repair, include `question_count` or `reply_shape`.
 9. For `send_message`, execute only ordinary requests with `planner_alignment: ok`; verify the sent state from a fresh observation and run `dating-boost operator record-action-result --data-dir .local/dating-boost --input action_result.json`.
 10. For `handoff`, appointment details, contact exchange, likes, unmatches, reports, or profile edits, stop automation for that match and ask the user to take over.
@@ -463,7 +463,7 @@ dating-boost managed-session start --app-id tinder --data-dir .local/dating-boos
 dating-boost managed-session run --data-dir .local/dating-boost --wait --json
 ```
 
-Use `--management-mode high-throughput --max-threads-per-cycle N --max-pages-per-cycle N --cycle-send-limit N` only for explicit link testing.
+Use `--management-mode high-throughput --max-threads-per-cycle N --cycle-send-limit N` only for explicit link testing. Do not ask the user to configure page depth; message-list scanning stops at the first row with no progress for 7 days.
 For TaShuo local Mac iOS app managed sessions, add
 `--harness-runtime mac-ios-app`. If the current scope selected mac-ios-app and
 the flag is omitted, the run blocks with `runtime_scope_mismatch` before any

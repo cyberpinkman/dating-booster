@@ -123,6 +123,9 @@ investment.
 When a managed run or stop response includes `relationship_progress_report`,
 show its Markdown before ending the host turn; do not finish by only reporting
 status or report file paths.
+For any bounded full-management workflow, the final response must present
+relationship_progress_report.markdown or the latest available
+`relationship_progress_snapshot`; do not replace it with a host action summary.
 
 ## User Model And Planning
 
@@ -273,6 +276,16 @@ session. After resume or equivalent manual operator processing, return to
 Full-object management is global: managed-session/operator serially advances
 multiple candidates by opportunity priority. App runtimes execute only the
 current work item. Use high-throughput mode only for explicit link testing.
+Managed session configuration must be shown to the user before start. The user
+must choose or confirm `send_mode`, `managed_gui_send`, `management_mode`,
+`max_threads_per_cycle`, `cycle_send_limit`, `scan_interval_seconds`,
+`nudge_delay_minutes`, and `harness_runtime`. Do not ask the user to configure
+`max_pages_per_cycle`; message-list scanning is framework-controlled and stops
+at the first row with no progress for 7 days.
+If `managed-session start` returns
+`managed_session_config_confirmation_required`, present `proposed_config` to the
+user and rerun only after the user confirms the returned
+`managed-session-config:<hash>` token.
 For TaShuo local Mac iOS app managed sessions, pass
 `--harness-runtime mac-ios-app`. If the current scope selected mac-ios-app and
 that flag is omitted, block with `runtime_scope_mismatch` instead of falling

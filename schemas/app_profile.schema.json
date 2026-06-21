@@ -175,8 +175,6 @@
         "precheck_failure_next_host_action",
         "default_max_threads_per_cycle",
         "high_throughput_max_threads_per_cycle",
-        "default_max_pages_per_cycle",
-        "high_throughput_max_pages_per_cycle",
         "cycle_send_limit",
         "message_list_pagination_supported"
       ],
@@ -190,8 +188,6 @@
         },
         "default_max_threads_per_cycle": {"type": "integer", "minimum": 1},
         "high_throughput_max_threads_per_cycle": {"type": "integer", "minimum": 1},
-        "default_max_pages_per_cycle": {"type": "integer", "minimum": 1},
-        "high_throughput_max_pages_per_cycle": {"type": "integer", "minimum": 1},
         "cycle_send_limit": {"type": "integer", "minimum": 1},
         "message_list_pagination_supported": {"type": "boolean"}
       }

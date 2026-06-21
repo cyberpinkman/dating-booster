@@ -16,6 +16,7 @@ from dating_boost.core.production_store import (
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.gui_harness import GUI_HARNESS_SCHEMA_VERSION
 from dating_boost.core.live_send_contract import managed_live_send_guidance
+from dating_boost.core.managed_session import MANAGED_SESSION_SCAN_BOUNDARY, MANAGED_SESSION_USER_CONFIGURABLE_FIELDS
 from dating_boost.core.support import SUPPORT_EVIDENCE_SCHEMA_VERSION, SUPPORT_LOG_SCHEMA_VERSION
 
 
@@ -304,9 +305,10 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "managed_session_default_nudge_delay_minutes": 30,
             "managed_session_default_max_threads_per_cycle": 5,
             "managed_session_high_throughput_max_threads_per_cycle": 12,
-            "managed_session_default_max_pages_per_cycle": 1,
-            "managed_session_high_throughput_max_pages_per_cycle": 3,
             "managed_session_default_cycle_send_limit": 1,
+            "managed_session_config_confirmation_required": True,
+            "managed_session_user_configurable_fields": list(MANAGED_SESSION_USER_CONFIGURABLE_FIELDS),
+            "managed_session_message_list_scan_boundary": dict(MANAGED_SESSION_SCAN_BOUNDARY),
             "managed_session_harness_runtime_selection": True,
             "runtime_scope_selection": True,
             "runtime_scope_enforcement": True,

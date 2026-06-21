@@ -72,6 +72,29 @@ class OperatorHostLoopTests(unittest.TestCase):
             self.assertEqual(auth_template["app_id"], "wechat")
             self.assertTrue((work_dir / "current_work_item.json").exists())
 
+    def test_host_loop_rejects_user_supplied_max_pages_per_cycle(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            work_dir = Path(temp_dir) / "work"
+
+            payload = self._run_script(
+                "run",
+                "--data-dir",
+                str(data_dir),
+                "--work-dir",
+                str(work_dir),
+                "--max-pages-per-cycle",
+                "2",
+                "--json",
+            )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "message_list_scan_boundary_framework_controlled")
+        self.assertEqual(
+            payload["message_list_scan_boundary"],
+            {"type": "first_historical_row", "history_cutoff_days": 7},
+        )
+
     def test_thread_observation_template_uses_valid_source_type(self):
         template = _thread_template(
             {"candidate_key": "row_ada"},
@@ -469,7 +492,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                     initial_surface="message-list",
                     management_mode="conservative",
                     max_threads_per_cycle=1,
-                    max_pages_per_cycle=1,
+                    max_pages_per_cycle=None,
                     cycle_send_limit=1,
                 )
             )
@@ -586,7 +609,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                     initial_surface="message-list",
                     management_mode="conservative",
                     max_threads_per_cycle=1,
-                    max_pages_per_cycle=1,
+                    max_pages_per_cycle=None,
                     cycle_send_limit=1,
                 )
             )
@@ -629,7 +652,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                     initial_surface="message-list",
                     management_mode="conservative",
                     max_threads_per_cycle=1,
-                    max_pages_per_cycle=1,
+                    max_pages_per_cycle=None,
                     cycle_send_limit=1,
                 )
             )
@@ -676,7 +699,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                     initial_surface="auto",
                     management_mode="conservative",
                     max_threads_per_cycle=1,
-                    max_pages_per_cycle=1,
+                    max_pages_per_cycle=None,
                     cycle_send_limit=1,
                 )
             )
@@ -719,7 +742,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                     initial_surface="current-thread",
                     management_mode="conservative",
                     max_threads_per_cycle=1,
-                    max_pages_per_cycle=1,
+                    max_pages_per_cycle=None,
                     cycle_send_limit=1,
                 )
             )
@@ -776,7 +799,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                     initial_surface="current-thread",
                     management_mode="conservative",
                     max_threads_per_cycle=1,
-                    max_pages_per_cycle=1,
+                    max_pages_per_cycle=None,
                     cycle_send_limit=1,
                 )
             )
