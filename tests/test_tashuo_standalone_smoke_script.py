@@ -85,6 +85,61 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
         flattened = [item for command in command_args for item in command]
         self.assertNotIn("--managed-gui-send", flattened)
 
+    def test_smoke_confirms_managed_session_config_before_start(self):
+        module = _load_smoke_module()
+        calls = []
+        start_count = 0
+
+        def fake_run(cmd, check=False, capture_output=False, text=False, cwd=None):
+            nonlocal start_count
+            calls.append(cmd)
+            payload = {"status": "ok"}
+            returncode = 0
+            if cmd[3:5] == ["standalone-session", "start"]:
+                start_count += 1
+                if start_count == 1:
+                    returncode = 2
+                    payload = {
+                        "status": "blocked",
+                        "reason": "managed_session_config_confirmation_required",
+                        "required_confirm_token": "managed-session-config:abc",
+                    }
+                else:
+                    payload = {"status": "active"}
+            if "tick" in cmd:
+                payload = {"status": "stage_recorded", "reason": "stage_recorded"}
+            return subprocess.CompletedProcess(cmd, returncode, stdout=json.dumps(payload), stderr="")
+
+        original_run = module.subprocess.run
+        module.subprocess.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                auth = root / "auth.json"
+                auth.write_text("{}", encoding="utf-8")
+                exit_code = module.main(
+                    [
+                        "--data-dir",
+                        str(root / "data"),
+                        "--authorization",
+                        str(auth),
+                        "--vision-backend",
+                        "openai",
+                        "--backend",
+                        "openai",
+                        "--json",
+                    ]
+                )
+        finally:
+            module.subprocess.run = original_run
+
+        start_commands = [call[3:] for call in calls if call[3:5] == ["standalone-session", "start"]]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(start_commands), 2)
+        self.assertNotIn("--config-confirm", start_commands[0])
+        self.assertIn("--config-confirm", start_commands[1])
+        self.assertIn("managed-session-config:abc", start_commands[1])
+
 
 if __name__ == "__main__":
     unittest.main()

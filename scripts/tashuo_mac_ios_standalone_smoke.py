@@ -79,7 +79,14 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             start_cmd.extend(["--scripted-vision-output", str(args.scripted_vision_output)])
         if args.scripted_backend_output is not None:
             start_cmd.extend(["--scripted-backend-output", str(args.scripted_backend_output)])
-        _run_step(steps, start_cmd)
+        start_payload = _run_step(steps, start_cmd, allow_failure=True)
+        if start_payload.get("reason") == "managed_session_config_confirmation_required":
+            confirm_token = str(start_payload.get("required_confirm_token") or "").strip()
+            if not confirm_token:
+                raise SmokeCommandError("managed_session_config_confirmation_token_missing")
+            _run_step(steps, [*start_cmd[:-1], "--config-confirm", confirm_token, "--json"])
+        elif int(start_payload.get("_returncode") or 0) != 0:
+            raise SmokeCommandError(f"command_failed:{start_payload.get('_returncode')}")
 
         max_ticks = max(1, int(args.max_ticks))
         for _ in range(max_ticks):
@@ -125,7 +132,7 @@ def _run_step(steps: list[dict[str, Any]], dating_boost_args: list[str], *, allo
     )
     if result.returncode != 0 and not allow_failure:
         raise SmokeCommandError(f"command_failed:{result.returncode}")
-    return payload
+    return {**payload, "_returncode": result.returncode}
 
 
 def _json_or_empty(text: str) -> dict[str, Any]:
