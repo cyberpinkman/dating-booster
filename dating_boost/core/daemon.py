@@ -222,7 +222,7 @@ def _now_iso() -> str:
 
 
 def _run_standalone_tick(root: Path) -> dict[str, Any] | None:
-    from dating_boost.core.standalone_observation import FixtureObservationProvider, fixture_harness_factory
+    from dating_boost.core.standalone_provider_factory import build_standalone_runtime_ports
     from dating_boost.core.standalone_runtime import StandaloneAgentRuntime
     from dating_boost.core.standalone_session import StandaloneSessionRepository
 
@@ -231,21 +231,15 @@ def _run_standalone_tick(root: Path) -> dict[str, Any] | None:
     if status.get("status") != "active":
         return None
     session = status.get("session") if isinstance(status.get("session"), dict) else {}
-    source = session.get("observation_source") if isinstance(session.get("observation_source"), dict) else {}
-    if source.get("type") != "fixture_dir":
-        return {"schema_version": 1, "status": "blocked", "reason": "unsupported_standalone_observation_source"}
-    source_path = source.get("path")
-    if not isinstance(source_path, str) or not source_path.strip():
-        return {"schema_version": 1, "status": "blocked", "reason": "standalone_observation_fixture_dir_required"}
-    fixture_dir = Path(source_path).expanduser().resolve()
-    if not fixture_dir.is_dir():
-        return {"schema_version": 1, "status": "blocked", "reason": "observation_fixture_dir_not_found"}
-    provider = FixtureObservationProvider(fixture_dir)
+    ports = build_standalone_runtime_ports(root, session)
+    if ports.get("status") != "ok":
+        return ports
     try:
         tick = StandaloneAgentRuntime(
             root,
-            observation_provider=provider,
-            harness_factory=fixture_harness_factory(provider),
+            observation_provider=ports["observation_provider"],
+            harness_factory=ports["harness_factory"],
+            action_executor=ports["action_executor"],
         ).tick()
     except Exception as exc:  # noqa: BLE001 - daemon run-once must return a structured payload.
         tick = {

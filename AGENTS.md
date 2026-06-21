@@ -261,7 +261,7 @@ DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session status --data-di
 Fixture and cross-app development can still use the Tinder scripted path:
 
 ```bash
-DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization tests/fixtures/standalone/auth_tinder_stage.json --app-id tinder --send-mode stage --observation-fixture-dir tests/fixtures/standalone --backend scripted --scripted-backend-output tests/fixtures/intelligence/scripted_reply.json --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization tests/fixtures/standalone/auth_tinder_stage.json --app-id tinder --send-mode stage --observation-source fixture --observation-fixture-dir tests/fixtures/standalone --backend scripted --scripted-backend-output tests/fixtures/intelligence/scripted_reply.json --json
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session stop --data-dir .local/dating-boost --json
 ```

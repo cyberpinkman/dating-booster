@@ -34,6 +34,7 @@ class StandaloneSessionRepository:
         backend: dict[str, Any],
         scan_interval_seconds: int,
         managed_gui_send: bool = False,
+        vision_backend: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if app_id not in set(supported_app_ids()):
             return _payload("blocked", reason=f"unsupported_app:{app_id}")
@@ -57,6 +58,7 @@ class StandaloneSessionRepository:
             "managed_gui_send": bool(managed_gui_send),
             "observation_source": dict(observation_source),
             "backend": dict(backend),
+            "vision_backend": dict(vision_backend or {}),
             "scan_interval_seconds": max(1, int(scan_interval_seconds)),
             "started_at": now,
             "updated_at": now,
