@@ -140,6 +140,76 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
         self.assertIn("--config-confirm", start_commands[1])
         self.assertIn("managed-session-config:abc", start_commands[1])
 
+    def test_smoke_confirmation_retry_preserves_scripted_output_flags(self):
+        module = _load_smoke_module()
+        calls = []
+        start_count = 0
+
+        def fake_run(cmd, check=False, capture_output=False, text=False, cwd=None):
+            nonlocal start_count
+            calls.append(cmd)
+            payload = {"status": "ok"}
+            returncode = 0
+            if cmd[3:5] == ["standalone-session", "start"]:
+                start_count += 1
+                if start_count == 1:
+                    returncode = 2
+                    payload = {
+                        "status": "blocked",
+                        "reason": "managed_session_config_confirmation_required",
+                        "required_confirm_token": "managed-session-config:abc",
+                    }
+                else:
+                    payload = {"status": "active"}
+            if "tick" in cmd:
+                payload = {"status": "stage_recorded", "reason": "stage_recorded"}
+            return subprocess.CompletedProcess(cmd, returncode, stdout=json.dumps(payload), stderr="")
+
+        original_run = module.subprocess.run
+        module.subprocess.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                auth = root / "auth.json"
+                auth.write_text("{}", encoding="utf-8")
+                vision = root / "vision.json"
+                vision.write_text(json.dumps({"status": "ok", "rows": []}), encoding="utf-8")
+                backend = root / "backend.json"
+                backend.write_text(json.dumps({"best_reply": "你好"}), encoding="utf-8")
+                exit_code = module.main(
+                    [
+                        "--data-dir",
+                        str(root / "data"),
+                        "--authorization",
+                        str(auth),
+                        "--vision-backend",
+                        "scripted",
+                        "--scripted-vision-output",
+                        str(vision),
+                        "--backend",
+                        "scripted",
+                        "--scripted-backend-output",
+                        str(backend),
+                        "--json",
+                    ]
+                )
+        finally:
+            module.subprocess.run = original_run
+
+        start_commands = [call[3:] for call in calls if call[3:5] == ["standalone-session", "start"]]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(start_commands), 2)
+        confirmed_start = start_commands[1]
+        self.assertIn("--scripted-vision-output", confirmed_start)
+        self.assertIn(str(vision), confirmed_start)
+        self.assertIn("--scripted-backend-output", confirmed_start)
+        self.assertIn(str(backend), confirmed_start)
+        self.assertIn("--config-confirm", confirmed_start)
+        self.assertLess(
+            confirmed_start.index(str(backend)),
+            confirmed_start.index("--config-confirm"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

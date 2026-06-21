@@ -42,8 +42,19 @@ class StageOnlyActionExecutor:
                 "action_request_id": work_item.get("action_request_id"),
                 "next_host_action": "enable_managed_gui_send_or_switch_to_stage",
             }
+        return self._execute_stage(work_item, app_id=app_id)
+
+    def _execute_stage(
+        self,
+        work_item: dict[str, Any],
+        *,
+        app_id: str,
+        stage_evidence: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         try:
             payload = _stage_payload(work_item, app_id=app_id)
+            if stage_evidence:
+                payload.update(_stage_record_extras(stage_evidence))
             operator_recorded = _record_with_operator_if_active(self.root, payload)
             if operator_recorded is None:
                 event = ActionAuditRepository(self.root).append_stage_result(payload, created_at=_now_iso())
@@ -110,6 +121,19 @@ def _stage_payload(work_item: dict[str, Any], *, app_id: str) -> dict[str, Any]:
             "draft_text_hash": _sha256(text),
             "live_send_executed": False,
         },
+    }
+
+
+def _stage_record_extras(stage_evidence: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: stage_evidence[key]
+        for key in (
+            "staged_text_verified",
+            "staged_text_verification",
+            "stage_attempt_status",
+            "screenshot_ref",
+        )
+        if key in stage_evidence
     }
 
 

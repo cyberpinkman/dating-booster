@@ -84,7 +84,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             confirm_token = str(start_payload.get("required_confirm_token") or "").strip()
             if not confirm_token:
                 raise SmokeCommandError("managed_session_config_confirmation_token_missing")
-            _run_step(steps, [*start_cmd[:-1], "--config-confirm", confirm_token, "--json"])
+            _run_step(steps, [*start_cmd, "--config-confirm", confirm_token])
         elif int(start_payload.get("_returncode") or 0) != 0:
             raise SmokeCommandError(f"command_failed:{start_payload.get('_returncode')}")
 

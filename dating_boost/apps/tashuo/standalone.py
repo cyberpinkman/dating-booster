@@ -12,6 +12,7 @@ from dating_boost.intelligence.vision_backends import VisionBackend
 
 
 TARGET_CACHE_PATH = Path("standalone_session") / "tashuo_targets.json"
+TARGET_CACHE_MAX_AGE_SECONDS = 120
 
 
 class TaShuoStandaloneTargetCache:
@@ -100,6 +101,16 @@ class TaShuoMacIosStandaloneObservationProvider:
                 observation_type="thread",
                 candidate_key=candidate_key,
             )
+        freshness_reason = _target_freshness_block_reason(target)
+        if freshness_reason:
+            return _blocked(
+                freshness_reason,
+                app_id=app_id,
+                observation_type="thread",
+                candidate_key=candidate_key,
+                observed_at=target.get("observed_at"),
+                max_age_seconds=TARGET_CACHE_MAX_AGE_SECONDS,
+            )
         adapter = self.adapter_factory()
         opened = adapter.run_action(
             "open-conversation",
@@ -138,6 +149,18 @@ class TaShuoMacIosStandaloneObservationProvider:
         if perceived.get("status") != "ok":
             return {**perceived, "observation_type": "thread", "app_id": app_id, "runtime": "mac-ios-app", "candidate_key": candidate_key}
         identity = dict(perceived["identity"])
+        if cached_target:
+            cached_name = _normalized_visible_name(cached_target.get("visible_name"))
+            perceived_name = _normalized_visible_name(identity.get("visible_name"))
+            if cached_name and perceived_name and cached_name != perceived_name:
+                return _blocked(
+                    "current_thread_visual_identity_mismatch",
+                    app_id=app_id,
+                    observation_type="thread",
+                    candidate_key=candidate_key,
+                    cached_visible_name=cached_name,
+                    perceived_visible_name=perceived_name,
+                )
         if cached_target and cached_target.get("visible_name") and not identity.get("visible_name"):
             identity["visible_name"] = cached_target.get("visible_name")
         return {
@@ -198,8 +221,9 @@ class TaShuoMacIosStageExecutor(StageOnlyActionExecutor):
                 "action_request_id": work_item.get("action_request_id"),
                 "gui_stage": _stage_evidence(staged),
             }
-        result = super().execute(work_item, app_id=app_id)
-        result["gui_stage"] = _stage_evidence(staged)
+        stage_evidence = _stage_evidence(staged)
+        result = self._execute_stage(work_item, app_id=app_id, stage_evidence=stage_evidence)
+        result["gui_stage"] = stage_evidence
         return result
 
 
@@ -235,6 +259,30 @@ def _stage_evidence(staged: dict[str, Any]) -> dict[str, Any]:
             "staged_text_verification",
         }
     }
+
+
+def _target_freshness_block_reason(target: dict[str, Any]) -> str | None:
+    age_seconds = _target_age_seconds(target)
+    if age_seconds is None or age_seconds > TARGET_CACHE_MAX_AGE_SECONDS:
+        return "tashuo_standalone_target_stale"
+    return None
+
+
+def _target_age_seconds(target: dict[str, Any]) -> float | None:
+    observed_at = str(target.get("observed_at") or "").strip()
+    if not observed_at:
+        return None
+    try:
+        parsed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+
+
+def _normalized_visible_name(value: Any) -> str:
+    return str(value or "").strip()
 
 
 def _blocked(reason: str, *, app_id: str, **extra: Any) -> dict[str, Any]:
