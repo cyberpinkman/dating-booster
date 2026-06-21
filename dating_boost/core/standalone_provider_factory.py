@@ -41,13 +41,23 @@ def build_standalone_runtime_ports(root: Path, session: dict[str, Any]) -> dict[
 
         output_dir = Path(source.get("output_dir") or root / "standalone_harness").expanduser()
         try:
-            create_vision_backend(dict(vision_config))
+            vision_backend = create_vision_backend(dict(vision_config))
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             return _blocked(str(exc))
-        provider = _PendingTaShuoLiveGuiProvider()
+        from dating_boost.apps.tashuo.standalone import (
+            TaShuoMacIosStageExecutor,
+            TaShuoMacIosStandaloneObservationProvider,
+            TaShuoStandalonePrecheckHarness,
+        )
 
-        def _harness_factory(factory_app_id: str, runtime: str | None = None) -> _PendingTaShuoLiveGuiHarness:
-            return _PendingTaShuoLiveGuiHarness(app_id=factory_app_id, runtime=runtime)
+        provider = TaShuoMacIosStandaloneObservationProvider(
+            root=root,
+            output_dir=output_dir,
+            vision_backend=vision_backend,
+        )
+
+        def _harness_factory(factory_app_id: str, runtime: str | None = None) -> TaShuoStandalonePrecheckHarness:
+            return TaShuoStandalonePrecheckHarness(provider, app_id=factory_app_id, runtime=runtime)
 
         return {
             "schema_version": 1,
@@ -57,56 +67,11 @@ def build_standalone_runtime_ports(root: Path, session: dict[str, Any]) -> dict[
             "harness_factory": _harness_factory,
             "action_executor": StandaloneManagedGuiSendExecutor(root)
             if send_mode == "live"
-            else StageOnlyActionExecutor(root, send_mode=send_mode),
+            else TaShuoMacIosStageExecutor(root=root, output_dir=output_dir),
             "output_dir": str(output_dir),
         }
 
     return _blocked("unsupported_standalone_observation_source")
-
-
-class _PendingTaShuoLiveGuiProvider:
-    def observe_message_list(self, *, app_id: str, scan_cursor: dict[str, Any]) -> dict[str, Any]:
-        return _pending_tashuo_provider_payload(app_id=app_id, observation_type="message_list")
-
-    def observe_thread(self, *, app_id: str, candidate_key: str) -> dict[str, Any]:
-        return _pending_tashuo_provider_payload(
-            app_id=app_id,
-            observation_type="thread",
-            candidate_key=candidate_key,
-        )
-
-    def observe_current_thread(self, *, app_id: str) -> dict[str, Any]:
-        return _pending_tashuo_provider_payload(app_id=app_id, observation_type="thread", candidate_key="current_thread")
-
-    def precheck_payload(self, *, app_id: str) -> dict[str, Any]:
-        return _pending_tashuo_provider_payload(app_id=app_id, observation_type="precheck")
-
-
-class _PendingTaShuoLiveGuiHarness:
-    def __init__(self, *, app_id: str, runtime: str | None):
-        self.app_id = app_id
-        self.runtime = runtime
-
-    def observe(self) -> dict[str, Any]:
-        return {
-            "schema_version": 1,
-            "status": "blocked",
-            "reason": "tashuo_standalone_provider_not_ready",
-            "app_id": self.app_id,
-            "runtime": self.runtime or "mac-ios-app",
-        }
-
-
-def _pending_tashuo_provider_payload(*, app_id: str, observation_type: str, **extra: Any) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "status": "blocked",
-        "reason": "tashuo_standalone_provider_not_ready",
-        "app_id": app_id,
-        "runtime": "mac-ios-app",
-        "observation_type": observation_type,
-        **extra,
-    }
 
 
 def _blocked(reason: str) -> dict[str, Any]:
