@@ -108,8 +108,16 @@ four axes that should not be mixed in one-off patches:
   authorization, recovery, and staged/live send mode checks。监督 work dir、授权、
   恢复和 send mode 检查。
 - Standalone session: `dating-boost standalone-session` consumes
-  managed-session/operator work without a host agent, starting with
-  fixture/manual observations and stage mode.
+  managed-session/operator work without a host agent. Primary mode is TaShuo
+  mac-ios-app live GUI observation with stage-only output:
+  ```bash
+  dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
+  DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization auth.json --app-id tashuo --runtime mac-ios-app --send-mode stage --observation-source live-gui --vision-backend openai --backend openai --json
+  DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
+  DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session status --data-dir .local/dating-boost --json
+  ```
+  Tinder/Bumble/WeChat and scripted fixtures remain cross-app development
+  paths until their standalone providers graduate.
 - GUI platform harness: `dating_boost/core/gui_harness.py` owns native
   app-window mechanics such as screenshots, OCR, gestures, clipboard, paste,
   and IME commit。平台自动化能力只应在这里。

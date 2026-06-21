@@ -72,9 +72,20 @@ python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost -
 
 ## Standalone Agent Runtime
 
-`standalone-session` is the opt-in migration path from host-native workflows to a local Dating Booster agent. Host-native remains the default production route. The first standalone mode consumes the same managed-session/operator contracts with fixture or manual observations; live GUI send remains disabled unless the existing authorization, target binding, staged-text verification, and post-action verification contracts are satisfied.
+`standalone-session` is the opt-in migration path from host-native workflows to a local Dating Booster agent. Host-native remains the default production route. The primary standalone path is TaShuo mac-ios-app stage mode: phone-free live GUI observation, existing managed-session/operator contracts, and stage-only output by default. Live GUI send remains disabled unless the existing authorization, target binding, staged-text verification, and post-action verification contracts are satisfied.
 
-Example fixture start:
+Primary TaShuo mac-ios-app standalone stage start:
+
+```bash
+dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization auth.json --app-id tashuo --runtime mac-ios-app --send-mode stage --observation-source live-gui --vision-backend openai --backend openai --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session status --data-dir .local/dating-boost --json
+```
+
+### Fixture and cross-app development
+
+Tinder fixture start:
 
 ```bash
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization tests/fixtures/standalone/auth_tinder_stage.json --app-id tinder --send-mode stage --observation-fixture-dir tests/fixtures/standalone --backend scripted --scripted-backend-output tests/fixtures/intelligence/scripted_reply.json --json

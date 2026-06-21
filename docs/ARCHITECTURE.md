@@ -31,12 +31,22 @@ core, but they must not fork domain rules.
 
 The standalone runtime is a new consumer of existing managed-session and operator contracts. It does not fork policy, planner, memory, app adapter, runtime scope, or managed-send rules.
 
+Primary path:
+
+```bash
+dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization auth.json --app-id tashuo --runtime mac-ios-app --send-mode stage --observation-source live-gui --vision-backend openai --backend openai --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session status --data-dir .local/dating-boost --json
+```
+
 Migration order:
 
-1. fixture/manual observations.
-2. local `ModelBackend` draft planning.
-3. daemon-supervised run-once ticks.
-4. live GUI staging and send only through existing verification contracts.
+1. TaShuo mac-ios-app live GUI stage mode.
+2. fixture and cross-app development paths.
+3. local `ModelBackend` draft planning.
+4. daemon-supervised run-once ticks.
+5. live GUI send only through existing verification contracts.
 
 ## Extension Priorities
 

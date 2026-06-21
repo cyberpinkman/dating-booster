@@ -116,9 +116,14 @@ class StandaloneSessionTests(unittest.TestCase):
             caps = payload["agent_native_capabilities"]
 
         self.assertTrue(caps["standalone_agent_runtime"])
-        self.assertEqual(caps["standalone_agent_default_mode"], "fixture_or_manual_first")
+        self.assertEqual(caps["standalone_agent_primary_app"], "tashuo")
+        self.assertEqual(caps["standalone_agent_primary_runtime"], "mac-ios-app")
+        self.assertEqual(caps["standalone_agent_default_mode"], "tashuo_mac_ios_app_stage_first")
+        self.assertTrue(caps["standalone_agent_phone_free_primary_runtime"])
+        self.assertTrue(caps["standalone_agent_fixture_mode_supported"])
         self.assertFalse(caps["standalone_agent_live_gui_default"])
         self.assertTrue(caps["standalone_agent_uses_existing_operator_contract"])
+        self.assertEqual(caps["standalone_agent_secondary_apps"], ["tinder", "bumble", "wechat"])
         self.assertIn("standalone-session start", payload["supported_commands"])
 
 

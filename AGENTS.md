@@ -249,7 +249,16 @@ dating-boost managed-session run --wait --data-dir .local/dating-boost --json
 
 For Codex, Claude Code, OpenClaw, and Hermes, host-native remains the default route. Use `standalone-session` only when the user explicitly asks to run Dating Booster's local standalone agent runtime.
 
-Initial standalone mode is fixture/manual-first:
+Primary standalone mode is TaShuo mac-ios-app stage-first:
+
+```bash
+dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization auth.json --app-id tashuo --runtime mac-ios-app --send-mode stage --observation-source live-gui --vision-backend openai --backend openai --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session status --data-dir .local/dating-boost --json
+```
+
+Fixture and cross-app development can still use the Tinder scripted path:
 
 ```bash
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization tests/fixtures/standalone/auth_tinder_stage.json --app-id tinder --send-mode stage --observation-fixture-dir tests/fixtures/standalone --backend scripted --scripted-backend-output tests/fixtures/intelligence/scripted_reply.json --json
