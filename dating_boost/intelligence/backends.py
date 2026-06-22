@@ -79,7 +79,7 @@ class OpenAIBackend:
         except ImportError as exc:
             raise RuntimeError(
                 "OpenAIBackend requires the optional OpenAI SDK. Install with "
-                "`pip install 'dating-booster[openai]'` or `pip install 'openai>=2,<3'`."
+                "`pip install 'dating-booster[models]'` or `pip install 'openai>=2,<3'`."
             ) from exc
 
         self._client = OpenAI(**client_kwargs)
@@ -142,7 +142,7 @@ class MiniMaxBackend:
         except ImportError as exc:
             raise RuntimeError(
                 "MiniMaxBackend requires the optional OpenAI SDK. Install with "
-                "`pip install 'dating-booster[openai]'` or `pip install 'openai>=2,<3'`."
+                "`pip install 'dating-booster[models]'` or `pip install 'openai>=2,<3'`."
             ) from exc
 
         resolved_api_key = api_key or os.environ.get(self._api_key_env)

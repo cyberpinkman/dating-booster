@@ -10,7 +10,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-openai = ["openai>=2,<3"]
+models = ["openai>=2,<3"]
 test = ["pytest>=8", "jsonschema>=4,<5"]
 
 [dependency-groups]

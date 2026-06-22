@@ -247,7 +247,7 @@ def _probe_minimax(*, env: dict[str, str], api_key_env: str, base_url: str, mode
     except ImportError:
         payload["reason"] = "openai_sdk_missing"
         payload["error_type"] = "ImportError"
-        payload["error_message"] = "Install with `pip install 'dating-booster[openai]'` or run through `uv run --extra openai`."
+        payload["error_message"] = "Install with `pip install 'dating-booster[models]'` or run through `uv run --extra models`."
         return payload
     try:
         client = OpenAI(api_key=api_key, base_url=base_url)

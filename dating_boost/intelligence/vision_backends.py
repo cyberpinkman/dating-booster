@@ -64,7 +64,7 @@ class OpenAIVisionBackend:
         except ImportError as exc:
             raise RuntimeError(
                 "OpenAIVisionBackend requires the optional OpenAI SDK. Install with "
-                "`pip install 'dating-booster[openai]'` or `pip install 'openai>=2,<3'`."
+                "`pip install 'dating-booster[models]'` or `pip install 'openai>=2,<3'`."
             ) from exc
 
         self._client = OpenAI(**client_kwargs)

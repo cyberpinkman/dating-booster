@@ -437,6 +437,22 @@ class PublicProductionTests(unittest.TestCase):
         self.assertEqual(pyproject["project"]["license"]["text"], "MIT")
         self.assertIn("License :: OSI Approved :: MIT License", pyproject["project"]["classifiers"])
 
+    def test_model_backends_use_models_extra_name(self):
+        pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+        optional = pyproject["project"]["optional-dependencies"]
+        backend_text = Path("dating_boost/intelligence/backends.py").read_text(encoding="utf-8")
+        vision_text = Path("dating_boost/intelligence/vision_backends.py").read_text(encoding="utf-8")
+        doctor_text = Path("scripts/tashuo_mac_ios_standalone_doctor.py").read_text(encoding="utf-8")
+
+        self.assertIn("models", optional)
+        self.assertEqual(optional["models"], ["openai>=2,<3"])
+        self.assertNotIn("openai", optional)
+        self.assertIn("pip install 'dating-booster[models]'", backend_text)
+        self.assertIn("pip install 'dating-booster[models]'", vision_text)
+        self.assertIn("uv run --extra models", doctor_text)
+        self.assertNotIn("dating-booster[openai]", "\n".join([backend_text, vision_text, doctor_text]))
+        self.assertNotIn("--extra openai", doctor_text)
+
     def test_release_doctor_blocks_tag_mismatch_in_strict_release_mode(self):
         with patch.dict(os.environ, {"DATING_BOOST_RELEASE_STRICT": "1", "GITHUB_REF_NAME": "v9.9.9"}):
             with patch.object(release_core, "_git_dirty", return_value=False):

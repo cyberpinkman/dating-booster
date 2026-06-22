@@ -77,6 +77,7 @@ python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost -
 Primary TaShuo mac-ios-app standalone stage quickstart with MiniMax Coding Plan:
 
 ```bash
+python3 -m pip install --user -e ".[models]"
 export MINIMAX_API_KEY="<coding-plan-subscription-key>"
 dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
 python3 scripts/tashuo_mac_ios_standalone_doctor.py --data-dir .local/dating-boost --json
@@ -190,13 +191,23 @@ dating-boost safety pause --data-dir .local/dating-boost --reason manual-stop --
 
 ## 验证
 
-常用回归：
+首次在干净环境运行测试时，先安装测试依赖：
 
 ```bash
-PYTHONPATH=. uv run pytest -q
+python3 -m pip install --user -e ".[test]"
 ```
 
-没有 `uv` 时，可按项目环境安装 test extras 后运行 pytest。
+推荐回归命令：
+
+```bash
+python3 -m pytest -q
+```
+
+如果使用 `uv` 管理临时环境，可选：
+
+```bash
+uv run --extra test python -m pytest -q
+```
 
 ## 许可证
 
