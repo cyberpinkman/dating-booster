@@ -127,15 +127,18 @@ class AppSpecificNativeGuiSessionMixin:
             }
         output = (output or _default_screenshot_path()).resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
-        result = self.runner.run(
-            [
+        window_id = getattr(window, "window_id", None)
+        if window_id is not None:
+            command = ["screencapture", "-x", "-l", str(window_id), str(output)]
+        else:
+            command = [
                 "screencapture",
                 "-x",
                 "-R",
                 f"{window.x},{window.y},{window.width},{window.height}",
                 str(output),
             ]
-        )
+        result = self.runner.run(command)
         if result.returncode != 0:
             return {
                 "status": "blocked",

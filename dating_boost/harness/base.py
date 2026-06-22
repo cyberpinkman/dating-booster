@@ -15,9 +15,10 @@ class WindowInfo:
     width: int
     height: int
     name: str
+    window_id: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "frontmost": self.frontmost,
             "x": self.x,
             "y": self.y,
@@ -25,6 +26,9 @@ class WindowInfo:
             "height": self.height,
             "name": self.name,
         }
+        if self.window_id is not None:
+            payload["window_id"] = self.window_id
+        return payload
 
 
 class SubprocessRunner:
@@ -66,6 +70,7 @@ def window_from_payload(payload: dict[str, Any]) -> WindowInfo:
         width=int(payload["width"]),
         height=int(payload["height"]),
         name=str(payload["name"]),
+        window_id=int(payload["window_id"]) if payload.get("window_id") is not None else None,
     )
 
 

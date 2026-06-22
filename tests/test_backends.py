@@ -110,6 +110,70 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(call["tools"][0]["function"]["parameters"], schema)
         self.assertEqual(call["extra_body"], {"thinking": {"type": "disabled"}, "reasoning_split": True})
 
+    def test_minimax_backend_extracts_json_from_wrapped_tool_arguments(self):
+        class FakeCompletions:
+            def create(self, **kwargs):
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        function=SimpleNamespace(
+                                            name="emit_structured_response",
+                                            arguments='```json\n{"best_reply":"你好呀"}\n```',
+                                        )
+                                    )
+                                ],
+                                content=None,
+                            )
+                        )
+                    ]
+                )
+
+        fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+        backend = MiniMaxBackend(client=fake_client)
+
+        result = backend.generate_structured(
+            system_prompt="Return draft JSON.",
+            user_prompt="Draft a reply.",
+            schema={"type": "object"},
+        )
+
+        self.assertEqual(result, {"best_reply": "你好呀"})
+
+    def test_minimax_backend_extracts_json_from_stringified_tool_arguments(self):
+        class FakeCompletions:
+            def create(self, **kwargs):
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        function=SimpleNamespace(
+                                            name="emit_structured_response",
+                                            arguments=json.dumps('{"best_reply":"你好呀"}'),
+                                        )
+                                    )
+                                ],
+                                content=None,
+                            )
+                        )
+                    ]
+                )
+
+        fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+        backend = MiniMaxBackend(client=fake_client)
+
+        result = backend.generate_structured(
+            system_prompt="Return draft JSON.",
+            user_prompt="Draft a reply.",
+            schema={"type": "object"},
+        )
+
+        self.assertEqual(result, {"best_reply": "你好呀"})
+
 
 if __name__ == "__main__":
     unittest.main()

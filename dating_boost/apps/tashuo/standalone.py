@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from dating_boost.apps.registry import create_adapter
+from dating_boost.apps.tashuo.native import _tashuo_visual_anchor_hash_for_path
 from dating_boost.apps.tashuo.perception import analyze_tashuo_conversation, analyze_tashuo_message_list
 from dating_boost.core.standalone_actions import StageOnlyActionExecutor
 from dating_boost.core.storage import JsonStorage
@@ -14,6 +15,7 @@ from dating_boost.intelligence.vision_backends import VisionBackend
 
 TARGET_CACHE_PATH = Path("standalone_session") / "tashuo_targets.json"
 TARGET_CACHE_MAX_AGE_SECONDS = 120
+TARGET_VISUAL_ANCHOR_CACHE_MAX_AGE_SECONDS = 600
 
 
 class TaShuoStandaloneTargetCache:
@@ -69,6 +71,17 @@ class TaShuoMacIosStandaloneObservationProvider:
             app_id=app_id,
         )
 
+    def app_precheck_payload(self, *, app_id: str) -> dict[str, Any]:
+        if app_id != "tashuo":
+            return _blocked("unsupported_app_for_tashuo_provider", app_id=app_id)
+        adapter = self.adapter_factory()
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        observed = adapter.observe(output_dir=self.output_dir)
+        return observed if observed.get("status") == "ok" else _blocked(
+            str(observed.get("reason") or "observe_failed"),
+            app_id=app_id,
+        )
+
     def observe_message_list(self, *, app_id: str, scan_cursor: dict[str, Any]) -> dict[str, Any]:
         if app_id != "tashuo":
             return _blocked("unsupported_app_for_tashuo_provider", app_id=app_id, observation_type="message_list")
@@ -78,7 +91,11 @@ class TaShuoMacIosStandaloneObservationProvider:
         perceived = analyze_tashuo_message_list(precheck, backend=self.vision_backend)
         if perceived.get("status") != "ok":
             return {**perceived, "observation_type": "message_list", "app_id": app_id, "runtime": "mac-ios-app"}
-        rows = _correct_tashuo_message_list_tap_ratios(perceived["rows"])
+        screen_path = _screen_path_from_observation(precheck)
+        rows = _attach_tashuo_message_list_perceptual_anchors(
+            _correct_tashuo_message_list_tap_ratios(perceived["rows"]),
+            screen_path=screen_path,
+        )
         candidates = []
         entries = []
         for index, row in enumerate(rows, start=1):
@@ -108,13 +125,14 @@ class TaShuoMacIosStandaloneObservationProvider:
             )
         freshness_reason = _target_freshness_block_reason(target)
         if freshness_reason:
+            max_age_seconds = _target_cache_max_age_seconds(target)
             return _blocked(
                 freshness_reason,
                 app_id=app_id,
                 observation_type="thread",
                 candidate_key=candidate_key,
                 observed_at=target.get("observed_at"),
-                max_age_seconds=TARGET_CACHE_MAX_AGE_SECONDS,
+                max_age_seconds=max_age_seconds,
             )
         adapter = self.adapter_factory()
         opened = adapter.run_action(
@@ -187,7 +205,7 @@ class TaShuoStandalonePrecheckHarness:
         self.runtime = runtime
 
     def observe(self) -> dict[str, Any]:
-        payload = self.provider.precheck_payload(app_id=self.app_id)
+        payload = self.provider.app_precheck_payload(app_id=self.app_id)
         payload["runtime"] = self.runtime or "mac-ios-app"
         return payload
 
@@ -656,8 +674,57 @@ def _correct_tashuo_message_list_tap_ratios(rows: list[dict[str, Any]]) -> list[
         if index >= first_index:
             y = round(min(0.965, start_y + (index - first_index) * row_step), 4)
             item["tap_ratio"] = {**tap_ratio, "y": y}
+            item = _align_visual_anchor_region_to_tap_y(item, tap_y=y)
         corrected.append(item)
     return corrected
+
+
+def _align_visual_anchor_region_to_tap_y(row: dict[str, Any], *, tap_y: float) -> dict[str, Any]:
+    region = _visual_anchor_region_from_source(row)
+    if region is None:
+        return row
+    if float(region["y1"]) <= tap_y <= float(region["y2"]):
+        return row
+    height = max(0.03, min(0.28, float(region["y2"]) - float(region["y1"])))
+    y1 = max(0.0, min(1.0 - height, tap_y - height / 2.0))
+    aligned = {
+        **region,
+        "y1": round(y1, 4),
+        "y2": round(y1 + height, 4),
+    }
+    return {**row, "visual_anchor_region": aligned}
+
+
+def _attach_tashuo_message_list_perceptual_anchors(
+    rows: list[dict[str, Any]],
+    *,
+    screen_path: Path | None,
+) -> list[dict[str, Any]]:
+    if screen_path is None:
+        return rows
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        region = _visual_anchor_region_from_source(item)
+        semantic_anchor = str(item.get("visual_anchor_hash") or "").strip()
+        if region is not None:
+            hash_result = _tashuo_visual_anchor_hash_for_path(screen_path, region=region)
+            perceptual_hash = str(hash_result.get("visual_anchor_hash") or "").strip()
+            if hash_result.get("status") == "ok" and perceptual_hash:
+                if semantic_anchor:
+                    item["visual_anchor_label"] = semantic_anchor
+                item["visual_anchor_hash"] = perceptual_hash
+                item["visual_anchor_grid_size"] = hash_result.get("grid_size")
+        enriched.append(item)
+    return enriched
+
+
+def _screen_path_from_observation(observation: dict[str, Any]) -> Path | None:
+    screen = observation.get("screen") if isinstance(observation.get("screen"), dict) else {}
+    path = screen.get("path") if isinstance(screen.get("path"), str) else None
+    if not path:
+        return None
+    return Path(path)
 
 
 def _first_all_messages_row_index(rows: list[dict[str, Any]]) -> int | None:
@@ -1026,9 +1093,19 @@ def _stage_evidence(staged: dict[str, Any]) -> dict[str, Any]:
 
 def _target_freshness_block_reason(target: dict[str, Any]) -> str | None:
     age_seconds = _target_age_seconds(target)
-    if age_seconds is None or age_seconds > TARGET_CACHE_MAX_AGE_SECONDS:
+    if age_seconds is None or age_seconds > _target_cache_max_age_seconds(target):
         return "tashuo_standalone_target_stale"
     return None
+
+
+def _target_cache_max_age_seconds(target: dict[str, Any]) -> int:
+    if _target_has_relocatable_visual_anchor(target):
+        return TARGET_VISUAL_ANCHOR_CACHE_MAX_AGE_SECONDS
+    return TARGET_CACHE_MAX_AGE_SECONDS
+
+
+def _target_has_relocatable_visual_anchor(target: dict[str, Any]) -> bool:
+    return bool(str(target.get("visual_anchor_hash") or "").strip() and _visual_anchor_region_from_source(target))
 
 
 def _target_age_seconds(target: dict[str, Any]) -> float | None:

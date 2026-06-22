@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
 import unittest
@@ -6,7 +7,9 @@ import unittest
 from dating_boost.apps.tashuo.standalone import (
     TaShuoMacIosStageExecutor,
     TaShuoMacIosStandaloneObservationProvider,
+    TaShuoStandalonePrecheckHarness,
     TaShuoStandaloneTargetCache,
+    _correct_tashuo_message_list_tap_ratios,
 )
 from dating_boost.core.scan_authoring import validate_scan_batch
 from dating_boost.intelligence.vision_backends import ScriptedVisionBackend
@@ -53,6 +56,65 @@ class FakeTaShuoAdapter:
 
 
 class TaShuoStandaloneProviderTests(unittest.TestCase):
+    def test_corrected_tap_ratios_keep_visual_anchor_region_on_same_row(self):
+        rows = [
+            {
+                "candidate_key": "tashuo_visual_blurred_avatar_new_badge",
+                "visible_name": "有个优秀的女生想认识你",
+                "latest_preview": "她毕业于知名院校，是个学霸",
+                "tap_ratio": {"x": 0.5, "y": 0.53},
+                "visual_anchor_hash": "blurred_avatar_new_badge",
+                "visual_anchor_region": {"x1": 0.04, "y1": 0.49, "x2": 0.96, "y2": 0.6},
+            },
+            {
+                "candidate_key": "tashuo_visual_row2_letty_outdoor_photo_draft_badge",
+                "visible_name": "Letty",
+                "latest_preview": "[草稿] 嗨Letty，我也没想到真的能…",
+                "tap_ratio": {"x": 0.5, "y": 0.77},
+                "visual_anchor_hash": "row2_letty_outdoor_photo_draft_badge",
+                "visual_anchor_region": {"x1": 0.04, "y1": 0.708, "x2": 0.96, "y2": 0.819},
+            },
+        ]
+
+        corrected = _correct_tashuo_message_list_tap_ratios(rows)
+        letty = corrected[1]
+
+        self.assertEqual(letty["tap_ratio"]["y"], 0.647)
+        self.assertLessEqual(letty["visual_anchor_region"]["y1"], letty["tap_ratio"]["y"])
+        self.assertGreaterEqual(letty["visual_anchor_region"]["y2"], letty["tap_ratio"]["y"])
+        self.assertEqual(letty["visual_anchor_region"], {"x1": 0.04, "y1": 0.5915, "x2": 0.96, "y2": 0.7025})
+
+    def test_precheck_harness_observes_current_screen_without_prepare_message_page(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screen = Path(temp_dir) / "thread.png"
+            screen.write_bytes(b"png")
+            adapter = FakeTaShuoAdapter(
+                str(screen),
+                observe_payloads=[
+                    {
+                        "schema_version": 1,
+                        "status": "ok",
+                        "screen_state": "tashuo_conversation",
+                        "layout_hints": {"page": "conversation"},
+                        "screen": {"path": str(screen)},
+                    }
+                ],
+            )
+            provider = TaShuoMacIosStandaloneObservationProvider(
+                root=Path(temp_dir) / "data",
+                output_dir=Path(temp_dir) / "harness",
+                vision_backend=ScriptedVisionBackend({"status": "ok"}),
+                adapter_factory=lambda: adapter,
+            )
+            harness = TaShuoStandalonePrecheckHarness(provider, app_id="tashuo", runtime="mac-ios-app")
+
+            payload = harness.observe()
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["screen_state"], "tashuo_conversation")
+        self.assertEqual(payload["runtime"], "mac-ios-app")
+        self.assertEqual([call[0] for call in adapter.calls], ["observe"])
+
     def test_message_list_observation_caches_visual_targets(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             screen = Path(temp_dir) / "screen.png"
@@ -346,6 +408,51 @@ class TaShuoStandaloneProviderTests(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["reason"], "tashuo_standalone_target_stale")
         self.assertEqual(adapter.calls, [])
+
+    def test_observe_thread_allows_slow_visual_anchor_backed_target(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            cache_path = data_dir / "standalone_session" / "tashuo_targets.json"
+            cache_path.parent.mkdir(parents=True)
+            observed_at = (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat().replace("+00:00", "Z")
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "targets": {
+                            "tashuo_visual_7f83a1d2": {
+                                "candidate_key": "tashuo_visual_7f83a1d2",
+                                "tap_ratio": {"x": 0.5, "y": 0.42},
+                                "visible_name": "Ada",
+                                "visual_anchor_hash": "7f83a1d2",
+                                "visual_anchor_region": {"x1": 0.1, "y1": 0.3, "x2": 0.9, "y2": 0.5},
+                                "observed_at": observed_at,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            adapter = FakeTaShuoAdapter(str(Path(temp_dir) / "screen.png"))
+            provider = TaShuoMacIosStandaloneObservationProvider(
+                root=data_dir,
+                output_dir=Path(temp_dir) / "harness",
+                vision_backend=ScriptedVisionBackend(
+                    {
+                        "status": "ok",
+                        "visible_name": "Ada",
+                        "visual_anchor_hash": "threadhash",
+                        "visible_messages": [{"direction": "inbound", "text": "你好呀", "confidence": "high"}],
+                    }
+                ),
+                adapter_factory=lambda: adapter,
+            )
+
+            payload = provider.observe_thread(app_id="tashuo", candidate_key="tashuo_visual_7f83a1d2")
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(adapter.calls[0][0:2], ("run_action", "open-conversation"))
+        self.assertEqual(adapter.calls[0][2]["message_list_evidence"]["visual_anchor_region"]["y1"], 0.3)
 
     def test_observe_thread_blocks_without_cached_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -27,6 +27,7 @@ from dating_boost.apps.tashuo.screen_state import (
     tashuo_thread_cues_from_text,
 )
 from dating_boost.harness.input_backends import core_graphics_command_v, core_graphics_drag
+from dating_boost.harness.base import WindowInfo
 
 
 class FakeRunner:
@@ -1268,6 +1269,118 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(process_probe["visible"])
         self.assertEqual(process_probe["window_count"], 0)
 
+    def test_tashuo_mac_ios_app_doctor_uses_core_graphics_window_fallback(self):
+        class CoreGraphicsWindowRunner(FakeRunner):
+            def run(self, command, *, input=None):
+                if command and command[0] == "osascript" and any("position of window" in item for item in command):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stderr='Can’t get window 1 of process "tashuo". Invalid index.', returncode=1)
+                if command and command[0] == "osascript" and any("to get unix id" in item for item in command):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stdout="35218\n")
+                if command[:3] == ["xcrun", "swift", "-e"] and "CGWindowListCopyWindowInfo" in command[-1]:
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stdout="1093\t111\t288\t541\t1713\t她说\n")
+                return super().run(command, input=input)
+
+        runner = CoreGraphicsWindowRunner(ocr_text="", window_name="她说")
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.doctor(capture=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["window"]["name"], "她说")
+        self.assertEqual(payload["window"]["x"], 1093)
+        self.assertEqual(payload["window"]["y"], 111)
+        self.assertEqual(payload["window"]["width"], 288)
+        self.assertEqual(payload["window"]["height"], 541)
+        self.assertEqual(payload["window"]["window_id"], 1713)
+        swift_commands = [command for command in runner.commands if command[:3] == ["xcrun", "swift", "-e"]]
+        self.assertTrue(swift_commands)
+        self.assertIn('"她说"', swift_commands[-1][-1])
+
+    def test_tashuo_mac_ios_app_doctor_blocks_when_loginwindow_frontmost(self):
+        class LoginWindowFrontmostRunner(FakeRunner):
+            def run(self, command, *, input=None):
+                if command[:3] == ["xcrun", "swift", "-e"] and "NSWorkspace.shared.runningApplications" in command[-1]:
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(
+                        stdout=(
+                            "front\tloginwindow\tcom.apple.loginwindow\n"
+                            "target\t她说\tcom.intelcupid.tashuo\t35218\tfalse\tfalse\tfalse\n"
+                        )
+                    )
+                return super().run(command, input=input)
+
+        runner = LoginWindowFrontmostRunner(ocr_text="", window_name="她说")
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.doctor(capture=False)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "mac_ios_app_gui_session_not_interactive")
+        self.assertEqual(payload["activation"]["reason"], "mac_ios_app_gui_session_not_interactive")
+        self.assertFalse(any("set frontmost of process" in " ".join(command) for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_click_blocks_when_loginwindow_frontmost(self):
+        class LoginWindowFrontmostRunner(FakeRunner):
+            def run(self, command, *, input=None):
+                if command[:3] == ["xcrun", "swift", "-e"] and "NSWorkspace.shared.runningApplications" in command[-1]:
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(
+                        stdout=(
+                            "front\tloginwindow\tcom.apple.loginwindow\n"
+                            "target\t她说\tcom.intelcupid.tashuo\t35218\tfalse\tfalse\tfalse\n"
+                        )
+                    )
+                return super().run(command, input=input)
+
+        runner = LoginWindowFrontmostRunner(ocr_text="", window_name="她说")
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+        window = WindowInfo(frontmost=True, x=1093, y=111, width=288, height=541, name="她说", window_id=1713)
+
+        payload = harness._click_ratio(window, {"x": 0.63, "y": 0.86})
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "mac_ios_app_gui_session_not_interactive")
+        self.assertEqual(payload["input_backend"], "blocked_core_graphics")
+        self.assertEqual(payload["point"], {"x": 1274, "y": 576})
+        self.assertFalse(any("dating_boost_core_graphics_click" in " ".join(command) for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_capture_uses_core_graphics_window_id(self):
+        class CoreGraphicsWindowRunner(FakeRunner):
+            def run(self, command, *, input=None):
+                if command and command[0] == "osascript" and any("position of window" in item for item in command):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stderr='Can’t get window 1 of process "tashuo". Invalid index.', returncode=1)
+                if command and command[0] == "osascript" and any("to get unix id" in item for item in command):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stdout="35218\n")
+                if command[:3] == ["xcrun", "swift", "-e"] and "CGWindowListCopyWindowInfo" in command[-1]:
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stdout="1093\t111\t288\t541\t1713\t她说\n")
+                return super().run(command, input=input)
+
+        runner = CoreGraphicsWindowRunner(
+            ocr_text="推荐\nsmilewen 31\n1日内活跃\n推荐\n飞行\n消息\n我的\n",
+            window_name="她说",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.capture_window(output=Path(temp_dir) / "capture.png")
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(any(command[:4] == ["screencapture", "-x", "-l", "1713"] for command in runner.commands))
+
     def test_tashuo_mac_ios_app_launch_recovers_process_with_no_windows(self):
         class RecoverNoWindowRunner(FakeRunner):
             def __init__(self, **kwargs):
@@ -2201,6 +2314,41 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(any("radio button 3" in " ".join(command) for command in runner.commands))
         self.assertNotIn("tap_tashuo_conversation_row", [step["intent"] for step in payload["executed_steps"]])
 
+    def test_tashuo_mac_ios_prepare_message_page_uses_core_graphics_window_id_capture(self):
+        class CoreGraphicsWindowRunner(FakeRunner):
+            def run(self, command, *, input=None):
+                if command and command[0] == "osascript" and any("position of window" in item for item in command):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stderr='Can’t get window 1 of process "tashuo". Invalid index.', returncode=1)
+                if command and command[0] == "osascript" and any("to get unix id" in item for item in command):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stdout="35218\n")
+                if command[:3] == ["xcrun", "swift", "-e"] and "CGWindowListCopyWindowInfo" in command[-1]:
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stdout="1093\t111\t288\t541\t1713\t她说\n")
+                return super().run(command, input=input)
+
+        runner = CoreGraphicsWindowRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_recommend_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("prepare-message-page", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["preflight"]["window"]["window_id"], 1713)
+        self.assertTrue(any(command[:4] == ["screencapture", "-x", "-l", "1713"] for command in runner.commands))
+        self.assertFalse(any(command[:3] == ["screencapture", "-x", "-R"] for command in runner.commands))
+
     def test_tashuo_mac_ios_prepare_message_page_fallback_taps_real_messages_tab_when_ax_missing(self):
         class AxMissingRunner(FakeRunner):
             def run(self, command, *, input=None):
@@ -2427,7 +2575,6 @@ class GuiHarnessTests(unittest.TestCase):
                 current_list_png,
                 current_list_png,
                 current_list_png,
-                current_list_png,
                 _tashuo_mac_ios_app_conversation_with_messages_png(),
             ],
         )
@@ -2459,9 +2606,107 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         relocation = payload["message_list_relocation"]["message_list_location"]
         self.assertEqual(relocation["location_method"], "message_list_visual_anchor_scan")
-        self.assertAlmostEqual(relocation["tap_ratio"]["y"], 0.62, delta=0.04)
-        self.assertAlmostEqual(payload["executed_steps"][0]["tap_ratio"]["y"], 0.62, delta=0.04)
+        self.assertAlmostEqual(relocation["tap_ratio"]["y"], 0.60, delta=0.04)
+        self.assertAlmostEqual(payload["executed_steps"][0]["tap_ratio"]["y"], 0.60, delta=0.04)
         self.assertEqual(payload["executed_steps"][0]["selection_method"], "message_list_visual_anchor_scan")
+        self.assertEqual(relocation["tap_adjustment"]["reason"], "row_upper_band_guard")
+
+    def test_tashuo_mac_ios_app_open_conversation_relocates_bottom_visible_visual_anchor(self):
+        old_list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.85)
+        current_list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.85)
+        row_region = {"x1": 0.05, "y1": 0.80, "x2": 0.95, "y2": 0.90}
+        row_visual_hash = _png_average_hash(old_list_png, region=row_region)
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                current_list_png,
+                current_list_png,
+                current_list_png,
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac-ios-app")
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("dating_boost.apps.native_gui_session.time.sleep", return_value=None),
+            patch("dating_boost.apps.tashuo.native.time.sleep", return_value=None),
+        ):
+            payload = harness.run_action(
+                "open-conversation",
+                dry_run=False,
+                output_dir=Path(temp_dir),
+                tap_ratio={"x": 0.45, "y": 0.85},
+                visual_target_label="如是徧是",
+                visual_target_preview="确实，端午就该给自己开个省电…",
+                message_list_evidence={
+                    "source_state": "tashuo_chat_list",
+                    "selection_method": "message_list_visual_anchor_scan",
+                    "visual_anchor_hash": row_visual_hash,
+                    "visual_anchor_region": row_region,
+                    "tap_ratio": {"x": 0.45, "y": 0.85},
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        relocation = payload["message_list_relocation"]["message_list_location"]
+        self.assertEqual(relocation["location_method"], "message_list_visual_anchor_scan")
+        self.assertAlmostEqual(relocation["tap_ratio"]["y"], 0.85, delta=0.02)
+        self.assertAlmostEqual(payload["executed_steps"][0]["tap_ratio"]["y"], 0.85, delta=0.02)
+        self.assertFalse(relocation["tap_adjustment"]["adjusted"])
+        self.assertIsNone(relocation["tap_adjustment"]["reason"])
+        self.assertTrue(relocation["tap_adjustment"]["bottom_row_detected"])
+
+    def test_tashuo_mac_ios_app_open_conversation_clamps_noisy_bottom_anchor_tap_above_tab_bar(self):
+        old_list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.85)
+        current_list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.85)
+        row_region = {"x1": 0.05, "y1": 0.83, "x2": 0.95, "y2": 0.95}
+        row_visual_hash = _png_average_hash(old_list_png, region=row_region)
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                current_list_png,
+                current_list_png,
+                current_list_png,
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac-ios-app")
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("dating_boost.apps.native_gui_session.time.sleep", return_value=None),
+            patch("dating_boost.apps.tashuo.native.time.sleep", return_value=None),
+        ):
+            payload = harness.run_action(
+                "open-conversation",
+                dry_run=False,
+                output_dir=Path(temp_dir),
+                tap_ratio={"x": 0.45, "y": 0.891},
+                visual_target_label="如是徧是",
+                visual_target_preview="确实，端午就该给自己开个省电…",
+                message_list_evidence={
+                    "source_state": "tashuo_chat_list",
+                    "selection_method": "message_list_visual_anchor_scan",
+                    "visual_anchor_hash": row_visual_hash,
+                    "visual_anchor_region": row_region,
+                    "tap_ratio": {"x": 0.45, "y": 0.891},
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        relocation = payload["message_list_relocation"]["message_list_location"]
+        self.assertEqual(relocation["location_method"], "message_list_visual_anchor_scan")
+        self.assertGreater(relocation["raw_tap_ratio"]["y"], relocation["tap_ratio"]["y"])
+        self.assertLessEqual(relocation["tap_ratio"]["y"], 0.86)
+        self.assertTrue(relocation["tap_adjustment"]["adjusted"])
+        self.assertEqual(relocation["tap_adjustment"]["reason"], "bottom_row_safe_tap_guard")
+        self.assertTrue(relocation["tap_adjustment"]["bottom_row_detected"])
+        self.assertEqual(payload["executed_steps"][0]["tap_ratio"], relocation["tap_ratio"])
 
     def test_tashuo_mac_ios_app_open_conversation_short_circuits_when_thread_already_open(self):
         runner = FakeRunner(
@@ -2483,6 +2728,56 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["screen_state"], "tashuo_conversation")
         self.assertEqual(payload["next_host_action"], "observe_current_thread")
         self.assertNotIn("executed_steps", payload)
+
+    def test_tashuo_mac_ios_app_open_conversation_relocates_from_existing_thread_when_target_evidence_present(self):
+        old_thread_png = _tashuo_mac_ios_app_conversation_with_messages_png(accent=(92, 168, 126, 255))
+        target_thread_png = _tashuo_mac_ios_app_conversation_with_messages_png(accent=(168, 92, 126, 255))
+        old_list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.34)
+        list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.62)
+        row_region = {"x1": 0.05, "y1": 0.29, "x2": 0.95, "y2": 0.39}
+        row_visual_hash = _png_average_hash(old_list_png, region=row_region)
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                old_thread_png,
+                list_png,
+                list_png,
+                list_png,
+                target_thread_png,
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac-ios-app")
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("dating_boost.apps.native_gui_session.time.sleep", return_value=None),
+            patch("dating_boost.apps.tashuo.native.time.sleep", return_value=None),
+        ):
+            payload = harness.run_action(
+                "open-conversation",
+                dry_run=False,
+                output_dir=Path(temp_dir),
+                tap_ratio={"x": 0.45, "y": 0.34},
+                visual_target_label="小药丸儿",
+                visual_target_preview="我也比较慢热",
+                message_list_evidence={
+                    "source_state": "tashuo_chat_list",
+                    "selection_method": "message_list_visual_anchor_scan",
+                    "visual_anchor_hash": row_visual_hash,
+                    "visual_anchor_region": row_region,
+                    "visual_anchor_scan_region": {"x1": 0.0, "y1": 0.18, "x2": 1.0, "y2": 0.84},
+                    "tap_ratio": {"x": 0.45, "y": 0.34},
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertNotIn("already_at_expected_state", payload)
+        recovery = payload["message_list_relocation"]["message_list_recovery"]
+        self.assertEqual(recovery["screen_state"], "tashuo_conversation")
+        self.assertEqual(recovery["return_to_chats"]["intent"], "tap_tashuo_back_to_chats")
+        self.assertEqual(payload["executed_steps"][0]["selection_method"], "message_list_visual_anchor_scan")
 
     def test_tashuo_mac_ios_app_open_conversation_waits_before_postcondition_capture(self):
         runner = FakeRunner(
@@ -3086,6 +3381,31 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["active_tab"], "recommend")
         self.assertTrue(payload["bottom_nav_present"])
         self.assertFalse(payload["conversation_toolbar_present"])
+
+    def test_visual_tashuo_recommend_tolerates_window_id_black_margins(self):
+        source_width, source_height, source_rows = _read_test_png_pixels(_tashuo_recommend_bottom_nav_png())
+        canvas_width, canvas_height = 720, 1280
+        offset_x, offset_y = 72, 70
+        scale = 2
+        pixels = [[(0, 0, 0, 255) for _ in range(canvas_width)] for _ in range(canvas_height)]
+        for y, row in enumerate(source_rows):
+            for x, pixel in enumerate(row):
+                for dy in range(scale):
+                    for dx in range(scale):
+                        target_x = offset_x + x * scale + dx
+                        target_y = offset_y + y * scale + dy
+                        if 0 <= target_x < canvas_width and 0 <= target_y < canvas_height:
+                            pixels[target_y][target_x] = pixel
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screenshot_path = Path(temp_dir) / "tashuo-recommend-windowed.png"
+            screenshot_path.write_bytes(_png_from_pixels(pixels, canvas_width, canvas_height))
+
+            payload = classify_tashuo_screen_image(screenshot_path)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["state"], "tashuo_recommend")
+        self.assertEqual(payload["active_tab"], "recommend")
+        self.assertTrue(payload["bottom_nav_present"])
 
     def test_open_profile_launch_if_needed_combines_launch_and_profile_navigation(self):
         runner = FakeRunner(ocr_text="周三\n03\n搜索\n电话\n微信\nChrome\n")

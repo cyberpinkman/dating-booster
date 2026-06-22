@@ -27,7 +27,11 @@ class LegacyHarnessAdapter:
     ):
         self.manifest = manifest
         runtime_key = _normalize_runtime_name(runtime)
-        runtime_config = self.manifest.runtime_profiles.get(runtime_key, {}) if runtime_key is not None else {}
+        runtime_config = dict(self.manifest.runtime_profiles.get(runtime_key, {}) if runtime_key is not None else {})
+        runtime_config.setdefault("display_name", self.manifest.display_name)
+        application_path = str(runtime_config.get("application_path") or "")
+        if application_path:
+            runtime_config.setdefault("application_name", Path(application_path).stem)
         title = (
             window_title
             or str(runtime_config.get("process_name") or "")
@@ -42,7 +46,7 @@ class LegacyHarnessAdapter:
             runtime=str(runtime_config.get("backend") or runtime_key or self.manifest.backend),
         )
         self.session.harness_backend = str(runtime_config.get("backend") or runtime_key or self.manifest.backend)
-        self.session.runtime_config = dict(runtime_config)
+        self.session.runtime_config = runtime_config
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.session, name)

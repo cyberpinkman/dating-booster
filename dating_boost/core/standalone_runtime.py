@@ -286,7 +286,9 @@ class StandaloneAgentRuntime:
                 "observation_type": "thread",
                 "candidate_key": observation.get("candidate_key"),
             }
-        if draft.get("status") != "ok":
+        if draft.get("status") != "ok" and not (
+            _managed_send_mode(self.managed.status()) == "stage" and _draft_allowed_for_standalone_stage(draft)
+        ):
             return {
                 "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
                 "status": "blocked",
@@ -308,6 +310,13 @@ class StandaloneAgentRuntime:
         observation["draft"] = draft_payload
         observation["standalone_draft_generation_summary"] = draft.get("draft_generation_summary")
         observation["standalone_draft_review"] = draft.get("draft_review")
+        if draft.get("status") != "ok":
+            observation["standalone_draft_stage_override"] = {
+                "status": "ok",
+                "reason": "draft_review_allowed_for_stage",
+                "original_status": draft.get("status"),
+                "original_reason": draft.get("reason"),
+            }
         return None
 
 
@@ -337,6 +346,17 @@ def _safe_error_message(exc: Exception, *, limit: int = 500) -> str:
     if len(message) <= limit:
         return message
     return f"{message[:limit]}..."
+
+
+def _managed_send_mode(payload: dict[str, Any]) -> str | None:
+    session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
+    value = session.get("send_mode")
+    return str(value).strip() if value is not None else None
+
+
+def _draft_allowed_for_standalone_stage(draft: dict[str, Any]) -> bool:
+    review = draft.get("draft_review") if isinstance(draft.get("draft_review"), dict) else {}
+    return review.get("allowed_for_stage") is True
 
 
 def _operator_state_may_have_current_thread_continuation(state: dict[str, Any]) -> bool:

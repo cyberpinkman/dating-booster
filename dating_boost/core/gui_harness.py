@@ -130,6 +130,11 @@ class NativeGuiHarness:
 
         activate = self._activate_window()
         payload["activation"] = activate
+        if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND and activate.get("status") == "blocked":
+            reason = str(activate.get("reason") or "mac_ios_app_activation_failed")
+            if reason in {"mac_ios_app_gui_session_not_interactive", "mac_ios_app_not_active"}:
+                payload.update({"status": "blocked", "reason": reason})
+                return payload
         window = self._window_info()
         if window is None:
             reason = (
@@ -180,15 +185,18 @@ class NativeGuiHarness:
             }
         output = (output or _default_screenshot_path()).resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
-        result = self.runner.run(
-            [
+        window_id = getattr(window, "window_id", None)
+        if window_id is not None:
+            command = ["screencapture", "-x", "-l", str(window_id), str(output)]
+        else:
+            command = [
                 "screencapture",
                 "-x",
                 "-R",
                 f"{window.x},{window.y},{window.width},{window.height}",
                 str(output),
             ]
-        )
+        result = self.runner.run(command)
         if result.returncode != 0:
             return {
                 "status": "blocked",
@@ -218,15 +226,23 @@ class NativeGuiHarness:
             attempts: list[dict[str, Any]] = []
             bundle_id = str(self.runtime_config.get("bundle_id") or "").strip()
             if bundle_id:
-                app_result = self.runner.run(
-                    ["osascript", "-e", f'tell application id {_applescript_string_literal(bundle_id)} to activate']
-                )
+                app_result = self.runner.run(["open", "-b", bundle_id])
                 attempts.append({
-                    "method": "activate_application_id",
+                    "method": "open_bundle_id",
                     "bundle_id": bundle_id,
                     "status": "ok" if app_result.returncode == 0 else "blocked",
                     "stderr": _short(app_result.stderr),
                 })
+                active_probe = self._mac_ios_active_application_probe()
+                attempts.append({"method": "verify_active_application", "result": active_probe})
+                if active_probe.get("status") == "ok":
+                    return {"status": "ok", "attempts": attempts}
+                if active_probe.get("status") == "blocked":
+                    return {
+                        "status": "blocked",
+                        "reason": active_probe.get("reason") or "mac_ios_app_not_active",
+                        "attempts": attempts,
+                    }
             for attempt_index in range(6):
                 if attempt_index:
                     time.sleep(0.35)
@@ -246,6 +262,14 @@ class NativeGuiHarness:
                         "stderr": _short(frontmost_result.stderr),
                     })
                     if frontmost_result.returncode == 0:
+                        active_probe = self._mac_ios_active_application_probe()
+                        attempts.append({"method": "verify_active_application", "result": active_probe})
+                        if active_probe.get("status") == "blocked":
+                            return {
+                                "status": "blocked",
+                                "reason": active_probe.get("reason") or "mac_ios_app_not_active",
+                                "attempts": attempts,
+                            }
                         return {
                             "status": "ok",
                             "attempts": attempts,
@@ -285,6 +309,8 @@ class NativeGuiHarness:
                         return window
                 elif window is not None and _looks_like_iphone_mirroring_window(window):
                     return window
+        if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND:
+            return self._mac_ios_core_graphics_window_info(process_names)
         return None
 
     def _mac_ios_process_names(self) -> list[str]:
@@ -300,6 +326,46 @@ class NativeGuiHarness:
             if cleaned and cleaned not in unique:
                 unique.append(cleaned)
         return unique or [self.window_title]
+
+    def _mac_ios_process_pids(self, process_names: list[str]) -> list[int]:
+        bundle_id = str(self.runtime_config.get("bundle_id") or "").strip()
+        script = _mac_ios_running_application_lookup_script(bundle_id=bundle_id, candidates=process_names)
+        result = self.runner.run(["xcrun", "swift", "-e", script])
+        if result.returncode != 0:
+            return []
+        pids: list[int] = []
+        for line in result.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 4 or parts[0] != "target":
+                continue
+            try:
+                pid = int(parts[3])
+            except ValueError:
+                continue
+            if pid not in pids:
+                pids.append(pid)
+        return pids
+
+    def _mac_ios_core_graphics_window_info(self, process_names: list[str]) -> WindowInfo | None:
+        pids = self._mac_ios_process_pids(process_names)
+        script = _mac_ios_core_graphics_window_lookup_script(pids=pids, candidates=process_names)
+        result = self.runner.run(["xcrun", "swift", "-e", script])
+        if result.returncode != 0:
+            return None
+        return _parse_core_graphics_window_info(result.stdout)
+
+    def _mac_ios_active_application_probe(self) -> dict[str, Any]:
+        process_names = self._mac_ios_process_names()
+        bundle_id = str(self.runtime_config.get("bundle_id") or "").strip()
+        script = _mac_ios_running_application_lookup_script(bundle_id=bundle_id, candidates=process_names)
+        result = self.runner.run(["xcrun", "swift", "-e", script])
+        if result.returncode != 0:
+            return {
+                "status": "unknown",
+                "reason": "mac_ios_active_application_probe_failed",
+                "stderr": _short(result.stderr),
+            }
+        return _parse_mac_ios_active_application_probe(result.stdout, bundle_id=bundle_id, candidates=process_names)
 
     def _mac_ios_window_probe(self) -> dict[str, Any]:
         probes: list[dict[str, Any]] = []
@@ -339,6 +405,16 @@ class NativeGuiHarness:
     def _click_ratio(self, window: WindowInfo, ratio: dict[str, float]) -> dict[str, Any]:
         x = round(window.x + window.width * float(ratio["x"]))
         y = round(window.y + window.height * float(ratio["y"]))
+        if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND:
+            readiness = self._mac_ios_active_application_probe()
+            if readiness.get("status") == "blocked":
+                return {
+                    "status": "blocked",
+                    "reason": readiness.get("reason") or "mac_ios_app_not_active",
+                    "point": {"x": x, "y": y},
+                    "input_backend": "blocked_core_graphics",
+                    "input_readiness": readiness,
+                }
         if self._command_available("xcrun"):
             result = self._core_graphics_click(x, y)
             if result["status"] == "ok":
@@ -777,6 +853,189 @@ def _parse_mac_ios_process_probe(stdout: str) -> dict[str, Any] | None:
         "visible": match.group(2).lower() == "true",
         "window_count": int(match.group(3)),
     }
+
+
+def _parse_core_graphics_window_info(stdout: str) -> WindowInfo | None:
+    line = stdout.strip().splitlines()[0] if stdout.strip() else ""
+    parts = line.split("\t", 5)
+    if len(parts) != 6:
+        return None
+    try:
+        x = int(parts[0])
+        y = int(parts[1])
+        width = int(parts[2])
+        height = int(parts[3])
+        window_id = int(parts[4])
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return WindowInfo(
+        frontmost=True,
+        x=x,
+        y=y,
+        width=width,
+        height=height,
+        name=parts[5].strip() or "mac_ios_app",
+        window_id=window_id,
+    )
+
+
+def _parse_mac_ios_active_application_probe(
+    stdout: str,
+    *,
+    bundle_id: str,
+    candidates: list[str],
+) -> dict[str, Any]:
+    front_name = ""
+    front_bundle = ""
+    target_name = ""
+    target_bundle = ""
+    target_pid: int | None = None
+    target_active: bool | None = None
+    target_running = False
+    for line in stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3 and parts[0] == "front":
+            front_name = parts[1]
+            front_bundle = parts[2]
+        elif len(parts) >= 7 and parts[0] == "target":
+            target_running = True
+            target_name = parts[1]
+            target_bundle = parts[2]
+            try:
+                target_pid = int(parts[3])
+            except ValueError:
+                target_pid = None
+            target_active = parts[4].lower() == "true"
+    if not front_name and not front_bundle and not target_running:
+        return {"status": "unknown", "reason": "mac_ios_active_application_probe_unparsed"}
+    payload: dict[str, Any] = {
+        "frontmost_application": {
+            "name": front_name,
+            "bundle_id": front_bundle,
+        },
+        "target_application": {
+            "name": target_name,
+            "bundle_id": target_bundle,
+            "pid": target_pid,
+            "active": target_active,
+            "running": target_running,
+        },
+    }
+    if front_bundle == "com.apple.loginwindow" or front_name == "loginwindow":
+        return {
+            **payload,
+            "status": "blocked",
+            "reason": "mac_ios_app_gui_session_not_interactive",
+        }
+    if not target_running:
+        return {**payload, "status": "blocked", "reason": "mac_ios_app_process_not_found"}
+    candidate_names = {candidate.lower() for candidate in candidates if candidate}
+    target_matches_front = bool(target_bundle and target_bundle == front_bundle)
+    if not target_matches_front and target_name:
+        target_matches_front = target_name.lower() == front_name.lower() or front_name.lower() in candidate_names
+    if target_active is True and target_matches_front:
+        return {**payload, "status": "ok"}
+    return {**payload, "status": "blocked", "reason": "mac_ios_app_not_active"}
+
+
+def _swift_string_literal(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+
+
+def _mac_ios_running_application_lookup_script(*, bundle_id: str, candidates: list[str]) -> str:
+    candidate_literal = ", ".join(_swift_string_literal(candidate) for candidate in candidates if candidate)
+    bundle_literal = _swift_string_literal(bundle_id)
+    return f"""
+import AppKit
+import Foundation
+
+let targetBundleId = {bundle_literal}
+let candidates = Set([{candidate_literal}].map {{ $0.lowercased() }})
+
+func cleaned(_ value: String?) -> String {{
+    return (value ?? "").replacingOccurrences(of: "\\t", with: " ").replacingOccurrences(of: "\\n", with: " ")
+}}
+
+let front = NSWorkspace.shared.frontmostApplication
+print("front\\t\\(cleaned(front?.localizedName))\\t\\(cleaned(front?.bundleIdentifier))")
+
+for app in NSWorkspace.shared.runningApplications {{
+    let bundle = app.bundleIdentifier ?? ""
+    let name = app.localizedName ?? ""
+    let matchesBundle = !targetBundleId.isEmpty && bundle == targetBundleId
+    let matchesName = candidates.contains(name.lowercased()) || candidates.contains(bundle.lowercased())
+    if matchesBundle || matchesName {{
+        print("target\\t\\(cleaned(name))\\t\\(cleaned(bundle))\\t\\(app.processIdentifier)\\t\\(app.isActive)\\t\\(app.isHidden)\\t\\(app.isTerminated)")
+    }}
+}}
+"""
+
+
+def _mac_ios_core_graphics_window_lookup_script(*, pids: list[int], candidates: list[str]) -> str:
+    pid_literal = ", ".join(str(pid) for pid in pids)
+    candidate_literal = ", ".join(_swift_string_literal(candidate) for candidate in candidates if candidate)
+    return f"""
+import CoreGraphics
+import Foundation
+
+let targetPids = Set<Int>([{pid_literal}])
+let candidates = [{candidate_literal}].map {{ $0.lowercased() }}
+let options = CGWindowListOption(arrayLiteral: [.optionOnScreenOnly, .excludeDesktopElements])
+let windows = (CGWindowListCopyWindowInfo(options, CGWindowID(0)) as? [[String: Any]]) ?? []
+
+func intValue(_ value: Any?) -> Int {{
+    if let number = value as? NSNumber {{
+        return Int(round(number.doubleValue))
+    }}
+    if let doubleValue = value as? Double {{
+        return Int(round(doubleValue))
+    }}
+    if let intValue = value as? Int {{
+        return intValue
+    }}
+    return 0
+}}
+
+func cleaned(_ value: String) -> String {{
+    return value.replacingOccurrences(of: "\\t", with: " ").replacingOccurrences(of: "\\n", with: " ")
+}}
+
+for window in windows {{
+    let layer = intValue(window[kCGWindowLayer as String])
+    if layer != 0 {{
+        continue
+    }}
+    let pid = intValue(window[kCGWindowOwnerPID as String])
+    let owner = (window[kCGWindowOwnerName as String] as? String) ?? ""
+    let title = (window[kCGWindowName as String] as? String) ?? ""
+    let haystack = (owner + " " + title).lowercased()
+    let pidMatches = targetPids.contains(pid)
+    let nameMatches = candidates.contains {{ candidate in
+        !candidate.isEmpty && haystack.contains(candidate)
+    }}
+    if !pidMatches && !nameMatches {{
+        continue
+    }}
+    guard let bounds = window[kCGWindowBounds as String] as? [String: Any] else {{
+        continue
+    }}
+    let x = intValue(bounds["X"])
+    let y = intValue(bounds["Y"])
+    let width = intValue(bounds["Width"])
+    let height = intValue(bounds["Height"])
+    let windowNumber = intValue(window[kCGWindowNumber as String])
+    if width <= 0 || height <= 0 {{
+        continue
+    }}
+    let name = cleaned(title.isEmpty ? owner : title)
+    print("\\(x)\\t\\(y)\\t\\(width)\\t\\(height)\\t\\(windowNumber)\\t\\(name)")
+    exit(0)
+}}
+
+exit(1)
+"""
 
 
 def _mac_ios_window_failure_reason(

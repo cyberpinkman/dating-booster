@@ -63,6 +63,7 @@ def classify_tashuo_screen_image(path: Path) -> dict[str, Any]:
         pixels = _read_png_pixels(path)
     except (OSError, ValueError, zlib.error, struct.error):
         return {"status": "failed", "state": "unknown", "active_tab": "unknown", "bottom_nav_present": False}
+    pixels = _crop_tashuo_window_content(pixels)
     bottom_nav = _tashuo_bottom_nav_hint(pixels)
     bottom_nav_present = bool(bottom_nav["present"])
     conversation_toolbar = _tashuo_conversation_toolbar_hint(pixels)
@@ -98,6 +99,39 @@ def classify_tashuo_screen_image(path: Path) -> dict[str, Any]:
         "recommend_card_visual_present": recommend_visual["present"],
         "recommend_card_visual_signal": recommend_visual,
     }
+
+
+def _crop_tashuo_window_content(pixels: dict[str, Any]) -> dict[str, Any]:
+    width = int(pixels["width"])
+    height = int(pixels["height"])
+    channels = int(pixels["channels"])
+    rows = pixels["rows"]
+    min_x = width
+    min_y = height
+    max_x = -1
+    max_y = -1
+    for y, row in enumerate(rows):
+        for x in range(width):
+            offset = x * channels
+            r, g, b = row[offset : offset + 3]
+            if (int(r) + int(g) + int(b)) / 3 > 12:
+                min_x = min(min_x, x)
+                min_y = min(min_y, y)
+                max_x = max(max_x, x)
+                max_y = max(max_y, y)
+    if max_x < min_x or max_y < min_y:
+        return pixels
+    crop_width = max_x - min_x + 1
+    crop_height = max_y - min_y + 1
+    if crop_width < 80 or crop_height < 120:
+        return pixels
+    if crop_width / width > 0.985 and crop_height / height > 0.985:
+        return pixels
+    cropped_rows = [
+        row[min_x * channels : (max_x + 1) * channels]
+        for row in rows[min_y : max_y + 1]
+    ]
+    return {"width": crop_width, "height": crop_height, "channels": channels, "rows": cropped_rows}
 
 
 def combine_tashuo_screen_states(

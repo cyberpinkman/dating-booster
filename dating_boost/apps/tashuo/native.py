@@ -122,8 +122,15 @@ TASHUO_MAC_IOS_APP_OUTBOUND_VISUAL_REGION = {"x1": 0.56, "y1": 0.22, "x2": 0.98,
 TASHUO_MAC_IOS_APP_OUTBOUND_VISUAL_CHANGED_RATIO = 0.012
 TASHUO_MAC_IOS_APP_OUTBOUND_VISUAL_AVERAGE_DELTA = 4.0
 TASHUO_MAC_IOS_APP_TARGET_RELOCATION_MAX_ATTEMPTS = 3
-TASHUO_CHAT_LIST_VISUAL_ANCHOR_SCAN_REGION = {"x1": 0.0, "y1": 0.16, "x2": 1.0, "y2": 0.88}
+TASHUO_CHAT_LIST_VISUAL_ANCHOR_SCAN_REGION = {"x1": 0.0, "y1": 0.16, "x2": 1.0, "y2": 0.95}
 TASHUO_CHAT_LIST_VISUAL_ANCHOR_MAX_DISTANCE = 8
+TASHUO_CHAT_LIST_BOTTOM_NAV_TOP_RATIO = 0.90
+TASHUO_CHAT_LIST_BOTTOM_ROW_SAFE_TAP_Y = 0.86
+TASHUO_CHAT_LIST_BOTTOM_ROW_TOP_THRESHOLD = 0.80
+TASHUO_CHAT_LIST_BOTTOM_ROW_REGION_THRESHOLD = 0.93
+TASHUO_CHAT_LIST_ROW_TAP_TOP_INSET_MIN = 0.025
+TASHUO_CHAT_LIST_ROW_TAP_TOP_INSET_MAX = 0.04
+TASHUO_CHAT_LIST_ROW_TAP_TOP_INSET_FRACTION = 0.28
 
 
 def install_tashuo_session_hooks(session: Any) -> None:
@@ -297,7 +304,7 @@ def launch_tashuo_mac_ios_app(session: Any, *, dry_run: bool = False, output_dir
     if activate_payload["status"] != "ok":
         payload.update({
             "status": "blocked",
-            "reason": "mac_ios_app_activation_failed",
+            "reason": activate_payload.get("reason") or "mac_ios_app_activation_failed",
             "executed_steps": executed_steps,
         })
         return payload
@@ -551,10 +558,12 @@ def run_tashuo_action(
     if dry_run:
         return payload
     if action == "open-conversation":
-        already_open = _tashuo_already_at_open_conversation_target(session, planned_steps, output_dir=output_dir)
-        if already_open is not None:
-            payload.update(already_open)
-            return payload
+        requires_visual_relocation = _tashuo_open_conversation_requires_visual_relocation(options)
+        if not requires_visual_relocation:
+            already_open = _tashuo_already_at_open_conversation_target(session, planned_steps, output_dir=output_dir)
+            if already_open is not None:
+                payload.update(already_open)
+                return payload
         relocated = _try_tashuo_open_conversation_visual_relocation(
             session,
             payload,
@@ -564,6 +573,23 @@ def run_tashuo_action(
         if relocated is not None:
             return relocated
     return session._execute_planned_steps(payload, output_dir=output_dir)
+
+
+def _tashuo_open_conversation_requires_visual_relocation(options: dict[str, Any]) -> bool:
+    evidence = _tashuo_message_list_relocation_evidence(
+        {
+            "message_list_evidence": options.get("message_list_evidence"),
+            "selection_evidence": options.get("selection_evidence"),
+            "target_selection_evidence": options.get("target_selection_evidence"),
+            "visual_anchor_hash": options.get("visual_anchor_hash"),
+            "visual_anchor_region": options.get("visual_anchor_region"),
+            "visual_anchor_scan_region": options.get("visual_anchor_scan_region"),
+            "visual_anchor_max_hamming_distance": options.get("visual_anchor_max_hamming_distance"),
+            "tap_ratio": options.get("tap_ratio"),
+            "selection_method": options.get("selection_method"),
+        }
+    )
+    return evidence.get("status") == "ok" and evidence.get("evidence_type") == "message_list_visual_anchor"
 
 
 def _try_tashuo_open_conversation_visual_relocation(
@@ -798,7 +824,7 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
     if activate_payload["status"] != "ok":
         payload.update({
             "status": "blocked",
-            "reason": "mac_ios_app_activation_failed",
+            "reason": activate_payload.get("reason") or "mac_ios_app_activation_failed",
             "executed_steps": executed_steps,
         })
         return payload
@@ -958,15 +984,18 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
 def _capture_tashuo_visual_screen(session: Any, window: Any, *, output: Path | None = None) -> dict[str, Any]:
     output = (output or platform._default_screenshot_path()).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    result = session.runner.run(
-        [
+    window_id = getattr(window, "window_id", None)
+    if window_id is not None:
+        command = ["screencapture", "-x", "-l", str(window_id), str(output)]
+    else:
+        command = [
             "screencapture",
             "-x",
             "-R",
             f"{window.x},{window.y},{window.width},{window.height}",
             str(output),
         ]
-    )
+    result = session.runner.run(command)
     if result.returncode != 0:
         return {
             "status": "blocked",
@@ -2454,6 +2483,15 @@ def _locate_tashuo_message_list_visual_target(
             "candidate_count": candidate_count,
         }
     matched_region = best["visual_anchor_region"]
+    raw_tap_ratio = {
+        "x": max(0.0, min(1.0, tap_x)),
+        "y": max(0.0, min(1.0, float(matched_region["y1"]) + row_height * tap_y_offset)),
+    }
+    safe_tap = _safe_tashuo_message_list_visual_anchor_tap_ratio(
+        raw_tap_ratio,
+        matched_region=matched_region,
+        row_height=row_height,
+    )
     return {
         **best,
         "status": "ok",
@@ -2461,12 +2499,73 @@ def _locate_tashuo_message_list_visual_target(
         "expected_visual_anchor_hash": expected_hash,
         "visual_anchor_max_hamming_distance": max_distance,
         "candidate_count": candidate_count,
-        "tap_ratio": {
-            "x": max(0.0, min(1.0, tap_x)),
-            "y": max(0.0, min(1.0, float(matched_region["y1"]) + row_height * tap_y_offset)),
-        },
+        "tap_ratio": safe_tap["tap_ratio"],
+        "raw_tap_ratio": raw_tap_ratio,
+        "tap_adjustment": safe_tap["tap_adjustment"],
         "uses_fixed_row_index": False,
         "visual_anchor_scanned": True,
+    }
+
+
+def _safe_tashuo_message_list_visual_anchor_tap_ratio(
+    tap_ratio: dict[str, float],
+    *,
+    matched_region: dict[str, Any],
+    row_height: float,
+) -> dict[str, Any]:
+    tap_y = max(0.0, min(1.0, float(tap_ratio["y"])))
+    adjusted = False
+    reason = None
+    try:
+        region_y1 = float(matched_region["y1"])
+        region_y2 = float(matched_region["y2"])
+    except (KeyError, TypeError, ValueError):
+        region_y1 = tap_y - row_height / 2.0
+        region_y2 = tap_y + row_height / 2.0
+
+    reasons: list[str] = []
+    bottom_row = (
+        region_y1 >= TASHUO_CHAT_LIST_BOTTOM_ROW_TOP_THRESHOLD
+        or region_y2 >= TASHUO_CHAT_LIST_BOTTOM_ROW_REGION_THRESHOLD
+        or tap_y >= TASHUO_CHAT_LIST_BOTTOM_ROW_SAFE_TAP_Y
+    )
+    if bottom_row:
+        safe_y = max(0.0, min(1.0, min(tap_y, TASHUO_CHAT_LIST_BOTTOM_ROW_SAFE_TAP_Y)))
+        if safe_y < tap_y:
+            tap_y = safe_y
+            adjusted = True
+            reasons.append("bottom_row_safe_tap_guard")
+    else:
+        top_band_y = region_y1 + max(
+            TASHUO_CHAT_LIST_ROW_TAP_TOP_INSET_MIN,
+            min(TASHUO_CHAT_LIST_ROW_TAP_TOP_INSET_MAX, row_height * TASHUO_CHAT_LIST_ROW_TAP_TOP_INSET_FRACTION),
+        )
+        if top_band_y < tap_y:
+            tap_y = max(0.0, min(1.0, top_band_y))
+            adjusted = True
+            reasons.append("row_upper_band_guard")
+
+        if tap_y >= TASHUO_CHAT_LIST_BOTTOM_NAV_TOP_RATIO:
+            safe_y = min(tap_y, TASHUO_CHAT_LIST_BOTTOM_ROW_SAFE_TAP_Y)
+            if safe_y < tap_y:
+                tap_y = safe_y
+                adjusted = True
+                reasons.append("bottom_nav_overlap_guard")
+    reason = "+".join(reasons) if reasons else None
+
+    return {
+        "tap_ratio": {
+            "x": max(0.0, min(1.0, float(tap_ratio["x"]))),
+            "y": tap_y,
+        },
+        "tap_adjustment": {
+            "adjusted": adjusted,
+            "reason": reason,
+            "bottom_nav_top_ratio": TASHUO_CHAT_LIST_BOTTOM_NAV_TOP_RATIO,
+            "bottom_row_safe_tap_y": TASHUO_CHAT_LIST_BOTTOM_ROW_SAFE_TAP_Y,
+            "bottom_row_detected": bottom_row,
+            "matched_region_y2": region_y2,
+        },
     }
 
 

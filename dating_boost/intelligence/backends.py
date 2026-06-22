@@ -253,17 +253,38 @@ def _value(container: object, key: str) -> Any:
 
 
 def _load_minimax_json_object(text: str) -> dict[str, object]:
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("MiniMax structured response was not valid JSON.") from exc
+    value = _load_minimax_json_value(text)
+    if isinstance(value, str):
+        value = _load_minimax_json_value(value)
     if not isinstance(value, dict):
         raise RuntimeError(f"MiniMax structured response was not a JSON object: {type(value).__name__}")
     return dict(value)
 
 
+def _load_minimax_json_value(text: str) -> Any:
+    candidates = []
+    stripped = _strip_markdown_json_fence(_strip_think_tags(text))
+    for candidate in (text, stripped, _json_object_candidate(stripped)):
+        cleaned = candidate.strip()
+        if cleaned and cleaned not in candidates:
+            candidates.append(cleaned)
+    last_error: json.JSONDecodeError | None = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+    raise RuntimeError("MiniMax structured response was not valid JSON.") from last_error
+
+
 def _strip_think_tags(text: str) -> str:
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def _strip_markdown_json_fence(text: str) -> str:
+    stripped = text.strip()
+    match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", stripped, flags=re.DOTALL | re.IGNORECASE)
+    return match.group(1).strip() if match else stripped
 
 
 def _json_object_candidate(text: str) -> str:
