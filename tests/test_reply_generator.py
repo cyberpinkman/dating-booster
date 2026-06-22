@@ -4,8 +4,8 @@ from pathlib import Path
 
 from dating_boost.core.models import ReplyMode
 from dating_boost.intelligence.backends import BackendCapability, ScriptedBackend
-from dating_boost.intelligence.prompts import REPLY_SCHEMA
-from dating_boost.intelligence.reply_generator import generate_reply
+from dating_boost.intelligence.prompts import CONVERSATION_MOVE_VALUES, REPLY_SCHEMA
+from dating_boost.intelligence.reply_generator import generate_reply, parse_draft_response
 
 
 class ReplyGeneratorTests(unittest.TestCase):
@@ -43,6 +43,7 @@ class ReplyGeneratorTests(unittest.TestCase):
         ):
             self.assertIn(field_name, REPLY_SCHEMA["required"])
             self.assertIn(field_name, REPLY_SCHEMA["properties"])
+        self.assertEqual(REPLY_SCHEMA["properties"]["conversation_move"]["enum"], CONVERSATION_MOVE_VALUES)
         for optional_field in (
             "message_sequence",
             "strategic_delta",
@@ -56,6 +57,18 @@ class ReplyGeneratorTests(unittest.TestCase):
             "why_not_invite_now",
         ):
             self.assertIn(optional_field, REPLY_SCHEMA["properties"])
+
+    def test_parse_draft_response_normalizes_minimax_move_explanation(self):
+        payload = json.loads(Path("tests/fixtures/intelligence/scripted_reply.json").read_text(encoding="utf-8"))
+        payload["conversation_move"] = "answer_or_riff：以共鸣接住当前话题"
+        payload["naturalness_notes"] = "短句，像真人聊天"
+        payload["risk_flags"] = ""
+
+        response = parse_draft_response(payload)
+
+        self.assertEqual(response.conversation_move, "answer_or_riff")
+        self.assertEqual(response.naturalness_notes, ["短句，像真人聊天"])
+        self.assertEqual(response.risk_flags, [])
 
     def test_core_prompt_includes_strategy_and_chinese_naturalness_guidance(self):
         backend = CapturingBackend(

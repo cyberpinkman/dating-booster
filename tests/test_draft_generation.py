@@ -98,6 +98,7 @@ class DraftPromptAndGenerationTests(unittest.TestCase):
         self.assertIn("我一般会去听现场", prompt.user_prompt)
         self.assertIn("你周末一般做什么", prompt.user_prompt)
         self.assertIn("deepen_current", prompt.user_prompt)
+        self.assertIn("answerable relationship handle", prompt.user_prompt)
 
     def test_refinement_retries_when_probability_above_40(self):
         backend = ScriptedBackend(
@@ -134,6 +135,37 @@ class DraftPromptAndGenerationTests(unittest.TestCase):
 
         self.assertEqual(result.status, "ok")
         self.assertEqual(result.attempt_count, 1)
+
+    def test_initial_supplemental_prompt_is_included(self):
+        backend = ScriptedBackend([
+            _reply_payload("现场听起来挺舒服。你一般会听哪种？"),
+            _self_review(20),
+        ])
+
+        result = generate_reply_with_refinement(
+            _evidence_pack(),
+            backend=backend,
+            audit_root=Path(tempfile.mkdtemp()),
+            supplemental_prompts=["Policy revision required before staging."],
+        )
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.prompt.supplemental_prompts, ["Policy revision required before staging."])
+
+    def test_refinement_normalizes_conversation_move_in_payload(self):
+        reply = _reply_payload("哈哈那我也喜欢人少的时候出门")
+        reply["conversation_move"] = "answer_or_riff：用共鸣接住当前话题"
+        backend = ScriptedBackend([reply, _self_review(20)])
+
+        result = generate_reply_with_refinement(
+            _evidence_pack(),
+            backend=backend,
+            audit_root=Path(tempfile.mkdtemp()),
+        )
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.draft.conversation_move, "answer_or_riff")
+        self.assertEqual(result.draft_payload["conversation_move"], "answer_or_riff")
 
     def test_three_failed_self_reviews_block_generation(self):
         backend = ScriptedBackend(

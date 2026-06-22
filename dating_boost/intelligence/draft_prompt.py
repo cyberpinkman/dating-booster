@@ -91,6 +91,9 @@ def _naturalness_requirements() -> str:
             "- Do not mechanically split punctuation, stack labels, repeat known facts as hooks, or ask the match to decide after they delegated choice.",
             "- Avoid abstract planning words, survey-style A/B interrogation, and stale current-state assumptions.",
             "- The final bubble must carry the conversational push or landing handle when message_sequence is used.",
+            "- Unless the planner explicitly recommends wait, slow_down_wait, or handoff, include an answerable "
+            "relationship handle: a specific unknown detail, a small user-side self-disclosure, or a next-milestone "
+            "bridge. A pure acknowledgement such as 明白, 锁定, or 收到 is not enough for managed/staged drafts.",
         ]
     )
 

@@ -132,6 +132,7 @@ def _stage_record_extras(stage_evidence: dict[str, Any]) -> dict[str, Any]:
             "staged_text_verification",
             "stage_attempt_status",
             "screenshot_ref",
+            "target_verification",
         )
         if key in stage_evidence
     }

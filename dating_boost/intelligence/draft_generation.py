@@ -12,7 +12,7 @@ from dating_boost.core.draft_generation_audit import DraftGenerationAuditReposit
 from dating_boost.intelligence.backends import ModelBackend
 from dating_boost.intelligence.draft_prompt import DraftGenerationPrompt, build_draft_generation_prompt
 from dating_boost.intelligence.prompts import REPLY_SCHEMA
-from dating_boost.intelligence.reply_generator import DraftResponse, parse_draft_response
+from dating_boost.intelligence.reply_generator import DraftResponse, normalize_draft_payload, parse_draft_response
 
 
 DRAFT_SELF_REVIEW_SCHEMA_VERSION = 1
@@ -73,11 +73,12 @@ def generate_reply_with_refinement(
     *,
     backend: ModelBackend,
     audit_root: Path | None,
+    supplemental_prompts: list[str] | None = None,
     threshold: int = 40,
     max_attempts: int = 3,
 ) -> DraftGenerationResult:
     if evidence_pack.status != "ok":
-        prompt = build_draft_generation_prompt(evidence_pack)
+        prompt = build_draft_generation_prompt(evidence_pack, supplemental_prompts=supplemental_prompts)
         return _result(
             evidence_pack=evidence_pack,
             prompt=prompt,
@@ -89,7 +90,7 @@ def generate_reply_with_refinement(
             audit_root=audit_root,
         )
 
-    supplemental_prompts: list[str] = []
+    active_supplemental_prompts: list[str] = [str(item) for item in (supplemental_prompts or []) if str(item).strip()]
     attempts: list[dict[str, Any]] = []
     last_prompt = build_draft_generation_prompt(evidence_pack)
     last_draft: DraftResponse | None = None
@@ -98,13 +99,14 @@ def generate_reply_with_refinement(
     for _attempt_index in range(1, max_attempts + 1):
         last_prompt = build_draft_generation_prompt(
             evidence_pack,
-            supplemental_prompts=supplemental_prompts,
+            supplemental_prompts=active_supplemental_prompts,
         )
         last_payload = backend.generate_structured(
             system_prompt=last_prompt.system_prompt,
             user_prompt=last_prompt.user_prompt,
             schema=REPLY_SCHEMA,
         )
+        last_payload = normalize_draft_payload(last_payload)
         last_draft = parse_draft_response(last_payload)
         self_review = _parse_self_review(
             backend.generate_structured(
@@ -130,7 +132,7 @@ def generate_reply_with_refinement(
                 audit_root=audit_root,
             )
         supplemental = str(self_review.get("supplemental_prompt") or "").strip()
-        supplemental_prompts.append(
+        active_supplemental_prompts.append(
             supplemental
             or "Rewrite to sound like a real private-chat message: shorter, more grounded in the latest inbound turn, and less like a summary."
         )

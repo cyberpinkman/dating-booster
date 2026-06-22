@@ -26,6 +26,7 @@ class TaShuoPerceptionTests(unittest.TestCase):
                     "rows": [
                         {
                             "tap_ratio": {"x": 0.50, "y": 0.42},
+                            "visual_anchor_region": {"x1": 0.12, "y1": 0.37, "x2": 0.88, "y2": 0.49},
                             "visible_name": "Ada",
                             "latest_preview": "刚刚发来一条消息",
                             "visual_anchor_hash": "7f83a1d2",
@@ -38,6 +39,7 @@ class TaShuoPerceptionTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["rows"][0]["candidate_key"], "tashuo_visual_7f83a1d2")
         self.assertEqual(payload["rows"][0]["tap_ratio"], {"x": 0.5, "y": 0.42})
+        self.assertEqual(payload["rows"][0]["visual_anchor_region"], {"x1": 0.12, "y1": 0.37, "x2": 0.88, "y2": 0.49})
 
     def test_message_list_blocks_without_tap_ratio(self):
         with tempfile.TemporaryDirectory() as temp_dir:

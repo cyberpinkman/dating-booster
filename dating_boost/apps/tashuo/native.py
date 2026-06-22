@@ -555,7 +555,106 @@ def run_tashuo_action(
         if already_open is not None:
             payload.update(already_open)
             return payload
+        relocated = _try_tashuo_open_conversation_visual_relocation(
+            session,
+            payload,
+            options=options,
+            output_dir=output_dir,
+        )
+        if relocated is not None:
+            return relocated
     return session._execute_planned_steps(payload, output_dir=output_dir)
+
+
+def _try_tashuo_open_conversation_visual_relocation(
+    session: Any,
+    payload: dict[str, Any],
+    *,
+    options: dict[str, Any],
+    output_dir: Path | None,
+) -> dict[str, Any] | None:
+    evidence = _tashuo_message_list_relocation_evidence(
+        {
+            "message_list_evidence": options.get("message_list_evidence"),
+            "selection_evidence": options.get("selection_evidence"),
+            "target_selection_evidence": options.get("target_selection_evidence"),
+            "visual_anchor_hash": options.get("visual_anchor_hash"),
+            "visual_anchor_region": options.get("visual_anchor_region"),
+            "visual_anchor_scan_region": options.get("visual_anchor_scan_region"),
+            "visual_anchor_max_hamming_distance": options.get("visual_anchor_max_hamming_distance"),
+            "tap_ratio": options.get("tap_ratio"),
+            "selection_method": options.get("selection_method"),
+        }
+    )
+    if evidence.get("status") != "ok" or evidence.get("evidence_type") != "message_list_visual_anchor":
+        return None
+    window = session._window_info()
+    if window is None:
+        return {
+            **payload,
+            "status": "blocked",
+            "reason": "target_relocation_window_missing",
+            **_tashuo_window_missing_payload(session),
+        }
+    list_result = _ensure_tashuo_message_list_for_relocation(
+        session,
+        window,
+        output_dir=output_dir,
+        attempt_index=1,
+    )
+    relocation: dict[str, Any] = {
+        "status": list_result.get("status"),
+        "message_list_recovery": list_result,
+    }
+    if list_result.get("status") != "ok":
+        relocation["reason"] = list_result.get("reason") or "target_relocation_message_list_not_verified"
+        return {
+            **payload,
+            "status": "blocked",
+            "reason": relocation["reason"],
+            "message_list_relocation": relocation,
+        }
+    list_screen = list_result.get("screen_payload") if isinstance(list_result.get("screen_payload"), dict) else {}
+    location = _locate_tashuo_message_list_visual_target(list_screen, evidence)
+    relocation["message_list_location"] = location
+    if location.get("status") != "ok":
+        relocation["status"] = "blocked"
+        relocation["reason"] = location.get("reason") or "target_relocation_visual_anchor_not_found"
+        return {
+            **payload,
+            "status": "blocked",
+            "reason": relocation["reason"],
+            "message_list_relocation": relocation,
+        }
+    tap_ratio = location.get("tap_ratio") if isinstance(location.get("tap_ratio"), dict) else None
+    if tap_ratio is None:
+        relocation["status"] = "blocked"
+        relocation["reason"] = "target_relocation_tap_ratio_unavailable"
+        return {
+            **payload,
+            "status": "blocked",
+            "reason": relocation["reason"],
+            "message_list_relocation": relocation,
+        }
+    relocation["status"] = "ok"
+    relocated_steps = list(payload.get("planned_steps") or [])
+    if relocated_steps:
+        relocated_steps[0] = {
+            **relocated_steps[0],
+            "tap_ratio": _copy_tap_ratio(tap_ratio),
+            "selection_method": "message_list_visual_anchor_scan",
+            "message_list_location": location,
+        }
+    result = session._execute_planned_steps(
+        {
+            **payload,
+            "planned_steps": relocated_steps,
+            "message_list_relocation": relocation,
+        },
+        output_dir=output_dir,
+    )
+    result["message_list_relocation"] = relocation
+    return result
 
 
 def _tashuo_already_at_open_conversation_target(

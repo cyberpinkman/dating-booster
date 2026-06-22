@@ -8,7 +8,7 @@ from typing import Any, Mapping
 
 from dating_boost.core.models import Divergence, ReplyMode
 from dating_boost.intelligence.backends import ModelBackend
-from dating_boost.intelligence.prompts import REPLY_SCHEMA
+from dating_boost.intelligence.prompts import CONVERSATION_MOVE_VALUES, REPLY_SCHEMA
 
 
 @dataclass(frozen=True)
@@ -97,6 +97,7 @@ def _build_user_prompt(context_pack: Mapping[str, Any], reply_mode: ReplyMode) -
 
 
 def parse_draft_response(payload: Mapping[str, object]) -> DraftResponse:
+    payload = normalize_draft_payload(payload)
     required = tuple(REPLY_SCHEMA["required"])
     missing = [key for key in required if key not in payload]
     if missing:
@@ -118,6 +119,42 @@ def parse_draft_response(payload: Mapping[str, object]) -> DraftResponse:
         persona_divergence=_require_divergence(payload, "persona_divergence"),
         stance_divergence=_require_divergence(payload, "stance_divergence"),
     )
+
+
+def normalize_draft_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    normalized = dict(payload)
+    if "conversation_move" in normalized:
+        normalized["conversation_move"] = _normalize_conversation_move(normalized["conversation_move"])
+    for field in ("naturalness_notes", "risk_flags", "missing_info", "used_user_material_ids", "message_sequence"):
+        if field in normalized:
+            normalized[field] = _normalize_string_list_value(normalized[field], field)
+    return normalized
+
+
+def _normalize_conversation_move(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Reply generation field 'conversation_move' must be a string.")
+    text = value.strip()
+    allowed = set(CONVERSATION_MOVE_VALUES)
+    if text in allowed:
+        return text
+    prefix = text.replace("：", ":", 1).split(":", 1)[0].strip()
+    if prefix in allowed:
+        return prefix
+    for move in CONVERSATION_MOVE_VALUES:
+        if text.startswith(move):
+            return move
+    allowed_text = ", ".join(CONVERSATION_MOVE_VALUES)
+    raise ValueError(f"Reply generation field 'conversation_move' must be one of: {allowed_text}.")
+
+
+def _normalize_string_list_value(value: object, field: str) -> list[str]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    raise ValueError(f"Reply generation field '{field}' must be a list of strings.")
 
 
 def _require_string(payload: Mapping[str, object], key: str) -> str:

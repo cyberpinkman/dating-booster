@@ -249,19 +249,45 @@ dating-boost managed-session run --wait --data-dir .local/dating-boost --json
 
 For Codex, Claude Code, OpenClaw, and Hermes, host-native remains the default route. Use `standalone-session` only when the user explicitly asks to run Dating Booster's local standalone agent runtime.
 
-Primary standalone mode is TaShuo mac-ios-app stage-first:
+Primary standalone mode is TaShuo mac-ios-app stage-first with MiniMax Coding Plan:
 
 ```bash
+export MINIMAX_API_KEY="<coding-plan-subscription-key>"
 dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
-DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization auth.json --app-id tashuo --runtime mac-ios-app --send-mode stage --observation-source live-gui --vision-backend openai --backend openai --json
-DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
-DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session status --data-dir .local/dating-boost --json
+python3 scripts/tashuo_mac_ios_standalone_doctor.py --data-dir .local/dating-boost --json
+DATING_BOOST_KEY_PROVIDER=local python3 scripts/tashuo_mac_ios_standalone_smoke.py --data-dir .local/dating-boost --authorization auth.json --json
 ```
 
-TaShuo standalone stage-only smoke:
+Stage-only `auth.json` must allow managed stage work item creation while disabling live send:
+
+```json
+{
+  "schema_version": 1,
+  "authorization_id": "auth_tashuo_standalone_stage",
+  "app_id": "tashuo",
+  "scope": "send_chat_messages",
+  "allowed_actions": ["send_message"],
+  "allowed_match_ids": [],
+  "goal_ids": [],
+  "autonomous_send": true,
+  "autonomous_nudge": false,
+  "live_send": false,
+  "requires_post_action_verification": true,
+  "quiet_hours": [],
+  "created_at": "2026-06-22T00:00:00Z",
+  "expires_at": "2099-01-01T00:00:00Z",
+  "revoked_at": null
+}
+```
+
+MiniMax Coding Plan is the default standalone TaShuo smoke backend and vision backend through the MiniMax China OpenAI-compatible endpoint, matching the local Hermes `minimax-cn` route. Put the Coding Plan subscription key in `.env` or an environment variable; standalone session state stores only the env var name. A successful smoke returns `status=ok`, `reason=tashuo_standalone_stage_smoke_complete`, and final tick `stage_recorded`. Durable proof is in `audit/stage_results.jsonl`: `stage_attempt_status=completed`, `staged_text_verified=true`, `staged_text_verification.status=verified`, and `target_verification.status=ok`.
+
+Manual standalone start, if not using the smoke wrapper:
 
 ```bash
-DATING_BOOST_KEY_PROVIDER=local python3 scripts/tashuo_mac_ios_standalone_smoke.py --authorization auth.json --vision-backend openai --backend openai --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization auth.json --app-id tashuo --runtime mac-ios-app --send-mode stage --observation-source live-gui --vision-backend minimax --backend minimax --model MiniMax-M3 --vision-model MiniMax-M3 --minimax-api-key-env MINIMAX_API_KEY --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session status --data-dir .local/dating-boost --json
 ```
 
 Fixture and cross-app development can still use the Tinder scripted path:

@@ -28,6 +28,17 @@ MESSAGE_LIST_SCHEMA = {
                         "required": ["x", "y"],
                         "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
                     },
+                    "visual_anchor_region": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["x1", "y1", "x2", "y2"],
+                        "properties": {
+                            "x1": {"type": "number"},
+                            "y1": {"type": "number"},
+                            "x2": {"type": "number"},
+                            "y2": {"type": "number"},
+                        },
+                    },
                     "visible_name": {"type": "string"},
                     "latest_preview": {"type": "string"},
                     "visual_anchor_hash": {"type": "string"},
@@ -69,8 +80,8 @@ def analyze_tashuo_message_list(observation: dict[str, Any], *, backend: VisionB
     if screen_path is None:
         return _blocked("screen_path_required_for_tashuo_message_list_perception")
     result = backend.analyze_image_structured(
-        "Analyze the TaShuo message list screenshot. Return only visible chat rows with precise tap ratios.",
-        "Extract candidate rows. Do not infer hidden rows. If no clear row exists, return an empty rows array.",
+        "Analyze the TaShuo message list screenshot. Return only visible chat rows with precise tap ratios and row visual anchor regions.",
+        "Extract candidate rows. Include visual_anchor_region as normalized x1/y1/x2/y2 bounds for the visible row anchor. Do not infer hidden rows. If no clear row exists, return an empty rows array.",
         screen_path,
         MESSAGE_LIST_SCHEMA,
     )
@@ -129,10 +140,15 @@ def _normalize_row(raw: Any) -> dict[str, Any]:
     ratio = _normalize_tap_ratio(tap_ratio)
     if ratio is None:
         return _blocked("tashuo_message_row_tap_ratio_invalid")
+    region = None
+    if "visual_anchor_region" in raw:
+        region = _normalize_visual_anchor_region(raw.get("visual_anchor_region"))
+        if region is None:
+            return _blocked("tashuo_message_row_visual_anchor_region_invalid")
     anchor = str(raw.get("visual_anchor_hash") or "").strip()
     if not anchor:
         anchor = _row_hash(raw)
-    return {
+    row = {
         "candidate_key": f"tashuo_visual_{anchor}",
         "tap_ratio": ratio,
         "visible_name": str(raw.get("visible_name") or "").strip() or None,
@@ -140,6 +156,9 @@ def _normalize_row(raw: Any) -> dict[str, Any]:
         "visual_anchor_hash": anchor,
         "confidence": str(raw.get("confidence") or "medium"),
     }
+    if region is not None:
+        row["visual_anchor_region"] = region
+    return row
 
 
 def _normalize_tap_ratio(tap_ratio: dict[str, Any]) -> dict[str, float] | None:
@@ -151,6 +170,21 @@ def _normalize_tap_ratio(tap_ratio: dict[str, Any]) -> dict[str, float] | None:
     if not (0 <= x <= 1 and 0 <= y <= 1):
         return None
     return {"x": round(x, 4), "y": round(y, 4)}
+
+
+def _normalize_visual_anchor_region(raw: Any) -> dict[str, float] | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        x1 = float(raw["x1"])
+        y1 = float(raw["y1"])
+        x2 = float(raw["x2"])
+        y2 = float(raw["y2"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
+        return None
+    return {"x1": round(x1, 4), "y1": round(y1, 4), "x2": round(x2, 4), "y2": round(y2, 4)}
 
 
 def _screen_path(observation: dict[str, Any]) -> Path | None:

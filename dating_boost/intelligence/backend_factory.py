@@ -4,7 +4,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from dating_boost.intelligence.backends import ModelBackend, OpenAIBackend, ScriptedBackend
+from dating_boost.intelligence.backends import (
+    MINIMAX_DEFAULT_API_KEY_ENV,
+    MINIMAX_DEFAULT_BASE_URL,
+    MINIMAX_DEFAULT_MODEL,
+    MiniMaxBackend,
+    ModelBackend,
+    OpenAIBackend,
+    ScriptedBackend,
+)
 
 
 def create_model_backend(config: dict[str, Any]) -> ModelBackend:
@@ -22,4 +30,10 @@ def create_model_backend(config: dict[str, Any]) -> ModelBackend:
     if backend_type == "openai":
         model = str(config.get("model") or "gpt-4.1-mini")
         return OpenAIBackend(model=model)
+    if backend_type == "minimax":
+        return MiniMaxBackend(
+            model=str(config.get("model") or MINIMAX_DEFAULT_MODEL),
+            base_url=str(config.get("base_url") or MINIMAX_DEFAULT_BASE_URL),
+            api_key_env=str(config.get("api_key_env") or MINIMAX_DEFAULT_API_KEY_ENV),
+        )
     raise ValueError(f"unsupported_model_backend:{backend_type}")

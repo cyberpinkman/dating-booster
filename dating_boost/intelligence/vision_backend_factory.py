@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from dating_boost.intelligence.vision_backends import OpenAIVisionBackend, ScriptedVisionBackend, VisionBackend
+from dating_boost.intelligence.backends import MINIMAX_DEFAULT_API_KEY_ENV, MINIMAX_DEFAULT_BASE_URL, MINIMAX_DEFAULT_MODEL
+from dating_boost.intelligence.vision_backends import MiniMaxVisionBackend, OpenAIVisionBackend, ScriptedVisionBackend, VisionBackend
 
 
 def create_vision_backend(config: dict[str, Any]) -> VisionBackend:
@@ -21,4 +22,10 @@ def create_vision_backend(config: dict[str, Any]) -> VisionBackend:
         raise ValueError("scripted_vision_backend_output_must_be_object_or_array")
     if backend_type == "openai":
         return OpenAIVisionBackend(model=str(config.get("model") or "gpt-4.1-mini"))
+    if backend_type == "minimax":
+        return MiniMaxVisionBackend(
+            model=str(config.get("model") or MINIMAX_DEFAULT_MODEL),
+            base_url=str(config.get("base_url") or MINIMAX_DEFAULT_BASE_URL),
+            api_key_env=str(config.get("api_key_env") or MINIMAX_DEFAULT_API_KEY_ENV),
+        )
     raise ValueError(f"unsupported_vision_backend:{backend_type}")

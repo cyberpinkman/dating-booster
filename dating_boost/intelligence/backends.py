@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from copy import deepcopy
 from collections.abc import Collection, Mapping
 from enum import Enum
 from typing import Any, Protocol
+
+
+MINIMAX_DEFAULT_BASE_URL = "https://api.minimaxi.com/v1"
+MINIMAX_GLOBAL_BASE_URL = "https://api.minimax.io/v1"
+MINIMAX_DEFAULT_MODEL = "MiniMax-M3"
+MINIMAX_DEFAULT_API_KEY_ENV = "MINIMAX_API_KEY"
+MINIMAX_STRUCTURED_TOOL_NAME = "emit_structured_response"
 
 
 class BackendCapability(str, Enum):
@@ -103,6 +112,85 @@ class OpenAIBackend:
         return parsed
 
 
+class MiniMaxBackend:
+    """MiniMax OpenAI-compatible backend for Coding/Token Plan keys.
+
+    MiniMax M-series models do not provide a stable schema-constrained JSON
+    mode across all OpenAI-compatible surfaces, so structured output is
+    recovered through a forced function call whose parameters are the requested
+    JSON schema.
+    """
+
+    def __init__(
+        self,
+        model: str = MINIMAX_DEFAULT_MODEL,
+        *,
+        base_url: str = MINIMAX_DEFAULT_BASE_URL,
+        api_key_env: str = MINIMAX_DEFAULT_API_KEY_ENV,
+        api_key: str | None = None,
+        client: Any | None = None,
+    ):
+        self._model = model or MINIMAX_DEFAULT_MODEL
+        self._base_url = base_url or MINIMAX_DEFAULT_BASE_URL
+        self._api_key_env = api_key_env or MINIMAX_DEFAULT_API_KEY_ENV
+        if client is not None:
+            self._client = client
+            return
+
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError(
+                "MiniMaxBackend requires the optional OpenAI SDK. Install with "
+                "`pip install 'dating-booster[openai]'` or `pip install 'openai>=2,<3'`."
+            ) from exc
+
+        resolved_api_key = api_key or os.environ.get(self._api_key_env)
+        if not resolved_api_key and self._api_key_env == MINIMAX_DEFAULT_API_KEY_ENV:
+            resolved_api_key = os.environ.get("MINIMAX_CN_API_KEY")
+        if not resolved_api_key and self._api_key_env == MINIMAX_DEFAULT_API_KEY_ENV:
+            resolved_api_key = os.environ.get("MINIMAX_SUBSCRIPTION_KEY")
+        if not resolved_api_key:
+            raise RuntimeError(f"MiniMaxBackend requires {self._api_key_env}, MINIMAX_CN_API_KEY, or MINIMAX_SUBSCRIPTION_KEY.")
+        self._client = OpenAI(api_key=resolved_api_key, base_url=self._base_url)
+
+    @property
+    def capabilities(self) -> Collection[BackendCapability]:
+        return frozenset({BackendCapability.GENERATE_STRUCTURED})
+
+    def generate_structured(self, system_prompt: str, user_prompt: str, schema: Mapping[str, object]) -> dict[str, object]:
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": MINIMAX_STRUCTURED_TOOL_NAME,
+                        "description": "Return the final structured JSON object for the Dating Booster draft workflow.",
+                        "parameters": dict(schema),
+                    },
+                }
+            ],
+            tool_choice={"type": "function", "function": {"name": MINIMAX_STRUCTURED_TOOL_NAME}},
+            extra_body=_minimax_extra_body(self._model),
+        )
+        return _extract_minimax_tool_payload(response)
+
+    def _extra_body(self) -> dict[str, object]:
+        return _minimax_extra_body(self._model)
+
+
+def _minimax_extra_body(model: str) -> dict[str, object]:
+    extra_body: dict[str, object] = {"thinking": {"type": "disabled"}}
+    if str(model or "").strip().lower() in {"minimax-m3", "minimax/minimax-m3"}:
+        extra_body["reasoning_split"] = True
+    return extra_body
+
+
 def _extract_parsed_response(response: object) -> dict[str, object]:
     output_parsed = getattr(response, "output_parsed", None)
     if output_parsed is not None:
@@ -135,6 +223,58 @@ def _extract_parsed_response(response: object) -> dict[str, object]:
                     return _load_json_object(text)
 
     raise RuntimeError("OpenAI response did not contain parsed structured output.")
+
+
+def _extract_minimax_tool_payload(response: object) -> dict[str, object]:
+    choices = _value(response, "choices")
+    if isinstance(choices, list) and choices:
+        message = _value(choices[0], "message")
+        tool_calls = _value(message, "tool_calls")
+        if isinstance(tool_calls, list):
+            for tool_call in tool_calls:
+                function = _value(tool_call, "function")
+                if _value(function, "name") != MINIMAX_STRUCTURED_TOOL_NAME:
+                    continue
+                arguments = _value(function, "arguments")
+                if isinstance(arguments, str) and arguments.strip():
+                    return _load_minimax_json_object(arguments)
+
+        content = _value(message, "content")
+        if isinstance(content, str) and content.strip():
+            return _load_minimax_json_object(_json_object_candidate(_strip_think_tags(content)))
+
+    raise RuntimeError("MiniMax structured response did not contain a valid structured payload.")
+
+
+def _value(container: object, key: str) -> Any:
+    if isinstance(container, Mapping):
+        return container.get(key)
+    return getattr(container, key, None)
+
+
+def _load_minimax_json_object(text: str) -> dict[str, object]:
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("MiniMax structured response was not valid JSON.") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError(f"MiniMax structured response was not a JSON object: {type(value).__name__}")
+    return dict(value)
+
+
+def _strip_think_tags(text: str) -> str:
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def _json_object_candidate(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start >= 0 and end > start:
+        return stripped[start : end + 1]
+    return stripped
 
 
 def _coerce_to_dict(value: object) -> dict[str, object]:

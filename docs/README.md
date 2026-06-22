@@ -109,12 +109,12 @@ four axes that should not be mixed in one-off patches:
   恢复和 send mode 检查。
 - Standalone session: `dating-boost standalone-session` consumes
   managed-session/operator work without a host agent. Primary mode is TaShuo
-  mac-ios-app live GUI observation with stage-only output:
+  mac-ios-app live GUI observation with MiniMax-backed stage-only output:
   ```bash
+  export MINIMAX_API_KEY="<coding-plan-subscription-key>"
   dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
-  DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization auth.json --app-id tashuo --runtime mac-ios-app --send-mode stage --observation-source live-gui --vision-backend openai --backend openai --json
-  DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
-  DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session status --data-dir .local/dating-boost --json
+  python3 scripts/tashuo_mac_ios_standalone_doctor.py --data-dir .local/dating-boost --json
+  DATING_BOOST_KEY_PROVIDER=local python3 scripts/tashuo_mac_ios_standalone_smoke.py --data-dir .local/dating-boost --authorization auth.json --json
   ```
   Tinder/Bumble/WeChat and scripted fixtures remain cross-app development
   paths until their standalone providers graduate.

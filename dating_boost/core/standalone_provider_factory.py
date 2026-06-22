@@ -67,7 +67,7 @@ def build_standalone_runtime_ports(root: Path, session: dict[str, Any]) -> dict[
             "harness_factory": _harness_factory,
             "action_executor": StandaloneManagedGuiSendExecutor(root)
             if send_mode == "live"
-            else TaShuoMacIosStageExecutor(root=root, output_dir=output_dir),
+            else TaShuoMacIosStageExecutor(root=root, output_dir=output_dir, vision_backend=vision_backend),
             "output_dir": str(output_dir),
         }
 

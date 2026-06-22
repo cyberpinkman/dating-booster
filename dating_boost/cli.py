@@ -80,7 +80,12 @@ from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.storage import StorageError
 from dating_boost.core.support import SupportLogRepository, classify_text_topics, context_source_manifest
 from dating_boost.intelligence.backend_factory import create_model_backend
-from dating_boost.intelligence.backends import ModelBackend
+from dating_boost.intelligence.backends import (
+    MINIMAX_DEFAULT_API_KEY_ENV,
+    MINIMAX_DEFAULT_BASE_URL,
+    MINIMAX_DEFAULT_MODEL,
+    ModelBackend,
+)
 from dating_boost.intelligence.draft_generation import DraftGenerationResult, generate_reply_with_refinement
 from dating_boost.intelligence.reply_generator import DraftResponse
 from dating_boost.evals.runner import run_conversation_eval, run_memory_eval, run_memory_review_eval
@@ -550,9 +555,11 @@ def main(argv: list[str] | None = None) -> int:
     draft_parser.add_argument("--data-dir", required=True, type=Path)
     draft_parser.add_argument("--match-id", required=True)
     draft_parser.add_argument("--mode", required=True, choices=[mode.value for mode in ReplyMode])
-    draft_parser.add_argument("--backend", choices=["openai", "scripted"])
-    draft_parser.add_argument("--model", default="gpt-4.1-mini")
+    draft_parser.add_argument("--backend", choices=["openai", "scripted", "minimax"])
+    draft_parser.add_argument("--model")
     draft_parser.add_argument("--scripted-backend-output", type=Path)
+    draft_parser.add_argument("--minimax-base-url", default=MINIMAX_DEFAULT_BASE_URL)
+    draft_parser.add_argument("--minimax-api-key-env", default=MINIMAX_DEFAULT_API_KEY_ENV)
     draft_parser.add_argument("--debug-context", action="store_true")
     draft_parser.add_argument("--draft-kind", choices=["reply", "opener"], default="reply")
     draft_parser.add_argument("--reactivation-requested", action="store_true")
@@ -826,11 +833,13 @@ def main(argv: list[str] | None = None) -> int:
     standalone_start_parser.add_argument("--observation-source", choices=["fixture", "live-gui"], default="live-gui")
     standalone_start_parser.add_argument("--observation-fixture-dir", type=Path)
     standalone_start_parser.add_argument("--output-dir", type=Path)
-    standalone_start_parser.add_argument("--backend", choices=["scripted", "openai"], default="scripted")
-    standalone_start_parser.add_argument("--model", default="gpt-4.1-mini")
+    standalone_start_parser.add_argument("--backend", choices=["scripted", "openai", "minimax"], default="scripted")
+    standalone_start_parser.add_argument("--model")
     standalone_start_parser.add_argument("--scripted-backend-output", type=Path)
-    standalone_start_parser.add_argument("--vision-backend", choices=["scripted", "openai"])
-    standalone_start_parser.add_argument("--vision-model", default="gpt-4.1-mini")
+    standalone_start_parser.add_argument("--minimax-base-url", default=MINIMAX_DEFAULT_BASE_URL)
+    standalone_start_parser.add_argument("--minimax-api-key-env", default=MINIMAX_DEFAULT_API_KEY_ENV)
+    standalone_start_parser.add_argument("--vision-backend", choices=["scripted", "openai", "minimax"])
+    standalone_start_parser.add_argument("--vision-model")
     standalone_start_parser.add_argument("--scripted-vision-output", type=Path)
     standalone_start_parser.add_argument("--scan-interval", type=int, default=120)
     standalone_start_parser.add_argument("--config-confirm")
@@ -3487,6 +3496,14 @@ def _standalone_observation_source_payload(args: argparse.Namespace) -> dict[str
             if not path.is_file():
                 return {"schema_version": 1, "status": "blocked", "reason": "scripted_vision_output_not_found"}
             vision_backend = {"type": "scripted", "path": str(path)}
+        elif args.vision_backend == "openai":
+            if args.scripted_vision_output is not None:
+                return {
+                    "schema_version": 1,
+                    "status": "blocked",
+                    "reason": "scripted_vision_output_only_for_scripted_vision_backend",
+                }
+            vision_backend = {"type": "openai", "model": args.vision_model or "gpt-4.1-mini"}
         else:
             if args.scripted_vision_output is not None:
                 return {
@@ -3494,7 +3511,12 @@ def _standalone_observation_source_payload(args: argparse.Namespace) -> dict[str
                     "status": "blocked",
                     "reason": "scripted_vision_output_only_for_scripted_vision_backend",
                 }
-            vision_backend = {"type": "openai", "model": args.vision_model}
+            vision_backend = {
+                "type": "minimax",
+                "model": args.vision_model or MINIMAX_DEFAULT_MODEL,
+                "base_url": args.minimax_base_url or MINIMAX_DEFAULT_BASE_URL,
+                "api_key_env": args.minimax_api_key_env or MINIMAX_DEFAULT_API_KEY_ENV,
+            }
         source: dict[str, Any] = {
             "type": "live_gui",
             "app_id": args.app_id,
@@ -3526,7 +3548,18 @@ def _standalone_backend_payload(args: argparse.Namespace) -> dict[str, Any]:
         }
     if args.scripted_backend_output is not None:
         return {"schema_version": 1, "status": "blocked", "reason": "scripted_backend_output_only_for_scripted_backend"}
-    return {"schema_version": 1, "status": "ok", "backend": {"type": args.backend, "model": args.model}}
+    if args.backend == "minimax":
+        return {
+            "schema_version": 1,
+            "status": "ok",
+            "backend": {
+                "type": "minimax",
+                "model": args.model or MINIMAX_DEFAULT_MODEL,
+                "base_url": args.minimax_base_url or MINIMAX_DEFAULT_BASE_URL,
+                "api_key_env": args.minimax_api_key_env or MINIMAX_DEFAULT_API_KEY_ENV,
+            },
+        }
+    return {"schema_version": 1, "status": "ok", "backend": {"type": args.backend, "model": args.model or "gpt-4.1-mini"}}
 
 
 def _handle_operator_session_start(args: argparse.Namespace) -> int:
@@ -3653,7 +3686,16 @@ def _select_backend(args: argparse.Namespace) -> ModelBackend:
         return create_model_backend({"type": "scripted", "path": str(args.scripted_backend_output)})
     if args.scripted_backend_output is not None:
         raise ValueError("--scripted-backend-output can only be used with --backend scripted")
-    return create_model_backend({"type": "openai", "model": args.model})
+    if backend_name == "minimax":
+        return create_model_backend(
+            {
+                "type": "minimax",
+                "model": args.model or MINIMAX_DEFAULT_MODEL,
+                "base_url": args.minimax_base_url or MINIMAX_DEFAULT_BASE_URL,
+                "api_key_env": args.minimax_api_key_env or MINIMAX_DEFAULT_API_KEY_ENV,
+            }
+        )
+    return create_model_backend({"type": "openai", "model": args.model or "gpt-4.1-mini"})
 
 
 def _handle_feedback(args: argparse.Namespace) -> int:

@@ -2415,6 +2415,54 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(step["selection_method"], "host_visual_tap_ratio")
         self.assertNotIn("row_index", step)
 
+    def test_tashuo_mac_ios_app_open_conversation_relocates_visual_anchor_before_tapping(self):
+        old_list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.34)
+        current_list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.62)
+        row_region = {"x1": 0.05, "y1": 0.29, "x2": 0.95, "y2": 0.39}
+        row_visual_hash = _png_average_hash(old_list_png, region=row_region)
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                current_list_png,
+                current_list_png,
+                current_list_png,
+                current_list_png,
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac-ios-app")
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("dating_boost.apps.native_gui_session.time.sleep", return_value=None),
+            patch("dating_boost.apps.tashuo.native.time.sleep", return_value=None),
+        ):
+            payload = harness.run_action(
+                "open-conversation",
+                dry_run=False,
+                output_dir=Path(temp_dir),
+                tap_ratio={"x": 0.45, "y": 0.34},
+                visual_target_label="小药丸儿",
+                visual_target_preview="我也比较慢热",
+                message_list_evidence={
+                    "source_state": "tashuo_chat_list",
+                    "selection_method": "message_list_visual_anchor_scan",
+                    "visual_anchor_hash": row_visual_hash,
+                    "visual_anchor_region": row_region,
+                    "visual_anchor_scan_region": {"x1": 0.0, "y1": 0.18, "x2": 1.0, "y2": 0.84},
+                    "tap_ratio": {"x": 0.45, "y": 0.34},
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        relocation = payload["message_list_relocation"]["message_list_location"]
+        self.assertEqual(relocation["location_method"], "message_list_visual_anchor_scan")
+        self.assertAlmostEqual(relocation["tap_ratio"]["y"], 0.62, delta=0.04)
+        self.assertAlmostEqual(payload["executed_steps"][0]["tap_ratio"]["y"], 0.62, delta=0.04)
+        self.assertEqual(payload["executed_steps"][0]["selection_method"], "message_list_visual_anchor_scan")
+
     def test_tashuo_mac_ios_app_open_conversation_short_circuits_when_thread_already_open(self):
         runner = FakeRunner(
             ocr_text="朵朵\n她跳过了问答考验，快和她聊聊吧\nhi\n你好啊\n点击此处输入文字\n",

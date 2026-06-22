@@ -7,7 +7,12 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
-from dating_boost.intelligence.backends import _extract_parsed_response
+from dating_boost.intelligence.backends import (
+    MINIMAX_STRUCTURED_TOOL_NAME,
+    MiniMaxBackend,
+    _extract_minimax_tool_payload,
+    _extract_parsed_response,
+)
 
 
 class VisionBackend(Protocol):
@@ -95,6 +100,51 @@ class OpenAIVisionBackend:
             },
         )
         return _extract_parsed_response(response)
+
+
+class MiniMaxVisionBackend(MiniMaxBackend):
+    """MiniMax OpenAI-compatible image analysis backend."""
+
+    def analyze_image_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        image_path: Path,
+        schema: Mapping[str, object],
+    ) -> dict[str, Any]:
+        data_url = f"{_image_mime_type(image_path)};base64,{base64.b64encode(image_path.read_bytes()).decode('ascii')}"
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": data_url,
+                                "detail": "high",
+                            },
+                        },
+                    ],
+                },
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": MINIMAX_STRUCTURED_TOOL_NAME,
+                        "description": "Return the final structured JSON object for the Dating Booster vision workflow.",
+                        "parameters": dict(schema),
+                    },
+                }
+            ],
+            tool_choice={"type": "function", "function": {"name": MINIMAX_STRUCTURED_TOOL_NAME}},
+            extra_body=self._extra_body(),
+        )
+        return _extract_minimax_tool_payload(response)
 
 
 def _image_mime_type(path: Path) -> str:

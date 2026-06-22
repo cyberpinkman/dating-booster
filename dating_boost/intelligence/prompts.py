@@ -4,6 +4,21 @@ from __future__ import annotations
 
 
 DIVERGENCE_VALUES = ["none", "low", "medium", "high"]
+CONVERSATION_MOVE_VALUES = [
+    "answer_or_riff",
+    "take_the_lead",
+    "deepen_current",
+    "bridge_topic",
+    "light_self_disclosure",
+    "reciprocal_disclosure",
+    "low_investment_repair",
+    "reset_thread",
+    "soft_invite_probe",
+    "nudge_later",
+    "slow_down_wait",
+    "wait",
+    "handoff",
+]
 
 REPLY_SCHEMA = {
     "type": "object",
@@ -30,7 +45,7 @@ REPLY_SCHEMA = {
         "bolder_reply": {"type": "string"},
         "why_this_works": {"type": "string"},
         "situation_read": {"type": "string"},
-        "conversation_move": {"type": "string"},
+        "conversation_move": {"type": "string", "enum": CONVERSATION_MOVE_VALUES},
         "hook_source": {"type": "string"},
         "naturalness_notes": {"type": "array", "items": {"type": "string"}},
         "followup_if_match_replies": {"type": "string"},

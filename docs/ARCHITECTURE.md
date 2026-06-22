@@ -34,10 +34,10 @@ The standalone runtime is a new consumer of existing managed-session and operato
 Primary path:
 
 ```bash
+export MINIMAX_API_KEY="<coding-plan-subscription-key>"
 dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
-DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization auth.json --app-id tashuo --runtime mac-ios-app --send-mode stage --observation-source live-gui --vision-backend openai --backend openai --json
-DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
-DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session status --data-dir .local/dating-boost --json
+python3 scripts/tashuo_mac_ios_standalone_doctor.py --data-dir .local/dating-boost --json
+DATING_BOOST_KEY_PROVIDER=local python3 scripts/tashuo_mac_ios_standalone_smoke.py --data-dir .local/dating-boost --authorization auth.json --json
 ```
 
 Migration order:

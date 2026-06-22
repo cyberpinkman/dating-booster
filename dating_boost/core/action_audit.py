@@ -181,6 +181,7 @@ def validate_stage_result(payload: dict[str, Any], *, created_at: str) -> dict[s
         "staged_text_verification",
         "stage_attempt_status",
         "screenshot_ref",
+        "target_verification",
     ):
         if optional_field in payload:
             base_event[optional_field] = payload[optional_field]

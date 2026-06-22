@@ -4,6 +4,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from dating_boost.cli import main
 from dating_boost.core.draft_evidence import UserMemoryRepository
@@ -41,6 +42,57 @@ class BackendFactoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported_model_backend"):
             create_model_backend({"type": "unknown"})
 
+    def test_creates_minimax_backend_with_coding_plan_config(self):
+        class FakeMiniMaxBackend:
+            created_configs: list[dict[str, object]] = []
+
+            def __init__(self, **kwargs):
+                self.created_configs.append(dict(kwargs))
+
+        with patch("dating_boost.intelligence.backend_factory.MiniMaxBackend", FakeMiniMaxBackend):
+            backend = create_model_backend(
+                {
+                    "type": "minimax",
+                    "model": "MiniMax-M2.5",
+                    "base_url": "https://api.minimax.io/v1",
+                    "api_key_env": "MINIMAX_CODE_KEY",
+                }
+            )
+
+        self.assertIsInstance(backend, FakeMiniMaxBackend)
+        self.assertEqual(
+            FakeMiniMaxBackend.created_configs,
+            [
+                {
+                    "model": "MiniMax-M2.5",
+                    "base_url": "https://api.minimax.io/v1",
+                    "api_key_env": "MINIMAX_CODE_KEY",
+                }
+            ],
+        )
+
+    def test_creates_minimax_backend_with_cn_coding_plan_default_base_url(self):
+        class FakeMiniMaxBackend:
+            created_configs: list[dict[str, object]] = []
+
+            def __init__(self, **kwargs):
+                self.created_configs.append(dict(kwargs))
+
+        with patch("dating_boost.intelligence.backend_factory.MiniMaxBackend", FakeMiniMaxBackend):
+            backend = create_model_backend({"type": "minimax"})
+
+        self.assertIsInstance(backend, FakeMiniMaxBackend)
+        self.assertEqual(
+            FakeMiniMaxBackend.created_configs,
+            [
+                {
+                    "model": "MiniMax-M3",
+                    "base_url": "https://api.minimaxi.com/v1",
+                    "api_key_env": "MINIMAX_API_KEY",
+                }
+            ],
+        )
+
 
 class StandaloneDraftPlannerTests(unittest.TestCase):
     def test_scripted_backend_generates_policy_checked_draft(self):
@@ -60,6 +112,9 @@ class StandaloneDraftPlannerTests(unittest.TestCase):
         if payload["status"] == "ok":
             self.assertIn("draft", payload)
             self.assertIn("draft_review", payload)
+            self.assertIn("draft_generation_id", payload["draft"])
+            self.assertIn("draft_self_review_summary", payload["draft"])
+            self.assertEqual(payload["draft"]["draft_self_review_summary"]["status"], "ok")
         else:
             self.assertIn("reason", payload)
 

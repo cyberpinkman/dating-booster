@@ -322,6 +322,57 @@ class StandaloneSessionCliTests(unittest.TestCase):
         self.assertEqual(tick_payload["status"], "work_consumed")
         self.assertEqual(tick_payload["work_item_type"], "scan_message_list")
 
+    def test_cli_start_persists_minimax_coding_plan_backend_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            fixture_dir = Path(temp_dir) / "fixtures"
+            fixture_dir.mkdir()
+            auth_path = Path(temp_dir) / "auth.json"
+            auth_path.write_text(json.dumps(_auth("tinder")), encoding="utf-8")
+            start_args = [
+                "standalone-session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(auth_path),
+                "--app-id",
+                "tinder",
+                "--send-mode",
+                "stage",
+                "--observation-source",
+                "fixture",
+                "--observation-fixture-dir",
+                str(fixture_dir),
+                "--backend",
+                "minimax",
+                "--model",
+                "MiniMax-M2.5",
+                "--minimax-base-url",
+                "https://api.minimax.io/v1",
+                "--minimax-api-key-env",
+                "MINIMAX_CODE_KEY",
+                "--json",
+            ]
+            confirm_exit, confirm_payload = self._run_cli(start_args)
+            start_exit, start_payload = self._run_cli(
+                start_args[:-1] + ["--config-confirm", confirm_payload["required_confirm_token"], "--json"]
+            )
+
+        self.assertEqual(confirm_exit, 2)
+        self.assertEqual(confirm_payload["reason"], "managed_session_config_confirmation_required")
+        self.assertEqual(start_exit, 0)
+        self.assertEqual(start_payload["status"], "active")
+        self.assertEqual(
+            start_payload["session"]["backend"],
+            {
+                "type": "minimax",
+                "model": "MiniMax-M2.5",
+                "base_url": "https://api.minimax.io/v1",
+                "api_key_env": "MINIMAX_CODE_KEY",
+            },
+        )
+
 
 def _auth(app_id: str) -> dict[str, object]:
     return {
