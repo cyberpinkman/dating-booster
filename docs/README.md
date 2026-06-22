@@ -116,6 +116,11 @@ four axes that should not be mixed in one-off patches:
   python3 scripts/tashuo_mac_ios_standalone_doctor.py --data-dir .local/dating-boost --json
   DATING_BOOST_KEY_PROVIDER=local python3 scripts/tashuo_mac_ios_standalone_smoke.py --data-dir .local/dating-boost --authorization auth.json --json
   ```
+  The smoke wrapper runs the alpha release gate and requires durable
+  `audit/stage_results.jsonl` evidence: completed stage attempt, exact staged
+  text verification, verified target, stage-only mode, and no live send. Saved
+  smoke JSON can be rechecked with
+  `python3 scripts/tashuo_mac_ios_standalone_alpha_gate.py --data-dir .local/dating-boost --smoke-json tashuo-standalone-smoke.json --json`.
   Tinder/Bumble/WeChat and scripted fixtures remain cross-app development
   paths until their standalone providers graduate.
 - GUI platform harness: `dating_boost/core/gui_harness.py` owns native

@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.tashuo_standalone_alpha_gate import evaluate_alpha_gate
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = ROOT / ".local" / "dating-boost-tashuo-standalone-smoke"
@@ -148,7 +150,14 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         except SmokeCommandError:
             pass
 
-    return {"schema_version": 1, "status": status, "reason": reason, "steps": steps}
+    payload: dict[str, Any] = {"schema_version": 1, "status": status, "reason": reason, "steps": steps}
+    if status == "ok" and reason == "tashuo_standalone_stage_smoke_complete":
+        gate = evaluate_alpha_gate(payload, data_dir=args.data_dir)
+        payload["alpha_release_gate"] = gate
+        if gate.get("status") != "ok":
+            payload["status"] = "blocked"
+            payload["reason"] = str(gate.get("reason") or "alpha_gate_failed")
+    return payload
 
 
 def _run_step(
@@ -203,11 +212,23 @@ def _run_step(
             "error_type": payload.get("error_type"),
             "error_message": _truncate(payload.get("error_message")),
             "work_item_type": payload.get("work_item_type"),
+            "recorded": _recorded_stage_binding(payload.get("recorded")),
         }
     )
     if result.returncode != 0 and not allow_failure:
         raise SmokeCommandError(f"command_failed:{result.returncode}")
     return {**payload, "_returncode": result.returncode}
+
+
+def _recorded_stage_binding(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    binding = {
+        key: value[key]
+        for key in ("event_id", "action_request_id", "target_match_id", "payload_hash")
+        if isinstance(value.get(key), str) and value.get(key)
+    }
+    return binding or None
 
 
 def _command_timeout_reason(dating_boost_args: list[str]) -> str:

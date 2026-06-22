@@ -280,7 +280,13 @@ Stage-only `auth.json` must allow managed stage work item creation while disabli
 }
 ```
 
-MiniMax Coding Plan is the default standalone TaShuo smoke backend and vision backend through the MiniMax China OpenAI-compatible endpoint, matching the local Hermes `minimax-cn` route. Put the Coding Plan subscription key in `.env` or an environment variable; standalone session state stores only the env var name. A successful smoke returns `status=ok`, `reason=tashuo_standalone_stage_smoke_complete`, and final tick `stage_recorded`. Durable proof is in `audit/stage_results.jsonl`: `stage_attempt_status=completed`, `staged_text_verified=true`, `staged_text_verification.status=verified`, and `target_verification.status=ok`.
+MiniMax Coding Plan is the default standalone TaShuo smoke backend and vision backend through the MiniMax China OpenAI-compatible endpoint, matching the local Hermes `minimax-cn` route. Put the Coding Plan subscription key in `.env` or an environment variable; standalone session state stores only the env var name. The standalone smoke wrapper runs the alpha release gate before reporting success. A successful smoke returns `status=ok`, `reason=tashuo_standalone_stage_smoke_complete`, with `alpha_release_gate.status=ok`, final tick `stage_recorded`, and durable proof in `audit/stage_results.jsonl`: `stage_attempt_status=completed`, `staged_text_verified=true`, `staged_text_verification.status=verified`, `target_verification.status=ok`, `evidence.stage_mode=true`, and `evidence.live_send_executed=false`.
+
+If the smoke JSON is saved, rerun the same acceptance gate without opening the app:
+
+```bash
+python3 scripts/tashuo_mac_ios_standalone_alpha_gate.py --data-dir .local/dating-boost --smoke-json tashuo-standalone-smoke.json --json
+```
 
 Manual standalone start, if not using the smoke wrapper:
 

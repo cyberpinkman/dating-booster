@@ -17,6 +17,52 @@ def _load_smoke_module():
     return module
 
 
+def _alpha_gate_stage_result() -> dict:
+    return {
+        "schema_version": 1,
+        "event_type": "stage_result",
+        "event_id": "stage_result_test",
+        "action_request_id": "act_1",
+        "target_match_id": "match_1",
+        "payload_hash": "hash_1",
+        "pre_action_observation_id": "obs_1",
+        "result_status": "succeeded",
+        "evidence": {
+            "stage_mode": True,
+            "draft_text_hash": "draft_hash_1",
+            "live_send_executed": False,
+        },
+        "stage_attempt_status": "completed",
+        "staged_text_verified": True,
+        "staged_text_verification": {"status": "verified", "exact_text_ax_verified": True},
+        "target_verification": {"status": "ok"},
+        "created_at": "2026-06-22T00:00:00Z",
+    }
+
+
+def _stage_recorded_tick_payload() -> dict:
+    return {
+        "status": "stage_recorded",
+        "reason": "stage_recorded",
+        "recorded": {
+            "event_id": "stage_result_test",
+            "action_request_id": "act_1",
+            "target_match_id": "match_1",
+            "payload_hash": "hash_1",
+        },
+    }
+
+
+def _write_alpha_gate_stage_result_for_cmd(cmd: list[str]) -> None:
+    data_dir = Path(cmd[cmd.index("--data-dir") + 1])
+    audit_dir = data_dir / "audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    (audit_dir / "stage_results.jsonl").write_text(
+        json.dumps(_alpha_gate_stage_result()) + "\n",
+        encoding="utf-8",
+    )
+
+
 class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
     def test_smoke_runs_stage_only_standalone_commands(self):
         module = _load_smoke_module()
@@ -26,7 +72,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
             calls.append(cmd)
             payload = {"status": "ok"}
             if "tick" in cmd:
-                payload = {"status": "stage_recorded", "reason": "stage_recorded"}
+                _write_alpha_gate_stage_result_for_cmd(cmd)
+                payload = _stage_recorded_tick_payload()
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run
@@ -109,7 +156,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
                 else:
                     payload = {"status": "active"}
             if "tick" in cmd:
-                payload = {"status": "stage_recorded", "reason": "stage_recorded"}
+                _write_alpha_gate_stage_result_for_cmd(cmd)
+                payload = _stage_recorded_tick_payload()
             return subprocess.CompletedProcess(cmd, returncode, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run
@@ -164,7 +212,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
                 else:
                     payload = {"status": "active"}
             if "tick" in cmd:
-                payload = {"status": "stage_recorded", "reason": "stage_recorded"}
+                _write_alpha_gate_stage_result_for_cmd(cmd)
+                payload = _stage_recorded_tick_payload()
             return subprocess.CompletedProcess(cmd, returncode, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run
@@ -222,7 +271,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
             if cmd[3:5] == ["standalone-session", "start"]:
                 payload = {"status": "active"}
             if "tick" in cmd:
-                payload = {"status": "stage_recorded", "reason": "stage_recorded"}
+                _write_alpha_gate_stage_result_for_cmd(cmd)
+                payload = _stage_recorded_tick_payload()
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run
@@ -284,7 +334,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
             if cmd[3:5] == ["standalone-session", "start"]:
                 payload = {"status": "active"}
             if "tick" in cmd:
-                payload = {"status": "stage_recorded", "reason": "stage_recorded"}
+                _write_alpha_gate_stage_result_for_cmd(cmd)
+                payload = _stage_recorded_tick_payload()
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run
@@ -421,6 +472,48 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
         self.assertEqual(tick_step["reason"], "command_timeout:standalone-session tick")
         self.assertEqual(tick_step["timeout_seconds"], 7.0)
         self.assertEqual(calls[-1][0][3:5], ["standalone-session", "stop"])
+
+    def test_smoke_blocks_stage_recorded_without_alpha_gate_audit_evidence(self):
+        module = _load_smoke_module()
+
+        def fake_run(cmd, check=False, capture_output=False, text=False, cwd=None, env=None, timeout=None):
+            payload = {"status": "ok"}
+            if cmd[3:5] == ["standalone-session", "start"]:
+                payload = {"status": "active"}
+            if cmd[3:5] == ["standalone-session", "tick"]:
+                payload = _stage_recorded_tick_payload()
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+        original_run = module.subprocess.run
+        module.subprocess.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                auth = root / "auth.json"
+                auth.write_text("{}", encoding="utf-8")
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    exit_code = module.main(
+                        [
+                            "--data-dir",
+                            str(root / "data"),
+                            "--authorization",
+                            str(auth),
+                            "--vision-backend",
+                            "openai",
+                            "--backend",
+                            "openai",
+                            "--json",
+                        ]
+                    )
+        finally:
+            module.subprocess.run = original_run
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "alpha_gate_stage_result_missing")
+        self.assertEqual(payload["alpha_release_gate"]["status"], "blocked")
 
 
 if __name__ == "__main__":

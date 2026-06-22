@@ -40,6 +40,12 @@ python3 scripts/tashuo_mac_ios_standalone_doctor.py --data-dir .local/dating-boo
 DATING_BOOST_KEY_PROVIDER=local python3 scripts/tashuo_mac_ios_standalone_smoke.py --data-dir .local/dating-boost --authorization auth.json --json
 ```
 
+The smoke wrapper includes the alpha release gate. It returns success only when
+the smoke JSON and durable `audit/stage_results.jsonl` evidence show a completed
+stage-only attempt, exact staged text verification, verified target, and no live
+send. Saved smoke output can be rechecked with
+`python3 scripts/tashuo_mac_ios_standalone_alpha_gate.py --data-dir .local/dating-boost --smoke-json tashuo-standalone-smoke.json --json`.
+
 Migration order:
 
 1. TaShuo mac-ios-app live GUI stage mode.
