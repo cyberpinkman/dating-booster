@@ -37,6 +37,14 @@ def _smoke_payload() -> dict:
                 },
             }
         ],
+        "final_input_verification": {
+            "schema_version": 1,
+            "status": "ok",
+            "verification_method": "unit_fake",
+            "input_cleared": True,
+            "final_input_character_count": 0,
+            "reason": None,
+        },
     }
 
 
@@ -48,6 +56,7 @@ def _stage_result(**overrides) -> dict:
         "action_request_id": "act_1",
         "target_match_id": "match_1",
         "payload_hash": "hash_1",
+        "precondition_hash": "pre_hash_1",
         "pre_action_observation_id": "obs_1",
         "result_status": "succeeded",
         "evidence": {
@@ -136,6 +145,42 @@ class TaShuoStandaloneAlphaGateTests(unittest.TestCase):
 
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["reason"], "alpha_gate_staged_text_not_verified")
+
+    def test_gate_rejects_stage_result_without_precondition_hash(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            event = _stage_result()
+            event.pop("precondition_hash")
+            _write_stage_result(data_dir, event)
+
+            payload = evaluate_alpha_gate(_smoke_payload(), data_dir=data_dir)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "alpha_gate_precondition_hash_missing")
+
+    def test_gate_rejects_success_without_final_empty_input_verification(self):
+        smoke = _smoke_payload()
+        smoke.pop("final_input_verification")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _write_stage_result(data_dir, _stage_result())
+
+            payload = evaluate_alpha_gate(smoke, data_dir=data_dir)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "alpha_gate_final_input_not_verified_empty")
+
+    def test_gate_rejects_direct_send_command_in_smoke_steps(self):
+        smoke = _smoke_payload()
+        smoke["steps"].append({"cmd": ["harness", "tashuo", "send-message"], "status": "ok"})
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _write_stage_result(data_dir, _stage_result())
+
+            payload = evaluate_alpha_gate(smoke, data_dir=data_dir)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "alpha_gate_direct_send_command_present")
 
     def test_gate_script_checks_saved_smoke_json(self):
         module = _load_gate_script()

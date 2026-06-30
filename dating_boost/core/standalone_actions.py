@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 from dating_boost.core.action_audit import ActionAuditRepository
 from dating_boost.core.operator import OperatorRepository
+from dating_boost.core.safety import SafetyRepository
 
 
 class StandaloneActionExecutor(Protocol):
@@ -41,6 +42,14 @@ class StageOnlyActionExecutor:
                 "status": "needs_live_executor",
                 "action_request_id": work_item.get("action_request_id"),
                 "next_host_action": "enable_managed_gui_send_or_switch_to_stage",
+            }
+        if SafetyRepository(self.root).is_paused():
+            return {
+                "schema_version": 1,
+                "status": "blocked",
+                "reason": "safety_paused",
+                "action_request_id": work_item.get("action_request_id"),
+                "next_host_action": "resume_safety_before_staging",
             }
         return self._execute_stage(work_item, app_id=app_id)
 
@@ -107,7 +116,7 @@ def _stage_payload(work_item: dict[str, Any], *, app_id: str) -> dict[str, Any]:
     action_request_id = _required_str(work_item.get("action_request_id"))
     target_match_id = _required_str(work_item.get("target_match_id") or work_item.get("match_id"))
     payload_hash = _required_str(work_item.get("payload_hash")) or _sha256(text)
-    return {
+    payload = {
         "schema_version": 1,
         "action": "send_message",
         "app_id": app_id,
@@ -122,6 +131,10 @@ def _stage_payload(work_item: dict[str, Any], *, app_id: str) -> dict[str, Any]:
             "live_send_executed": False,
         },
     }
+    for optional_field in ("precondition_hash", "autonomous_audit_binding"):
+        if work_item.get(optional_field):
+            payload[optional_field] = work_item[optional_field]
+    return payload
 
 
 def _stage_record_extras(stage_evidence: dict[str, Any]) -> dict[str, Any]:

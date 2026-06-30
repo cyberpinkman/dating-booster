@@ -31,9 +31,12 @@ def create_model_backend(config: dict[str, Any]) -> ModelBackend:
         model = str(config.get("model") or "gpt-4.1-mini")
         return OpenAIBackend(model=model)
     if backend_type == "minimax":
-        return MiniMaxBackend(
-            model=str(config.get("model") or MINIMAX_DEFAULT_MODEL),
-            base_url=str(config.get("base_url") or MINIMAX_DEFAULT_BASE_URL),
-            api_key_env=str(config.get("api_key_env") or MINIMAX_DEFAULT_API_KEY_ENV),
-        )
+        kwargs: dict[str, Any] = {
+            "model": str(config.get("model") or MINIMAX_DEFAULT_MODEL),
+            "base_url": str(config.get("base_url") or MINIMAX_DEFAULT_BASE_URL),
+            "api_key_env": str(config.get("api_key_env") or MINIMAX_DEFAULT_API_KEY_ENV),
+        }
+        if "timeout_seconds" in config:
+            kwargs["timeout_seconds"] = config.get("timeout_seconds")
+        return MiniMaxBackend(**kwargs)
     raise ValueError(f"unsupported_model_backend:{backend_type}")

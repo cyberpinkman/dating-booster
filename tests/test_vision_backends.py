@@ -110,6 +110,19 @@ class VisionBackendFactoryTests(unittest.TestCase):
             ],
         )
 
+    def test_factory_creates_minimax_vision_backend_with_timeout_config(self):
+        class FakeMiniMaxVisionBackend:
+            created_configs: list[dict[str, object]] = []
+
+            def __init__(self, **kwargs):
+                self.created_configs.append(dict(kwargs))
+
+        with patch("dating_boost.intelligence.vision_backend_factory.MiniMaxVisionBackend", FakeMiniMaxVisionBackend):
+            backend = create_vision_backend({"type": "minimax", "timeout_seconds": 18})
+
+        self.assertIsInstance(backend, FakeMiniMaxVisionBackend)
+        self.assertEqual(FakeMiniMaxVisionBackend.created_configs[0]["timeout_seconds"], 18)
+
     def test_factory_creates_minimax_vision_backend_with_cn_default_base_url(self):
         class FakeMiniMaxVisionBackend:
             created_configs: list[dict[str, object]] = []

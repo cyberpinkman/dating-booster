@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = ROOT / ".local" / "dating-boost-tashuo-standalone-smoke"
 DEFAULT_OUTPUT_DIR = ROOT / ".local" / "dating-boost-tashuo-standalone-harness"
 DEFAULT_MINIMAX_MODEL = "MiniMax-M3"
+DEFAULT_MINIMAX_REQUEST_TIMEOUT_SECONDS = 30.0
+DEFAULT_MAX_TICKS = 12
+MAX_REPEATED_TICK_SIGNATURES = 3
 
 
 class SmokeCommandError(RuntimeError):
@@ -38,7 +41,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scripted-backend-output", type=Path)
     parser.add_argument("--minimax-base-url", default="https://api.minimaxi.com/v1")
     parser.add_argument("--minimax-api-key-env", default="MINIMAX_API_KEY")
-    parser.add_argument("--max-ticks", type=int, default=5)
+    parser.add_argument("--minimax-request-timeout-seconds", type=float, default=DEFAULT_MINIMAX_REQUEST_TIMEOUT_SECONDS)
+    parser.add_argument("--initial-surface", choices=["message-list", "current-thread"], default="message-list")
+    parser.add_argument("--max-ticks", type=int, default=DEFAULT_MAX_TICKS)
     parser.add_argument("--step-timeout-seconds", type=float, default=300.0)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
@@ -57,6 +62,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
     status = "blocked"
     reason = "standalone_stage_not_recorded"
+    interrupted = False
     env = _smoke_env(args.env_file)
     try:
         _run_step(
@@ -80,6 +86,8 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             "stage",
             "--observation-source",
             "live-gui",
+            "--initial-surface",
+            args.initial_surface,
             "--output-dir",
             str(args.output_dir),
             "--vision-backend",
@@ -99,6 +107,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         if args.vision_backend == "minimax" or args.backend == "minimax":
             start_cmd.extend(["--minimax-base-url", args.minimax_base_url])
             start_cmd.extend(["--minimax-api-key-env", args.minimax_api_key_env])
+            start_cmd.extend(["--minimax-request-timeout-seconds", str(args.minimax_request_timeout_seconds)])
         if args.scripted_vision_output is not None:
             start_cmd.extend(["--scripted-vision-output", str(args.scripted_vision_output)])
         if args.scripted_backend_output is not None:
@@ -113,7 +122,8 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             raise SmokeCommandError(f"command_failed:{start_payload.get('_returncode')}")
 
         max_ticks = max(1, int(args.max_ticks))
-        for _ in range(max_ticks):
+        tick_signatures: dict[str, int] = {}
+        for tick_index in range(1, max_ticks + 1):
             tick = _run_step(
                 steps,
                 ["standalone-session", "tick", "--data-dir", str(args.data_dir), "--json"],
@@ -122,6 +132,11 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
                 timeout_seconds=args.step_timeout_seconds,
             )
             tick_status = str(tick.get("status") or "unknown")
+            tick_signature = _tick_progress_signature(tick)
+            tick_signatures[tick_signature] = tick_signatures.get(tick_signature, 0) + 1
+            if tick_status == "work_consumed" and tick_signatures[tick_signature] >= MAX_REPEATED_TICK_SIGNATURES:
+                reason = f"standalone_tick_no_progress:{tick_status}"
+                break
             if tick_status == "stage_recorded":
                 status = "ok"
                 reason = "tashuo_standalone_stage_smoke_complete"
@@ -133,11 +148,15 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
                 reason = str(tick.get("reason") or f"command_failed:{tick.get('_returncode')}")
                 break
             if tick_status == "no_work":
-                reason = "standalone_tick_no_work"
+                reason = _standalone_no_work_reason(tick)
                 break
-            reason = f"standalone_tick_incomplete:{tick_status}"
+            reason = f"standalone_tick_incomplete:{tick_status}:after_{tick_index}_ticks"
     except SmokeCommandError as exc:
         reason = exc.reason
+    except KeyboardInterrupt:
+        status = "blocked"
+        interrupted = True
+        reason = "standalone_smoke_interrupted_by_user"
     finally:
         try:
             _run_step(
@@ -149,15 +168,97 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             )
         except SmokeCommandError:
             pass
+        except KeyboardInterrupt:
+            status = "blocked"
+            interrupted = True
+            reason = "standalone_smoke_interrupted_by_user"
 
     payload: dict[str, Any] = {"schema_version": 1, "status": status, "reason": reason, "steps": steps}
-    if status == "ok" and reason == "tashuo_standalone_stage_smoke_complete":
+    cleanup = (
+        _interrupted_final_input_cleanup()
+        if interrupted
+        else _run_final_input_cleanup(args, steps=steps, env=env)
+    )
+    payload["final_input_cleanup"] = cleanup
+    payload["final_input_verification"] = _final_input_verification(cleanup)
+    if status == "ok" and payload["final_input_verification"].get("status") != "ok":
+        payload["status"] = "blocked"
+        payload["reason"] = str(payload["final_input_verification"].get("reason") or "final_input_cleanup_failed")
+    if payload["status"] == "ok" and reason == "tashuo_standalone_stage_smoke_complete":
         gate = evaluate_alpha_gate(payload, data_dir=args.data_dir)
         payload["alpha_release_gate"] = gate
         if gate.get("status") != "ok":
             payload["status"] = "blocked"
             payload["reason"] = str(gate.get("reason") or "alpha_gate_failed")
     return payload
+
+
+def _interrupted_final_input_cleanup() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "status": "blocked",
+        "reason": "final_input_cleanup_skipped_after_user_interrupt",
+        "skipped": True,
+    }
+
+
+def _run_final_input_cleanup(args: argparse.Namespace, *, steps: list[dict[str, Any]], env: dict[str, str]) -> dict[str, Any]:
+    try:
+        cleanup = _run_step(
+            steps,
+            [
+                "harness",
+                "tashuo",
+                "action",
+                "clear-message-input",
+                "--data-dir",
+                str(args.data_dir),
+                "--runtime",
+                "mac-ios-app",
+                "--output-dir",
+                str(args.output_dir),
+                "--json",
+            ],
+            allow_failure=True,
+            env=env,
+            timeout_seconds=args.step_timeout_seconds,
+        )
+    except SmokeCommandError as exc:
+        return {"schema_version": 1, "status": "blocked", "reason": exc.reason}
+    except KeyboardInterrupt:
+        return {
+            "schema_version": 1,
+            "status": "blocked",
+            "reason": "final_input_cleanup_interrupted_by_user",
+            "interrupted": True,
+        }
+    return cleanup
+
+
+def _final_input_verification(cleanup: dict[str, Any]) -> dict[str, Any]:
+    nested = cleanup.get("final_input_verification") if isinstance(cleanup.get("final_input_verification"), dict) else {}
+    count = cleanup.get("final_input_character_count")
+    if count is None:
+        count = nested.get("final_input_character_count")
+    try:
+        final_count = int(count)
+    except (TypeError, ValueError):
+        final_count = -1
+    input_cleared = cleanup.get("input_cleared")
+    if input_cleared is None:
+        input_cleared = nested.get("input_cleared")
+    status = "ok" if cleanup.get("status") == "ok" and final_count == 0 and input_cleared is True else "blocked"
+    reason = None
+    if status != "ok":
+        reason = cleanup.get("reason") or nested.get("reason") or "final_input_not_verified_empty"
+    return {
+        "schema_version": 1,
+        "status": status,
+        "verification_method": nested.get("verification_method") or "tashuo_clear_message_input_action",
+        "input_cleared": bool(input_cleared),
+        "final_input_character_count": max(final_count, 0),
+        "reason": reason,
+    }
 
 
 def _run_step(
@@ -179,6 +280,21 @@ def _run_step(
             env=env,
             timeout=timeout_seconds,
         )
+    except KeyboardInterrupt:
+        reason = _command_interrupted_reason(dating_boost_args)
+        steps.append(
+            {
+                "cmd": dating_boost_args,
+                "returncode": None,
+                "status": "error",
+                "reason": reason,
+                "error_type": "KeyboardInterrupt",
+                "error_message": "interrupted by user",
+                "work_item_type": None,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        raise
     except subprocess.TimeoutExpired as exc:
         reason = _command_timeout_reason(dating_boost_args)
         steps.append(
@@ -231,9 +347,43 @@ def _recorded_stage_binding(value: Any) -> dict[str, Any] | None:
     return binding or None
 
 
+def _tick_progress_signature(payload: dict[str, Any]) -> str:
+    ingested = payload.get("ingested") if isinstance(payload.get("ingested"), dict) else {}
+    recorded = payload.get("recorded") if isinstance(payload.get("recorded"), dict) else {}
+    work_item = payload.get("work_item") if isinstance(payload.get("work_item"), dict) else {}
+    signature = {
+        "status": payload.get("status"),
+        "reason": payload.get("reason"),
+        "work_item_type": payload.get("work_item_type") or work_item.get("work_item_type"),
+        "work_item_id": payload.get("work_item_id") or work_item.get("work_item_id"),
+        "candidate_key": payload.get("candidate_key") or work_item.get("candidate_key"),
+        "observation_id": ingested.get("observation_id"),
+        "match_id": ingested.get("match_id"),
+        "action_request_id": recorded.get("action_request_id"),
+        "event_id": recorded.get("event_id"),
+    }
+    return json.dumps(signature, ensure_ascii=False, sort_keys=True)
+
+
+def _standalone_no_work_reason(payload: dict[str, Any]) -> str:
+    managed = payload.get("managed_session") if isinstance(payload.get("managed_session"), dict) else {}
+    operator = managed.get("operator") if isinstance(managed.get("operator"), dict) else {}
+    work_item = operator.get("work_item") if isinstance(operator.get("work_item"), dict) else {}
+    internal_reason = str(work_item.get("reason") or operator.get("reason") or payload.get("reason") or "no_work").strip()
+    queue = work_item.get("next_priority_queue") if isinstance(work_item.get("next_priority_queue"), list) else []
+    if internal_reason == "no_eligible_operator_work" and queue:
+        internal_reason = "no_eligible_operator_work_with_priority_queue"
+    return f"standalone_tick_no_work:{internal_reason}"
+
+
 def _command_timeout_reason(dating_boost_args: list[str]) -> str:
     label = " ".join(dating_boost_args[:2] if len(dating_boost_args) >= 2 else dating_boost_args)
     return f"command_timeout:{label or 'dating_boost'}"
+
+
+def _command_interrupted_reason(dating_boost_args: list[str]) -> str:
+    label = " ".join(dating_boost_args[:2] if len(dating_boost_args) >= 2 else dating_boost_args)
+    return f"command_interrupted:{label or 'dating_boost'}"
 
 
 def _smoke_env(env_file: Path | None) -> dict[str, str]:

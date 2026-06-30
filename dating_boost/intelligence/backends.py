@@ -16,6 +16,8 @@ MINIMAX_GLOBAL_BASE_URL = "https://api.minimax.io/v1"
 MINIMAX_DEFAULT_MODEL = "MiniMax-M3"
 MINIMAX_DEFAULT_API_KEY_ENV = "MINIMAX_API_KEY"
 MINIMAX_STRUCTURED_TOOL_NAME = "emit_structured_response"
+MINIMAX_DEFAULT_REQUEST_TIMEOUT_SECONDS = 45.0
+MINIMAX_REQUEST_TIMEOUT_ENV = "DATING_BOOST_MINIMAX_REQUEST_TIMEOUT_SECONDS"
 
 
 class BackendCapability(str, Enum):
@@ -128,11 +130,13 @@ class MiniMaxBackend:
         base_url: str = MINIMAX_DEFAULT_BASE_URL,
         api_key_env: str = MINIMAX_DEFAULT_API_KEY_ENV,
         api_key: str | None = None,
+        timeout_seconds: float | None = None,
         client: Any | None = None,
     ):
         self._model = model or MINIMAX_DEFAULT_MODEL
         self._base_url = base_url or MINIMAX_DEFAULT_BASE_URL
         self._api_key_env = api_key_env or MINIMAX_DEFAULT_API_KEY_ENV
+        self._timeout_seconds = _request_timeout_seconds(timeout_seconds)
         if client is not None:
             self._client = client
             return
@@ -152,7 +156,7 @@ class MiniMaxBackend:
             resolved_api_key = os.environ.get("MINIMAX_SUBSCRIPTION_KEY")
         if not resolved_api_key:
             raise RuntimeError(f"MiniMaxBackend requires {self._api_key_env}, MINIMAX_CN_API_KEY, or MINIMAX_SUBSCRIPTION_KEY.")
-        self._client = OpenAI(api_key=resolved_api_key, base_url=self._base_url)
+        self._client = OpenAI(api_key=resolved_api_key, base_url=self._base_url, timeout=self._timeout_seconds)
 
     @property
     def capabilities(self) -> Collection[BackendCapability]:
@@ -189,6 +193,25 @@ def _minimax_extra_body(model: str) -> dict[str, object]:
     if str(model or "").strip().lower() in {"minimax-m3", "minimax/minimax-m3"}:
         extra_body["reasoning_split"] = True
     return extra_body
+
+
+def _request_timeout_seconds(value: float | None) -> float:
+    if value is not None:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            parsed = 0.0
+        if parsed > 0:
+            return parsed
+    raw = os.environ.get(MINIMAX_REQUEST_TIMEOUT_ENV)
+    if raw:
+        try:
+            parsed = float(raw)
+        except ValueError:
+            parsed = 0.0
+        if parsed > 0:
+            return parsed
+    return MINIMAX_DEFAULT_REQUEST_TIMEOUT_SECONDS
 
 
 def _extract_parsed_response(response: object) -> dict[str, object]:

@@ -900,6 +900,7 @@ class AutomationRepository:
                     authorization=authorization,
                     planner_recommendation=planner_recommendation,
                     target_binding=thread_item.get("target_binding"),
+                    standalone_draft_review=thread_item.get("standalone_draft_review"),
                 )
             elif assessment.get("recommended_next") == "reply":
                 state["state"] = "needs_reply"
@@ -941,6 +942,7 @@ class AutomationRepository:
                         authorization=authorization,
                         planner_recommendation=planner_recommendation,
                         target_binding=thread_item.get("target_binding"),
+                        standalone_draft_review=thread_item.get("standalone_draft_review"),
                     )
                 elif state.get("last_nudged_inbound_fingerprint") == latest_fingerprint:
                     if draft_payload and _draft_payload_hash(dict(draft_payload)) == state.get("last_outbound_payload_hash"):
@@ -1216,6 +1218,7 @@ class AutomationRepository:
         authorization: dict[str, Any],
         planner_recommendation: dict[str, Any] | None = None,
         target_binding: Any = None,
+        standalone_draft_review: Any = None,
     ) -> None:
         raw_draft = dict(draft_payload)
         draft = _draft_from_dict(raw_draft)
@@ -1257,7 +1260,15 @@ class AutomationRepository:
             )
             return
 
-        generation_contract_reason = _host_supplied_generation_contract_block_reason(raw_draft)
+        stage_only_generation_soft_accept = _stage_only_generation_soft_accept_allowed(
+            raw_draft,
+            authorization=authorization,
+            standalone_draft_review=standalone_draft_review,
+        )
+        generation_contract_reason = _host_supplied_generation_contract_block_reason(
+            raw_draft,
+            allow_stage_only_soft_accept=stage_only_generation_soft_accept,
+        )
         if generation_contract_reason is not None:
             _mark_draft_revision_required(state, reason=generation_contract_reason)
             warnings.append(generation_contract_reason)
@@ -1277,9 +1288,10 @@ class AutomationRepository:
             context_pack=evidence.context_pack,
             draft_payload=raw_draft,
             created_at=self._now(),
+            allow_stage_only_soft_accept=stage_only_generation_soft_accept,
         )
         self_review_probability = int(generation_binding["draft_self_review_summary"]["ai_or_weird_probability"])
-        if self_review_probability > 40:
+        if self_review_probability > 40 and not stage_only_generation_soft_accept:
             _mark_draft_revision_required(state, reason="draft_self_review_probability_high")
             warnings.append("draft_self_review_probability_high")
             warnings.append("draft_revision_required")
@@ -1291,6 +1303,8 @@ class AutomationRepository:
                 reason="draft_self_review_probability_high",
             )
             return
+        if self_review_probability > 40:
+            warnings.append("stage_only_draft_self_review_soft_accepted")
 
         context_pack = evidence.context_pack
         review = review_draft(
@@ -1308,7 +1322,12 @@ class AutomationRepository:
             mode="managed_live",
             target_match_id=match_id,
         )
-        if not review.allowed_for_managed_send:
+        stage_only_review_soft_accept = _stage_only_review_soft_accept_allowed(
+            authorization=authorization,
+            review=review,
+            standalone_draft_review=standalone_draft_review,
+        )
+        if not review.allowed_for_managed_send and not stage_only_review_soft_accept:
             _mark_draft_revision_required(state, reason=review.primary_reason)
             finding_codes = [finding.code for finding in review.findings]
             warnings.extend(code for code in finding_codes if code not in warnings)
@@ -1323,6 +1342,8 @@ class AutomationRepository:
                 reason=review.primary_reason,
             )
             return
+        if stage_only_review_soft_accept:
+            warnings.append("stage_only_draft_review_soft_accepted")
 
         payload_messages = draft_payload_messages(raw_draft, draft.best_reply)
         payload_hash = draft_messages_payload_hash(payload_messages)
@@ -1373,9 +1394,11 @@ class AutomationRepository:
             "target_profile_observation": observation.profile_observation.to_dict(),
             "requires_post_action_verification": True,
             "policy": {
-                "allowed": review.allowed_for_managed_send,
-                "severity": "low" if review.allowed_for_managed_send else "high",
-                "reason": review.primary_reason,
+                "allowed": review.allowed_for_managed_send or stage_only_review_soft_accept,
+                "allowed_for_stage": review.allowed_for_stage,
+                "allowed_for_managed_send": review.allowed_for_managed_send,
+                "severity": "low" if (review.allowed_for_managed_send or stage_only_review_soft_accept) else "high",
+                "reason": "stage_only_draft_review_soft_accepted" if stage_only_review_soft_accept else review.primary_reason,
                 "requires_user_confirmation": review.requires_user_confirmation,
                 "draft_review_id": review.review_id,
             },
@@ -1685,6 +1708,7 @@ def _host_supplied_generation_binding(
     context_pack: dict[str, Any],
     draft_payload: dict[str, Any],
     created_at: str,
+    allow_stage_only_soft_accept: bool = False,
 ) -> dict[str, Any]:
     raw_summary = draft_payload.get("draft_self_review_summary")
     if not isinstance(raw_summary, dict):
@@ -1698,10 +1722,11 @@ def _host_supplied_generation_binding(
     generation_id = str(
         draft_payload["draft_generation_id"]
     )
+    accepted = probability <= 40 or bool(allow_stage_only_soft_accept)
     self_review_summary = {
         "schema_version": 1,
         "ai_or_weird_probability": probability,
-        "status": "ok" if probability <= 40 else "needs_revision",
+        "status": "ok" if probability <= 40 else ("stage_only_soft_accepted" if accepted else "needs_revision"),
         "source": source,
         "reason": reason,
     }
@@ -1709,8 +1734,12 @@ def _host_supplied_generation_binding(
         generation_id=generation_id,
         evidence_id=evidence_id,
         prompt_id=prompt_id,
-        status="ok" if probability <= 40 else "blocked",
-        primary_reason=None if probability <= 40 else "draft_self_review_probability_high",
+        status="ok" if accepted else "blocked",
+        primary_reason=(
+            None
+            if probability <= 40
+            else ("stage_only_draft_self_review_soft_accepted" if accepted else "draft_self_review_probability_high")
+        ),
         prompt_hash=str(draft_payload.get("draft_prompt_hash") or "host_supplied"),
         context_hash=context_hash,
         draft_hash=draft_hash,
@@ -1724,7 +1753,11 @@ def _host_supplied_generation_binding(
     }
 
 
-def _host_supplied_generation_contract_block_reason(draft_payload: dict[str, Any]) -> str | None:
+def _host_supplied_generation_contract_block_reason(
+    draft_payload: dict[str, Any],
+    *,
+    allow_stage_only_soft_accept: bool = False,
+) -> str | None:
     if not str(draft_payload.get("draft_generation_id") or "").strip():
         return "draft_generation_required"
     raw_summary = draft_payload.get("draft_self_review_summary")
@@ -1733,9 +1766,48 @@ def _host_supplied_generation_contract_block_reason(draft_payload: dict[str, Any
     probability = raw_summary.get("ai_or_weird_probability")
     if not isinstance(probability, int) or isinstance(probability, bool) or probability < 0 or probability > 100:
         return "draft_self_review_invalid"
-    if probability > 40:
+    if probability > 40 and not allow_stage_only_soft_accept:
         return "draft_self_review_probability_high"
     return None
+
+
+STAGE_ONLY_SELF_REVIEW_SOFT_ACCEPT_THRESHOLD = 65
+
+
+def _stage_only_generation_soft_accept_allowed(
+    draft_payload: dict[str, Any],
+    *,
+    authorization: dict[str, Any],
+    standalone_draft_review: Any,
+) -> bool:
+    if authorization.get("live_send") is True:
+        return False
+    if not isinstance(standalone_draft_review, dict):
+        return False
+    if standalone_draft_review.get("allowed_for_stage") is not True:
+        return False
+    raw_summary = draft_payload.get("draft_self_review_summary")
+    if not isinstance(raw_summary, dict):
+        return False
+    probability = raw_summary.get("ai_or_weird_probability")
+    if not isinstance(probability, int) or isinstance(probability, bool):
+        return False
+    return 40 < probability <= STAGE_ONLY_SELF_REVIEW_SOFT_ACCEPT_THRESHOLD
+
+
+def _stage_only_review_soft_accept_allowed(
+    *,
+    authorization: dict[str, Any],
+    review: Any,
+    standalone_draft_review: Any,
+) -> bool:
+    if authorization.get("live_send") is True:
+        return False
+    if not isinstance(standalone_draft_review, dict):
+        return False
+    if standalone_draft_review.get("allowed_for_stage") is not True:
+        return False
+    return getattr(review, "allowed_for_stage", False) is True
 
 
 def _send_retry_suffix(state: dict[str, Any], payload_hash: str) -> str:
@@ -2022,6 +2094,11 @@ def _entry_priority(
     if state is not None and state.get("state") == "needs_target_profile":
         return 3
     if state is None:
+        candidate_type = str(entry.get("candidate_type") or "").strip().lower()
+        if candidate_type == "continuation_candidate":
+            return 4
+        if _entry_is_open_chat_candidate(entry):
+            return 5
         return 4
     if state.get("state") == "scan_later":
         return 5
@@ -2218,15 +2295,7 @@ def _next_priority_queue(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "match_id": state["match_id"],
             "candidate_key": state.get("candidate_key"),
             "state": state.get("state"),
-            "priority": 2
-            if state.get("state") in {"draft_ready", "needs_thread_scan"}
-            and state.get("candidate_type") == "continuation_candidate"
-            and _entry_has_reply_cue(state)
-            else 2
-            if state.get("state") == "scan_later"
-            and state.get("candidate_type") == "continuation_candidate"
-            and state.get("latest_inbound_fingerprint")
-            else priority.get(str(state.get("state")), 9),
+            "priority": _state_priority_for_queue(state, priority),
             "next_due_at": state.get("next_due_at"),
             "last_scan_cursor": state.get("last_scan_cursor"),
             "unread_cue": state.get("unread_cue"),
@@ -2237,6 +2306,24 @@ def _next_priority_queue(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
         and not _state_is_stale_autonomous_activation_candidate(state)
     ]
     return sorted(items, key=lambda item: (item["priority"], str(item["match_id"])))
+
+
+def _state_priority_for_queue(state: dict[str, Any], priority: dict[str, int]) -> int:
+    if (
+        state.get("state") in {"draft_ready", "needs_thread_scan"}
+        and state.get("candidate_type") == "continuation_candidate"
+        and _entry_has_reply_cue(state)
+    ):
+        return 2
+    if (
+        state.get("state") == "scan_later"
+        and state.get("candidate_type") == "continuation_candidate"
+        and state.get("latest_inbound_fingerprint")
+    ):
+        return 2
+    if state.get("state") == "needs_thread_scan" and state.get("candidate_type") == "open_chat_candidate":
+        return 5
+    return priority.get(str(state.get("state")), 9)
 
 
 def _state_is_stale_autonomous_activation_candidate(state: dict[str, Any]) -> bool:
@@ -2502,7 +2589,35 @@ def _looks_like_non_chat_message_list_gate(*, key: str, visible_name: str, lates
     normalized_key = key.strip().lower()
     normalized_name = visible_name.strip().lower()
     normalized_preview = latest_preview.strip().lower()
+    combined = f"{normalized_key} {normalized_name} {normalized_preview}"
+    if normalized_key.startswith("tashuo_visual_") and not normalized_name:
+        return True
     if any(token in normalized_key for token in ("liked_you_gate", "premium_gate", "paywall_gate")):
+        return True
+    if normalized_name.startswith("tab header"):
+        return True
+    if "消息" in visible_name and "动态" in visible_name and len(visible_name.strip()) <= 24:
+        return True
+    if "开启通知" in combined or "接收通知" in combined:
+        return True
+    if any(
+        token in combined
+        for token in (
+            "pending_question",
+            "pending question",
+            "question_gate",
+            "question gate",
+            "question row avatar",
+            "anonymous_question",
+            "anonymous question",
+            "tab header",
+            "message tab header",
+            "notification banner",
+            "search icon",
+            "filter icon",
+            "list icon",
+        )
+    ):
         return True
     if "\u559c\u6b22\u4e86\u4f60" in normalized_name and (
         "\u4eba" in normalized_name or normalized_name[:1].isdigit()
@@ -2515,6 +2630,8 @@ def _looks_like_non_chat_message_list_gate(*, key: str, visible_name: str, lates
     }:
         return True
     if "\u53bb\u6253\u4e2a\u62db\u547c" in normalized_preview and "\u6d3b\u8dc3" in normalized_preview:
+        return True
+    if any(token in normalized_name or token in normalized_preview for token in ("匿名提问", "提问卡片", "问题卡片")):
         return True
     return False
 

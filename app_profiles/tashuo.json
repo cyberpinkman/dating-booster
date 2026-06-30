@@ -78,6 +78,12 @@
           "launch_app",
           "observe_screen",
           "prepare_message_page",
+          "prepare_self_profile_page",
+          "open_self_profile_detail",
+          "profile_scroll_down",
+          "profile_scroll_up",
+          "profile_scroll_to_bottom",
+          "clear_message_input",
           "stage_draft"
         ],
         "supported_live_actions": [

@@ -237,7 +237,7 @@ class StandaloneAgentRuntime:
                 observation=observation,
             )
         if work_type in {"open_thread", "observe_current_thread"}:
-            draft_payload = self._attach_standalone_draft(observation)
+            draft_payload = self._attach_standalone_draft(observation, work_item=work_item)
             if draft_payload is not None:
                 return draft_payload
         try:
@@ -253,7 +253,7 @@ class StandaloneAgentRuntime:
             )
         return _consumed(work_type, ingested, work_item)
 
-    def _attach_standalone_draft(self, observation: Any) -> dict[str, Any] | None:
+    def _attach_standalone_draft(self, observation: Any, *, work_item: dict[str, Any]) -> dict[str, Any] | None:
         if self.draft_planner is None:
             return None
         if not isinstance(observation, dict):
@@ -275,7 +275,11 @@ class StandaloneAgentRuntime:
             app_observation = AppObservation.from_dict(raw_app_observation)
             ingest = store_observation_with_memory(self.root, app_observation)
             match_id = str(ingest["match_id"])
-            draft = self.draft_planner.draft_for_match(match_id=match_id, mode="adaptive")
+            draft = self.draft_planner.draft_for_match(
+                match_id=match_id,
+                mode="adaptive",
+                supplemental_prompts=_work_item_revision_prompts(work_item),
+            )
         except Exception as exc:  # noqa: BLE001 - model/planner adapters must not crash the runtime loop.
             return {
                 "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
@@ -359,6 +363,27 @@ def _draft_allowed_for_standalone_stage(draft: dict[str, Any]) -> bool:
     return review.get("allowed_for_stage") is True
 
 
+def _work_item_revision_prompts(work_item: dict[str, Any]) -> list[str]:
+    if not work_item.get("requires_revised_draft"):
+        return []
+    reason = str(work_item.get("draft_revision_reason") or work_item.get("reason") or "").strip()
+    if reason == "message_sequence_mechanical_split":
+        return [
+            (
+                "Previous draft was rejected for message_sequence_mechanical_split. "
+                "Revise as one concise Chinese private-chat bubble unless multiple bubbles each have a distinct job. "
+                "Do not split punctuation, acknowledgements, or one sentence into separate bubbles."
+            )
+        ]
+    return [
+        (
+            "Previous draft was rejected before staging"
+            + (f" for policy reason: {reason}." if reason else ".")
+            + " Revise the draft so it passes managed-send policy while preserving hard facts and the latest inbound turn."
+        )
+    ]
+
+
 def _operator_state_may_have_current_thread_continuation(state: dict[str, Any]) -> bool:
     operator_session = state.get("operator_session") if isinstance(state.get("operator_session"), dict) else {}
     current = operator_session.get("current_work_item")
@@ -377,11 +402,24 @@ def _operator_state_may_have_current_thread_continuation(state: dict[str, Any]) 
 
 
 class StandaloneDraftPlanner:
-    def __init__(self, root: Path, *, backend_config: dict[str, Any]):
+    def __init__(
+        self,
+        root: Path,
+        *,
+        backend_config: dict[str, Any],
+        allow_stage_soft_accept: bool = False,
+    ):
         self.root = root
         self.backend_config = dict(backend_config)
+        self.allow_stage_soft_accept = bool(allow_stage_soft_accept)
 
-    def draft_for_match(self, *, match_id: str, mode: str) -> dict[str, Any]:
+    def draft_for_match(
+        self,
+        *,
+        match_id: str,
+        mode: str,
+        supplemental_prompts: list[str] | None = None,
+    ) -> dict[str, Any]:
         from dating_boost.core.draft_evidence import build_draft_evidence
         from dating_boost.core.draft_review_audit import DraftReviewAuditRepository
         from dating_boost.core.models import ReplyMode
@@ -424,24 +462,49 @@ class StandaloneDraftPlanner:
                 "draft_evidence": evidence.public_dict(),
             }
 
-        policy_supplements: list[str] = []
+        policy_supplements: list[str] = [
+            str(item)
+            for item in (supplemental_prompts or [])
+            if str(item).strip()
+        ]
         generation = None
         review = None
-        for policy_attempt in range(1, 3):
-            try:
-                generation = generate_reply_with_refinement(
-                    evidence,
-                    backend=backend,
-                    audit_root=self.root,
-                    supplemental_prompts=policy_supplements,
-                )
-            except Exception as exc:  # noqa: BLE001 - standalone planner must stop with a structured wait point.
+        max_policy_attempts = 1 if self.allow_stage_soft_accept else 2
+        max_generation_attempts = 1 if self.allow_stage_soft_accept else 2
+        max_refinement_attempts = 3
+        for policy_attempt in range(1, max_policy_attempts + 1):
+            generation_errors: list[dict[str, Any]] = []
+            generation = None
+            for generation_attempt in range(1, max_generation_attempts + 1):
+                try:
+                    generation = generate_reply_with_refinement(
+                        evidence,
+                        backend=backend,
+                        audit_root=self.root,
+                        supplemental_prompts=policy_supplements,
+                        soft_accept_after_exhaustion=self.allow_stage_soft_accept,
+                        soft_accept_after_attempts=1 if self.allow_stage_soft_accept else None,
+                        soft_accept_threshold=65 if self.allow_stage_soft_accept else 60,
+                        max_attempts=max_refinement_attempts,
+                    )
+                    break
+                except Exception as exc:  # noqa: BLE001 - standalone planner must stop with a structured wait point.
+                    generation_errors.append(
+                        {
+                            "attempt": generation_attempt,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        }
+                    )
+            if generation is None:
+                last_error = generation_errors[-1] if generation_errors else {}
                 return {
                     "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
                     "status": "blocked",
                     "reason": "draft_generation_failed",
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
+                    "error_type": last_error.get("error_type"),
+                    "error": last_error.get("error"),
+                    "generation_error_attempts": generation_errors,
                     "draft_evidence": evidence.public_dict(),
                 }
             if generation.status != "ok" or generation.draft_payload is None:
@@ -451,6 +514,7 @@ class StandaloneDraftPlanner:
                     "reason": generation.primary_reason,
                     "draft_evidence": evidence.public_dict(),
                     "draft_generation_summary": generation.summary(),
+                    "generation_error_attempts": generation_errors,
                 }
             draft_payload = _draft_payload_with_generation_contract(generation.draft_payload, generation)
 
@@ -479,7 +543,12 @@ class StandaloneDraftPlanner:
                 mode="managed_live",
                 target_match_id=match_id,
             )
-            if review.allowed_for_managed_send or policy_attempt == 2 or not _standalone_policy_retryable(review):
+            if (
+                review.allowed_for_managed_send
+                or (self.allow_stage_soft_accept and review.allowed_for_stage)
+                or policy_attempt == max_policy_attempts
+                or not _standalone_policy_retryable(review)
+            ):
                 break
             policy_supplements = _policy_revision_prompts(review)
 

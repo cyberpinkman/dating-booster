@@ -136,6 +136,26 @@ class DraftPromptAndGenerationTests(unittest.TestCase):
         self.assertEqual(result.status, "ok")
         self.assertEqual(result.attempt_count, 1)
 
+    def test_invalid_draft_payload_retries_with_schema_prompt(self):
+        backend = ScriptedBackend(
+            [
+                {"best_reply": "现场听起来挺舒服"},
+                _reply_payload("现场听起来挺舒服。你一般会听哪种？"),
+                _self_review(30),
+            ]
+        )
+
+        result = generate_reply_with_refinement(
+            _evidence_pack(),
+            backend=backend,
+            audit_root=Path(tempfile.mkdtemp()),
+        )
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.attempt_count, 2)
+        self.assertIn("draft_generation_schema_invalid", result.self_review_attempts[0]["reason"])
+        self.assertIn("Return every required reply field", result.prompt.supplemental_prompts[0])
+
     def test_initial_supplemental_prompt_is_included(self):
         backend = ScriptedBackend([
             _reply_payload("现场听起来挺舒服。你一般会听哪种？"),
@@ -188,6 +208,78 @@ class DraftPromptAndGenerationTests(unittest.TestCase):
         self.assertEqual(result.status, "blocked")
         self.assertEqual(result.primary_reason, "draft_refinement_exhausted")
         self.assertEqual(result.attempt_count, 3)
+        self.assertIsNone(result.draft)
+
+    def test_soft_accept_after_exhaustion_returns_last_moderate_draft_when_enabled(self):
+        backend = ScriptedBackend(
+            [
+                _reply_payload("第一版"),
+                _self_review(80, "更自然"),
+                _reply_payload("第二版"),
+                _self_review(70, "更像真人"),
+                _reply_payload("第三版"),
+                _self_review(52, "再短"),
+            ]
+        )
+
+        result = generate_reply_with_refinement(
+            _evidence_pack(),
+            backend=backend,
+            audit_root=Path(tempfile.mkdtemp()),
+            soft_accept_after_exhaustion=True,
+        )
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.primary_reason, "draft_refinement_soft_accepted")
+        self.assertEqual(result.attempt_count, 3)
+        self.assertEqual(result.draft.best_reply, "第三版")
+        self.assertEqual(result.self_review_attempts[-1]["ai_or_weird_probability"], 52)
+
+    def test_soft_accept_after_attempts_returns_moderate_draft_without_exhausting(self):
+        backend = ScriptedBackend(
+            [
+                _reply_payload("第一版"),
+                _self_review(52, "可以接受"),
+                _reply_payload("第二版"),
+                _self_review(20, "更自然"),
+            ]
+        )
+
+        result = generate_reply_with_refinement(
+            _evidence_pack(),
+            backend=backend,
+            audit_root=Path(tempfile.mkdtemp()),
+            soft_accept_after_attempts=1,
+            soft_accept_threshold=65,
+        )
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.primary_reason, "draft_refinement_soft_accepted")
+        self.assertEqual(result.attempt_count, 1)
+        self.assertEqual(result.draft.best_reply, "第一版")
+        self.assertEqual(result.self_review_attempts[-1]["ai_or_weird_probability"], 52)
+
+    def test_soft_accept_after_exhaustion_still_blocks_high_risk_last_draft(self):
+        backend = ScriptedBackend(
+            [
+                _reply_payload("第一版"),
+                _self_review(90, "更自然"),
+                _reply_payload("第二版"),
+                _self_review(80, "更像真人"),
+                _reply_payload("第三版"),
+                _self_review(70, "再短"),
+            ]
+        )
+
+        result = generate_reply_with_refinement(
+            _evidence_pack(),
+            backend=backend,
+            audit_root=Path(tempfile.mkdtemp()),
+            soft_accept_after_exhaustion=True,
+        )
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.primary_reason, "draft_refinement_exhausted")
         self.assertIsNone(result.draft)
 
 

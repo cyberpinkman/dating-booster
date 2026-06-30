@@ -421,8 +421,14 @@ class StandaloneRuntimeTests(unittest.TestCase):
             def __init__(self):
                 self.calls = []
 
-            def draft_for_match(self, *, match_id: str, mode: str) -> dict[str, object]:
-                self.calls.append({"match_id": match_id, "mode": mode})
+            def draft_for_match(
+                self,
+                *,
+                match_id: str,
+                mode: str,
+                supplemental_prompts: list[str] | None = None,
+            ) -> dict[str, object]:
+                self.calls.append({"match_id": match_id, "mode": mode, "supplemental_prompts": supplemental_prompts})
                 return {
                     "schema_version": 1,
                     "status": "ok",
@@ -479,12 +485,19 @@ class StandaloneRuntimeTests(unittest.TestCase):
         self.assertEqual(scan_tick["work_item_type"], "scan_message_list")
         self.assertEqual(open_tick["work_item_type"], "open_thread")
         self.assertEqual(planner.calls[0]["mode"], "adaptive")
+        self.assertEqual(planner.calls[0]["supplemental_prompts"], [])
         self.assertEqual(final_tick["status"], "stage_recorded")
         self.assertEqual(final_tick["result_status"], "succeeded")
 
     def test_stage_runtime_accepts_draft_blocked_only_for_managed_send_when_stage_allowed(self):
         class FakeDraftPlanner:
-            def draft_for_match(self, *, match_id: str, mode: str) -> dict[str, object]:
+            def draft_for_match(
+                self,
+                *,
+                match_id: str,
+                mode: str,
+                supplemental_prompts: list[str] | None = None,
+            ) -> dict[str, object]:
                 return {
                     "schema_version": 1,
                     "status": "blocked",
@@ -496,6 +509,87 @@ class StandaloneRuntimeTests(unittest.TestCase):
                     "draft_review": {
                         "status": "blocked",
                         "primary_reason": "planner_auto_send_blocked",
+                        "allowed_for_stage": True,
+                        "allowed_for_managed_send": False,
+                    },
+                }
+
+        with patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-05-26T00:00:00Z"}):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                data_dir = Path(temp_dir) / "data"
+                fixture_dir = Path(temp_dir) / "fixtures"
+                fixture_dir.mkdir()
+                _init_profile(data_dir)
+                (fixture_dir / "message_list.json").write_text(
+                    json.dumps(_single_candidate_message_list_observation("row_ada"), ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                thread_without_draft = _thread_observation("row_ada")
+                thread_without_draft.pop("draft")
+                (fixture_dir / "thread_row_ada.json").write_text(
+                    json.dumps(thread_without_draft, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                provider = FixtureObservationProvider(fixture_dir)
+                managed = ManagedSessionRepository(
+                    data_dir,
+                    harness_factory=fixture_harness_factory(provider),
+                )
+                managed.start(
+                    app_id="tinder",
+                    authorization=json.loads((AUTOMATION_FIXTURE_DIR / "auth_send.json").read_text(encoding="utf-8")),
+                    goal=None,
+                    availability=None,
+                    send_mode="stage",
+                    managed_gui_send=False,
+                )
+                runtime = StandaloneAgentRuntime(
+                    data_dir,
+                    observation_provider=provider,
+                    harness_factory=fixture_harness_factory(provider),
+                    action_executor=StageOnlyActionExecutor(data_dir, send_mode="stage"),
+                    draft_planner=FakeDraftPlanner(),
+                )
+
+                runtime.tick()
+                open_tick = runtime.tick()
+                final_tick = runtime.tick()
+
+        self.assertEqual(open_tick["status"], "work_consumed")
+        self.assertEqual(final_tick["status"], "stage_recorded")
+        self.assertEqual(final_tick["result_status"], "succeeded")
+
+    def test_stage_runtime_accepts_soft_reviewed_draft_when_stage_only(self):
+        class FakeDraftPlanner:
+            def draft_for_match(
+                self,
+                *,
+                match_id: str,
+                mode: str,
+                supplemental_prompts: list[str] | None = None,
+            ) -> dict[str, object]:
+                draft = dict(_thread_observation("row_ada")["draft"])
+                draft["draft_self_review_summary"] = {
+                    "schema_version": 1,
+                    "ai_or_weird_probability": 62,
+                    "status": "needs_revision",
+                    "source": "unit_fixture",
+                    "reason": "soft_accept_stage_only",
+                }
+                return {
+                    "schema_version": 1,
+                    "status": "ok",
+                    "match_id": match_id,
+                    "mode": mode,
+                    "draft": draft,
+                    "draft_generation_summary": {
+                        "status": "ok",
+                        "source": "unit_fake",
+                        "primary_reason": "draft_refinement_soft_accepted",
+                    },
+                    "draft_review": {
+                        "status": "ok",
+                        "primary_reason": "passed",
                         "allowed_for_stage": True,
                         "allowed_for_managed_send": False,
                     },

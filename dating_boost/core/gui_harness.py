@@ -150,6 +150,25 @@ class NativeGuiHarness:
             return payload
         payload["window"] = window.to_dict()
         if not window.frontmost:
+            if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND:
+                frontmost_retry = self._activate_window()
+                payload["frontmost_retry_activation"] = frontmost_retry
+                retry_window = self._window_info()
+                if retry_window is not None:
+                    payload["frontmost_retry_window"] = retry_window.to_dict()
+                    if retry_window.frontmost:
+                        window = retry_window
+                        payload["window"] = window.to_dict()
+                    else:
+                        payload.update({"status": "blocked", "reason": "mac_ios_app_not_frontmost"})
+                        return payload
+                else:
+                    payload.update({"status": "blocked", "reason": "mac_ios_app_window_not_found_after_frontmost_retry"})
+                    return payload
+            else:
+                payload.update({"status": "blocked", "reason": "iphone_mirroring_not_frontmost"})
+                return payload
+        if not window.frontmost:
             reason = (
                 "mac_ios_app_not_frontmost"
                 if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND
@@ -238,11 +257,17 @@ class NativeGuiHarness:
                 if active_probe.get("status") == "ok":
                     return {"status": "ok", "attempts": attempts}
                 if active_probe.get("status") == "blocked":
-                    return {
-                        "status": "blocked",
-                        "reason": active_probe.get("reason") or "mac_ios_app_not_active",
-                        "attempts": attempts,
-                    }
+                    reason = str(active_probe.get("reason") or "mac_ios_app_not_active")
+                    if reason == "mac_ios_app_gui_session_not_interactive":
+                        return {
+                            "status": "blocked",
+                            "reason": reason,
+                            "attempts": attempts,
+                        }
+                    attempts.append({
+                        "method": "defer_blocked_active_probe_to_frontmost_retry",
+                        "reason": reason,
+                    })
             for attempt_index in range(6):
                 if attempt_index:
                     time.sleep(0.35)
@@ -265,11 +290,18 @@ class NativeGuiHarness:
                         active_probe = self._mac_ios_active_application_probe()
                         attempts.append({"method": "verify_active_application", "result": active_probe})
                         if active_probe.get("status") == "blocked":
-                            return {
-                                "status": "blocked",
-                                "reason": active_probe.get("reason") or "mac_ios_app_not_active",
-                                "attempts": attempts,
-                            }
+                            reason = str(active_probe.get("reason") or "mac_ios_app_not_active")
+                            if reason == "mac_ios_app_gui_session_not_interactive":
+                                return {
+                                    "status": "blocked",
+                                    "reason": reason,
+                                    "attempts": attempts,
+                                }
+                            attempts.append({
+                                "method": "retry_after_frontmost_active_probe_blocked",
+                                "reason": reason,
+                            })
+                            continue
                         return {
                             "status": "ok",
                             "attempts": attempts,
@@ -408,13 +440,18 @@ class NativeGuiHarness:
         if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND:
             readiness = self._mac_ios_active_application_probe()
             if readiness.get("status") == "blocked":
-                return {
-                    "status": "blocked",
-                    "reason": readiness.get("reason") or "mac_ios_app_not_active",
-                    "point": {"x": x, "y": y},
-                    "input_backend": "blocked_core_graphics",
-                    "input_readiness": readiness,
-                }
+                activation_retry = self._activate_window()
+                retry_readiness = self._mac_ios_active_application_probe()
+                if retry_readiness.get("status") == "blocked":
+                    return {
+                        "status": "blocked",
+                        "reason": retry_readiness.get("reason") or readiness.get("reason") or "mac_ios_app_not_active",
+                        "point": {"x": x, "y": y},
+                        "input_backend": "blocked_core_graphics",
+                        "input_readiness": retry_readiness,
+                        "initial_input_readiness": readiness,
+                        "activation_retry": activation_retry,
+                    }
         if self._command_available("xcrun"):
             result = self._core_graphics_click(x, y)
             if result["status"] == "ok":

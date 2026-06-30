@@ -123,6 +123,8 @@ class StandaloneTaShuoCliTests(unittest.TestCase):
                 "minimax",
                 "--minimax-api-key-env",
                 "MINIMAX_API_KEY",
+                "--minimax-request-timeout-seconds",
+                "19",
                 "--json",
             ]
             class FakeMiniMaxVisionBackend:
@@ -146,5 +148,7 @@ class StandaloneTaShuoCliTests(unittest.TestCase):
                 "model": "MiniMax-M3",
                 "base_url": "https://api.minimaxi.com/v1",
                 "api_key_env": "MINIMAX_API_KEY",
+                "timeout_seconds": 19.0,
             },
         )
+        self.assertEqual(start_payload["session"]["backend"]["timeout_seconds"], 19.0)

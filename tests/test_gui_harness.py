@@ -118,6 +118,8 @@ class FakeRunner:
         if command and command[0] == "osascript" and any("thin left navback" in item for item in command):
             self.ax_navback_clicks += 1
             return _result(stdout=f"{self.ax_navback_stdout}\n")
+        if command and command[0] == "osascript" and any("DATING_BOOST_TASHUO_DISMISS_NOTIFICATION_PROMPT" in item for item in command):
+            return _result(stdout="clicked\n")
         if command and command[0] == "osascript" and any("focused UI element" in item for item in command):
             return _result(stdout=f"{self.focused_text}\n")
         if command and command[0] == "osascript" and any('keystroke "v"' in item for item in command):
@@ -371,6 +373,15 @@ def _draft_generation_binding() -> dict[str, object]:
 
 
 class GuiHarnessTests(unittest.TestCase):
+    def setUp(self):
+        self._sleep_patchers = [
+            patch("dating_boost.apps.native_gui_session.time.sleep", return_value=None),
+            patch("dating_boost.apps.tashuo.native.time.sleep", return_value=None),
+        ]
+        for patcher in self._sleep_patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_capabilities_expose_stage_gui_harness_and_opt_in_managed_wechat_send(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output = StringIO()
@@ -1326,6 +1337,89 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["activation"]["reason"], "mac_ios_app_gui_session_not_interactive")
         self.assertFalse(any("set frontmost of process" in " ".join(command) for command in runner.commands))
 
+    def test_tashuo_mac_ios_app_doctor_retries_when_window_info_not_frontmost(self):
+        runner = FakeRunner(
+            ocr_text="",
+            window_name="她说",
+            window_info_stdout=[
+                "false, 100, 50, 288, 541, 她说\n",
+                "true, 100, 50, 288, 541, 她说\n",
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.doctor(capture=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["window"]["name"], "她说")
+        self.assertTrue(payload["window"]["frontmost"])
+        self.assertIn("frontmost_retry_activation", payload)
+        self.assertIn("frontmost_retry_window", payload)
+        self.assertTrue(any("set frontmost of process" in " ".join(command) for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_open_bundle_failure_recovers_when_app_already_active(self):
+        class OpenFailRunner:
+            def __init__(self):
+                self.commands = []
+
+            def run(self, command, *, input=None):
+                self.commands.append(command)
+                if command[:2] == ["open", "-b"]:
+                    return _result(returncode=1, stderr="_LSOpenURLsWithCompletionHandler() failed with error -1712.")
+                return _result()
+
+        class Session:
+            def __init__(self):
+                self.runner = OpenFailRunner()
+
+            def _mac_ios_active_application_probe(self):
+                return {
+                    "status": "ok",
+                    "frontmost_application": {"name": "她说", "bundle_id": "com.intelcupid.tashuo"},
+                    "target_application": {"name": "她说", "bundle_id": "com.intelcupid.tashuo", "active": True},
+                }
+
+        payload = tashuo_native._open_tashuo_mac_ios_app_bundle(Session(), "com.intelcupid.tashuo")
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["recovered_by"], "active_probe_after_failed_open")
+        self.assertEqual(payload["active_probe_after_failed_open"]["status"], "ok")
+
+    def test_tashuo_mac_ios_app_open_bundle_retries_transient_failed_active_probe(self):
+        class OpenFailRunner:
+            def __init__(self):
+                self.commands = []
+
+            def run(self, command, *, input=None):
+                self.commands.append(command)
+                if command[:2] == ["open", "-b"]:
+                    return _result(returncode=1, stderr="_LSOpenURLsWithCompletionHandler() failed with error -1712.")
+                return _result()
+
+        class Session:
+            def __init__(self):
+                self.runner = OpenFailRunner()
+                self.probes = 0
+
+            def _mac_ios_active_application_probe(self):
+                self.probes += 1
+                if self.probes == 1:
+                    return {"status": "blocked", "reason": "frontmost_application_not_target"}
+                return {
+                    "status": "ok",
+                    "frontmost_application": {"name": "她说", "bundle_id": "com.intelcupid.tashuo"},
+                    "target_application": {"name": "她说", "bundle_id": "com.intelcupid.tashuo", "active": True},
+                }
+
+        session = Session()
+        payload = tashuo_native._open_tashuo_mac_ios_app_bundle(session, "com.intelcupid.tashuo")
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["recovered_by"], "active_probe_after_failed_open")
+        self.assertEqual(session.probes, 2)
+        self.assertEqual(len(payload["attempts"]), 2)
+        self.assertEqual(session.runner.commands.count(["open", "-b", "com.intelcupid.tashuo"]), 2)
+
     def test_tashuo_mac_ios_app_click_blocks_when_loginwindow_frontmost(self):
         class LoginWindowFrontmostRunner(FakeRunner):
             def run(self, command, *, input=None):
@@ -2208,6 +2302,88 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
         self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
 
+    def test_tashuo_mac_ios_app_stage_draft_uses_ax_set_when_paste_does_not_stage(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Yasmine\n你好\n点击此处输入文字\n发送\n",
+                "Yasmine\n你好\n点击此处输入文字\n发送\n",
+                "Yasmine\n你好\n点击此处输入文字\n发送\n",
+                "Yasmine\n你好\n点击此处输入文字\n发送\n",
+                "Yasmine\n你好\n点击此处输入文字\n发送\n",
+            ],
+            window_name="她说",
+            screenshot_bytes=_tashuo_mac_ios_app_conversation_with_messages_png(),
+            ax_text_area_value="",
+            paste_focus_override="",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.stage_draft("今晚聊得挺舒服的。", dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["ax_set_text_area_result"]["status"], "ok")
+        self.assertEqual(payload["staging_input_backend"], "macos_accessibility")
+        self.assertEqual(payload["staged_text_verification"]["status"], "verified")
+        self.assertTrue(payload["staged_text_verified"])
+        self.assertEqual(runner.ax_text_area_value, "今晚聊得挺舒服的。")
+        self.assertTrue(
+            any(
+                command and command[0] == "osascript" and any("DATING_BOOST_AX_SET_TEXT_AREA_VALUE" in item for item in command)
+                for command in runner.commands
+            )
+        )
+        self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
+
+    def test_tashuo_mac_ios_app_stage_draft_reactivates_before_click_when_focus_moves(self):
+        class FocusMovesBeforeClickRunner(FakeRunner):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.active_probe_calls = 0
+
+            def run(self, command, *, input=None):
+                if (
+                    command[:3] == ["xcrun", "swift", "-e"]
+                    and "NSWorkspace.shared.frontmostApplication" in command[-1]
+                ):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    self.active_probe_calls += 1
+                    if self.active_probe_calls == 2:
+                        return _result(
+                            stdout=(
+                                "front\tCodex\tcom.openai.codex\n"
+                                "target\t她说\tcom.intelcupid.tashuo\t123\tfalse\tfalse\tfalse\n"
+                            )
+                        )
+                    return _result(
+                        stdout=(
+                            "front\t她说\tcom.intelcupid.tashuo\n"
+                            "target\t她说\tcom.intelcupid.tashuo\t123\ttrue\tfalse\tfalse\n"
+                        )
+                    )
+                return super().run(command, input=input)
+
+        runner = FocusMovesBeforeClickRunner(
+            ocr_text=[
+                "Yasmine\n你好\n点击此处输入文字\n发送\n",
+                "Yasmine\n你好\n点击此处输入文字\n发送\n",
+                "Yasmine\n你好\n今晚聊得挺舒服的。\n发送\n",
+                "Yasmine\n你好\n今晚聊得挺舒服的。\n发送\n",
+            ],
+            window_name="她说",
+            screenshot_bytes=_tashuo_mac_ios_app_conversation_with_messages_png(),
+            ax_text_area_value="",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        payload = harness.stage_draft("今晚聊得挺舒服的。", dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["staged_text_verified"])
+        self.assertGreaterEqual(runner.active_probe_calls, 4)
+        self.assertGreaterEqual(sum(1 for command in runner.commands if command[:2] == ["open", "-b"]), 2)
+        self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
+
     def test_tashuo_mac_ios_app_stage_draft_clears_existing_input_before_paste(self):
         runner = FakeRunner(
             ocr_text=[
@@ -2240,6 +2416,34 @@ class GuiHarnessTests(unittest.TestCase):
             if command and command[0] == "pbcopy"
         )
         self.assertLess(clear_index, copy_index)
+
+    def test_tashuo_mac_ios_app_clear_message_input_verifies_empty_without_send(self):
+        runner = FakeRunner(
+            ocr_text="Yasmine\n你好\n旧草稿\n发送\n",
+            window_name="她说",
+            screenshot_bytes=_tashuo_mac_ios_app_conversation_with_messages_png(),
+            ax_text_area_value="旧草稿",
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("clear-message-input", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "clear-message-input")
+        self.assertTrue(payload["input_cleared"])
+        self.assertEqual(payload["final_input_character_count"], 0)
+        self.assertEqual(payload["final_input_verification"]["status"], "ok")
+        self.assertEqual(payload["final_input_verification"]["final_input_character_count"], 0)
+        self.assertFalse(payload["send_action_executed"])
+        self.assertEqual(runner.ax_text_area_value, "")
+        self.assertTrue(
+            any(
+                command and command[0] == "osascript" and any("DATING_BOOST_AX_CLEAR_TEXT_AREA" in item for item in command)
+                for command in runner.commands
+            )
+        )
+        self.assertFalse(any("key code 36" in " ".join(command) for command in runner.commands))
 
     def test_tashuo_mac_ios_app_stage_draft_duplicate_append_needs_user_verification(self):
         runner = FakeRunner(
@@ -2314,6 +2518,54 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(any("radio button 3" in " ".join(command) for command in runner.commands))
         self.assertNotIn("tap_tashuo_conversation_row", [step["intent"] for step in payload["executed_steps"]])
 
+    def test_tashuo_mac_ios_prepare_message_page_retries_frontmost_when_open_probe_not_active(self):
+        class DelayedActiveRunner(FakeRunner):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.active_probe_calls = 0
+
+            def run(self, command, *, input=None):
+                if (
+                    command[:3] == ["xcrun", "swift", "-e"]
+                    and "NSWorkspace.shared.frontmostApplication" in command[-1]
+                ):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    self.active_probe_calls += 1
+                    if self.active_probe_calls <= 2:
+                        return _result(
+                            stdout=(
+                                "front\tFinder\tcom.apple.finder\n"
+                                "target\t她说\tcom.intelcupid.tashuo\t123\tfalse\tfalse\tfalse\n"
+                            )
+                        )
+                    return _result(
+                        stdout=(
+                            "front\t她说\tcom.intelcupid.tashuo\n"
+                            "target\t她说\tcom.intelcupid.tashuo\t123\ttrue\tfalse\tfalse\n"
+                        )
+                    )
+                return super().run(command, input=input)
+
+        runner = DelayedActiveRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[_tashuo_messages_bottom_nav_png()],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("prepare-message-page", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertGreaterEqual(runner.active_probe_calls, 3)
+        activate_step = next(step for step in payload["executed_steps"] if step["intent"] == "activate_tashuo_mac_ios_process")
+        attempts = activate_step["result"]["attempts"]
+        self.assertIn("defer_blocked_active_probe_to_frontmost_retry", [attempt["method"] for attempt in attempts])
+        self.assertIn("retry_after_frontmost_active_probe_blocked", [attempt["method"] for attempt in attempts])
+        self.assertIn("set_process_frontmost", [attempt["method"] for attempt in attempts])
+        self.assertEqual(payload["screen_state"], "tashuo_chat_list")
+
     def test_tashuo_mac_ios_prepare_message_page_uses_core_graphics_window_id_capture(self):
         class CoreGraphicsWindowRunner(FakeRunner):
             def run(self, command, *, input=None):
@@ -2376,6 +2628,147 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertAlmostEqual(fallback["tap_ratio"]["x"], 0.67)
         self.assertAlmostEqual(fallback["tap_ratio"]["y"], 0.96)
         self.assertEqual(payload["screen_state"], "tashuo_chat_list")
+
+    def test_tashuo_mac_ios_prepare_self_profile_page_uses_ax_radio_button_without_ocr(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_recommend_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_top_level_bottom_nav_png("mine"),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("prepare-self-profile-page", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["harness_backend"], "mac_ios_app")
+        self.assertEqual(payload["screen_state"], "tashuo_self_profile")
+        self.assertEqual(payload["next_host_action"], "extract_visible_self_profile_facts")
+        self.assertFalse(payload["ocr_used"])
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+        self.assertIn(
+            "prepare_tashuo_message_page_as_safe_top_level_anchor",
+            [step["intent"] for step in payload["executed_steps"]],
+        )
+        self.assertIn("click_tashuo_mine_tab_accessibility", [step["intent"] for step in payload["executed_steps"]])
+        self.assertTrue(any("radio button 4" in " ".join(command) for command in runner.commands))
+        self.assertNotIn("tap_tashuo_conversation_row", [step["intent"] for step in payload["executed_steps"]])
+
+    def test_tashuo_mac_ios_prepare_self_profile_page_fallback_taps_real_mine_tab_when_ax_missing(self):
+        class MineAxMissingRunner(FakeRunner):
+            def run(self, command, *, input=None):
+                if command and command[0] == "osascript" and any("radio button 4" in item for item in command):
+                    self.commands.append(command)
+                    self.command_inputs.append((command, input))
+                    return _result(stderr='System Events got an error: Can’t get radio button 4.', returncode=1)
+                return super().run(command, input=input)
+
+        runner = MineAxMissingRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_recommend_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_top_level_bottom_nav_png("mine"),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("prepare-self-profile-page", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["screen_state"], "tashuo_self_profile")
+        fallback = next(step for step in payload["executed_steps"] if step["intent"] == "tap_tashuo_mine_tab_fallback")
+        self.assertAlmostEqual(fallback["tap_ratio"]["x"], 0.86)
+        self.assertAlmostEqual(fallback["tap_ratio"]["y"], 0.96)
+
+    def test_tashuo_mac_ios_open_self_profile_detail_taps_avatar_read_only(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_recommend_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_top_level_bottom_nav_png("mine"),
+                _tashuo_mac_ios_app_profile_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("open-self-profile-detail", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["harness_backend"], "mac_ios_app")
+        self.assertEqual(payload["screen_state"], "tashuo_profile")
+        self.assertEqual(payload["next_host_action"], "extract_visible_self_profile_detail_facts")
+        self.assertFalse(payload["ocr_used"])
+        self.assertTrue(any(command and command[0] == "tesseract" for command in runner.commands))
+        intents = [step["intent"] for step in payload["executed_steps"]]
+        self.assertIn("prepare_tashuo_self_profile_page_top", intents)
+        self.assertIn("tap_tashuo_self_profile_avatar", intents)
+        self.assertNotIn("tap_tashuo_conversation_row", intents)
+        avatar_tap = next(step for step in payload["executed_steps"] if step["intent"] == "tap_tashuo_self_profile_avatar")
+        self.assertTrue(avatar_tap["does_not_tap_edit_profile"])
+        self.assertAlmostEqual(avatar_tap["tap_ratio"]["x"], 0.50)
+        self.assertAlmostEqual(avatar_tap["tap_ratio"]["y"], 0.27)
+
+    def test_tashuo_mac_ios_profile_scroll_to_bottom_stops_on_share_anchor(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "我的资料\nVibe Coding\n健身\n补觉\n",
+                "我的资料\n我的MBTI\nENFP创造家\n小狗\n",
+                "我的资料\n近期动态\n我在哪里\n北京市 朝阳区\n分享给好友\n",
+            ],
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_mac_ios_app_profile_mid_png(),
+                _tashuo_mac_ios_app_profile_mid_png(),
+                _tashuo_mac_ios_app_profile_bottom_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("profile-scroll-to-bottom", dry_run=False, output_dir=Path(temp_dir), max_scrolls=3)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["reason"], "tashuo_profile_bottom_anchor_verified")
+        self.assertTrue(payload["bottom_anchor_verified"])
+        self.assertEqual(payload["attempt_count"], 3)
+        self.assertEqual(len(payload["executed_steps"]), 2)
+        self.assertTrue(all(step["intent"] == "wheel_tashuo_profile_read_down" for step in payload["executed_steps"]))
+        self.assertEqual(payload["next_host_action"], "extract_visible_self_profile_detail_facts")
+
+    def test_tashuo_mac_ios_profile_scroll_to_bottom_continues_through_mid_profile_without_title(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Vibe Coding\n健身\n补觉\n",
+                "更多信息\n有健身习惯\n不饮酒\n不吸烟\n我的恋爱三观\n我的心灵测试\n关于人生阶段\n",
+                "近期动态\n我在哪里\n北京市 朝阳区\n分享给好友\n",
+            ],
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_mac_ios_app_profile_mid_png(),
+                _tashuo_mac_ios_app_profile_bottom_png(),
+                _tashuo_mac_ios_app_profile_bottom_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("profile-scroll-to-bottom", dry_run=False, output_dir=Path(temp_dir), max_scrolls=3)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["reason"], "tashuo_profile_bottom_anchor_verified")
+        self.assertTrue(payload["bottom_anchor_verified"])
+        self.assertEqual(payload["attempt_count"], 3)
+        self.assertEqual(len(payload["executed_steps"]), 2)
 
     def test_tashuo_mac_ios_prepare_message_page_waits_for_message_list_after_tab_highlight(self):
         runner = FakeRunner(
@@ -2452,6 +2845,89 @@ class GuiHarnessTests(unittest.TestCase):
         intents = [step["intent"] for step in payload["executed_steps"]]
         self.assertIn("click_tashuo_conversation_navback_accessibility", intents)
         self.assertIn("tap_tashuo_conversation_navback_visual_fallback", intents)
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+
+    def test_tashuo_mac_ios_prepare_message_page_returns_from_secondary_profile_page(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_mac_ios_app_profile_png(),
+                _tashuo_messages_bottom_nav_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("prepare-message-page", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["initial_visual_state"], "tashuo_profile")
+        self.assertEqual(payload["post_secondary_navback_visual_state"], "tashuo_chat_list")
+        self.assertEqual(payload["screen_state"], "tashuo_chat_list")
+        intents = [step["intent"] for step in payload["executed_steps"]]
+        self.assertIn("tap_tashuo_secondary_page_navback_visual", intents)
+        self.assertIn("handoff_to_visual_message_list_planning", intents)
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+
+    def test_tashuo_mac_ios_prepare_message_page_returns_from_pending_question_list(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_mac_ios_app_pending_question_list_png(),
+                _tashuo_messages_bottom_nav_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("prepare-message-page", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["initial_visual_state"], "tashuo_pending_question_list")
+        self.assertEqual(payload["post_secondary_navback_visual_state"], "tashuo_chat_list")
+        self.assertEqual(payload["screen_state"], "tashuo_chat_list")
+        intents = [step["intent"] for step in payload["executed_steps"]]
+        self.assertIn("tap_tashuo_secondary_page_navback_visual", intents)
+        self.assertIn("handoff_to_visual_message_list_planning", intents)
+        self.assertNotIn("question_gate_send", intents)
+        self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+
+    def test_tashuo_mac_ios_prepare_message_page_dismisses_liked_you_modal(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_liked_you_modal_png(),
+                _tashuo_messages_bottom_nav_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac_ios_app")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = harness.run_action("prepare-message-page", dry_run=False, output_dir=Path(temp_dir))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["initial_visual_state"], "tashuo_liked_you_modal")
+        self.assertEqual(payload["initial_screen"]["state"], "tashuo_liked_you_modal")
+        self.assertTrue(payload["liked_you_modal_dismissed"])
+        self.assertEqual(payload["post_liked_you_modal_visual_state"], "tashuo_chat_list")
+        self.assertEqual(payload["after_liked_you_modal_screen"]["state"], "tashuo_chat_list")
+        self.assertEqual(payload["screen_state"], "tashuo_chat_list")
+        self.assertEqual(payload["next_host_action"], "visual_plan_message_list")
+        intents = [step["intent"] for step in payload["executed_steps"]]
+        self.assertIn("dismiss_tashuo_liked_you_modal_later", intents)
+        self.assertNotIn("click_tashuo_conversation_navback_accessibility", intents)
+        self.assertNotIn("tap_tashuo_conversation_navback_visual_fallback", intents)
+        dismiss_step = next(step for step in payload["executed_steps"] if step["intent"] == "dismiss_tashuo_liked_you_modal_later")
+        self.assertEqual(dismiss_step["result"]["status"], "ok")
+        self.assertTrue(dismiss_step["result"]["does_not_purchase"])
+        self.assertEqual(dismiss_step["result"]["method"], "visual_cancel_tap")
+        self.assertAlmostEqual(dismiss_step["result"]["tap_ratio"]["x"], 0.50)
+        self.assertAlmostEqual(dismiss_step["result"]["tap_ratio"]["y"], 0.79)
+        self.assertIn("refresh_tashuo_mac_ios_window_after_liked_you_modal", intents)
+        self.assertTrue(any("DATING_BOOST_TASHUO_DISMISS_LIKED_YOU_MODAL" in " ".join(command) for command in runner.commands))
         self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
 
     def test_tashuo_mac_ios_conversation_list_scroll_action_skips_all_ocr_captures(self):
@@ -2610,6 +3086,78 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertAlmostEqual(payload["executed_steps"][0]["tap_ratio"]["y"], 0.60, delta=0.04)
         self.assertEqual(payload["executed_steps"][0]["selection_method"], "message_list_visual_anchor_scan")
         self.assertEqual(relocation["tap_adjustment"]["reason"], "row_upper_band_guard")
+
+    def test_tashuo_message_list_relocation_prefers_prior_tap_when_visual_anchor_is_ambiguous(self):
+        width, height = 288, 541
+        ambiguous_png = _png_from_pixels(
+            [[(255, 255, 255, 255) for _x in range(width)] for _y in range(height)],
+            width,
+            height,
+        )
+        row_region = {"x1": 0.02, "y1": 0.7815, "x2": 0.98, "y2": 0.8605}
+        row_visual_hash = _png_average_hash(ambiguous_png, region=row_region)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "ambiguous-list.png"
+            path.write_bytes(ambiguous_png)
+
+            location = tashuo_native._locate_tashuo_message_list_visual_target(
+                {"status": "ok", "state": "tashuo_chat_list", "path": str(path)},
+                {
+                    "status": "ok",
+                    "evidence_type": "message_list_visual_anchor",
+                    "visual_anchor_hash": row_visual_hash,
+                    "visual_anchor_region": row_region,
+                    "visual_anchor_scan_region": {"x1": 0.0, "y1": 0.16, "x2": 1.0, "y2": 0.95},
+                    "visual_anchor_max_hamming_distance": 0,
+                    "tap_ratio": {"x": 0.87, "y": 0.821},
+                },
+            )
+
+        self.assertEqual(location["status"], "ok")
+        self.assertEqual(location["location_method"], "message_list_visual_anchor_scan")
+        self.assertLess(location["visual_anchor_tap_y_delta"], 0.01)
+        self.assertAlmostEqual(location["raw_tap_ratio"]["y"], 0.821, delta=0.01)
+        self.assertAlmostEqual(location["tap_ratio"]["x"], 0.87, delta=0.001)
+        self.assertGreater(location["tap_ratio"]["y"], row_region["y1"])
+        self.assertLess(location["tap_ratio"]["y"], row_region["y2"])
+
+    def test_tashuo_message_list_relocation_preserves_corrected_action_tap_when_current_region_matches(self):
+        width, height = 288, 541
+        current_png = _png_from_pixels(
+            [[(255, 255, 255, 255) for _x in range(width)] for _y in range(height)],
+            width,
+            height,
+        )
+        row_region = {"x1": 0.03, "y1": 0.497, "x2": 0.22, "y2": 0.657}
+        row_visual_hash = _png_average_hash(current_png, region=row_region)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "current-list.png"
+            path.write_bytes(current_png)
+
+            location = tashuo_native._locate_tashuo_message_list_visual_target(
+                {"status": "ok", "state": "tashuo_chat_list", "path": str(path)},
+                {
+                    "status": "ok",
+                    "evidence_type": "message_list_visual_anchor",
+                    "visual_anchor_hash": row_visual_hash,
+                    "visual_anchor_region": row_region,
+                    "visual_anchor_scan_region": {"x1": 0.0, "y1": 0.16, "x2": 1.0, "y2": 0.95},
+                    "visual_anchor_max_hamming_distance": 0,
+                    "tap_ratio": {"x": 0.87, "y": 0.577},
+                    "tap_ratio_source": "corrected_all_messages_row_action",
+                },
+            )
+
+        self.assertEqual(location["status"], "ok")
+        self.assertEqual(location["location_method"], "message_list_visual_anchor_current_region_tap")
+        self.assertTrue(location["current_region_verified"])
+        self.assertFalse(location["visual_anchor_scanned"])
+        self.assertEqual(location["tap_ratio_source"], "corrected_all_messages_row_action")
+        self.assertAlmostEqual(location["tap_ratio"]["x"], 0.87, delta=0.001)
+        self.assertAlmostEqual(location["tap_ratio"]["y"], 0.577, delta=0.001)
+        self.assertFalse(location["tap_adjustment"]["adjusted"])
 
     def test_tashuo_mac_ios_app_open_conversation_relocates_bottom_visible_visual_anchor(self):
         old_list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.85)
@@ -2779,6 +3327,58 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(recovery["return_to_chats"]["intent"], "tap_tashuo_back_to_chats")
         self.assertEqual(payload["executed_steps"][0]["selection_method"], "message_list_visual_anchor_scan")
 
+    def test_tashuo_mac_ios_app_open_conversation_retries_body_tap_when_action_tap_does_not_open(self):
+        list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.82)
+        target_thread_png = _tashuo_mac_ios_app_conversation_with_messages_png(accent=(168, 92, 126, 255))
+        row_region = {"x1": 0.04, "y1": 0.77, "x2": 0.96, "y2": 0.87}
+        row_visual_hash = _png_average_hash(list_png, region=row_region)
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                list_png,
+                list_png,
+                list_png,
+                list_png,
+                list_png,
+                list_png,
+                target_thread_png,
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac-ios-app")
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("dating_boost.apps.native_gui_session.time.sleep", return_value=None),
+            patch("dating_boost.apps.tashuo.native.time.sleep", return_value=None),
+        ):
+            payload = harness.run_action(
+                "open-conversation",
+                dry_run=False,
+                output_dir=Path(temp_dir),
+                tap_ratio={"x": 0.87, "y": 0.821},
+                visual_target_label="小药丸儿",
+                visual_target_preview="我也比较慢热",
+                message_list_evidence={
+                    "source_state": "tashuo_chat_list",
+                    "selection_method": "message_list_visual_anchor_scan",
+                    "visual_anchor_hash": row_visual_hash,
+                    "visual_anchor_region": row_region,
+                    "visual_anchor_scan_region": {"x1": 0.0, "y1": 0.18, "x2": 1.0, "y2": 0.90},
+                    "tap_ratio": {"x": 0.87, "y": 0.821},
+                    "tap_ratio_source": "corrected_all_messages_row_action",
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        attempts = payload["message_list_open_fallback_attempts"]
+        self.assertEqual(attempts[0]["selection_method"], "message_list_visual_anchor_body_fallback_tap")
+        self.assertEqual(attempts[0]["result"]["status"], "ok")
+        self.assertEqual(payload["message_list_open_initial_result"]["reason"], "tashuo_step_postcondition_not_verified")
+        self.assertEqual(payload["executed_steps"][0]["selection_method"], "message_list_visual_anchor_body_fallback_tap")
+        self.assertEqual(payload["executed_steps"][0]["message_list_open_fallback"]["attempt_index"], 1)
+
     def test_tashuo_mac_ios_app_open_conversation_waits_before_postcondition_capture(self):
         runner = FakeRunner(
             ocr_text="OCR should not be used",
@@ -2811,6 +3411,48 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["executed_steps"][0]["postcondition"]["screen_state"], "tashuo_conversation")
         self.assertIn(2.0, sleeps)
         self.assertFalse(any(command and command[0] == "tesseract" for command in runner.commands))
+
+    def test_tashuo_mac_ios_open_conversation_dismisses_notification_prompt_before_postcondition(self):
+        runner = FakeRunner(
+            ocr_text="OCR should not be used",
+            window_name="她说",
+            screenshot_bytes=[
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_messages_bottom_nav_png(),
+                _tashuo_mac_ios_app_conversation_notification_prompt_png(),
+                _tashuo_mac_ios_app_conversation_with_messages_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tashuo", platform="darwin", runner=runner, runtime="mac-ios-app")
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("dating_boost.apps.native_gui_session.time.sleep", return_value=None),
+            patch("dating_boost.apps.tashuo.native.time.sleep", return_value=None),
+        ):
+            payload = harness.run_action(
+                "open-conversation",
+                dry_run=False,
+                output_dir=Path(temp_dir),
+                tap_ratio={"x": 0.86, "y": 0.47},
+                visual_target_label="小药丸儿",
+                visual_target_preview="我也比较慢热",
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        postcondition = payload["executed_steps"][0]["postcondition"]
+        self.assertEqual(postcondition["screen_state"], "tashuo_conversation")
+        self.assertTrue(postcondition["dismissed_tashuo_notification_prompt"])
+        self.assertEqual(postcondition["first_screen_state"], "tashuo_conversation_notification_prompt")
+        self.assertTrue(
+            any(
+                command
+                and command[0] == "osascript"
+                and "DATING_BOOST_TASHUO_DISMISS_NOTIFICATION_PROMPT" in " ".join(command)
+                for command in runner.commands
+            )
+        )
 
     def test_tashuo_mac_ios_conversation_list_scroll_to_top_requires_top_anchor(self):
         runner = FakeRunner(
@@ -3275,6 +3917,22 @@ class GuiHarnessTests(unittest.TestCase):
             "tashuo_profile",
         )
         self.assertEqual(
+            classify_tashuo_screen_text("更多信息\n有健身习惯\n不饮酒\n不吸烟\n我的恋爱三观\n我的心灵测试\n关于人生阶段"),
+            "tashuo_profile",
+        )
+        self.assertEqual(
+            classify_tashuo_screen_text("近期动态\n我在哪里\n北京市 朝阳区\n分享给好友"),
+            "tashuo_profile",
+        )
+        self.assertEqual(
+            combine_tashuo_screen_states(
+                "unknown",
+                "tashuo_conversation",
+                "近期动态\n我在哪里\n北京市 朝阳区\n分享给好友",
+            ),
+            "tashuo_profile",
+        )
+        self.assertEqual(
             classify_tashuo_screen_text("Yasmine\n不理解\n点击此处输入文字\n"),
             "tashuo_conversation",
         )
@@ -3346,6 +4004,21 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertFalse(payload["bottom_nav_present"])
         self.assertTrue(payload["conversation_toolbar_present"])
 
+    def test_visual_tashuo_notification_prompt_is_recoverable_not_stageable_conversation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screenshot_path = Path(temp_dir) / "tashuo-notification-prompt.png"
+            screenshot_path.write_bytes(_tashuo_mac_ios_app_conversation_notification_prompt_png())
+
+            payload = classify_tashuo_screen_image(screenshot_path)
+            capture = classify_tashuo_capture(screenshot_path, "")
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["state"], "tashuo_conversation_notification_prompt")
+        self.assertTrue(payload["conversation_notification_prompt_present"])
+        self.assertFalse(payload["conversation_toolbar_present"])
+        self.assertEqual(capture["state"], "tashuo_conversation_notification_prompt")
+        self.assertFalse(tashuo_layout_hints(capture)["draft_staging_supported"])
+
     def test_visual_tashuo_mac_ios_app_profile_uses_media_and_info_card_layout(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             screenshot_path = Path(temp_dir) / "tashuo-mac-ios-profile.png"
@@ -3381,6 +4054,18 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["active_tab"], "recommend")
         self.assertTrue(payload["bottom_nav_present"])
         self.assertFalse(payload["conversation_toolbar_present"])
+
+    def test_visual_tashuo_liked_you_modal_is_not_classified_as_conversation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screenshot_path = Path(temp_dir) / "tashuo-liked-you-modal.png"
+            screenshot_path.write_bytes(_tashuo_liked_you_modal_png())
+
+            payload = classify_tashuo_screen_image(screenshot_path)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["state"], "tashuo_liked_you_modal")
+        self.assertTrue(payload["liked_you_modal_present"])
+        self.assertFalse(payload["bottom_nav_present"])
 
     def test_visual_tashuo_recommend_tolerates_window_id_black_margins(self):
         source_width, source_height, source_rows = _read_test_png_pixels(_tashuo_recommend_bottom_nav_png())
@@ -6419,6 +7104,28 @@ def _tashuo_mac_ios_app_conversation_with_messages_png(
     return _png_from_pixels(pixels, width, height)
 
 
+def _tashuo_mac_ios_app_conversation_notification_prompt_png() -> bytes:
+    width, height = 288, 541
+    pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.04, 0.095, 0.095, 0.135, (35, 35, 35, 255))
+    fill(0.37, 0.098, 0.45, 0.145, (28, 28, 32, 255))
+    fill(0.47, 0.110, 0.63, 0.132, (28, 28, 32, 255))
+    fill(0.84, 0.115, 0.94, 0.128, (35, 35, 35, 255))
+    fill(0.00, 0.155, 1.00, 0.340, (255, 255, 255, 255))
+    fill(0.29, 0.190, 0.71, 0.218, (24, 24, 28, 255))
+    fill(0.23, 0.232, 0.77, 0.258, (132, 132, 145, 255))
+    fill(0.34, 0.262, 0.66, 0.305, (111, 74, 237, 255))
+    fill(0.90, 0.165, 0.94, 0.190, (205, 205, 212, 255))
+    fill(0.00, 0.340, 1.00, 1.00, (249, 249, 253, 255))
+    return _png_from_pixels(pixels, width, height)
+
+
 def _tashuo_mac_ios_app_message_list_with_target_row_png(
     *,
     target_center_y: float,
@@ -6477,6 +7184,56 @@ def _tashuo_mac_ios_app_profile_png() -> bytes:
     return _png_from_pixels(pixels, width, height)
 
 
+def _tashuo_mac_ios_app_pending_question_list_png() -> bytes:
+    width, height = 288, 541
+    pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.00, 0.00, 1.00, 1.00, (248, 249, 253, 255))
+    fill(0.04, 0.095, 0.095, 0.135, (28, 28, 32, 255))
+    fill(0.42, 0.105, 0.58, 0.132, (28, 28, 32, 255))
+    fill(0.26, 0.185, 0.42, 0.215, (106, 68, 238, 255))
+    fill(0.33, 0.224, 0.40, 0.232, (106, 68, 238, 255))
+    fill(0.62, 0.185, 0.78, 0.215, (28, 28, 32, 255))
+    fill(0.27, 0.335, 0.73, 0.55, (210, 218, 236, 255))
+    fill(0.32, 0.37, 0.44, 0.50, (80, 98, 126, 255))
+    fill(0.26, 0.59, 0.74, 0.635, (28, 28, 32, 255))
+    fill(0.28, 0.67, 0.72, 0.72, (116, 120, 132, 255))
+    return _png_from_pixels(pixels, width, height)
+
+
+def _tashuo_mac_ios_app_profile_mid_png() -> bytes:
+    return _tashuo_mac_ios_app_profile_png()
+
+
+def _tashuo_mac_ios_app_profile_bottom_png() -> bytes:
+    width, height = 288, 541
+    pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.00, 0.08, 1.00, 0.47, (236, 240, 252, 255))
+    fill(0.08, 0.12, 0.48, 0.16, (154, 170, 235, 255))
+    fill(0.08, 0.20, 0.22, 0.30, (180, 120, 95, 255))
+    fill(0.25, 0.20, 0.39, 0.30, (195, 75, 60, 255))
+    fill(0.42, 0.20, 0.56, 0.30, (76, 126, 196, 255))
+    fill(0.59, 0.20, 0.73, 0.30, (70, 158, 196, 255))
+    fill(0.76, 0.20, 0.84, 0.30, (224, 229, 248, 255))
+    fill(0.00, 0.47, 1.00, 0.86, (236, 240, 252, 255))
+    fill(0.08, 0.56, 0.44, 0.60, (154, 170, 235, 255))
+    fill(0.08, 0.64, 0.42, 0.70, (32, 34, 40, 255))
+    fill(0.08, 0.92, 0.92, 0.965, (248, 250, 255, 255))
+    fill(0.40, 0.938, 0.60, 0.948, (96, 102, 126, 255))
+    return _png_from_pixels(pixels, width, height)
+
+
 def _tashuo_mac_ios_app_profile_closing_transition_png() -> bytes:
     width, height = 288, 541
     pixels = [[(248, 248, 252, 255) for _ in range(width)] for _ in range(height)]
@@ -6527,6 +7284,25 @@ def _tashuo_messages_top_anchor_png() -> bytes:
         label_half_width = 0.030 if active else 0.018
         fill(center - icon_half_width, 0.930, center + icon_half_width, 0.968, color)
         fill(center - label_half_width, 0.980, center + label_half_width, 0.990, color)
+    return _png_from_pixels(pixels, width, height)
+
+
+def _tashuo_liked_you_modal_png() -> bytes:
+    width, height = 288, 541
+    pixels = [[(18, 18, 22, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(int(y1 * height), int(y2 * height)):
+            for x in range(int(x1 * width), int(x2 * width)):
+                pixels[y][x] = color
+
+    fill(0.08, 0.25, 0.92, 0.80, (255, 255, 255, 255))
+    fill(0.34, 0.30, 0.66, 0.36, (42, 42, 48, 255))
+    fill(0.18, 0.41, 0.82, 0.47, (236, 236, 242, 255))
+    fill(0.22, 0.50, 0.78, 0.55, (236, 236, 242, 255))
+    fill(0.14, 0.62, 0.86, 0.72, (111, 74, 237, 255))
+    fill(0.30, 0.72, 0.70, 0.80, (255, 255, 255, 255))
+    fill(0.40, 0.745, 0.60, 0.765, (70, 70, 78, 255))
     return _png_from_pixels(pixels, width, height)
 
 

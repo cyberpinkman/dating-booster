@@ -91,6 +91,61 @@ def _write_user_profile(data_dir: Path) -> None:
     )
 
 
+def _write_disclosure_profile(data_dir: Path) -> None:
+    user_dir = data_dir / "user"
+    user_dir.mkdir(parents=True, exist_ok=True)
+    (user_dir / "disclosure_profile.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "user_id": "user_local",
+                "hard_facts": [
+                    {
+                        "fact_id": "fact_degree_undergrad",
+                        "text": "本科",
+                        "value": "本科",
+                        "source": "tashuo_self_profile_detail_observation",
+                    }
+                ],
+                "persona_style": {
+                    "baseline": "每句话不会太长，不油，偶尔有梗，会比较有边界感",
+                    "allowed_modulations": ["light_polish"],
+                },
+                "shareable_material": [
+                    {
+                        "material_id": "mat_reply_rhythm_busy_batches",
+                        "type": "reply_rhythm",
+                        "text": "我一般会忙完了集中回信息，有时候会间隔比较长",
+                        "tags": ["low_investment_repair"],
+                        "risk_level": "low",
+                        "usable_moves": ["low_investment_repair"],
+                        "hard_fact_dependencies": [],
+                        "example_phrasings": [],
+                        "sensitivity": "low",
+                        "source": "user_self_interview",
+                    }
+                ],
+                "voice_samples": [],
+                "boundaries": [
+                    {
+                        "boundary_id": "boundary_income_private",
+                        "text": "收入不透露",
+                        "type": "privacy",
+                    }
+                ],
+                "simulation_policy": "material_only",
+                "source_completion": {
+                    "dating_profile": True,
+                    "interview": True,
+                },
+                "updated_at": "2026-06-25T16:08:30Z",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
 def _write_match_projection(
     data_dir: Path,
     match_id: str,
@@ -320,6 +375,35 @@ class DraftEvidenceTests(unittest.TestCase):
 
             self.assertEqual(evidence.status, "blocked")
             self.assertEqual(evidence.primary_reason, "user_profile_source_required")
+
+    def test_uses_disclosure_profile_as_user_memory_when_legacy_profile_is_absent(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            match_id = "match_ada"
+            _write_disclosure_profile(data_dir)
+            _write_match_projection(data_dir, match_id)
+            ConversationThreadRepository(data_dir).overwrite_from_observation(match_id, _observation())
+
+            evidence = build_draft_evidence(
+                data_dir,
+                match_id,
+                reply_mode=ReplyMode.ADAPTIVE,
+                observation=_observation(),
+                app_id="tashuo",
+                runtime="mac-ios-app",
+                require_user_profile_source=True,
+            )
+
+            self.assertEqual(evidence.status, "ok")
+            self.assertIsNotNone(evidence.evidence_manifest["user_memory_hash"])
+            sources = {
+                (item.get("app_id"), item.get("runtime"))
+                for item in evidence.user_memory.get("profile_sources", [])
+                if isinstance(item, dict)
+            }
+            self.assertIn(("tashuo", "mac-ios-app"), sources)
+            labels = [item["label"] for item in evidence.context_pack["items"]]
+            self.assertIn("user_disclosure_profile", labels)
 
 
 if __name__ == "__main__":

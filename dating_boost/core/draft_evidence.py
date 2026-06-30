@@ -246,8 +246,16 @@ class UserMemoryRepository:
         try:
             return self._storage.read_json(self._path(), expected_schema_version=USER_MEMORY_SCHEMA_VERSION)
         except FileNotFoundError:
-            profile = JsonMemoryRepository(self.root).load_user_profile()
-            projection = self._projection_from_profile(profile, profile_sources=[])
+            try:
+                profile = JsonMemoryRepository(self.root).load_user_profile()
+                projection = self._projection_from_profile(profile, profile_sources=[])
+            except FileNotFoundError:
+                from dating_boost.core.user_disclosure import UserDisclosureRepository
+
+                disclosure_profile = UserDisclosureRepository(self.root).load_profile_or_none()
+                if disclosure_profile is None:
+                    raise
+                projection = self._projection_from_disclosure_profile(disclosure_profile)
             self._storage.write_json(self._path(), projection)
             return projection
 
@@ -306,6 +314,39 @@ class UserMemoryRepository:
             "profile_sources": profile_sources,
             "thread_disclosures": [],
             "updated_at": profile.updated_at,
+        }
+
+    def _projection_from_disclosure_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
+        updated_at = str(profile.get("updated_at") or _now_iso())
+        persona_style = profile.get("persona_style") if isinstance(profile.get("persona_style"), dict) else {}
+        hard_facts = [dict(item) for item in profile.get("hard_facts", []) if isinstance(item, dict)]
+        boundaries = [dict(item) for item in profile.get("boundaries", []) if isinstance(item, dict)]
+        shareable_material = [dict(item) for item in profile.get("shareable_material", []) if isinstance(item, dict)]
+        voice_samples = [str(item) for item in profile.get("voice_samples", []) if str(item).strip()]
+        return {
+            "schema_version": USER_MEMORY_SCHEMA_VERSION,
+            "user_id": str(profile.get("user_id") or "user_local"),
+            "profile": {
+                "facts": hard_facts,
+                "preferences": [],
+                "boundaries": boundaries,
+                "style_examples": voice_samples,
+                "goals": [],
+                "persona_baseline": str(persona_style.get("baseline") or ""),
+                "persona_range": [
+                    str(item)
+                    for item in persona_style.get("allowed_modulations", [])
+                    if str(item).strip()
+                ],
+                "stance_range": [],
+                "default_reply_mode": "adaptive",
+                "shareable_material": shareable_material,
+                "simulation_policy": str(profile.get("simulation_policy") or "free_simulation_soft"),
+            },
+            "disclosure_profile": dict(profile),
+            "profile_sources": _profile_sources_from_disclosure_profile(profile, updated_at=updated_at),
+            "thread_disclosures": [],
+            "updated_at": updated_at,
         }
 
     def _path(self) -> Path:
@@ -484,6 +525,14 @@ def _build_context_pack_from_evidence(
 ) -> dict[str, Any]:
     messages = [dict(item) for item in conversation_thread.get("messages", []) if isinstance(item, dict)]
     latest_messages = [dict(item) for item in latest_turn.get("messages", []) if isinstance(item, dict)]
+    memory_items = [
+        {"label": "match_memory_projection", "content": match_memory},
+        {"label": "user_memory_projection", "content": user_memory},
+    ]
+    disclosure_profile = user_memory.get("disclosure_profile")
+    if isinstance(disclosure_profile, dict):
+        memory_items.append({"label": "user_disclosure_profile", "content": disclosure_profile})
+
     conversation_memory = {
         "recent_messages": messages,
         "latest_inbound_messages": latest_messages,
@@ -491,10 +540,7 @@ def _build_context_pack_from_evidence(
             "message_count": int(conversation_thread.get("message_count") or 0),
             "revision": conversation_thread.get("revision"),
         },
-        "memory_items": [
-            {"label": "match_memory_projection", "content": match_memory},
-            {"label": "user_memory_projection", "content": user_memory},
-        ],
+        "memory_items": memory_items,
     }
     conversation_memory.update(planner_context_items(goal_plan))
     conversation_memory["planner_recommendation"] = planner_recommendation
@@ -748,6 +794,29 @@ def _parse_iso(value: str) -> datetime:
 
 def _reply_mode_value(reply_mode: ReplyMode | str) -> str:
     return reply_mode.value if isinstance(reply_mode, ReplyMode) else str(reply_mode)
+
+
+def _profile_sources_from_disclosure_profile(profile: dict[str, Any], *, updated_at: str) -> list[dict[str, Any]]:
+    source_values: list[str] = []
+    for field in ("hard_facts", "shareable_material", "boundaries"):
+        for item in profile.get(field, []):
+            if not isinstance(item, dict):
+                continue
+            source = str(item.get("source") or item.get("source_id") or "")
+            if source.strip():
+                source_values.append(source)
+
+    sources: list[dict[str, Any]] = []
+    if any("tashuo" in source.lower() or source.startswith("她说") for source in source_values):
+        sources.append(
+            {
+                "app_id": "tashuo",
+                "runtime": "mac-ios-app",
+                "first_observed_at": updated_at,
+                "last_observed_at": updated_at,
+            }
+        )
+    return sources
 
 
 def _now_iso() -> str:

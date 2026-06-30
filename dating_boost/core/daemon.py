@@ -240,7 +240,11 @@ def _run_standalone_tick(root: Path) -> dict[str, Any] | None:
             observation_provider=ports["observation_provider"],
             harness_factory=ports["harness_factory"],
             action_executor=ports["action_executor"],
-            draft_planner=StandaloneDraftPlanner(root, backend_config=session.get("backend") or {}),
+            draft_planner=StandaloneDraftPlanner(
+                root,
+                backend_config=session.get("backend") or {},
+                allow_stage_soft_accept=str(session.get("send_mode") or "").strip() == "stage",
+            ),
         ).tick()
     except Exception as exc:  # noqa: BLE001 - daemon run-once must return a structured payload.
         tick = {

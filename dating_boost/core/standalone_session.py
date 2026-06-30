@@ -35,6 +35,7 @@ class StandaloneSessionRepository:
         scan_interval_seconds: int,
         managed_gui_send: bool = False,
         vision_backend: dict[str, Any] | None = None,
+        initial_surface: str = "message-list",
     ) -> dict[str, Any]:
         if app_id not in set(supported_app_ids()):
             return _payload("blocked", reason=f"unsupported_app:{app_id}")
@@ -56,6 +57,7 @@ class StandaloneSessionRepository:
             "runtime": runtime,
             "send_mode": send_mode,
             "managed_gui_send": bool(managed_gui_send),
+            "initial_surface": initial_surface,
             "observation_source": dict(observation_source),
             "backend": dict(backend),
             "vision_backend": dict(vision_backend or {}),

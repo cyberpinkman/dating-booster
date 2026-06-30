@@ -13,6 +13,7 @@ from dating_boost.core.draft_evidence import UserMemoryRepository
 from dating_boost.core.memory.models import IdentityTrustStatus, MatchMemoryProjection
 from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.perception.observations import AppObservation
+from dating_boost.policy.draft_review import DraftReviewDecision, DraftReviewFinding
 
 
 FIXTURE_DIR = Path("tests/fixtures/automation")
@@ -141,6 +142,81 @@ class AutomationSessionTests(unittest.TestCase):
 
         self.assertEqual([item["candidate_key"] for item in queue], ["row_unread_old"])
 
+    def test_next_priority_queue_excludes_tashuo_pending_question_gate_state(self):
+        queue = _next_priority_queue(
+            [
+                {
+                    "match_id": "provisional_tashuo_visual_8181c3ffffffff80",
+                    "candidate_key": "tashuo_visual_8181c3ffffffff80",
+                    "state": "needs_thread_scan",
+                    "candidate_type": "new_match_candidate",
+                    "visible_name": "Pending question avatar (illustration)",
+                    "updated_at": "2026-06-29T17:34:33Z",
+                },
+                {
+                    "match_id": "match_ordinary",
+                    "candidate_key": "row_ordinary",
+                    "state": "needs_thread_scan",
+                    "candidate_type": "continuation_candidate",
+                    "visible_name": "Ada",
+                    "unread_cue": "present",
+                    "updated_at": "2026-06-29T17:34:33Z",
+                },
+            ]
+        )
+
+        self.assertEqual([item["candidate_key"] for item in queue], ["row_ordinary"])
+
+    def test_next_priority_queue_excludes_tashuo_structural_tab_header_state(self):
+        queue = _next_priority_queue(
+            [
+                {
+                    "match_id": "provisional_tashuo_visual_000000ffffe7e7ef",
+                    "candidate_key": "tashuo_visual_000000ffffe7e7ef",
+                    "state": "needs_thread_scan",
+                    "candidate_type": "new_match_candidate",
+                    "visible_name": "Tab header: 消息 / 动态",
+                    "updated_at": "2026-06-29T17:59:32Z",
+                },
+                {
+                    "match_id": "match_ordinary",
+                    "candidate_key": "row_ordinary",
+                    "state": "needs_thread_scan",
+                    "candidate_type": "continuation_candidate",
+                    "visible_name": "Ada",
+                    "unread_cue": "present",
+                    "updated_at": "2026-06-29T17:59:32Z",
+                },
+            ]
+        )
+
+        self.assertEqual([item["candidate_key"] for item in queue], ["row_ordinary"])
+
+    def test_next_priority_queue_excludes_tashuo_anonymous_question_card_state(self):
+        queue = _next_priority_queue(
+            [
+                {
+                    "match_id": "provisional_tashuo_visual_0080c1ffffffffff",
+                    "candidate_key": "tashuo_visual_0080c1ffffffffff",
+                    "state": "needs_thread_scan",
+                    "candidate_type": "new_match_candidate",
+                    "visible_name": "匿名提问卡片",
+                    "updated_at": "2026-06-29T18:08:28Z",
+                },
+                {
+                    "match_id": "match_ordinary",
+                    "candidate_key": "row_ordinary",
+                    "state": "needs_thread_scan",
+                    "candidate_type": "continuation_candidate",
+                    "visible_name": "Ada",
+                    "unread_cue": "present",
+                    "updated_at": "2026-06-29T18:08:28Z",
+                },
+            ]
+        )
+
+        self.assertEqual([item["candidate_key"] for item in queue], ["row_ordinary"])
+
     def test_next_priority_queue_promotes_recent_scan_later_continuation_with_inbound(self):
         queue = _next_priority_queue(
             [
@@ -163,6 +239,30 @@ class AutomationSessionTests(unittest.TestCase):
         )
 
         self.assertEqual([item["candidate_key"] for item in queue], ["row_reply", "row_opening"])
+
+    def test_next_priority_queue_demotes_open_chat_behind_unseen_continuation(self):
+        queue = _next_priority_queue(
+            [
+                {
+                    "match_id": "match_a_open",
+                    "candidate_key": "row_open_chat",
+                    "state": "needs_thread_scan",
+                    "candidate_type": "open_chat_candidate",
+                    "updated_at": "2026-05-26T00:00:00Z",
+                },
+                {
+                    "match_id": "match_z_continuation",
+                    "candidate_key": "row_continuation",
+                    "state": "needs_thread_scan",
+                    "candidate_type": "continuation_candidate",
+                    "updated_at": "2026-05-26T00:00:00Z",
+                },
+            ]
+        )
+
+        self.assertEqual([item["candidate_key"] for item in queue], ["row_continuation", "row_open_chat"])
+        self.assertEqual(queue[0]["priority"], 4)
+        self.assertEqual(queue[1]["priority"], 5)
 
     def test_next_priority_queue_promotes_pending_send_request(self):
         queue = _next_priority_queue(
@@ -341,6 +441,323 @@ class AutomationSessionTests(unittest.TestCase):
             self.assertEqual(post_result_repeat_exit, 0)
             self.assertEqual(post_result_repeat_payload["action_requests"], [])
             self.assertIn("duplicate_send_request_suppressed", post_result_repeat_payload["warnings"])
+
+    def test_session_step_stage_only_soft_accepts_standalone_reviewed_generation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "goal",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "goal_meet.json"),
+            ])
+            self._run([
+                "automation",
+                "availability",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "availability_weekend.json"),
+            ])
+            scan = json.loads((FIXTURE_DIR / "scan_batch_initial.json").read_text(encoding="utf-8"))
+            ada = scan["thread_observations"][0]
+            ada["draft"]["draft_self_review_summary"]["ai_or_weird_probability"] = 55
+            ada["draft"]["draft_self_review_summary"]["status"] = "needs_revision"
+            ada["standalone_draft_review"] = {
+                "schema_version": 1,
+                "allowed_for_stage": True,
+                "allowed_for_live_send": False,
+                "primary_reason": "soft_accept_stage_only",
+            }
+            scan_path = Path(temp_dir) / "scan_stage_soft_accept.json"
+            self._write_json(scan_path, scan)
+
+            start_exit, _, _ = self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+        self.assertEqual(start_exit, 0)
+        self.assertEqual(step_exit, 0)
+        self.assertEqual(len(step_payload["action_requests"]), 1)
+        action_request = step_payload["action_requests"][0]
+        self.assertEqual(action_request["candidate_key"], "row_ada")
+        self.assertEqual(action_request["action"], "send_message")
+        self.assertEqual(action_request["draft_self_review_summary"]["ai_or_weird_probability"], 55)
+        self.assertEqual(action_request["draft_self_review_summary"]["status"], "stage_only_soft_accepted")
+        self.assertIn("stage_only_draft_self_review_soft_accepted", step_payload["warnings"])
+
+    def test_session_step_stage_only_soft_accepts_standalone_reviewed_policy(self):
+        review = DraftReviewDecision(
+            schema_version=1,
+            status="needs_revision",
+            allowed_for_display=True,
+            allowed_for_stage=True,
+            allowed_for_managed_send=False,
+            requires_user_confirmation=False,
+            primary_reason="draft_strategy_delta_missing",
+            summary={"stage": True, "managed_live": False},
+            findings=[
+                DraftReviewFinding(
+                    code="draft_strategy_delta_missing",
+                    category="strategy",
+                    severity="medium",
+                    message="needs stronger managed-live strategy",
+                    revision_hint="add a concrete handle",
+                    blocks_display=False,
+                    blocks_stage=False,
+                    blocks_managed_send=True,
+                )
+            ],
+            revision_hints=["add a concrete handle"],
+            payload_hash="review_payload_hash",
+            payload_format="single",
+            message_count=1,
+            review_id="review_stage_only_policy",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "goal",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "goal_meet.json"),
+            ])
+            self._run([
+                "automation",
+                "availability",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "availability_weekend.json"),
+            ])
+            scan = json.loads((FIXTURE_DIR / "scan_batch_initial.json").read_text(encoding="utf-8"))
+            ada = scan["thread_observations"][0]
+            ada["standalone_draft_review"] = {
+                "schema_version": 1,
+                "allowed_for_stage": True,
+                "allowed_for_managed_send": False,
+                "primary_reason": "draft_strategy_delta_missing",
+            }
+            scan_path = Path(temp_dir) / "scan_stage_policy_soft_accept.json"
+            self._write_json(scan_path, scan)
+
+            start_exit, _, _ = self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            with patch("dating_boost.core.automation.review_draft", return_value=review):
+                step_exit, step_payload, _ = self._run([
+                    "automation",
+                    "session",
+                    "step",
+                    "--data-dir",
+                    str(data_dir),
+                    "--scan-batch",
+                    str(scan_path),
+                ])
+
+        self.assertEqual(start_exit, 0)
+        self.assertEqual(step_exit, 0)
+        self.assertEqual(len(step_payload["action_requests"]), 1)
+        action_request = step_payload["action_requests"][0]
+        self.assertEqual(action_request["policy"]["allowed"], True)
+        self.assertEqual(action_request["policy"]["allowed_for_stage"], True)
+        self.assertEqual(action_request["policy"]["allowed_for_managed_send"], False)
+        self.assertEqual(action_request["policy"]["reason"], "stage_only_draft_review_soft_accepted")
+        self.assertIn("stage_only_draft_review_soft_accepted", step_payload["warnings"])
+
+    def test_session_step_live_send_does_not_use_stage_only_soft_accept(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "goal",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "goal_meet.json"),
+            ])
+            self._run([
+                "automation",
+                "availability",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "availability_weekend.json"),
+            ])
+            auth = json.loads((FIXTURE_DIR / "auth_send.json").read_text(encoding="utf-8"))
+            auth["authorization_id"] = "auth_fixture_live_send"
+            auth["live_send"] = True
+            auth_path = Path(temp_dir) / "auth_live.json"
+            self._write_json(auth_path, auth)
+            scan = json.loads((FIXTURE_DIR / "scan_batch_initial.json").read_text(encoding="utf-8"))
+            ada = scan["thread_observations"][0]
+            ada["draft"]["draft_self_review_summary"]["ai_or_weird_probability"] = 55
+            ada["draft"]["draft_self_review_summary"]["status"] = "needs_revision"
+            ada["standalone_draft_review"] = {
+                "schema_version": 1,
+                "allowed_for_stage": True,
+                "allowed_for_live_send": False,
+                "primary_reason": "soft_accept_stage_only",
+            }
+            scan_path = Path(temp_dir) / "scan_live_blocks_soft_accept.json"
+            self._write_json(scan_path, scan)
+
+            start_exit, _, _ = self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(auth_path),
+            ])
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+        self.assertEqual(start_exit, 0)
+        self.assertEqual(step_exit, 0)
+        self.assertEqual(step_payload["action_requests"], [])
+        self.assertIn("draft_self_review_probability_high", step_payload["warnings"])
+        self.assertIn("draft_generation_required", step_payload["warnings"])
+        revision_requests = [
+            item
+            for item in step_payload["scan_requests"]
+            if item.get("candidate_key") == "row_ada" and item.get("reason") == "draft_revision_required"
+        ]
+        self.assertEqual(len(revision_requests), 1)
+        self.assertEqual(revision_requests[0]["draft_revision_reason"], "draft_self_review_probability_high")
+
+    def test_session_step_live_send_does_not_use_stage_only_policy_soft_accept(self):
+        review = DraftReviewDecision(
+            schema_version=1,
+            status="needs_revision",
+            allowed_for_display=True,
+            allowed_for_stage=True,
+            allowed_for_managed_send=False,
+            requires_user_confirmation=False,
+            primary_reason="draft_strategy_delta_missing",
+            summary={"stage": True, "managed_live": False},
+            findings=[
+                DraftReviewFinding(
+                    code="draft_strategy_delta_missing",
+                    category="strategy",
+                    severity="medium",
+                    message="needs stronger managed-live strategy",
+                    revision_hint="add a concrete handle",
+                    blocks_display=False,
+                    blocks_stage=False,
+                    blocks_managed_send=True,
+                )
+            ],
+            revision_hints=["add a concrete handle"],
+            payload_hash="review_payload_hash",
+            payload_format="single",
+            message_count=1,
+            review_id="review_live_policy",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "goal",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "goal_meet.json"),
+            ])
+            self._run([
+                "automation",
+                "availability",
+                "set",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(FIXTURE_DIR / "availability_weekend.json"),
+            ])
+            auth = json.loads((FIXTURE_DIR / "auth_send.json").read_text(encoding="utf-8"))
+            auth["authorization_id"] = "auth_fixture_live_send"
+            auth["live_send"] = True
+            auth_path = Path(temp_dir) / "auth_live.json"
+            self._write_json(auth_path, auth)
+            scan = json.loads((FIXTURE_DIR / "scan_batch_initial.json").read_text(encoding="utf-8"))
+            ada = scan["thread_observations"][0]
+            ada["standalone_draft_review"] = {
+                "schema_version": 1,
+                "allowed_for_stage": True,
+                "allowed_for_managed_send": False,
+                "primary_reason": "draft_strategy_delta_missing",
+            }
+            scan_path = Path(temp_dir) / "scan_live_policy_blocks_soft_accept.json"
+            self._write_json(scan_path, scan)
+
+            start_exit, _, _ = self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(auth_path),
+            ])
+            with patch("dating_boost.core.automation.review_draft", return_value=review):
+                step_exit, step_payload, _ = self._run([
+                    "automation",
+                    "session",
+                    "step",
+                    "--data-dir",
+                    str(data_dir),
+                    "--scan-batch",
+                    str(scan_path),
+                ])
+
+        self.assertEqual(start_exit, 0)
+        self.assertEqual(step_exit, 0)
+        self.assertEqual(step_payload["action_requests"], [])
+        self.assertIn("draft_strategy_delta_missing", step_payload["warnings"])
+        self.assertIn("draft_revision_required", step_payload["warnings"])
 
     def test_failed_send_result_allows_same_payload_retry_with_new_request_id(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1544,6 +1961,36 @@ class AutomationSessionTests(unittest.TestCase):
                             "latest_preview": "有人刚刚活跃，去打个招呼吧!",
                             "unread_cue": "present",
                             "last_session_id": "session_gate_filter",
+                        },
+                        {
+                            "schema_version": 1,
+                            "match_id": "provisional_tashuo_visual_8181c3ffffffff80",
+                            "candidate_key": "tashuo_visual_8181c3ffffffff80",
+                            "state": "needs_thread_scan",
+                            "candidate_type": "new_match_candidate",
+                            "visible_name": "Pending question avatar (illustration)",
+                            "unread_cue": "present",
+                            "last_session_id": "session_gate_filter",
+                        },
+                        {
+                            "schema_version": 1,
+                            "match_id": "provisional_tashuo_visual_000000ffffe7e7ef",
+                            "candidate_key": "tashuo_visual_000000ffffe7e7ef",
+                            "state": "needs_thread_scan",
+                            "candidate_type": "new_match_candidate",
+                            "visible_name": "Tab header: 消息 / 动态",
+                            "unread_cue": None,
+                            "last_session_id": "session_gate_filter",
+                        },
+                        {
+                            "schema_version": 1,
+                            "match_id": "provisional_tashuo_visual_0080c1ffffffffff",
+                            "candidate_key": "tashuo_visual_0080c1ffffffffff",
+                            "state": "needs_thread_scan",
+                            "candidate_type": "new_match_candidate",
+                            "visible_name": "匿名提问卡片",
+                            "unread_cue": "present",
+                            "last_session_id": "session_gate_filter",
                         }
                     ],
                 },
@@ -1553,7 +2000,7 @@ class AutomationSessionTests(unittest.TestCase):
                 "session_id": "session_gate_filter",
                 "app_id": "tashuo",
                 "captured_at": "2026-05-26T12:00:00Z",
-                "scan_budget": 2,
+                "scan_budget": 5,
                 "message_list_snapshot": {
                     "entries": [
                         {
@@ -1567,13 +2014,43 @@ class AutomationSessionTests(unittest.TestCase):
                             "position": 1,
                         },
                         {
+                            "candidate_key": "tashuo_visual_8181c3ffffffff80",
+                            "candidate_type": "new_match_candidate",
+                            "visible_name": "Pending question avatar (illustration)",
+                            "latest_preview": "Pending question row avatar",
+                            "latest_preview_hash": "pending_question_hash",
+                            "timestamp_cue": "",
+                            "unread_cue": "present",
+                            "position": 2,
+                        },
+                        {
+                            "candidate_key": "tashuo_visual_000000ffffe7e7ef",
+                            "candidate_type": "new_match_candidate",
+                            "visible_name": "Tab header: 消息 / 动态",
+                            "latest_preview": "Message tab header",
+                            "latest_preview_hash": "tab_header_hash",
+                            "timestamp_cue": "",
+                            "unread_cue": "absent",
+                            "position": 3,
+                        },
+                        {
+                            "candidate_key": "tashuo_visual_0080c1ffffffffff",
+                            "candidate_type": "new_match_candidate",
+                            "visible_name": "匿名提问卡片",
+                            "latest_preview": "待回答横向问题卡片",
+                            "latest_preview_hash": "anonymous_question_card_hash",
+                            "timestamp_cue": "",
+                            "unread_cue": "present",
+                            "position": 4,
+                        },
+                        {
                             "candidate_key": "row_ordinary",
                             "visible_name": "Ada",
                             "latest_preview": "刚刚问你今天忙不忙",
                             "latest_preview_hash": "ordinary_hash",
                             "timestamp_cue": "刚刚",
                             "unread_cue": "present",
-                            "position": 2,
+                            "position": 5,
                         },
                     ]
                 },
@@ -1597,7 +2074,68 @@ class AutomationSessionTests(unittest.TestCase):
         self.assertEqual([item["candidate_key"] for item in step_payload["scan_requests"]], ["row_ordinary"])
         queued_keys = [item["candidate_key"] for item in step_payload["next_priority_queue"]]
         self.assertNotIn("tashuo_liked_you_gate_29_active", queued_keys)
+        self.assertNotIn("tashuo_visual_8181c3ffffffff80", queued_keys)
+        self.assertNotIn("tashuo_visual_000000ffffe7e7ef", queued_keys)
+        self.assertNotIn("tashuo_visual_0080c1ffffffffff", queued_keys)
         self.assertIn("row_ordinary", queued_keys)
+
+    def test_session_step_skips_tashuo_visual_rows_without_visible_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            scan = {
+                "schema_version": 1,
+                "session_id": "session_tashuo_empty_name_filter",
+                "app_id": "tashuo",
+                "captured_at": "2026-05-26T12:00:00Z",
+                "scan_budget": 2,
+                "message_list_snapshot": {
+                    "entries": [
+                        {
+                            "candidate_key": "tashuo_visual_0f3990839b0a",
+                            "candidate_type": "continuation_candidate",
+                            "latest_preview": "",
+                            "latest_preview_hash": "empty_name_hash",
+                            "position": 1,
+                        },
+                        {
+                            "candidate_key": "row_ordinary",
+                            "visible_name": "Ada",
+                            "latest_preview": "刚刚问你忙不忙",
+                            "latest_preview_hash": "ordinary_hash",
+                            "timestamp_cue": "刚刚",
+                            "unread_cue": "present",
+                            "position": 2,
+                        },
+                    ]
+                },
+                "thread_observations": [],
+            }
+            scan_path = Path(temp_dir) / "scan_with_empty_name_tashuo_visual_row.json"
+            self._write_json(scan_path, scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+        self.assertEqual(step_exit, 0)
+        self.assertIn("non_chat_message_list_entry_skipped", step_payload["warnings"])
+        self.assertEqual([item["candidate_key"] for item in step_payload["scan_requests"]], ["row_ordinary"])
 
     def test_session_step_queues_recent_open_chat_after_unread_continuation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1689,6 +2227,70 @@ class AutomationSessionTests(unittest.TestCase):
         states_by_key = {state["candidate_key"]: state for state in states_payload["states"]}
         self.assertEqual(states_by_key["row_open_chat"]["candidate_type"], "open_chat_candidate")
         self.assertEqual(states_by_key["row_open_chat"]["state"], "needs_thread_scan")
+
+    def test_session_step_prioritizes_unseen_continuation_before_open_chat(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run([
+                "automation",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ])
+            scan = {
+                "schema_version": 1,
+                "session_id": "session_open_chat_after_continuation",
+                "app_id": "tashuo",
+                "captured_at": "2026-05-26T12:00:00Z",
+                "scan_budget": 3,
+                "message_list_snapshot": {
+                    "entries": [
+                        {
+                            "candidate_key": "row_open_chat",
+                            "candidate_type": "open_chat_candidate",
+                            "visible_name": "Newly Open",
+                            "latest_preview": "你们已经可以进行会话了，开启聊天",
+                            "latest_preview_hash": "open_chat_recent_hash",
+                            "timestamp_cue": "刚刚",
+                            "unread_cue": "absent",
+                            "position": 1,
+                        },
+                        {
+                            "candidate_key": "row_continuation",
+                            "candidate_type": "continuation_candidate",
+                            "visible_name": "小药丸儿",
+                            "latest_preview": "我晚上上班呀",
+                            "latest_preview_hash": "reply_new_hash",
+                            "timestamp_cue": "刚刚",
+                            "unread_cue": "absent",
+                            "position": 2,
+                        },
+                    ]
+                },
+                "thread_observations": [],
+            }
+            scan_path = Path(temp_dir) / "open_chat_after_continuation_scan.json"
+            self._write_json(scan_path, scan)
+
+            step_exit, step_payload, _ = self._run([
+                "automation",
+                "session",
+                "step",
+                "--data-dir",
+                str(data_dir),
+                "--scan-batch",
+                str(scan_path),
+            ])
+
+        self.assertEqual(step_exit, 0)
+        self.assertEqual(
+            [item["candidate_key"] for item in step_payload["scan_requests"]],
+            ["row_continuation", "row_open_chat"],
+        )
 
     def test_session_step_history_cutoff_skips_old_open_chat_and_lower_rows(self):
         with tempfile.TemporaryDirectory() as temp_dir:

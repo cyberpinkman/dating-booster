@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -8,6 +9,7 @@ from typing import Any, Callable
 from dating_boost.apps.registry import create_adapter
 from dating_boost.apps.tashuo.native import _tashuo_visual_anchor_hash_for_path
 from dating_boost.apps.tashuo.perception import analyze_tashuo_conversation, analyze_tashuo_message_list
+from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.standalone_actions import StageOnlyActionExecutor
 from dating_boost.core.storage import JsonStorage
 from dating_boost.intelligence.vision_backends import VisionBackend
@@ -16,6 +18,7 @@ from dating_boost.intelligence.vision_backends import VisionBackend
 TARGET_CACHE_PATH = Path("standalone_session") / "tashuo_targets.json"
 TARGET_CACHE_MAX_AGE_SECONDS = 120
 TARGET_VISUAL_ANCHOR_CACHE_MAX_AGE_SECONDS = 600
+SYNTHETIC_MESSAGE_LIST_VISIBLE_NAME_PREFIX = "TaShuo visible chat row"
 
 
 class TaShuoStandaloneTargetCache:
@@ -88,7 +91,7 @@ class TaShuoMacIosStandaloneObservationProvider:
         precheck = self.precheck_payload(app_id=app_id)
         if precheck.get("status") != "ok":
             return {**precheck, "observation_type": "message_list"}
-        perceived = analyze_tashuo_message_list(precheck, backend=self.vision_backend)
+        perceived = _analyze_tashuo_message_list_with_retry(precheck, backend=self.vision_backend)
         if perceived.get("status") != "ok":
             return {**perceived, "observation_type": "message_list", "app_id": app_id, "runtime": "mac-ios-app"}
         screen_path = _screen_path_from_observation(precheck)
@@ -96,13 +99,36 @@ class TaShuoMacIosStandaloneObservationProvider:
             _correct_tashuo_message_list_tap_ratios(perceived["rows"]),
             screen_path=screen_path,
         )
+        rows, duplicate_rows = _dedupe_tashuo_message_list_rows(rows)
         candidates = []
         entries = []
+        skipped_rows = list(duplicate_rows)
+        provider_skipped_row = False
+        warnings = [str(item) for item in perceived.get("warnings", []) if str(item).strip()] if isinstance(perceived.get("warnings"), list) else []
+        if isinstance(perceived.get("skipped_rows"), list):
+            skipped_rows.extend(item for item in perceived["skipped_rows"] if isinstance(item, dict))
         for index, row in enumerate(rows, start=1):
+            skip_reason = _tashuo_message_list_visual_row_skip_reason(row)
+            if skip_reason:
+                provider_skipped_row = True
+                skipped_rows.append(_redacted_skipped_visual_row(row, reason=skip_reason, position=index))
+                continue
             self.targets.put(row)
             candidates.append(row)
             entries.append(_message_list_entry_from_visual_row(row, position=index))
-        return {
+        if not entries:
+            fallback_rows = _tashuo_message_list_grid_fallback_rows(
+                precheck=precheck,
+                rows=rows,
+                screen_path=screen_path,
+            )
+            if fallback_rows:
+                warnings.append("tashuo_message_list_grid_fallback_used")
+                for fallback_position, row in enumerate(fallback_rows, start=1):
+                    self.targets.put(row)
+                    candidates.append(row)
+                    entries.append(_message_list_entry_from_visual_row(row, position=fallback_position))
+        result = {
             "schema_version": 1,
             "status": "ok",
             "observation_type": "message_list",
@@ -113,10 +139,22 @@ class TaShuoMacIosStandaloneObservationProvider:
             "candidates": candidates,
             "provenance": {"app_id": app_id, "runtime": "mac-ios-app", "source": "standalone_live_gui"},
         }
+        if skipped_rows:
+            if provider_skipped_row:
+                warnings.append("tashuo_message_list_visual_row_skipped")
+            if duplicate_rows:
+                warnings.append("tashuo_message_list_duplicate_visual_row_skipped")
+            result["warnings"] = list(dict.fromkeys(warnings))
+            result["skipped_candidates"] = skipped_rows
+        elif warnings:
+            result["warnings"] = list(dict.fromkeys(warnings))
+        return result
 
     def observe_thread(self, *, app_id: str, candidate_key: str) -> dict[str, Any]:
         target = self.targets.get(candidate_key)
         if target is None:
+            if _is_current_thread_candidate_key(candidate_key):
+                return self.observe_current_thread(app_id=app_id, candidate_key=candidate_key, cached_target=None)
             return _blocked(
                 "tashuo_standalone_target_not_found",
                 app_id=app_id,
@@ -166,10 +204,13 @@ class TaShuoMacIosStandaloneObservationProvider:
                 observation_type="thread",
                 candidate_key=candidate_key,
             )
-        perceived = analyze_tashuo_conversation(observed, backend=self.vision_backend)
+        perceived = _analyze_tashuo_conversation_with_retry(observed, backend=self.vision_backend)
         if perceived.get("status") != "ok":
             return {**perceived, "observation_type": "thread", "app_id": app_id, "runtime": "mac-ios-app", "candidate_key": candidate_key}
         identity = dict(perceived["identity"])
+        normalized_identity_name = _normalized_visible_name(identity.get("visible_name"))
+        if normalized_identity_name:
+            identity["visible_name"] = normalized_identity_name
         if cached_target:
             cached_name = _normalized_visible_name(cached_target.get("visible_name"))
             perceived_name = _normalized_visible_name(identity.get("visible_name"))
@@ -187,7 +228,12 @@ class TaShuoMacIosStandaloneObservationProvider:
                     cached_visible_name=cached_name,
                     perceived_visible_name=perceived_name,
                 )
-        if cached_target and cached_target.get("visible_name") and not identity.get("visible_name"):
+        if (
+            cached_target
+            and cached_target.get("visible_name")
+            and not _is_synthetic_message_list_visible_name(cached_target.get("visible_name"))
+            and not identity.get("visible_name")
+        ):
             identity["visible_name"] = cached_target.get("visible_name")
         return _thread_observation_from_perception(
             app_id=app_id,
@@ -196,6 +242,43 @@ class TaShuoMacIosStandaloneObservationProvider:
             visible_messages=perceived["visible_messages"],
             cached_target=cached_target,
         )
+
+
+def _analyze_tashuo_message_list_with_retry(observation: dict[str, Any], *, backend: VisionBackend) -> dict[str, Any]:
+    return _analyze_tashuo_vision_with_retry(
+        lambda: analyze_tashuo_message_list(observation, backend=backend),
+        timeout_reason="tashuo_message_list_vision_timeout",
+    )
+
+
+def _analyze_tashuo_conversation_with_retry(observation: dict[str, Any], *, backend: VisionBackend) -> dict[str, Any]:
+    return _analyze_tashuo_vision_with_retry(
+        lambda: analyze_tashuo_conversation(observation, backend=backend),
+        timeout_reason="tashuo_conversation_vision_timeout",
+    )
+
+
+def _analyze_tashuo_vision_with_retry(analyze: Callable[[], dict[str, Any]], *, timeout_reason: str) -> dict[str, Any]:
+    last_timeout: Exception | None = None
+    for _attempt in range(2):
+        try:
+            return analyze()
+        except Exception as exc:  # noqa: BLE001 - transient model timeouts should not crash the runtime loop.
+            if not _is_retryable_vision_timeout(exc):
+                raise
+            last_timeout = exc
+    return {
+        "schema_version": 1,
+        "status": "blocked",
+        "reason": timeout_reason,
+        "error_type": type(last_timeout).__name__ if last_timeout is not None else "TimeoutError",
+    }
+
+
+def _is_retryable_vision_timeout(exc: Exception) -> bool:
+    error_type = type(exc).__name__.lower()
+    message = str(exc).lower()
+    return "timeout" in error_type or "timed out" in message or "request timed out" in message
 
 
 class TaShuoStandalonePrecheckHarness:
@@ -234,6 +317,14 @@ class TaShuoMacIosStageExecutor(StageOnlyActionExecutor):
                 "status": "blocked",
                 "reason": block_reason,
                 "action_request_id": work_item.get("action_request_id"),
+            }
+        if SafetyRepository(self.root).is_paused():
+            return {
+                "schema_version": 1,
+                "status": "blocked",
+                "reason": "safety_paused",
+                "action_request_id": work_item.get("action_request_id"),
+                "next_host_action": "resume_safety_before_staging",
             }
         text = str(work_item.get("payload_text") or "").strip()
         adapter = self.adapter_factory()
@@ -480,6 +571,11 @@ def _stage_candidate_key(work_item: dict[str, Any]) -> str | None:
     return value or None
 
 
+def _is_current_thread_candidate_key(candidate_key: Any) -> bool:
+    value = str(candidate_key or "").strip()
+    return value == "current_thread" or value.startswith("current_thread_")
+
+
 def _stage_target_blocked(reason: str, *, candidate_key: str, **extra: Any) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -494,7 +590,7 @@ def _stage_expected_visible_name(target: dict[str, Any], work_item: dict[str, An
     binding = work_item.get("target_binding") if isinstance(work_item.get("target_binding"), dict) else {}
     for value in (binding.get("visible_name"), target.get("visible_name")):
         normalized = _normalized_visible_name(value)
-        if normalized:
+        if normalized and not _is_synthetic_message_list_visible_name(normalized):
             return normalized
     return None
 
@@ -515,7 +611,12 @@ def _stage_target_identity_mismatch(
         visible_messages=visible_messages,
     ):
         return "current_thread_visual_identity_mismatch"
-    if _current_thread_binding_evidence_mismatch(identity, work_item=work_item, visible_messages=visible_messages):
+    if _current_thread_binding_evidence_mismatch(
+        identity,
+        work_item=work_item,
+        visible_messages=visible_messages,
+        target=target,
+    ):
         return "current_thread_binding_evidence_mismatch"
     return None
 
@@ -525,6 +626,7 @@ def _current_thread_binding_evidence_mismatch(
     *,
     work_item: dict[str, Any],
     visible_messages: Any,
+    target: dict[str, Any] | None = None,
 ) -> bool:
     binding = work_item.get("target_binding") if isinstance(work_item.get("target_binding"), dict) else {}
     thread_evidence = binding.get("thread_evidence") if isinstance(binding.get("thread_evidence"), dict) else {}
@@ -537,7 +639,35 @@ def _current_thread_binding_evidence_mismatch(
     current_latest = _current_latest_inbound_fingerprint(visible_messages)
     anchor_matches = bool(expected_anchor and current_anchor and expected_anchor == current_anchor)
     latest_matches = bool(expected_latest and current_latest and expected_latest == current_latest)
-    return not (anchor_matches or latest_matches)
+    preview_matches = bool(target and _latest_preview_corroborates_thread(target, visible_messages))
+    visible_name_continuity = _current_thread_visible_name_continuity_allowed(
+        identity,
+        work_item=work_item,
+        target=target,
+        expected_latest=expected_latest,
+        current_latest=current_latest,
+    )
+    return not (anchor_matches or latest_matches or preview_matches or visible_name_continuity)
+
+
+def _current_thread_visible_name_continuity_allowed(
+    identity: dict[str, Any],
+    *,
+    work_item: dict[str, Any],
+    target: dict[str, Any] | None,
+    expected_latest: str,
+    current_latest: str | None,
+) -> bool:
+    candidate_key = _stage_candidate_key(work_item) or ""
+    if not _is_current_thread_candidate_key(candidate_key):
+        return False
+    if expected_latest and current_latest and expected_latest != current_latest:
+        return False
+    expected_name = _stage_expected_visible_name(target or {}, work_item)
+    perceived_name = _normalized_visible_name(identity.get("visible_name"))
+    if not expected_name or not perceived_name:
+        return False
+    return not _visible_name_identity_conflict(expected_name, perceived_name)
 
 
 def _current_latest_inbound_fingerprint(visible_messages: Any) -> str | None:
@@ -557,7 +687,8 @@ def _message_list_evidence_from_target(target: dict[str, Any]) -> dict[str, Any]
         "visual_anchor_hash": str(target.get("visual_anchor_hash") or "").strip() or None,
         "visual_anchor_region": region,
         "tap_ratio": dict(tap_ratio) if tap_ratio else None,
-        "selection_method": "standalone_vision_message_list_row",
+        "tap_ratio_source": target.get("tap_ratio_source"),
+        "selection_method": target.get("selection_method") or "standalone_vision_message_list_row",
     }
 
 
@@ -587,6 +718,7 @@ def _message_list_entry_from_visual_row(row: dict[str, Any], *, position: int) -
     anchor = str(row.get("visual_anchor_hash") or row.get("candidate_key") or "").strip()
     tap_ratio = row.get("tap_ratio") if isinstance(row.get("tap_ratio"), dict) else None
     region = _visual_anchor_region_from_source(row)
+    selection_method = str(row.get("selection_method") or "standalone_vision_message_list_row")
     entry = {
         "candidate_key": str(row.get("candidate_key") or f"tashuo_visual_{anchor}").strip(),
         "visible_name": visible_name or None,
@@ -596,7 +728,7 @@ def _message_list_entry_from_visual_row(row: dict[str, Any], *, position: int) -
         "position": position,
         "identity_confidence": row.get("confidence") if row.get("confidence") in {"low", "medium", "high"} else "medium",
         "identity_evidence": "TaShuo mac-ios-app message-list visual row.",
-        "evidence": "Visible TaShuo message-list row selected by standalone vision backend.",
+        "evidence": "Visible TaShuo message-list row selected by standalone observation provider.",
         "match_identity_hints": {
             "visible_name": visible_name,
             "profile_cues": [],
@@ -608,10 +740,66 @@ def _message_list_entry_from_visual_row(row: dict[str, Any], *, position: int) -
             "visual_anchor_hash": anchor,
             "visual_anchor_region": region,
             "tap_ratio": dict(tap_ratio) if tap_ratio else None,
-            "selection_method": "standalone_vision_message_list_row",
+            "selection_method": selection_method,
         },
     }
     return {key: value for key, value in entry.items() if value is not None}
+
+
+def _tashuo_message_list_visual_row_skip_reason(row: dict[str, Any]) -> str | None:
+    visible_name = _normalized_visible_name(row.get("visible_name"))
+    if not visible_name:
+        return "missing_visible_name"
+    if _candidate_type_from_visual_row(row) == "non_chat_gate":
+        return "non_chat_gate"
+    tap_ratio = row.get("tap_ratio") if isinstance(row.get("tap_ratio"), dict) else None
+    if not tap_ratio:
+        return "missing_tap_ratio"
+    anchor = str(row.get("visual_anchor_hash") or row.get("candidate_key") or "").strip()
+    region = _visual_anchor_region_from_source(row)
+    if not anchor and region is None:
+        return "missing_visual_anchor"
+    return None
+
+
+def _dedupe_tashuo_message_list_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    seen: set[tuple[str, str]] = set()
+    kept: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for position, row in enumerate(rows, start=1):
+        key = _tashuo_message_list_duplicate_key(row)
+        if key is not None and key in seen:
+            skipped.append(_redacted_skipped_visual_row(row, reason="duplicate_visual_row", position=position))
+            continue
+        if key is not None:
+            seen.add(key)
+        kept.append(row)
+    return kept, skipped
+
+
+def _tashuo_message_list_duplicate_key(row: dict[str, Any]) -> tuple[str, str] | None:
+    visible_name = _normalized_visible_name(row.get("visible_name"))
+    latest_preview = str(row.get("latest_preview") or "").strip()
+    if not visible_name or not latest_preview:
+        return None
+    return (visible_name, _stable_text_hash(latest_preview))
+
+
+def _redacted_skipped_visual_row(row: dict[str, Any], *, reason: str, position: int) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            "candidate_key": row.get("candidate_key"),
+            "reason": reason,
+            "position": position,
+            "candidate_type": _candidate_type_from_visual_row(row),
+            "has_latest_preview": bool(str(row.get("latest_preview") or "").strip()),
+            "has_tap_ratio": isinstance(row.get("tap_ratio"), dict),
+            "has_visual_anchor": bool(str(row.get("visual_anchor_hash") or "").strip())
+            or _visual_anchor_region_from_source(row) is not None,
+        }.items()
+        if value is not None
+    }
 
 
 def _candidate_type_from_visual_row(row: dict[str, Any]) -> str:
@@ -626,7 +814,31 @@ def _candidate_type_from_visual_row(row: dict[str, Any]) -> str:
     return "continuation_candidate"
 
 
+def _looks_like_tashuo_action_artifact(row: dict[str, Any]) -> bool:
+    visible_name = str(row.get("visible_name") or "").strip()
+    latest_preview = str(row.get("latest_preview") or "").strip()
+    preview_lower = latest_preview.lower()
+    if any(token in visible_name for token in ("去回复", "开启聊天按钮", "去回复按钮", "按钮")):
+        return True
+    if latest_preview in {"去回复", "开启聊天"}:
+        return True
+    if any(token in latest_preview for token in ("去回复", "开启聊天")) and any(
+        token in preview_lower for token in ("action", "button", "按钮")
+    ):
+        return True
+    return False
+
+
 def _looks_like_tashuo_non_chat_gate(combined: str, *, visible_name: str, latest_preview: str) -> bool:
+    if _looks_like_tashuo_action_artifact({"visible_name": visible_name, "latest_preview": latest_preview}):
+        return True
+    visible_name_lower = visible_name.strip().lower()
+    if visible_name_lower.startswith("tab header"):
+        return True
+    if "消息" in visible_name and "动态" in visible_name and len(visible_name.strip()) <= 24:
+        return True
+    if "开启通知" in combined or "接收通知" in combined:
+        return True
     if any(
         token in combined
         for token in (
@@ -641,14 +853,48 @@ def _looks_like_tashuo_non_chat_gate(combined: str, *, visible_name: str, latest
             "blurred_avatar",
             "orange_avatar_blur",
             "answer_pending",
+            "pending question",
+            "pending_question",
+            "question gate",
+            "question_gate",
+            "question row avatar",
+            "anonymous question",
+            "anonymous_question",
             "no visible name",
             "unnamed",
+            "tab header",
+            "message tab header",
+            "notification banner",
+            "search icon",
+            "filter icon",
+            "list icon",
         )
     ):
         return True
-    if any(token in visible_name for token in ("优秀的女生想认识你", "查看谁喜欢了我", "喜欢你的人", "等待中", "待回答", "未命名")):
+    if any(
+        token in visible_name
+        for token in (
+            "优秀的女生想认识你",
+            "抢手的女生喜欢了你",
+            "查看谁喜欢了我",
+            "查看谁喜欢我",
+            "喜欢你的人",
+            "喜欢了你",
+            "去回复",
+            "开启聊天",
+            "按钮",
+            "等待中",
+            "待回答",
+            "匿名提问",
+            "提问卡片",
+            "问题卡片",
+            "未命名",
+        )
+    ):
         return True
     if latest_preview in {"等待中", "待回答", "待回答 (1)"} or "待回答" in latest_preview:
+        return True
+    if "受欢迎" in latest_preview and ("女生" in visible_name or "喜欢" in visible_name):
         return True
     if "她毕业于知名院校" in latest_preview and "优秀的女生" in visible_name:
         return True
@@ -662,21 +908,56 @@ def _correct_tashuo_message_list_tap_ratios(rows: list[dict[str, Any]]) -> list[
         return rows
     first_index = _first_all_messages_row_index(rows)
     if first_index is None:
-        return rows
-    start_y = _all_messages_start_y(rows[first_index])
-    if start_y is None:
-        return rows
+        inferred = _infer_first_visible_chat_row_grid_start(rows)
+        if inferred is None:
+            return rows
+        first_index, start_y = inferred
+    else:
+        start_y = _all_messages_start_y(rows[first_index])
+        if start_y is None:
+            return rows
     corrected: list[dict[str, Any]] = []
     row_step = 0.122
+    grid_offset = 0
     for index, row in enumerate(rows):
         item = dict(row)
         tap_ratio = item.get("tap_ratio") if isinstance(item.get("tap_ratio"), dict) else {}
         if index >= first_index:
-            y = round(min(0.965, start_y + (index - first_index) * row_step), 4)
-            item["tap_ratio"] = {**tap_ratio, "y": y}
+            y = round(min(0.965, start_y + grid_offset * row_step), 4)
+            item["tap_ratio"] = {**tap_ratio, "x": _all_messages_open_tap_x(item), "y": y}
+            item["tap_ratio_source"] = "corrected_all_messages_row_action"
             item = _align_visual_anchor_region_to_tap_y(item, tap_y=y)
+            if not _looks_like_tashuo_action_artifact(item):
+                grid_offset += 1
         corrected.append(item)
     return corrected
+
+
+def _infer_first_visible_chat_row_grid_start(rows: list[dict[str, Any]]) -> tuple[int, float] | None:
+    for index, row in enumerate(rows):
+        if _candidate_type_from_visual_row(row) == "non_chat_gate":
+            continue
+        if not _normalized_visible_name(row.get("visible_name")):
+            continue
+        y = _tap_y(row)
+        region = _visual_anchor_region_from_source(row)
+        if y is None:
+            continue
+        region_y1 = float(region["y1"]) if isinstance(region, dict) else y - 0.06
+        if 0.52 <= y <= 0.66 and region_y1 <= 0.62:
+            return index, 0.577
+        return None
+    return None
+
+
+def _all_messages_open_tap_x(row: dict[str, Any]) -> float:
+    visible_name = str(row.get("visible_name") or "").strip()
+    latest_preview = str(row.get("latest_preview") or "").strip()
+    anchor = str(row.get("visual_anchor_hash") or row.get("candidate_key") or "").strip().lower()
+    combined = f"{visible_name} {latest_preview} {anchor}".lower()
+    if _looks_like_tashuo_non_chat_gate(combined, visible_name=visible_name, latest_preview=latest_preview):
+        return 0.5
+    return 0.87
 
 
 def _align_visual_anchor_region_to_tap_y(row: dict[str, Any], *, tap_y: float) -> dict[str, Any]:
@@ -693,6 +974,84 @@ def _align_visual_anchor_region_to_tap_y(row: dict[str, Any], *, tap_y: float) -
         "y2": round(y1 + height, 4),
     }
     return {**row, "visual_anchor_region": aligned}
+
+
+def _tashuo_message_list_grid_fallback_rows(
+    *,
+    precheck: dict[str, Any],
+    rows: list[dict[str, Any]],
+    screen_path: Path | None,
+) -> list[dict[str, Any]]:
+    if screen_path is None or not _precheck_has_tashuo_message_list_anchor(precheck):
+        return []
+    start_y = _fallback_first_chat_row_y(rows)
+    if start_y is None:
+        return []
+    fallback_rows = []
+    for offset, y in enumerate(_fallback_message_list_row_ys(start_y), start=1):
+        row = {
+            "tap_ratio": {"x": 0.87, "y": y},
+            "tap_ratio_source": "synthetic_all_messages_row_action",
+            "visible_name": f"{SYNTHETIC_MESSAGE_LIST_VISIBLE_NAME_PREFIX} {offset}",
+            "latest_preview": "",
+            "visual_anchor_hash": f"synthetic_grid_row_{offset}_{int(y * 10000)}",
+            "visual_anchor_region": _fallback_message_list_avatar_region(y),
+            "visual_anchor_region_source": "synthetic_message_list_grid",
+            "confidence": "low",
+            "selection_method": "standalone_visual_message_list_grid_fallback",
+        }
+        fallback_rows.append(row)
+    enriched = _attach_tashuo_message_list_perceptual_anchors(fallback_rows, screen_path=screen_path)
+    normalized = []
+    for row in enriched:
+        item = dict(row)
+        anchor = str(item.get("visual_anchor_hash") or item.get("visual_anchor_label") or "").strip()
+        if not anchor:
+            anchor = hashlib.sha256(
+                f"{item.get('visible_name')}|{item.get('tap_ratio')}|{item.get('visual_anchor_region')}".encode("utf-8")
+            ).hexdigest()[:16]
+        item["candidate_key"] = f"tashuo_visual_{anchor}"
+        normalized.append(item)
+    return normalized
+
+
+def _precheck_has_tashuo_message_list_anchor(precheck: dict[str, Any]) -> bool:
+    if precheck.get("screen_state") != "tashuo_chat_list":
+        return False
+    if precheck.get("message_list_top_anchor_present") is True:
+        return True
+    screen = precheck.get("screen") if isinstance(precheck.get("screen"), dict) else {}
+    if screen.get("message_list_top_anchor_present") is True:
+        return True
+    layout = precheck.get("layout_hints") if isinstance(precheck.get("layout_hints"), dict) else {}
+    return bool(layout.get("message_list_top_anchor_present") or layout.get("chat_list_visual_present"))
+
+
+def _fallback_first_chat_row_y(rows: list[dict[str, Any]]) -> float | None:
+    first_index = _first_all_messages_row_index(rows)
+    if first_index is not None:
+        start_y = _all_messages_start_y(rows[first_index])
+        if start_y is not None:
+            return round(start_y + 0.122, 4)
+    if rows and any(_candidate_type_from_visual_row(row) == "non_chat_gate" for row in rows):
+        return 0.577
+    return None
+
+
+def _fallback_message_list_row_ys(start_y: float) -> list[float]:
+    values = []
+    for index in range(3):
+        y = round(start_y + index * 0.122, 4)
+        if 0.52 <= y <= 0.86:
+            values.append(y)
+    return values
+
+
+def _fallback_message_list_avatar_region(y: float) -> dict[str, float]:
+    height = 0.101
+    y1 = max(0.0, y - height / 2.0)
+    y2 = min(1.0, y + height / 2.0)
+    return {"x1": 0.041, "y1": round(y1, 4), "x2": 0.37, "y2": round(y2, 4)}
 
 
 def _attach_tashuo_message_list_perceptual_anchors(
@@ -732,9 +1091,9 @@ def _first_all_messages_row_index(rows: list[dict[str, Any]]) -> int | None:
         visible_name = str(row.get("visible_name") or "")
         latest_preview = str(row.get("latest_preview") or "")
         anchor = str(row.get("visual_anchor_hash") or row.get("candidate_key") or "").lower()
-        if any(token in visible_name for token in ("有个优秀的女生想认识你", "查看谁喜欢了我")):
+        if any(token in visible_name for token in ("有个优秀的女生想认识你", "查看谁喜欢了我", "喜欢了你")):
             return index
-        if any(token in anchor for token in ("new_promo", "new_badge", "liked_you")):
+        if any(token in anchor for token in ("new_promo", "new_badge", "liked_you", "likes_you", "liked_", "likes_")):
             return index
         if latest_preview.startswith("你们已经可以进行会话") and _tap_y(row) and _tap_y(row) > 0.72:
             return index
@@ -744,7 +1103,11 @@ def _first_all_messages_row_index(rows: list[dict[str, Any]]) -> int | None:
 def _all_messages_start_y(first_row: dict[str, Any]) -> float | None:
     visible_name = str(first_row.get("visible_name") or "")
     anchor = str(first_row.get("visual_anchor_hash") or first_row.get("candidate_key") or "").lower()
-    if "查看谁喜欢了我" in visible_name or "liked_you" in anchor:
+    if (
+        "查看谁喜欢了我" in visible_name
+        or "喜欢了你" in visible_name
+        or any(token in anchor for token in ("liked_you", "likes_you", "liked_", "likes_"))
+    ):
         return 0.455
     if "有个优秀的女生想认识你" in visible_name or any(token in anchor for token in ("new_promo", "new_badge")):
         return 0.525
@@ -962,6 +1325,7 @@ def _target_binding(
     region = _visual_anchor_region_from_source(cached_target)
     list_anchor = str(cached_target.get("visual_anchor_hash") or "").strip()
     thread_anchor = str(identity.get("visual_anchor_hash") or "").strip()
+    thread_region = _visual_anchor_region_from_source(identity)
     binding = {
         "schema_version": 1,
         "binding_type": "current_thread_visual_identity",
@@ -973,7 +1337,9 @@ def _target_binding(
             "screen_state": "tashuo_conversation",
             "latest_inbound_fingerprint": latest_inbound_fingerprint,
             "visual_anchor_hash": thread_anchor,
-            "source": "standalone_vision_conversation",
+            "visual_anchor_region": thread_region,
+            "visual_anchor_grid_size": identity.get("visual_anchor_grid_size"),
+            "source": identity.get("visual_anchor_source") or "standalone_vision_conversation",
         },
         "message_list_evidence": {
             "evidence_type": "message_list_visual_anchor",
@@ -1004,10 +1370,11 @@ def _visual_anchor_region_from_source(source: dict[str, Any]) -> dict[str, float
 
 def _profile_observation_from_cached_target(cached_target: dict[str, Any] | None, *, visible_name: str) -> dict[str, Any]:
     latest_preview = str((cached_target or {}).get("latest_preview") or "").strip()
+    display_name = "" if _is_synthetic_message_list_visible_name(visible_name) else visible_name
     profile_text = (
-        f"TaShuo visible thread/list context for {visible_name}: latest preview {latest_preview}"
+        f"TaShuo visible thread/list context for {display_name}: latest preview {latest_preview}"
         if latest_preview
-        else f"TaShuo visible thread/list context for {visible_name or 'current thread'}."
+        else f"TaShuo visible thread/list context for {display_name or 'current thread'}."
     )
     return {
         "profile_text": profile_text,
@@ -1122,7 +1489,16 @@ def _target_age_seconds(target: dict[str, Any]) -> float | None:
 
 
 def _normalized_visible_name(value: Any) -> str:
-    return str(value or "").strip()
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    compact = re.sub(r"\s+", "", text)
+    notification_match = re.search(r"不要让(.{1,40}?)等太久", compact)
+    if notification_match:
+        candidate = notification_match.group(1).strip("，。,.!！?？：:、|")
+        if candidate and "喜欢你的人" not in candidate:
+            return candidate
+    return text
 
 
 def _visible_name_identity_conflict(
@@ -1136,6 +1512,8 @@ def _visible_name_identity_conflict(
     perceived_name = _normalized_visible_name(perceived)
     if not expected_name or not perceived_name:
         return False
+    if _is_synthetic_message_list_visible_name(expected_name) or _is_synthetic_message_list_visible_name(perceived_name):
+        return False
     if expected_name == perceived_name:
         return False
     if _cjk_visible_name_ocr_near_match(expected_name, perceived_name):
@@ -1143,6 +1521,11 @@ def _visible_name_identity_conflict(
     if cached_target and _latest_preview_corroborates_thread(cached_target, visible_messages):
         return False
     return True
+
+
+def _is_synthetic_message_list_visible_name(value: Any) -> bool:
+    text = str(value or "").strip()
+    return text.startswith(SYNTHETIC_MESSAGE_LIST_VISIBLE_NAME_PREFIX)
 
 
 def _cjk_visible_name_ocr_near_match(expected: str, perceived: str) -> bool:

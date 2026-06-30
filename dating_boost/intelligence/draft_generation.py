@@ -75,6 +75,9 @@ def generate_reply_with_refinement(
     audit_root: Path | None,
     supplemental_prompts: list[str] | None = None,
     threshold: int = 40,
+    soft_accept_after_exhaustion: bool = False,
+    soft_accept_after_attempts: int | None = None,
+    soft_accept_threshold: int = 60,
     max_attempts: int = 3,
 ) -> DraftGenerationResult:
     if evidence_pack.status != "ok":
@@ -106,19 +109,31 @@ def generate_reply_with_refinement(
             user_prompt=last_prompt.user_prompt,
             schema=REPLY_SCHEMA,
         )
-        last_payload = normalize_draft_payload(last_payload)
-        last_draft = parse_draft_response(last_payload)
-        self_review = _parse_self_review(
-            backend.generate_structured(
-                system_prompt=_self_review_system_prompt(),
-                user_prompt=_self_review_user_prompt(
-                    evidence_pack=evidence_pack,
-                    prompt=last_prompt,
-                    draft_payload=last_payload,
-                ),
-                schema=DRAFT_SELF_REVIEW_SCHEMA,
+        try:
+            last_payload = normalize_draft_payload(last_payload)
+            last_draft = parse_draft_response(last_payload)
+        except (TypeError, ValueError) as exc:
+            supplemental = _schema_retry_supplemental(str(exc))
+            attempts.append(_synthetic_retry_attempt(reason=f"draft_generation_schema_invalid: {exc}", supplemental=supplemental))
+            active_supplemental_prompts.append(supplemental)
+            continue
+        try:
+            self_review = _parse_self_review(
+                backend.generate_structured(
+                    system_prompt=_self_review_system_prompt(),
+                    user_prompt=_self_review_user_prompt(
+                        evidence_pack=evidence_pack,
+                        prompt=last_prompt,
+                        draft_payload=last_payload,
+                    ),
+                    schema=DRAFT_SELF_REVIEW_SCHEMA,
+                )
             )
-        )
+        except (TypeError, ValueError) as exc:
+            supplemental = _schema_retry_supplemental(f"self_review_invalid: {exc}")
+            attempts.append(_synthetic_retry_attempt(reason=f"draft_self_review_schema_invalid: {exc}", supplemental=supplemental))
+            active_supplemental_prompts.append(supplemental)
+            continue
         attempts.append(self_review)
         if self_review["ai_or_weird_probability"] <= threshold:
             return _result(
@@ -131,10 +146,45 @@ def generate_reply_with_refinement(
                 attempts=attempts,
                 audit_root=audit_root,
             )
+        if (
+            soft_accept_after_attempts is not None
+            and _attempt_index >= max(1, int(soft_accept_after_attempts))
+            and int(self_review.get("ai_or_weird_probability") or 100) <= soft_accept_threshold
+            and last_draft is not None
+            and last_payload is not None
+        ):
+            return _result(
+                evidence_pack=evidence_pack,
+                prompt=last_prompt,
+                status="ok",
+                reason="draft_refinement_soft_accepted",
+                draft=last_draft,
+                draft_payload=dict(last_payload),
+                attempts=attempts,
+                audit_root=audit_root,
+            )
         supplemental = str(self_review.get("supplemental_prompt") or "").strip()
         active_supplemental_prompts.append(
             supplemental
             or "Rewrite to sound like a real private-chat message: shorter, more grounded in the latest inbound turn, and less like a summary."
+        )
+
+    if (
+        soft_accept_after_exhaustion
+        and last_draft is not None
+        and last_payload is not None
+        and attempts
+        and int(attempts[-1].get("ai_or_weird_probability") or 100) <= soft_accept_threshold
+    ):
+        return _result(
+            evidence_pack=evidence_pack,
+            prompt=last_prompt,
+            status="ok",
+            reason="draft_refinement_soft_accepted",
+            draft=last_draft,
+            draft_payload=dict(last_payload),
+            attempts=attempts,
+            audit_root=audit_root,
         )
 
     return _result(
@@ -189,6 +239,25 @@ def _result(
         self_review_attempts=attempts,
         audit_event=audit_event,
     )
+
+
+def _schema_retry_supplemental(reason: str) -> str:
+    return (
+        "Previous structured output failed schema validation: "
+        f"{reason}. Return every required reply field exactly as specified by the schema, including "
+        "why_this_works, situation_read, conversation_move, hook_source, naturalness_notes, "
+        "followup_if_match_replies, risk_flags, missing_info, mode_notes, persona_divergence, "
+        "and stance_divergence. Keep the reply natural and do not omit required metadata fields."
+    )
+
+
+def _synthetic_retry_attempt(*, reason: str, supplemental: str) -> dict[str, Any]:
+    return {
+        "ai_or_weird_probability": 100,
+        "reason": reason,
+        "supplemental_prompt": supplemental,
+        "supplemental_prompt_hash": _digest(supplemental),
+    }
 
 
 def _parse_self_review(payload: dict[str, Any]) -> dict[str, Any]:

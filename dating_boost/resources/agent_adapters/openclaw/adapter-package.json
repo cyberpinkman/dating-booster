@@ -75,6 +75,9 @@
     "diagnostic_bundle": 1,
     "support_log": 1,
     "support_evidence": 1,
+    "beta_session": 1,
+    "beta_report": 1,
+    "beta_feedback": 1,
     "release_manifest": 1
   },
   "source_spec_commit": "main",
@@ -210,6 +213,14 @@
     "harness wechat observe",
     "harness wechat stage-draft",
     "harness wechat send-message",
-    "release doctor"
+    "release doctor",
+    "release gate tashuo-stage-alpha",
+    "beta readiness",
+    "beta feedback record",
+    "beta tashuo-stage start",
+    "beta tashuo-stage run",
+    "beta tashuo-stage status",
+    "beta tashuo-stage stop",
+    "beta tashuo-stage report"
   ]
 }

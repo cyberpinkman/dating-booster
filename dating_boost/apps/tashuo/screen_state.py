@@ -20,9 +20,12 @@ TASHUO_FOREGROUND_STATES = {
     "tashuo_activity",
     "tashuo_search",
     "tashuo_conversation",
+    "tashuo_conversation_notification_prompt",
     "tashuo_question_gate",
+    "tashuo_pending_question_list",
     "tashuo_profile",
     "tashuo_self_profile",
+    "tashuo_liked_you_modal",
     "tashuo_unknown",
 }
 TASHUO_TOP_LEVEL_TAB_LABELS = ("推荐", "飞行", "消息", "我的")
@@ -66,7 +69,13 @@ def classify_tashuo_screen_image(path: Path) -> dict[str, Any]:
     pixels = _crop_tashuo_window_content(pixels)
     bottom_nav = _tashuo_bottom_nav_hint(pixels)
     bottom_nav_present = bool(bottom_nav["present"])
+    liked_you_modal = _tashuo_liked_you_modal_hint(pixels)
     conversation_toolbar = _tashuo_conversation_toolbar_hint(pixels)
+    conversation_notification_prompt = _tashuo_conversation_notification_prompt_hint(
+        pixels,
+        bottom_nav=bottom_nav,
+    )
+    pending_question_list = _tashuo_pending_question_list_hint(pixels, bottom_nav=bottom_nav)
     profile_visual = _tashuo_profile_visual_hint(pixels)
     chat_list_visual = _tashuo_chat_list_body_hint(pixels, bottom_nav=bottom_nav)
     message_list_top_anchor = _tashuo_message_list_top_anchor_hint(
@@ -81,16 +90,28 @@ def classify_tashuo_screen_image(path: Path) -> dict[str, Any]:
         "messages": "tashuo_chat_list" if chat_list_visual["present"] else "tashuo_unknown",
         "mine": "tashuo_self_profile",
     }.get(str(bottom_nav["active_tab"]), "unknown")
+    if liked_you_modal["present"]:
+        state = "tashuo_liked_you_modal"
+    if state == "unknown" and not bottom_nav_present and conversation_notification_prompt["present"]:
+        state = "tashuo_conversation_notification_prompt"
+    if state == "unknown" and not bottom_nav_present and profile_visual["present"]:
+        state = "tashuo_profile"
     if state == "unknown" and not bottom_nav_present and conversation_toolbar["present"]:
         state = "tashuo_conversation"
-    if state == "unknown" and not bottom_nav_present and not conversation_toolbar["present"] and profile_visual["present"]:
-        state = "tashuo_profile"
+    if state == "unknown" and not bottom_nav_present and pending_question_list["present"]:
+        state = "tashuo_pending_question_list"
     return {
         "status": "ok",
         "state": state,
         "active_tab": str(bottom_nav["active_tab"]),
         "bottom_nav_present": bottom_nav_present,
         "conversation_toolbar_present": conversation_toolbar["present"],
+        "conversation_notification_prompt_present": conversation_notification_prompt["present"],
+        "conversation_notification_prompt_signal": conversation_notification_prompt,
+        "pending_question_list_present": pending_question_list["present"],
+        "pending_question_list_signal": pending_question_list,
+        "liked_you_modal_present": liked_you_modal["present"],
+        "liked_you_modal_signal": liked_you_modal,
         "profile_visual_present": profile_visual["present"],
         "chat_list_visual_present": chat_list_visual["present"],
         "chat_list_visual_signal": chat_list_visual,
@@ -148,6 +169,8 @@ def combine_tashuo_screen_states(
     normalized = normalize_text(text)
     if _looks_like_tashuo_flight_text(normalized):
         return "tashuo_flight"
+    if _looks_like_tashuo_profile_text(normalized):
+        return "tashuo_profile"
     if (
         visual_state in {"tashuo_recommend", "tashuo_flight", "tashuo_chat_list", "tashuo_self_profile"}
         and visual_bottom_nav_present
@@ -157,10 +180,16 @@ def combine_tashuo_screen_states(
         top_level_state = _classify_tashuo_top_level_header_text(normalized)
         if top_level_state is not None:
             return top_level_state
+    if visual_state == "tashuo_liked_you_modal" and text_state in {"unknown", "tashuo_unknown"}:
+        return "tashuo_liked_you_modal"
+    if visual_state == "tashuo_conversation_notification_prompt" and text_state in {"unknown", "tashuo_unknown"}:
+        return "tashuo_conversation_notification_prompt"
     if visual_state == "tashuo_conversation" and text_state in {"unknown", "tashuo_unknown"}:
         return "tashuo_conversation"
     if visual_state == "tashuo_profile" and text_state in {"unknown", "tashuo_unknown"}:
         return "tashuo_profile"
+    if visual_state == "tashuo_pending_question_list" and text_state in {"unknown", "tashuo_unknown"}:
+        return "tashuo_pending_question_list"
     return text_state
 
 
@@ -181,9 +210,13 @@ def classify_tashuo_capture(path: Path, text: str) -> dict[str, Any]:
         "visual_active_tab": visual.get("active_tab", "unknown"),
         "visual_bottom_nav_present": visual.get("bottom_nav_present", False),
         "chat_list_visual_present": visual.get("chat_list_visual_present", False),
+        "conversation_notification_prompt_present": visual.get("conversation_notification_prompt_present", False),
+        "conversation_notification_prompt_signal": visual.get("conversation_notification_prompt_signal", {}),
         "message_list_top_anchor_present": visual.get("message_list_top_anchor_present", False),
         "message_list_top_anchor_signal": visual.get("message_list_top_anchor_signal", {}),
         "recommend_card_visual_present": visual.get("recommend_card_visual_present", False),
+        "liked_you_modal_present": visual.get("liked_you_modal_present", False),
+        "liked_you_modal_signal": visual.get("liked_you_modal_signal", {}),
     }
 
 
@@ -209,9 +242,12 @@ def tashuo_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
         "tashuo_activity": "activity",
         "tashuo_search": "search",
         "tashuo_conversation": "conversation",
+        "tashuo_conversation_notification_prompt": "conversation_notification_prompt",
         "tashuo_question_gate": "question_gate",
+        "tashuo_pending_question_list": "pending_question_list",
         "tashuo_profile": "profile",
         "tashuo_self_profile": "self_profile",
+        "tashuo_liked_you_modal": "liked_you_modal",
         "tashuo_unknown": "unknown_tashuo",
     }.get(state, "unknown")
     return {
@@ -230,8 +266,12 @@ def tashuo_layout_hints(screen: dict[str, Any]) -> dict[str, Any]:
         "message_list_top_anchor_present": tashuo_message_list_top_anchor_present(screen)
         or any(marker in normalized for marker in ("待回答", "新匹配", "全部消息")),
         "recommend_card_visual_present": bool(screen.get("recommend_card_visual_present")),
+        "liked_you_modal_present": state == "tashuo_liked_you_modal"
+        or bool(screen.get("liked_you_modal_present")),
         "conversation_present": state == "tashuo_conversation",
         "question_gate_present": state == "tashuo_question_gate",
+        "pending_question_list_present": state == "tashuo_pending_question_list"
+        or bool(screen.get("pending_question_list_present")),
         "self_profile_present": state == "tashuo_self_profile"
         or any(marker in normalized for marker in ("编辑资料", "我的认证")),
         "profile_present": state == "tashuo_profile",
@@ -324,11 +364,33 @@ def _looks_like_tashuo_conversation_text(normalized_text: str) -> bool:
 def _looks_like_tashuo_profile_text(normalized_text: str) -> bool:
     if _tashuo_top_level_nav_text_present(normalized_text):
         return False
+    compact = re.sub(r"\s+", "", normalized_text)
+    if "分享给好友" in compact or ("分享" in compact and "好友" in compact):
+        return True
+    profile_read_markers = (
+        "我的资料",
+        "更多信息",
+        "有健身习惯",
+        "不饮酒",
+        "不吸烟",
+        "我的恋爱三观",
+        "查看详细解析",
+        "我的心灵测试",
+        "关于人生阶段",
+        "当前人生阶段",
+        "我的MBTI",
+        "近期动态",
+        "我在哪里",
+    )
+    if sum(1 for marker in profile_read_markers if marker in compact) >= 2:
+        return True
     profile_sections = sum(
         1
-        for marker in ("资料", "动态", "关于我", "我的日常", "我的愿望", "cm", "家乡", "星座")
-        if marker in normalized_text
+        for marker in ("资料", "动态", "关于我", "我的日常", "我的愿望", "家乡", "星座")
+        if marker in compact
     )
+    if "cm" in normalized_text:
+        profile_sections += 1
     identity_header = bool(re.search(r"\b[a-z][a-z0-9_ .'-]{1,30}\s+\d{2}\b", normalized_text)) or bool(
         re.search(r"\d{2}\b", normalized_text)
     )
@@ -425,20 +487,127 @@ def _tashuo_conversation_toolbar_hint(pixels: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _tashuo_conversation_notification_prompt_hint(
+    pixels: dict[str, Any],
+    *,
+    bottom_nav: dict[str, Any],
+) -> dict[str, Any]:
+    if bottom_nav.get("present"):
+        return {"present": False, "reason": "bottom_nav_present"}
+    back_signal = _region_nonwhite_ratio(pixels, 0.035, 0.085, 0.120, 0.155, threshold=170)
+    header_signal = _region_nonwhite_ratio(pixels, 0.32, 0.085, 0.96, 0.155, threshold=190)
+    prompt_title_signal = _region_nonwhite_ratio(pixels, 0.20, 0.170, 0.80, 0.225, threshold=190)
+    prompt_body_signal = _region_nonwhite_ratio(pixels, 0.18, 0.215, 0.82, 0.265, threshold=205)
+    close_signal = _region_nonwhite_ratio(pixels, 0.88, 0.145, 0.96, 0.210, threshold=215)
+    cta_purple_signal = _region_purple_ratio(pixels, 0.28, 0.245, 0.72, 0.325)
+    lower_body = _region_stats(pixels, 0.04, 0.345, 0.96, 0.860)
+    present = (
+        back_signal > 0.010
+        and header_signal > 0.010
+        and prompt_title_signal > 0.020
+        and prompt_body_signal > 0.010
+        and close_signal > 0.010
+        and cta_purple_signal > 0.030
+        and lower_body["bright_ratio"] > 0.82
+        and lower_body["dark_ratio"] < 0.08
+    )
+    return {
+        "present": present,
+        "back_signal": back_signal,
+        "header_signal": header_signal,
+        "prompt_title_signal": prompt_title_signal,
+        "prompt_body_signal": prompt_body_signal,
+        "close_signal": close_signal,
+        "cta_purple_signal": cta_purple_signal,
+        "lower_body_bright_ratio": lower_body["bright_ratio"],
+        "lower_body_dark_ratio": lower_body["dark_ratio"],
+    }
+
+
+def _tashuo_pending_question_list_hint(pixels: dict[str, Any], *, bottom_nav: dict[str, Any]) -> dict[str, Any]:
+    if bottom_nav.get("present"):
+        return {"present": False, "reason": "bottom_nav_present"}
+    back_signal = _region_nonwhite_ratio(pixels, 0.035, 0.085, 0.125, 0.160, threshold=150)
+    title_signal = _region_nonwhite_ratio(pixels, 0.36, 0.085, 0.64, 0.155, threshold=170)
+    tab_text_signal = _region_nonwhite_ratio(pixels, 0.22, 0.170, 0.78, 0.235, threshold=180)
+    tab_purple_signal = _region_purple_ratio(pixels, 0.20, 0.170, 0.50, 0.250)
+    body = _region_stats(pixels, 0.06, 0.265, 0.94, 0.86)
+    present = (
+        back_signal > 0.015
+        and title_signal > 0.015
+        and tab_text_signal > 0.020
+        and tab_purple_signal > 0.003
+        and body["bright_ratio"] > 0.58
+        and body["dark_ratio"] < 0.16
+    )
+    return {
+        "present": present,
+        "back_signal": back_signal,
+        "title_signal": title_signal,
+        "tab_text_signal": tab_text_signal,
+        "tab_purple_signal": tab_purple_signal,
+        "body_bright_ratio": body["bright_ratio"],
+        "body_dark_ratio": body["dark_ratio"],
+    }
+
+
+def _tashuo_liked_you_modal_hint(pixels: dict[str, Any]) -> dict[str, Any]:
+    card = _region_stats(pixels, 0.08, 0.25, 0.92, 0.80)
+    primary_button = _region_stats(pixels, 0.14, 0.62, 0.86, 0.72)
+    cancel_area = _region_stats(pixels, 0.30, 0.72, 0.70, 0.80)
+    surround_top = _region_stats(pixels, 0.04, 0.10, 0.96, 0.22)
+    surround_left = _region_stats(pixels, 0.02, 0.30, 0.08, 0.78)
+    surround_right = _region_stats(pixels, 0.92, 0.30, 0.98, 0.78)
+    surround_bottom = _region_stats(pixels, 0.04, 0.86, 0.96, 0.99)
+    surround_dark_signal = min(
+        surround_top["dark_ratio"],
+        surround_left["dark_ratio"],
+        surround_right["dark_ratio"],
+        surround_bottom["dark_ratio"],
+    )
+    primary_button_signal = primary_button["mid_ratio"] + primary_button["color_ratio"]
+    present = (
+        card["bright_ratio"] > 0.58
+        and card["dark_ratio"] < 0.16
+        and primary_button_signal > 0.34
+        and primary_button["bright_ratio"] < 0.55
+        and cancel_area["bright_ratio"] > 0.70
+        and surround_dark_signal > 0.35
+    )
+    return {
+        "present": present,
+        "card_bright_ratio": card["bright_ratio"],
+        "card_dark_ratio": card["dark_ratio"],
+        "primary_button_signal": primary_button_signal,
+        "primary_button_bright_ratio": primary_button["bright_ratio"],
+        "cancel_area_bright_ratio": cancel_area["bright_ratio"],
+        "surround_dark_signal": surround_dark_signal,
+    }
+
+
 def _tashuo_profile_visual_hint(pixels: dict[str, Any]) -> dict[str, Any]:
     hero = _region_stats(pixels, 0.02, 0.10, 0.98, 0.72)
+    hero_photo = _region_stats(pixels, 0.04, 0.16, 0.96, 0.84)
     bottom_card = _region_stats(pixels, 0.02, 0.76, 0.98, 0.995)
     bottom_inner = _region_stats(pixels, 0.05, 0.80, 0.95, 0.98)
+    bottom_text_overlay = _region_stats(pixels, 0.04, 0.76, 0.96, 0.96)
     media_signal = (
         hero["bright_ratio"] < 0.35
         and hero["color_ratio"] > 0.18
         and (hero["dark_ratio"] + hero["mid_ratio"]) > 0.25
     )
     info_card_signal = bottom_card["bright_ratio"] > 0.55 and bottom_inner["bright_ratio"] > 0.65
+    detail_photo_signal = (
+        hero_photo["bright_ratio"] < 0.65
+        and (hero_photo["mid_ratio"] + hero_photo["color_ratio"]) > 0.35
+        and bottom_text_overlay["mid_ratio"] > 0.35
+        and bottom_text_overlay["bright_ratio"] < 0.35
+    )
     return {
-        "present": media_signal and info_card_signal,
+        "present": (media_signal and info_card_signal) or detail_photo_signal,
         "media_signal": media_signal,
         "info_card_signal": info_card_signal,
+        "detail_photo_signal": detail_photo_signal,
     }
 
 

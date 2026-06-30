@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import math
 import re
 import struct
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 import zlib
@@ -29,6 +32,8 @@ BUMBLE_FOREGROUND_STATES = {
     "bumble_unknown",
 }
 BUMBLE_TOP_LEVEL_TAB_LABELS = ("个人档案", "发现", "浏览用户", "为你心动", "聊天")
+_PNG_PIXEL_CACHE_LIMIT = 16
+_PNG_PIXEL_CACHE: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
 
 def classify_screen_text(text: str) -> str:
@@ -754,9 +759,14 @@ def _region_stats(pixels: dict[str, Any], x1: float, y1: float, x2: float, y2: f
     end_x = max(start_x + 1, min(width, int(x2 * width)))
     start_y = max(0, min(height - 1, int(y1 * height)))
     end_y = max(start_y + 1, min(height, int(y2 * height)))
+    region_width = end_x - start_x
+    region_height = end_y - start_y
+    pixel_count = region_width * region_height
+    stride = max(1, math.ceil(math.sqrt(pixel_count / 20_000))) if pixel_count > 20_000 else 1
     total = bright = dark = mid = color = 0
-    for row in rows[start_y:end_y]:
-        for x in range(start_x, end_x):
+    for y in range(start_y, end_y, stride):
+        row = rows[y]
+        for x in range(start_x, end_x, stride):
             r, g, b = row[x * channels : x * channels + 3]
             lum = (int(r) + int(g) + int(b)) / 3
             total += 1
@@ -780,6 +790,11 @@ def _read_png_pixels(path: Path) -> dict[str, Any]:
     data = path.read_bytes()
     if not data.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ValueError("not a png")
+    cache_key = hashlib.sha256(data).hexdigest()
+    cached = _PNG_PIXEL_CACHE.get(cache_key)
+    if cached is not None:
+        _PNG_PIXEL_CACHE.move_to_end(cache_key)
+        return cached
     pos = 8
     width = height = channels = color_type = bit_depth = None
     raw = b""
@@ -818,7 +833,12 @@ def _read_png_pixels(path: Path) -> dict[str, Any]:
         decoded = _decode_png_scanline(row, previous, channels, filter_type)
         rows.append(decoded)
         previous = decoded
-    return {"width": width, "height": height, "channels": channels, "rows": rows}
+    pixels = {"width": width, "height": height, "channels": channels, "rows": rows}
+    _PNG_PIXEL_CACHE[cache_key] = pixels
+    _PNG_PIXEL_CACHE.move_to_end(cache_key)
+    while len(_PNG_PIXEL_CACHE) > _PNG_PIXEL_CACHE_LIMIT:
+        _PNG_PIXEL_CACHE.popitem(last=False)
+    return pixels
 
 
 def _decode_png_scanline(row: list[int], previous: list[int], channels: int, filter_type: int) -> list[int]:

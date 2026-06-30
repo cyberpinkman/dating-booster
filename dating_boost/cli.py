@@ -372,6 +372,105 @@ def main(argv: list[str] | None = None) -> int:
     release_doctor_parser = release_subparsers.add_parser("doctor")
     release_doctor_parser.add_argument("--json", action="store_true")
     release_doctor_parser.set_defaults(handler=_handle_release_doctor)
+    release_gate_parser = release_subparsers.add_parser("gate", help="Release gate commands.")
+    release_gate_subparsers = release_gate_parser.add_subparsers(dest="release_gate_command", required=True)
+    tashuo_stage_alpha_parser = release_gate_subparsers.add_parser("tashuo-stage-alpha")
+    tashuo_stage_alpha_parser.add_argument("--data-dir", type=Path)
+    tashuo_stage_alpha_parser.add_argument("--work-dir", type=Path)
+    tashuo_stage_alpha_parser.add_argument("--authorization", type=Path)
+    tashuo_stage_alpha_parser.add_argument("--env-file", type=Path)
+    tashuo_stage_alpha_parser.add_argument("--runs", type=int)
+    tashuo_stage_alpha_parser.add_argument(
+        "--initial-surface",
+        choices=["mixed", "message-list", "current-thread"],
+    )
+    tashuo_stage_alpha_parser.add_argument("--continue-on-failure", action="store_true")
+    tashuo_stage_alpha_parser.add_argument("--vision-backend", choices=["scripted", "openai", "minimax"])
+    tashuo_stage_alpha_parser.add_argument("--vision-model")
+    tashuo_stage_alpha_parser.add_argument("--scripted-vision-output", type=Path)
+    tashuo_stage_alpha_parser.add_argument("--backend", choices=["scripted", "openai", "minimax"])
+    tashuo_stage_alpha_parser.add_argument("--model")
+    tashuo_stage_alpha_parser.add_argument("--scripted-backend-output", type=Path)
+    tashuo_stage_alpha_parser.add_argument("--minimax-base-url")
+    tashuo_stage_alpha_parser.add_argument("--minimax-api-key-env")
+    tashuo_stage_alpha_parser.add_argument("--minimax-request-timeout-seconds", type=float)
+    tashuo_stage_alpha_parser.add_argument("--max-ticks", type=int)
+    tashuo_stage_alpha_parser.add_argument("--step-timeout-seconds", type=float)
+    tashuo_stage_alpha_parser.add_argument("--smoke-timeout-seconds", type=float)
+    tashuo_stage_alpha_parser.add_argument("--support-session-id")
+    tashuo_stage_alpha_parser.add_argument("--validate-evidence-json", type=Path)
+    tashuo_stage_alpha_parser.add_argument("--validate-evidence-bundle", type=Path)
+    tashuo_stage_alpha_parser.add_argument("--json", action="store_true")
+    tashuo_stage_alpha_parser.set_defaults(handler=_handle_release_gate_tashuo_stage_alpha)
+
+    beta_parser = subparsers.add_parser("beta", help="Controlled beta commands.")
+    beta_subparsers = beta_parser.add_subparsers(dest="beta_command", required=True)
+    beta_readiness_parser = beta_subparsers.add_parser("readiness")
+    beta_readiness_parser.add_argument("--data-dir", required=True, type=Path)
+    beta_readiness_parser.add_argument("--env-file", type=Path)
+    beta_readiness_parser.add_argument("--minimax-api-key-env", default=MINIMAX_DEFAULT_API_KEY_ENV)
+    beta_readiness_parser.add_argument("--alpha-evidence-json", type=Path)
+    beta_readiness_parser.add_argument("--alpha-evidence-bundle", type=Path)
+    beta_readiness_parser.add_argument("--json", action="store_true")
+    beta_readiness_parser.set_defaults(handler=_handle_beta_readiness)
+
+    beta_feedback_parser = beta_subparsers.add_parser("feedback")
+    beta_feedback_subparsers = beta_feedback_parser.add_subparsers(dest="beta_feedback_command", required=True)
+    beta_feedback_record_parser = beta_feedback_subparsers.add_parser("record")
+    beta_feedback_record_parser.add_argument("--data-dir", required=True, type=Path)
+    beta_feedback_record_parser.add_argument("--input", required=True, type=Path)
+    beta_feedback_record_parser.add_argument("--json", action="store_true")
+    beta_feedback_record_parser.set_defaults(handler=_handle_beta_feedback_record)
+
+    beta_tashuo_parser = beta_subparsers.add_parser("tashuo-stage")
+    beta_tashuo_subparsers = beta_tashuo_parser.add_subparsers(dest="beta_tashuo_stage_command", required=True)
+    beta_tashuo_start_parser = beta_tashuo_subparsers.add_parser("start")
+    beta_tashuo_start_parser.add_argument("--data-dir", required=True, type=Path)
+    beta_tashuo_start_parser.add_argument("--authorization", required=True, type=Path)
+    beta_tashuo_start_parser.add_argument("--work-dir", type=Path)
+    beta_tashuo_start_parser.add_argument("--env-file", type=Path)
+    beta_tashuo_start_parser.add_argument("--minimax-api-key-env", default=MINIMAX_DEFAULT_API_KEY_ENV)
+    beta_tashuo_start_parser.add_argument("--host", default="codex")
+    beta_tashuo_start_parser.add_argument("--json", action="store_true")
+    beta_tashuo_start_parser.set_defaults(handler=_handle_beta_tashuo_stage_start)
+    beta_tashuo_run_parser = beta_tashuo_subparsers.add_parser("run")
+    beta_tashuo_run_parser.add_argument("--data-dir", required=True, type=Path)
+    beta_tashuo_run_parser.add_argument("--authorization", type=Path)
+    beta_tashuo_run_parser.add_argument("--work-dir", type=Path)
+    beta_tashuo_run_parser.add_argument("--env-file", type=Path)
+    beta_tashuo_run_parser.add_argument("--runs", type=int, default=1)
+    beta_tashuo_run_parser.add_argument("--initial-surface", choices=["mixed", "message-list", "current-thread"], default="mixed")
+    beta_tashuo_run_parser.add_argument("--continue-on-failure", action="store_true")
+    beta_tashuo_run_parser.add_argument("--vision-backend", choices=["scripted", "openai", "minimax"], default="minimax")
+    beta_tashuo_run_parser.add_argument("--vision-model")
+    beta_tashuo_run_parser.add_argument("--scripted-vision-output", type=Path)
+    beta_tashuo_run_parser.add_argument("--backend", choices=["scripted", "openai", "minimax"], default="minimax")
+    beta_tashuo_run_parser.add_argument("--model")
+    beta_tashuo_run_parser.add_argument("--scripted-backend-output", type=Path)
+    beta_tashuo_run_parser.add_argument("--minimax-base-url")
+    beta_tashuo_run_parser.add_argument("--minimax-api-key-env", default=MINIMAX_DEFAULT_API_KEY_ENV)
+    beta_tashuo_run_parser.add_argument("--minimax-request-timeout-seconds", type=float)
+    beta_tashuo_run_parser.add_argument("--max-ticks", type=int)
+    beta_tashuo_run_parser.add_argument("--step-timeout-seconds", type=float)
+    beta_tashuo_run_parser.add_argument("--smoke-timeout-seconds", type=float)
+    beta_tashuo_run_parser.add_argument("--json", action="store_true")
+    beta_tashuo_run_parser.set_defaults(handler=_handle_beta_tashuo_stage_run)
+    beta_tashuo_status_parser = beta_tashuo_subparsers.add_parser("status")
+    beta_tashuo_status_parser.add_argument("--data-dir", required=True, type=Path)
+    beta_tashuo_status_parser.add_argument("--json", action="store_true")
+    beta_tashuo_status_parser.set_defaults(handler=_handle_beta_tashuo_stage_status)
+    beta_tashuo_stop_parser = beta_tashuo_subparsers.add_parser("stop")
+    beta_tashuo_stop_parser.add_argument("--data-dir", required=True, type=Path)
+    beta_tashuo_stop_parser.add_argument("--work-dir", type=Path)
+    beta_tashuo_stop_parser.add_argument("--env-file", type=Path)
+    beta_tashuo_stop_parser.add_argument("--reason", default="manual_stop")
+    beta_tashuo_stop_parser.add_argument("--json", action="store_true")
+    beta_tashuo_stop_parser.set_defaults(handler=_handle_beta_tashuo_stage_stop)
+    beta_tashuo_report_parser = beta_tashuo_subparsers.add_parser("report")
+    beta_tashuo_report_parser.add_argument("--data-dir", required=True, type=Path)
+    beta_tashuo_report_parser.add_argument("--format", choices=["json", "md"], default="json")
+    beta_tashuo_report_parser.add_argument("--json", action="store_const", const="json", dest="format")
+    beta_tashuo_report_parser.set_defaults(handler=_handle_beta_tashuo_stage_report)
 
     confirmation_parser = subparsers.add_parser("confirmation", help="Create and validate send confirmations.")
     confirmation_subparsers = confirmation_parser.add_subparsers(dest="confirmation_command", required=True)
@@ -831,6 +930,7 @@ def main(argv: list[str] | None = None) -> int:
     standalone_start_parser.add_argument("--send-mode", choices=["stage", "live"], default="stage")
     standalone_start_parser.add_argument("--managed-gui-send", action="store_true")
     standalone_start_parser.add_argument("--observation-source", choices=["fixture", "live-gui"], default="live-gui")
+    standalone_start_parser.add_argument("--initial-surface", choices=["message-list", "current-thread"], default="message-list")
     standalone_start_parser.add_argument("--observation-fixture-dir", type=Path)
     standalone_start_parser.add_argument("--output-dir", type=Path)
     standalone_start_parser.add_argument("--backend", choices=["scripted", "openai", "minimax"], default="scripted")
@@ -838,6 +938,7 @@ def main(argv: list[str] | None = None) -> int:
     standalone_start_parser.add_argument("--scripted-backend-output", type=Path)
     standalone_start_parser.add_argument("--minimax-base-url", default=MINIMAX_DEFAULT_BASE_URL)
     standalone_start_parser.add_argument("--minimax-api-key-env", default=MINIMAX_DEFAULT_API_KEY_ENV)
+    standalone_start_parser.add_argument("--minimax-request-timeout-seconds", type=float)
     standalone_start_parser.add_argument("--vision-backend", choices=["scripted", "openai", "minimax"])
     standalone_start_parser.add_argument("--vision-model")
     standalone_start_parser.add_argument("--scripted-vision-output", type=Path)
@@ -1752,6 +1853,151 @@ def _handle_release_doctor(args: argparse.Namespace) -> int:
     payload = release_doctor()
     _print_json(payload)
     return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_release_gate_tashuo_stage_alpha(args: argparse.Namespace) -> int:
+    from dating_boost.core.tashuo_stage_alpha_release_gate import main as release_gate_main
+
+    return int(release_gate_main(_release_gate_tashuo_stage_alpha_argv(args)))
+
+
+def _release_gate_tashuo_stage_alpha_argv(args: argparse.Namespace) -> list[str]:
+    argv: list[str] = []
+    path_options = (
+        ("--data-dir", "data_dir"),
+        ("--work-dir", "work_dir"),
+        ("--authorization", "authorization"),
+        ("--env-file", "env_file"),
+        ("--scripted-vision-output", "scripted_vision_output"),
+        ("--scripted-backend-output", "scripted_backend_output"),
+        ("--validate-evidence-json", "validate_evidence_json"),
+        ("--validate-evidence-bundle", "validate_evidence_bundle"),
+    )
+    value_options = (
+        ("--runs", "runs"),
+        ("--initial-surface", "initial_surface"),
+        ("--vision-backend", "vision_backend"),
+        ("--vision-model", "vision_model"),
+        ("--backend", "backend"),
+        ("--model", "model"),
+        ("--minimax-base-url", "minimax_base_url"),
+        ("--minimax-api-key-env", "minimax_api_key_env"),
+        ("--minimax-request-timeout-seconds", "minimax_request_timeout_seconds"),
+        ("--max-ticks", "max_ticks"),
+        ("--step-timeout-seconds", "step_timeout_seconds"),
+        ("--smoke-timeout-seconds", "smoke_timeout_seconds"),
+        ("--support-session-id", "support_session_id"),
+    )
+    for flag, attr in path_options:
+        value = getattr(args, attr, None)
+        if value is not None:
+            argv.extend([flag, str(value)])
+    for flag, attr in value_options:
+        value = getattr(args, attr, None)
+        if value is not None:
+            argv.extend([flag, str(value)])
+    if args.continue_on_failure:
+        argv.append("--continue-on-failure")
+    if args.json:
+        argv.append("--json")
+    return argv
+
+
+def _handle_beta_readiness(args: argparse.Namespace) -> int:
+    from dating_boost.core.tashuo_stage_beta import beta_readiness
+
+    payload = beta_readiness(
+        data_dir=args.data_dir,
+        env_file=args.env_file,
+        minimax_api_key_env=args.minimax_api_key_env,
+        alpha_evidence_json=args.alpha_evidence_json,
+        alpha_evidence_bundle=args.alpha_evidence_bundle,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_beta_feedback_record(args: argparse.Namespace) -> int:
+    from dating_boost.core.tashuo_stage_beta import record_stage_beta_feedback
+
+    payload = record_stage_beta_feedback(data_dir=args.data_dir, feedback=_read_json_object(args.input))
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_beta_tashuo_stage_start(args: argparse.Namespace) -> int:
+    from dating_boost.core.tashuo_stage_beta import start_tashuo_stage_beta
+
+    payload = start_tashuo_stage_beta(
+        data_dir=args.data_dir,
+        authorization_path=args.authorization,
+        work_dir=args.work_dir,
+        env_file=args.env_file,
+        minimax_api_key_env=args.minimax_api_key_env,
+        host=args.host,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") == "active" else 2
+
+
+def _handle_beta_tashuo_stage_run(args: argparse.Namespace) -> int:
+    from dating_boost.core.tashuo_stage_beta import run_tashuo_stage_beta
+
+    payload = run_tashuo_stage_beta(
+        data_dir=args.data_dir,
+        runs=args.runs,
+        work_dir=args.work_dir,
+        env_file=args.env_file,
+        authorization_path=args.authorization,
+        initial_surface=args.initial_surface,
+        continue_on_failure=args.continue_on_failure,
+        vision_backend=args.vision_backend,
+        backend=args.backend,
+        vision_model=args.vision_model,
+        model=args.model,
+        scripted_vision_output=args.scripted_vision_output,
+        scripted_backend_output=args.scripted_backend_output,
+        minimax_api_key_env=args.minimax_api_key_env,
+        minimax_base_url=args.minimax_base_url,
+        minimax_request_timeout_seconds=args.minimax_request_timeout_seconds,
+        max_ticks=args.max_ticks,
+        step_timeout_seconds=args.step_timeout_seconds,
+        smoke_timeout_seconds=args.smoke_timeout_seconds,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") == "ok" else 2
+
+
+def _handle_beta_tashuo_stage_status(args: argparse.Namespace) -> int:
+    from dating_boost.core.tashuo_stage_beta import status_tashuo_stage_beta
+
+    payload = status_tashuo_stage_beta(data_dir=args.data_dir)
+    _print_json(payload)
+    return 0 if payload.get("status") != "not_found" else 2
+
+
+def _handle_beta_tashuo_stage_stop(args: argparse.Namespace) -> int:
+    from dating_boost.core.tashuo_stage_beta import stop_tashuo_stage_beta
+
+    payload = stop_tashuo_stage_beta(
+        data_dir=args.data_dir,
+        work_dir=args.work_dir,
+        reason=args.reason,
+        env_file=args.env_file,
+    )
+    _print_json(payload)
+    return 0 if payload.get("status") == "stopped" else 2
+
+
+def _handle_beta_tashuo_stage_report(args: argparse.Namespace) -> int:
+    from dating_boost.core.tashuo_stage_beta import report_tashuo_stage_beta
+
+    payload = report_tashuo_stage_beta(data_dir=args.data_dir, format=args.format)
+    if args.format == "md":
+        sys.stdout.write(str(payload) + "\n")
+        return 0 if not str(payload).endswith("not found.") else 2
+    _print_json(payload)
+    return 0 if isinstance(payload, dict) and payload.get("status") != "not_found" else 2
 
 
 def _handle_confirmation_create(args: argparse.Namespace) -> int:
@@ -3361,6 +3607,7 @@ def _handle_standalone_session_start(args: argparse.Namespace) -> int:
         max_threads_per_cycle=None,
         cycle_send_limit=None,
         harness_runtime=args.runtime,
+        initial_surface=args.initial_surface,
     )
     required_confirm_token = managed_session_config_confirm_token(proposed_config)
     if args.config_confirm != required_confirm_token:
@@ -3404,6 +3651,7 @@ def _handle_standalone_session_start(args: argparse.Namespace) -> int:
             managed_gui_send=args.managed_gui_send,
             scan_interval_seconds=args.scan_interval,
             harness_runtime=args.runtime,
+            initial_surface=args.initial_surface,
         )
     except ValueError as exc:
         managed_payload = {"schema_version": 1, "status": "blocked", "reason": str(exc)}
@@ -3420,6 +3668,7 @@ def _handle_standalone_session_start(args: argparse.Namespace) -> int:
         scan_interval_seconds=args.scan_interval,
         managed_gui_send=bool(args.managed_gui_send),
         vision_backend=vision_backend,
+        initial_surface=args.initial_surface,
     )
     payload["managed_session"] = managed_payload
     if payload.get("status") != "active":
@@ -3448,7 +3697,11 @@ def _handle_standalone_session_tick(args: argparse.Namespace) -> int:
         observation_provider=ports["observation_provider"],
         harness_factory=ports["harness_factory"],
         action_executor=ports["action_executor"],
-        draft_planner=StandaloneDraftPlanner(args.data_dir, backend_config=session.get("backend") or {}),
+        draft_planner=StandaloneDraftPlanner(
+            args.data_dir,
+            backend_config=session.get("backend") or {},
+            allow_stage_soft_accept=str(session.get("send_mode") or "").strip() == "stage",
+        ),
     ).tick()
     repository.record_tick(payload)
     _print_json(payload)
@@ -3517,6 +3770,9 @@ def _standalone_observation_source_payload(args: argparse.Namespace) -> dict[str
                 "base_url": args.minimax_base_url or MINIMAX_DEFAULT_BASE_URL,
                 "api_key_env": args.minimax_api_key_env or MINIMAX_DEFAULT_API_KEY_ENV,
             }
+            timeout_seconds = _standalone_minimax_request_timeout(args)
+            if timeout_seconds is not None:
+                vision_backend["timeout_seconds"] = timeout_seconds
         source: dict[str, Any] = {
             "type": "live_gui",
             "app_id": args.app_id,
@@ -3549,17 +3805,32 @@ def _standalone_backend_payload(args: argparse.Namespace) -> dict[str, Any]:
     if args.scripted_backend_output is not None:
         return {"schema_version": 1, "status": "blocked", "reason": "scripted_backend_output_only_for_scripted_backend"}
     if args.backend == "minimax":
+        backend = {
+            "type": "minimax",
+            "model": args.model or MINIMAX_DEFAULT_MODEL,
+            "base_url": args.minimax_base_url or MINIMAX_DEFAULT_BASE_URL,
+            "api_key_env": args.minimax_api_key_env or MINIMAX_DEFAULT_API_KEY_ENV,
+        }
+        timeout_seconds = _standalone_minimax_request_timeout(args)
+        if timeout_seconds is not None:
+            backend["timeout_seconds"] = timeout_seconds
         return {
             "schema_version": 1,
             "status": "ok",
-            "backend": {
-                "type": "minimax",
-                "model": args.model or MINIMAX_DEFAULT_MODEL,
-                "base_url": args.minimax_base_url or MINIMAX_DEFAULT_BASE_URL,
-                "api_key_env": args.minimax_api_key_env or MINIMAX_DEFAULT_API_KEY_ENV,
-            },
+            "backend": backend,
         }
     return {"schema_version": 1, "status": "ok", "backend": {"type": args.backend, "model": args.model or "gpt-4.1-mini"}}
+
+
+def _standalone_minimax_request_timeout(args: argparse.Namespace) -> float | None:
+    value = getattr(args, "minimax_request_timeout_seconds", None)
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _handle_operator_session_start(args: argparse.Namespace) -> int:

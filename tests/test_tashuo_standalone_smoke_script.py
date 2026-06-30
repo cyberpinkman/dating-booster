@@ -25,6 +25,7 @@ def _alpha_gate_stage_result() -> dict:
         "action_request_id": "act_1",
         "target_match_id": "match_1",
         "payload_hash": "hash_1",
+        "precondition_hash": "pre_hash_1",
         "pre_action_observation_id": "obs_1",
         "result_status": "succeeded",
         "evidence": {
@@ -53,6 +54,24 @@ def _stage_recorded_tick_payload() -> dict:
     }
 
 
+def _clear_input_payload() -> dict:
+    return {
+        "schema_version": 2,
+        "status": "ok",
+        "action": "clear-message-input",
+        "input_cleared": True,
+        "final_input_character_count": 0,
+        "final_input_verification": {
+            "schema_version": 1,
+            "status": "ok",
+            "verification_method": "unit_fake",
+            "input_cleared": True,
+            "final_input_character_count": 0,
+            "reason": None,
+        },
+    }
+
+
 def _write_alpha_gate_stage_result_for_cmd(cmd: list[str]) -> None:
     data_dir = Path(cmd[cmd.index("--data-dir") + 1])
     audit_dir = data_dir / "audit"
@@ -74,6 +93,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
             if "tick" in cmd:
                 _write_alpha_gate_stage_result_for_cmd(cmd)
                 payload = _stage_recorded_tick_payload()
+            if "clear-message-input" in cmd:
+                payload = _clear_input_payload()
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run
@@ -131,6 +152,7 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
             ["standalone-session", "stop", "--data-dir", str(root / "data"), "--reason", "smoke_complete", "--json"],
             command_args,
         )
+        self.assertTrue(any(command[:4] == ["harness", "tashuo", "action", "clear-message-input"] for command in command_args))
         flattened = [item for command in command_args for item in command]
         self.assertNotIn("--managed-gui-send", flattened)
 
@@ -158,6 +180,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
             if "tick" in cmd:
                 _write_alpha_gate_stage_result_for_cmd(cmd)
                 payload = _stage_recorded_tick_payload()
+            if "clear-message-input" in cmd:
+                payload = _clear_input_payload()
             return subprocess.CompletedProcess(cmd, returncode, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run
@@ -214,6 +238,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
             if "tick" in cmd:
                 _write_alpha_gate_stage_result_for_cmd(cmd)
                 payload = _stage_recorded_tick_payload()
+            if "clear-message-input" in cmd:
+                payload = _clear_input_payload()
             return subprocess.CompletedProcess(cmd, returncode, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run
@@ -273,6 +299,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
             if "tick" in cmd:
                 _write_alpha_gate_stage_result_for_cmd(cmd)
                 payload = _stage_recorded_tick_payload()
+            if "clear-message-input" in cmd:
+                payload = _clear_input_payload()
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run
@@ -322,6 +350,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
         self.assertIn("MiniMax-M3", start)
         self.assertIn("--vision-model", start)
         self.assertIn("--minimax-api-key-env", start)
+        self.assertIn("--minimax-request-timeout-seconds", start)
+        self.assertEqual(start[start.index("--minimax-request-timeout-seconds") + 1], "30.0")
         self.assertEqual(calls[0][1].get("MINIMAX_API_KEY"), "test-key")
 
     def test_smoke_defaults_to_minimax_m3(self):
@@ -336,6 +366,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
             if "tick" in cmd:
                 _write_alpha_gate_stage_result_for_cmd(cmd)
                 payload = _stage_recorded_tick_payload()
+            if "clear-message-input" in cmd:
+                payload = _clear_input_payload()
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run
@@ -368,6 +400,181 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
         self.assertIn("--vision-model", start)
         self.assertIn("--minimax-base-url", start)
         self.assertIn("https://api.minimaxi.com/v1", start)
+        self.assertIn("--minimax-request-timeout-seconds", start)
+        self.assertEqual(start[start.index("--minimax-request-timeout-seconds") + 1], "30.0")
+
+    def test_smoke_continues_while_ticks_make_structural_progress(self):
+        module = _load_smoke_module()
+        calls = []
+        tick_count = 0
+
+        def fake_run(cmd, check=False, capture_output=False, text=False, cwd=None, env=None, timeout=None):
+            nonlocal tick_count
+            calls.append(cmd)
+            payload = {"status": "ok"}
+            if cmd[3:5] == ["standalone-session", "start"]:
+                payload = {"status": "active"}
+            if cmd[3:5] == ["standalone-session", "tick"]:
+                tick_count += 1
+                if tick_count < 7:
+                    payload = {
+                        "status": "work_consumed",
+                        "work_item_type": "open_thread",
+                        "work_item_id": f"work_{tick_count}",
+                        "ingested": {
+                            "observation_id": f"obs_{tick_count}",
+                            "match_id": f"match_{tick_count}",
+                        },
+                    }
+                else:
+                    _write_alpha_gate_stage_result_for_cmd(cmd)
+                    payload = _stage_recorded_tick_payload()
+            if "clear-message-input" in cmd:
+                payload = _clear_input_payload()
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+        original_run = module.subprocess.run
+        module.subprocess.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                auth = root / "auth.json"
+                auth.write_text("{}", encoding="utf-8")
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    exit_code = module.main(
+                        [
+                            "--data-dir",
+                            str(root / "data"),
+                            "--authorization",
+                            str(auth),
+                            "--vision-backend",
+                            "openai",
+                            "--backend",
+                            "openai",
+                            "--json",
+                        ]
+                    )
+        finally:
+            module.subprocess.run = original_run
+
+        payload = json.loads(stdout.getvalue())
+        tick_commands = [call for call in calls if call[3:5] == ["standalone-session", "tick"]]
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(len(tick_commands), 7)
+
+    def test_smoke_blocks_when_tick_repeats_without_progress(self):
+        module = _load_smoke_module()
+        calls = []
+
+        def fake_run(cmd, check=False, capture_output=False, text=False, cwd=None, env=None, timeout=None):
+            calls.append(cmd)
+            payload = {"status": "ok"}
+            if cmd[3:5] == ["standalone-session", "start"]:
+                payload = {"status": "active"}
+            if cmd[3:5] == ["standalone-session", "tick"]:
+                payload = {
+                    "status": "work_consumed",
+                    "work_item_type": "open_thread",
+                    "work_item_id": "same_work",
+                    "ingested": {"observation_id": "same_observation", "match_id": "same_match"},
+                }
+            if "clear-message-input" in cmd:
+                payload = _clear_input_payload()
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+        original_run = module.subprocess.run
+        module.subprocess.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                auth = root / "auth.json"
+                auth.write_text("{}", encoding="utf-8")
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    exit_code = module.main(
+                        [
+                            "--data-dir",
+                            str(root / "data"),
+                            "--authorization",
+                            str(auth),
+                            "--vision-backend",
+                            "openai",
+                            "--backend",
+                            "openai",
+                            "--json",
+                        ]
+                    )
+        finally:
+            module.subprocess.run = original_run
+
+        payload = json.loads(stdout.getvalue())
+        tick_commands = [call for call in calls if call[3:5] == ["standalone-session", "tick"]]
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "standalone_tick_no_progress:work_consumed")
+        self.assertEqual(len(tick_commands), 3)
+
+    def test_smoke_reports_operator_no_work_detail_with_priority_queue(self):
+        module = _load_smoke_module()
+        calls = []
+
+        def fake_run(cmd, check=False, capture_output=False, text=False, cwd=None, env=None, timeout=None):
+            calls.append(cmd)
+            payload = {"status": "ok"}
+            if cmd[3:5] == ["standalone-session", "start"]:
+                payload = {"status": "active"}
+            if cmd[3:5] == ["standalone-session", "tick"]:
+                payload = {
+                    "status": "no_work",
+                    "managed_session": {
+                        "operator": {
+                            "work_item": {
+                                "work_item_type": "wait",
+                                "reason": "no_eligible_operator_work",
+                                "next_priority_queue": [
+                                    {"candidate_key": "row_1", "match_id": "match_1", "state": "needs_thread_scan"}
+                                ],
+                            }
+                        }
+                    },
+                }
+            if "clear-message-input" in cmd:
+                payload = _clear_input_payload()
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+        original_run = module.subprocess.run
+        module.subprocess.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                auth = root / "auth.json"
+                auth.write_text("{}", encoding="utf-8")
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    exit_code = module.main(
+                        [
+                            "--data-dir",
+                            str(root / "data"),
+                            "--authorization",
+                            str(auth),
+                            "--vision-backend",
+                            "openai",
+                            "--backend",
+                            "openai",
+                            "--json",
+                        ]
+                    )
+        finally:
+            module.subprocess.run = original_run
+
+        payload = json.loads(stdout.getvalue())
+        tick_commands = [call for call in calls if call[3:5] == ["standalone-session", "tick"]]
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "standalone_tick_no_work:no_eligible_operator_work_with_priority_queue")
+        self.assertEqual(len(tick_commands), 1)
 
     def test_smoke_reports_blocked_tick_payload_when_tick_command_returns_nonzero(self):
         module = _load_smoke_module()
@@ -388,6 +595,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
                     "work_item_type": "scan_message_list",
                 }
                 returncode = 2
+            if "clear-message-input" in cmd:
+                payload = _clear_input_payload()
             return subprocess.CompletedProcess(cmd, returncode, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run
@@ -422,7 +631,10 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
         self.assertEqual(payload["reason"], "observation_capture_failed")
         self.assertEqual(tick_step["error_type"], "AuthenticationError")
         self.assertEqual(tick_step["error_message"], "invalid api key (2049)")
-        self.assertEqual(calls[-1][3:5], ["standalone-session", "stop"])
+        command_args = [call[3:] for call in calls]
+        stop_index = next(index for index, command in enumerate(command_args) if command[:2] == ["standalone-session", "stop"])
+        cleanup_index = next(index for index, command in enumerate(command_args) if command[:4] == ["harness", "tashuo", "action", "clear-message-input"])
+        self.assertLess(stop_index, cleanup_index)
 
     def test_smoke_reports_command_timeout_and_stops_session(self):
         module = _load_smoke_module()
@@ -435,6 +647,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
                 payload = {"status": "active"}
             if cmd[3:5] == ["standalone-session", "tick"]:
                 raise subprocess.TimeoutExpired(cmd, timeout)
+            if "clear-message-input" in cmd:
+                payload = _clear_input_payload()
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run
@@ -471,7 +685,163 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
         self.assertEqual(payload["reason"], "command_timeout:standalone-session tick")
         self.assertEqual(tick_step["reason"], "command_timeout:standalone-session tick")
         self.assertEqual(tick_step["timeout_seconds"], 7.0)
-        self.assertEqual(calls[-1][0][3:5], ["standalone-session", "stop"])
+        command_args = [call[0][3:] for call in calls]
+        stop_index = next(index for index, command in enumerate(command_args) if command[:2] == ["standalone-session", "stop"])
+        cleanup_index = next(index for index, command in enumerate(command_args) if command[:4] == ["harness", "tashuo", "action", "clear-message-input"])
+        self.assertLess(stop_index, cleanup_index)
+
+    def test_smoke_keyboard_interrupt_returns_json_and_skips_gui_cleanup(self):
+        module = _load_smoke_module()
+        calls = []
+
+        def fake_run(cmd, check=False, capture_output=False, text=False, cwd=None, env=None, timeout=None):
+            calls.append(cmd)
+            payload = {"status": "ok"}
+            if cmd[3:5] == ["standalone-session", "start"]:
+                payload = {"status": "active"}
+            if cmd[3:5] == ["standalone-session", "tick"]:
+                raise KeyboardInterrupt
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+        original_run = module.subprocess.run
+        module.subprocess.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                auth = root / "auth.json"
+                auth.write_text("{}", encoding="utf-8")
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    exit_code = module.main(
+                        [
+                            "--data-dir",
+                            str(root / "data"),
+                            "--authorization",
+                            str(auth),
+                            "--vision-backend",
+                            "openai",
+                            "--backend",
+                            "openai",
+                            "--json",
+                        ]
+                    )
+        finally:
+            module.subprocess.run = original_run
+
+        payload = json.loads(stdout.getvalue())
+        command_args = [call[3:] for call in calls]
+        tick_step = next(step for step in payload["steps"] if step["cmd"][:2] == ["standalone-session", "tick"])
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "standalone_smoke_interrupted_by_user")
+        self.assertEqual(tick_step["reason"], "command_interrupted:standalone-session tick")
+        self.assertEqual(tick_step["error_type"], "KeyboardInterrupt")
+        self.assertTrue(any(command[:2] == ["standalone-session", "stop"] for command in command_args))
+        self.assertFalse(any(command[:4] == ["harness", "tashuo", "action", "clear-message-input"] for command in command_args))
+        self.assertEqual(payload["final_input_cleanup"]["reason"], "final_input_cleanup_skipped_after_user_interrupt")
+        self.assertTrue(payload["final_input_cleanup"]["skipped"])
+
+    def test_smoke_stop_interrupt_returns_json_and_skips_gui_cleanup(self):
+        module = _load_smoke_module()
+        calls = []
+
+        def fake_run(cmd, check=False, capture_output=False, text=False, cwd=None, env=None, timeout=None):
+            calls.append(cmd)
+            payload = {"status": "ok"}
+            if cmd[3:5] == ["standalone-session", "start"]:
+                payload = {"status": "active"}
+            if cmd[3:5] == ["standalone-session", "tick"]:
+                _write_alpha_gate_stage_result_for_cmd(cmd)
+                payload = _stage_recorded_tick_payload()
+            if cmd[3:5] == ["standalone-session", "stop"]:
+                raise KeyboardInterrupt
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+        original_run = module.subprocess.run
+        module.subprocess.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                auth = root / "auth.json"
+                auth.write_text("{}", encoding="utf-8")
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    exit_code = module.main(
+                        [
+                            "--data-dir",
+                            str(root / "data"),
+                            "--authorization",
+                            str(auth),
+                            "--vision-backend",
+                            "openai",
+                            "--backend",
+                            "openai",
+                            "--json",
+                        ]
+                    )
+        finally:
+            module.subprocess.run = original_run
+
+        payload = json.loads(stdout.getvalue())
+        command_args = [call[3:] for call in calls]
+        stop_step = next(step for step in payload["steps"] if step["cmd"][:2] == ["standalone-session", "stop"])
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "standalone_smoke_interrupted_by_user")
+        self.assertEqual(stop_step["reason"], "command_interrupted:standalone-session stop")
+        self.assertEqual(stop_step["error_type"], "KeyboardInterrupt")
+        self.assertFalse(any(command[:4] == ["harness", "tashuo", "action", "clear-message-input"] for command in command_args))
+        self.assertEqual(payload["final_input_cleanup"]["reason"], "final_input_cleanup_skipped_after_user_interrupt")
+
+    def test_smoke_cleanup_interrupt_returns_json_and_blocks_success(self):
+        module = _load_smoke_module()
+        calls = []
+
+        def fake_run(cmd, check=False, capture_output=False, text=False, cwd=None, env=None, timeout=None):
+            calls.append(cmd)
+            payload = {"status": "ok"}
+            if cmd[3:5] == ["standalone-session", "start"]:
+                payload = {"status": "active"}
+            if cmd[3:5] == ["standalone-session", "tick"]:
+                _write_alpha_gate_stage_result_for_cmd(cmd)
+                payload = _stage_recorded_tick_payload()
+            if cmd[3:7] == ["harness", "tashuo", "action", "clear-message-input"]:
+                raise KeyboardInterrupt
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+        original_run = module.subprocess.run
+        module.subprocess.run = fake_run
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                auth = root / "auth.json"
+                auth.write_text("{}", encoding="utf-8")
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    exit_code = module.main(
+                        [
+                            "--data-dir",
+                            str(root / "data"),
+                            "--authorization",
+                            str(auth),
+                            "--vision-backend",
+                            "openai",
+                            "--backend",
+                            "openai",
+                            "--json",
+                        ]
+                    )
+        finally:
+            module.subprocess.run = original_run
+
+        payload = json.loads(stdout.getvalue())
+        cleanup_step = next(step for step in payload["steps"] if step["cmd"][:4] == ["harness", "tashuo", "action", "clear-message-input"])
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "final_input_cleanup_interrupted_by_user")
+        self.assertEqual(payload["final_input_cleanup"]["reason"], "final_input_cleanup_interrupted_by_user")
+        self.assertEqual(cleanup_step["reason"], "command_interrupted:harness tashuo")
+        self.assertEqual(cleanup_step["error_type"], "KeyboardInterrupt")
 
     def test_smoke_blocks_stage_recorded_without_alpha_gate_audit_evidence(self):
         module = _load_smoke_module()
@@ -482,6 +852,8 @@ class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
                 payload = {"status": "active"}
             if cmd[3:5] == ["standalone-session", "tick"]:
                 payload = _stage_recorded_tick_payload()
+            if "clear-message-input" in cmd:
+                payload = _clear_input_payload()
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
         original_run = module.subprocess.run

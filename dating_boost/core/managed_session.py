@@ -42,6 +42,7 @@ MANAGED_SESSION_USER_CONFIGURABLE_FIELDS = [
     "scan_interval_seconds",
     "nudge_delay_minutes",
     "harness_runtime",
+    "initial_surface",
 ]
 
 
@@ -72,6 +73,7 @@ class ManagedSessionRepository:
         max_pages_per_cycle: int | None = None,
         cycle_send_limit: int | None = None,
         harness_runtime: str | None = None,
+        initial_surface: str = "message-list",
     ) -> dict[str, Any]:
         app_id = _validate_app_id(app_id)
         normalized_runtime = _normalize_runtime(harness_runtime)
@@ -104,7 +106,7 @@ class ManagedSessionRepository:
         if runtime_scope.get("status") == "blocked":
             return runtime_scope
         app_check = self._app_precheck(app_id, runtime=normalized_runtime)
-        operator_start = self._operator.start_session(authorization, **session_config)
+        operator_start = self._operator.start_session(authorization, initial_surface=initial_surface, **session_config)
         if operator_start.get("status") != "active":
             return _payload(
                 str(operator_start.get("status") or "blocked"),
@@ -139,6 +141,7 @@ class ManagedSessionRepository:
             "scan_interval_seconds": max(1, int(scan_interval_seconds)),
             "nudge_delay_minutes": max(1, int(nudge_delay_minutes)),
             **session_config,
+            "initial_surface": initial_surface,
             "harness_runtime": normalized_runtime,
             "started_at": now,
             "updated_at": now,
@@ -630,6 +633,7 @@ def managed_session_proposed_config(
     max_threads_per_cycle: int | None,
     cycle_send_limit: int | None,
     harness_runtime: str | None,
+    initial_surface: str = "message-list",
 ) -> dict[str, Any]:
     session_config = _resolve_session_config(
         policy,
@@ -645,6 +649,7 @@ def managed_session_proposed_config(
         "scan_interval_seconds": max(1, int(scan_interval_seconds)),
         "nudge_delay_minutes": max(1, int(nudge_delay_minutes)),
         "harness_runtime": _normalize_runtime(harness_runtime),
+        "initial_surface": initial_surface,
         "management_mode": session_config["management_mode"],
         "max_threads_per_cycle": session_config["max_threads_per_cycle"],
         "cycle_send_limit": session_config["cycle_send_limit"],

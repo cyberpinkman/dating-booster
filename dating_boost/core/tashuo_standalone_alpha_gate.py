@@ -13,6 +13,12 @@ def evaluate_alpha_gate(smoke_payload: dict[str, Any], *, data_dir: Path) -> dic
     smoke_check = _smoke_completion_check(smoke_payload)
     if smoke_check is not None:
         return smoke_check
+    safety_check = _smoke_safety_check(smoke_payload)
+    if safety_check is not None:
+        return safety_check
+    final_input_check = _final_input_check(smoke_payload)
+    if final_input_check is not None:
+        return final_input_check
 
     final_tick = _final_tick_step(smoke_payload)
     binding = _stage_binding_from_final_tick(final_tick)
@@ -48,6 +54,8 @@ def evaluate_alpha_gate(smoke_payload: dict[str, Any], *, data_dir: Path) -> dic
             "stage_attempt_completed": True,
             "staged_text_verified": True,
             "target_verified": True,
+            "final_input_empty": True,
+            "no_direct_live_send_command": True,
         },
         "stage_binding": binding,
         "stage_result": _stage_result_summary(stage_result),
@@ -108,8 +116,52 @@ def _stage_result_check(stage_result: dict[str, Any]) -> dict[str, Any] | None:
         return _blocked("alpha_gate_target_match_id_missing", stage_result=_stage_result_summary(stage_result))
     if not _non_empty(stage_result.get("payload_hash")):
         return _blocked("alpha_gate_payload_hash_missing", stage_result=_stage_result_summary(stage_result))
+    if not _non_empty(stage_result.get("precondition_hash")):
+        return _blocked("alpha_gate_precondition_hash_missing", stage_result=_stage_result_summary(stage_result))
     if not _non_empty(stage_result.get("pre_action_observation_id")):
         return _blocked("alpha_gate_pre_action_observation_missing", stage_result=_stage_result_summary(stage_result))
+    return None
+
+
+def _smoke_safety_check(smoke_payload: dict[str, Any]) -> dict[str, Any] | None:
+    steps = smoke_payload.get("steps")
+    if not isinstance(steps, list):
+        return _blocked("alpha_gate_smoke_steps_missing")
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        cmd = step.get("cmd")
+        if not isinstance(cmd, list):
+            continue
+        tokens = [str(item) for item in cmd]
+        if "send-message" in tokens:
+            return _blocked("alpha_gate_direct_send_command_present", command=tokens)
+        if "--send-mode" in tokens:
+            index = tokens.index("--send-mode")
+            if index + 1 < len(tokens) and tokens[index + 1] != "stage":
+                return _blocked("alpha_gate_non_stage_send_mode_present", command=tokens)
+        if "--managed-gui-send" in tokens:
+            return _blocked("alpha_gate_managed_gui_send_present", command=tokens)
+    return None
+
+
+def _final_input_check(smoke_payload: dict[str, Any]) -> dict[str, Any] | None:
+    verification = (
+        smoke_payload.get("final_input_verification")
+        if isinstance(smoke_payload.get("final_input_verification"), dict)
+        else {}
+    )
+    if verification.get("status") != "ok":
+        return _blocked(
+            "alpha_gate_final_input_not_verified_empty",
+            final_input_verification=verification,
+        )
+    try:
+        count = int(verification.get("final_input_character_count"))
+    except (TypeError, ValueError):
+        return _blocked("alpha_gate_final_input_count_missing", final_input_verification=verification)
+    if count != 0 or verification.get("input_cleared") is not True:
+        return _blocked("alpha_gate_final_input_not_empty", final_input_verification=verification)
     return None
 
 
@@ -182,6 +234,7 @@ def _stage_result_summary(stage_result: dict[str, Any]) -> dict[str, Any]:
             "action_request_id",
             "target_match_id",
             "payload_hash",
+            "precondition_hash",
             "pre_action_observation_id",
             "result_status",
             "stage_attempt_status",

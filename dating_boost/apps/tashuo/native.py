@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 from uuid import uuid4
 import time
@@ -39,7 +40,7 @@ from dating_boost.core.target_binding import (
     validate_row_to_thread_structural_evidence,
 )
 from dating_boost.harness.base import SubprocessRunner
-from dating_boost.harness.screen_state import _read_png_pixels
+from dating_boost.harness.screen_state import _read_png_pixels, normalize_text
 
 
 TASHUO_BLOCKED_GUI_ACTIONS = [
@@ -111,7 +112,11 @@ TASHUO_MESSAGE_INPUT_UNFOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.91}
 TASHUO_MESSAGE_INPUT_FOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.91}
 TASHUO_MAC_IOS_APP_MESSAGE_INPUT_FOCUSED_TAP_RATIO = {"x": 0.32, "y": 0.90}
 TASHUO_MESSAGES_TAB_TAP_RATIO = {"x": 0.67, "y": 0.96}
+TASHUO_MINE_TAB_TAP_RATIO = {"x": 0.86, "y": 0.96}
+TASHUO_SELF_PROFILE_AVATAR_TAP_RATIO = {"x": 0.50, "y": 0.27}
 TASHUO_CONVERSATION_NAVBACK_TAP_RATIO = {"x": 0.07, "y": 0.115}
+TASHUO_LIKED_YOU_MODAL_LATER_TAP_RATIO = {"x": 0.50, "y": 0.79}
+TASHUO_NOTIFICATION_PROMPT_CLOSE_TAP_RATIO = {"x": 0.92, "y": 0.175}
 TASHUO_MESSAGE_PAGE_SETTLE_TIMEOUT_SECONDS = 3.0
 TASHUO_MESSAGE_PAGE_SETTLE_INTERVAL_SECONDS = 0.35
 TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65}
@@ -131,6 +136,7 @@ TASHUO_CHAT_LIST_BOTTOM_ROW_REGION_THRESHOLD = 0.93
 TASHUO_CHAT_LIST_ROW_TAP_TOP_INSET_MIN = 0.025
 TASHUO_CHAT_LIST_ROW_TAP_TOP_INSET_MAX = 0.04
 TASHUO_CHAT_LIST_ROW_TAP_TOP_INSET_FRACTION = 0.28
+TASHUO_PROFILE_BOTTOM_MAX_SCROLLS = 8
 
 
 def install_tashuo_session_hooks(session: Any) -> None:
@@ -151,7 +157,27 @@ def _capture_tashuo_window(
     ocr: bool | None = None,
 ) -> dict[str, Any]:
     use_ocr = not _is_mac_ios_app_session(session) if ocr is None else bool(ocr)
-    return session.capture_window(output=output, window=window, ocr=use_ocr)
+    capture_window = window
+    activation = None
+    if _is_mac_ios_app_session(session):
+        activate = getattr(session, "_activate_window", None)
+        if callable(activate):
+            activation = activate()
+            if activation.get("status") == "blocked":
+                return {
+                    "status": "blocked",
+                    "reason": activation.get("reason") or "tashuo_capture_activation_failed",
+                    "state": "unknown",
+                    "ocr_status": "not_run",
+                    "activation": activation,
+                }
+        refreshed_window = session._window_info()
+        if refreshed_window is not None:
+            capture_window = refreshed_window
+    payload = session.capture_window(output=output, window=capture_window, ocr=use_ocr)
+    if activation is not None:
+        payload["activation"] = activation
+    return payload
 
 
 def _tashuo_post_action_observation_delay_seconds(session: Any, *, fallback: float) -> float:
@@ -288,11 +314,7 @@ def launch_tashuo_mac_ios_app(session: Any, *, dry_run: bool = False, output_dir
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
     executed_steps: list[dict[str, Any]] = []
-    open_result = session.runner.run(["open", "-b", bundle_id])
-    open_payload = {
-        "status": "ok" if open_result.returncode == 0 else "blocked",
-        "stderr": platform._short(open_result.stderr),
-    }
+    open_payload = _open_tashuo_mac_ios_app_bundle(session, bundle_id)
     executed_steps.append({**planned_steps[0], "result": open_payload})
     if open_payload["status"] != "ok":
         payload.update({"status": "blocked", "reason": "mac_ios_app_open_failed", "executed_steps": executed_steps})
@@ -347,6 +369,34 @@ def launch_tashuo_mac_ios_app(session: Any, *, dry_run: bool = False, output_dir
     elif verification.get("screen", {}).get("state") not in TASHUO_FOREGROUND_STATES:
         payload.update({"status": "needs_verification", "reason": "tashuo_mac_ios_app_launch_not_verified"})
     return payload
+
+
+def _open_tashuo_mac_ios_app_bundle(session: Any, bundle_id: str) -> dict[str, Any]:
+    attempts: list[dict[str, Any]] = []
+    for attempt_number in range(1, 3):
+        open_result = session.runner.run(["open", "-b", bundle_id])
+        payload: dict[str, Any] = {
+            "attempt": attempt_number,
+            "status": "ok" if open_result.returncode == 0 else "blocked",
+            "stderr": platform._short(open_result.stderr),
+        }
+        if payload["status"] == "ok":
+            attempts.append(dict(payload))
+            payload["attempts"] = attempts
+            return payload
+        active_probe = session._mac_ios_active_application_probe()
+        payload["active_probe_after_failed_open"] = active_probe
+        if active_probe.get("status") == "ok":
+            payload["status"] = "ok"
+            payload["recovered_by"] = "active_probe_after_failed_open"
+            attempts.append(dict(payload))
+            payload["attempts"] = attempts
+            return payload
+        attempts.append(dict(payload))
+        time.sleep(0.25)
+    final = dict(attempts[-1]) if attempts else {"status": "blocked"}
+    final["attempts"] = attempts
+    return final
 
 
 def _is_mac_ios_app_session(session: Any) -> bool:
@@ -532,6 +582,21 @@ def run_tashuo_action(
 ) -> dict[str, Any]:
     if action in {"prepare-message-page", "prepare_message_page"}:
         return prepare_tashuo_message_page(session, dry_run=dry_run, output_dir=output_dir)
+    if action in {"prepare-self-profile-page", "prepare_self_profile_page"}:
+        return prepare_tashuo_self_profile_page(session, dry_run=dry_run, output_dir=output_dir)
+    if action in {"open-self-profile-detail", "open_self_profile_detail"}:
+        return open_tashuo_self_profile_detail(session, dry_run=dry_run, output_dir=output_dir)
+    if action in {"profile-scroll-to-bottom", "profile_scroll_to_bottom"} and _is_mac_ios_app_session(session):
+        return scroll_tashuo_profile_to_bottom_mac_ios_app(
+            session,
+            dry_run=dry_run,
+            output_dir=output_dir,
+            max_scrolls=int(options.get("max_scrolls") or TASHUO_PROFILE_BOTTOM_MAX_SCROLLS),
+        )
+    if action in {"profile-scroll-down", "profile_scroll_down", "profile-scroll-up", "profile_scroll_up"} and _is_mac_ios_app_session(session):
+        return scroll_tashuo_profile_read_mac_ios_app(session, action, dry_run=dry_run, output_dir=output_dir)
+    if action in {"clear-message-input", "clear_message_input"}:
+        return clear_tashuo_message_input(session, dry_run=dry_run, output_dir=output_dir)
     if action in {"conversation-list-scroll-to-top", "conversation-list-return-to-top"}:
         return scroll_tashuo_conversation_list_to_top(
             session,
@@ -679,8 +744,119 @@ def _try_tashuo_open_conversation_visual_relocation(
         },
         output_dir=output_dir,
     )
+    fallback = _retry_tashuo_message_list_open_after_postcondition_failure(
+        session,
+        payload=payload,
+        relocated_steps=relocated_steps,
+        location=location,
+        first_result=result,
+        output_dir=output_dir,
+    )
+    if fallback is not None:
+        result = fallback
     result["message_list_relocation"] = relocation
     return result
+
+
+def _retry_tashuo_message_list_open_after_postcondition_failure(
+    session: Any,
+    *,
+    payload: dict[str, Any],
+    relocated_steps: list[dict[str, Any]],
+    location: dict[str, Any],
+    first_result: dict[str, Any],
+    output_dir: Path | None,
+) -> dict[str, Any] | None:
+    if first_result.get("status") != "blocked":
+        return None
+    if first_result.get("reason") != "tashuo_step_postcondition_not_verified":
+        return None
+    first_step = {}
+    steps = first_result.get("executed_steps")
+    if isinstance(steps, list) and steps and isinstance(steps[0], dict):
+        first_step = steps[0]
+    postcondition = first_step.get("postcondition") if isinstance(first_step.get("postcondition"), dict) else {}
+    if postcondition.get("screen_state") != "tashuo_chat_list":
+        return None
+    if not relocated_steps:
+        return None
+
+    attempts: list[dict[str, Any]] = []
+    for attempt_index, fallback_tap in enumerate(_tashuo_message_list_open_fallback_taps(location), start=1):
+        retry_steps = list(relocated_steps)
+        retry_steps[0] = {
+            **retry_steps[0],
+            "tap_ratio": fallback_tap["tap_ratio"],
+            "selection_method": fallback_tap["selection_method"],
+            "message_list_open_fallback": {
+                "attempt_index": attempt_index,
+                "reason": "action_tap_postcondition_not_verified",
+                "first_postcondition_screen_state": postcondition.get("screen_state"),
+            },
+        }
+        retry_result = session._execute_planned_steps(
+            {
+                **payload,
+                "planned_steps": retry_steps,
+                "message_list_open_fallback_attempt": attempt_index,
+            },
+            output_dir=output_dir,
+        )
+        attempts.append(
+            {
+                "attempt_index": attempt_index,
+                "tap_ratio": fallback_tap["tap_ratio"],
+                "selection_method": fallback_tap["selection_method"],
+                "result": {
+                    "status": retry_result.get("status"),
+                    "reason": retry_result.get("reason"),
+                    "screen_state": retry_result.get("screen_state"),
+                },
+            }
+        )
+        if retry_result.get("status") == "ok":
+            retry_result["message_list_open_initial_result"] = {
+                "status": first_result.get("status"),
+                "reason": first_result.get("reason"),
+                "postcondition_screen_state": postcondition.get("screen_state"),
+            }
+            retry_result["message_list_open_fallback_attempts"] = attempts
+            return retry_result
+        if retry_result.get("reason") != "tashuo_step_postcondition_not_verified":
+            break
+
+    return {
+        **first_result,
+        "message_list_open_fallback_attempts": attempts,
+    }
+
+
+def _tashuo_message_list_open_fallback_taps(location: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = location.get("raw_tap_ratio") if isinstance(location.get("raw_tap_ratio"), dict) else {}
+    tap = location.get("tap_ratio") if isinstance(location.get("tap_ratio"), dict) else {}
+    region = location.get("visual_anchor_region") if isinstance(location.get("visual_anchor_region"), dict) else {}
+    try:
+        y = float(tap.get("y") if "y" in tap else raw.get("y"))
+    except (TypeError, ValueError):
+        y = 0.5
+    y = max(0.0, min(TASHUO_CHAT_LIST_BOTTOM_ROW_SAFE_TAP_Y, y))
+    taps = [
+        {
+            "selection_method": "message_list_visual_anchor_body_fallback_tap",
+            "tap_ratio": {"x": 0.50, "y": round(y, 4)},
+        }
+    ]
+    try:
+        avatar_x = max(0.10, min(0.28, (float(region["x1"]) + float(region["x2"])) / 2.0))
+    except (KeyError, TypeError, ValueError):
+        avatar_x = 0.16
+    taps.append(
+        {
+            "selection_method": "message_list_visual_anchor_avatar_fallback_tap",
+            "tap_ratio": {"x": round(avatar_x, 4), "y": round(y, 4)},
+        }
+    )
+    return taps
 
 
 def _tashuo_already_at_open_conversation_target(
@@ -718,6 +894,561 @@ def _tashuo_already_at_open_conversation_target(
     }
 
 
+def prepare_tashuo_self_profile_page(session: Any, *, dry_run: bool = False, output_dir: Path | None = None) -> dict[str, Any]:
+    if not _is_mac_ios_app_session(session):
+        return {
+            **session._base_payload("blocked"),
+            "action": "prepare-self-profile-page",
+            "target": "tashuo_self_profile_page",
+            "reason": "tashuo_prepare_self_profile_page_requires_mac_ios_app_runtime",
+            **tashuo_guardrails_payload(),
+        }
+    planned_steps = [
+        {
+            "intent": "prepare_tashuo_message_page_as_safe_top_level_anchor",
+            "risk": "navigation_only",
+            "does_not_open_conversation": True,
+            "ocr_used": False,
+        },
+        {
+            "intent": "click_tashuo_mine_tab_accessibility",
+            "radio_button_index": 4,
+            "risk": "navigation_only",
+            "wait_after_seconds": 0.4,
+        },
+        {
+            "intent": "tap_tashuo_mine_tab_fallback",
+            "tap_ratio": _copy_tap_ratio(TASHUO_MINE_TAB_TAP_RATIO),
+            "risk": "navigation_only",
+            "fallback_for": "click_tashuo_mine_tab_accessibility",
+            "wait_after_seconds": 0.4,
+        },
+        {
+            "intent": "handoff_to_visible_self_profile_fact_extraction",
+            "risk": "visual_observation_only",
+            "does_not_edit_profile": True,
+            "ocr_used": False,
+        },
+    ]
+    payload = {
+        **session._base_payload("ok"),
+        "action": "prepare-self-profile-page",
+        "target": "tashuo_self_profile_page",
+        "mode": "dry_run" if dry_run else "execute",
+        "planned_steps": planned_steps,
+        "visual_only_navigation": True,
+        "ocr_used": False,
+        "self_profile_followup": "visible_fact_extraction_only",
+        "next_host_action": "extract_visible_self_profile_facts",
+        **tashuo_guardrails_payload(),
+    }
+    if dry_run:
+        return payload
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    message_page = prepare_tashuo_message_page(session, dry_run=False, output_dir=output_dir)
+    payload["message_page_preparation"] = {
+        "status": message_page.get("status"),
+        "reason": message_page.get("reason"),
+        "screen_state": message_page.get("screen_state"),
+        "next_host_action": message_page.get("next_host_action"),
+    }
+    executed_steps: list[dict[str, Any]] = [
+        {
+            **planned_steps[0],
+            "result": {
+                "status": message_page.get("status"),
+                "reason": message_page.get("reason"),
+                "screen_state": message_page.get("screen_state"),
+            },
+        }
+    ]
+    if message_page.get("status") != "ok":
+        payload.update({
+            "status": "blocked" if message_page.get("status") == "blocked" else "needs_verification",
+            "reason": message_page.get("reason") or "tashuo_message_page_anchor_not_verified",
+            "executed_steps": executed_steps,
+            "next_host_action": message_page.get("next_host_action") or "visual_analyze_current_screen",
+        })
+        return payload
+
+    refresh_result, window = _refresh_tashuo_mac_ios_window(session)
+    payload["profile_page_window_refresh"] = refresh_result
+    if refresh_result.get("status") != "ok" or window is None:
+        payload.update({
+            "status": "blocked",
+            "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
+            "executed_steps": executed_steps,
+            "next_host_action": "restore_tashuo_window_focus",
+        })
+        return payload
+
+    ax_result = _click_tashuo_mine_radio_button(session)
+    executed_steps.append({**planned_steps[1], "result": ax_result})
+    if ax_result.get("status") != "ok":
+        tap_result = session._click_ratio(window, planned_steps[2]["tap_ratio"])
+        executed_steps.append({**planned_steps[2], "result": tap_result})
+        if tap_result.get("status") != "ok":
+            payload.update({
+                "status": "blocked",
+                "reason": tap_result.get("reason") or "tashuo_mine_tab_click_failed",
+                "executed_steps": executed_steps,
+            })
+            return payload
+        time.sleep(float(planned_steps[2]["wait_after_seconds"]))
+    else:
+        time.sleep(float(planned_steps[1]["wait_after_seconds"]))
+
+    refresh_result, window = _refresh_tashuo_mac_ios_window(session)
+    executed_steps.append({
+        "intent": "refresh_tashuo_mac_ios_window_after_mine_tab",
+        "risk": "navigation_only",
+        "result": refresh_result,
+    })
+    if refresh_result.get("status") != "ok" or window is None:
+        payload.update({
+            "status": "blocked",
+            "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
+            "executed_steps": executed_steps,
+            "next_host_action": "restore_tashuo_window_focus",
+        })
+        return payload
+
+    final_output = output_dir / "mac_ios_app.tashuo.prepare_self_profile_page.profile.png" if output_dir is not None else None
+    final_screen = _capture_tashuo_visual_screen(session, window, output=final_output)
+    payload["screen"] = platform._redacted_screen(final_screen)
+    payload["screen_state"] = final_screen.get("state", "unknown")
+    executed_steps.append({
+        **planned_steps[3],
+        "result": {"status": "ok" if final_screen.get("status") == "ok" else "blocked"},
+    })
+    payload["executed_steps"] = executed_steps
+    if final_screen.get("status") != "ok":
+        payload.update({"status": "blocked", "reason": final_screen.get("reason") or "tashuo_visual_capture_failed"})
+    elif final_screen.get("visual_active_tab") != "mine" or final_screen.get("state") != "tashuo_self_profile":
+        payload.update({
+            "status": "needs_verification",
+            "reason": "tashuo_self_profile_tab_not_verified",
+            "next_host_action": "visual_analyze_current_screen",
+        })
+    return payload
+
+
+def open_tashuo_self_profile_detail(session: Any, *, dry_run: bool = False, output_dir: Path | None = None) -> dict[str, Any]:
+    if not _is_mac_ios_app_session(session):
+        return {
+            **session._base_payload("blocked"),
+            "action": "open-self-profile-detail",
+            "target": "tashuo_self_profile_detail",
+            "reason": "tashuo_open_self_profile_detail_requires_mac_ios_app_runtime",
+            **tashuo_guardrails_payload(),
+        }
+    planned_steps = [
+        {
+            "intent": "prepare_tashuo_self_profile_page_top",
+            "risk": "navigation_only",
+            "does_not_edit_profile": True,
+            "ocr_used": False,
+        },
+        {
+            **_tashuo_action_steps("profile-scroll-up")[0],
+            "intent": "wheel_tashuo_self_profile_to_avatar_top",
+            "risk": "navigation_only",
+            "does_not_edit_profile": True,
+            "wait_after_seconds": 0.45,
+        },
+        {
+            "intent": "tap_tashuo_self_profile_avatar",
+            "tap_ratio": _copy_tap_ratio(TASHUO_SELF_PROFILE_AVATAR_TAP_RATIO),
+            "risk": "read_only_profile_navigation",
+            "does_not_tap_edit_profile": True,
+            "wait_after_seconds": 0.6,
+        },
+        {
+            "intent": "capture_tashuo_self_profile_detail",
+            "risk": "visual_observation_only",
+            "does_not_edit_profile": True,
+            "ocr_used": False,
+        },
+    ]
+    payload = {
+        **session._base_payload("ok"),
+        "action": "open-self-profile-detail",
+        "target": "tashuo_self_profile_detail",
+        "mode": "dry_run" if dry_run else "execute",
+        "planned_steps": planned_steps,
+        "visual_only_navigation": True,
+        "ocr_used": False,
+        "next_host_action": "extract_visible_self_profile_detail_facts",
+        **tashuo_guardrails_payload(),
+    }
+    if dry_run:
+        return payload
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    prepare = prepare_tashuo_self_profile_page(session, dry_run=False, output_dir=output_dir)
+    payload["self_profile_page_preparation"] = {
+        "status": prepare.get("status"),
+        "reason": prepare.get("reason"),
+        "screen_state": prepare.get("screen_state"),
+        "next_host_action": prepare.get("next_host_action"),
+    }
+    executed_steps: list[dict[str, Any]] = [
+        {
+            **planned_steps[0],
+            "result": {
+                "status": prepare.get("status"),
+                "reason": prepare.get("reason"),
+                "screen_state": prepare.get("screen_state"),
+            },
+        }
+    ]
+    if prepare.get("status") != "ok":
+        payload.update({
+            "status": "blocked" if prepare.get("status") == "blocked" else "needs_verification",
+            "reason": prepare.get("reason") or "tashuo_self_profile_page_not_verified",
+            "executed_steps": executed_steps,
+            "next_host_action": prepare.get("next_host_action") or "visual_analyze_current_screen",
+        })
+        return payload
+
+    refresh_result, window = _refresh_tashuo_mac_ios_window(session)
+    payload["detail_page_window_refresh"] = refresh_result
+    if refresh_result.get("status") != "ok" or window is None:
+        payload.update({
+            "status": "blocked",
+            "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
+            "executed_steps": executed_steps,
+            "next_host_action": "restore_tashuo_window_focus",
+        })
+        return payload
+
+    scroll_result = session._execute_step(window, planned_steps[1])
+    executed_steps.append({**planned_steps[1], "result": scroll_result})
+    if scroll_result.get("status") != "ok":
+        payload.update({
+            "status": "blocked",
+            "reason": scroll_result.get("reason") or "tashuo_self_profile_scroll_to_avatar_failed",
+            "executed_steps": executed_steps,
+        })
+        return payload
+    time.sleep(float(planned_steps[1]["wait_after_seconds"]))
+
+    refresh_result, window = _refresh_tashuo_mac_ios_window(session)
+    executed_steps.append({
+        "intent": "refresh_tashuo_mac_ios_window_after_profile_top_scroll",
+        "risk": "navigation_only",
+        "result": refresh_result,
+    })
+    if refresh_result.get("status") != "ok" or window is None:
+        payload.update({
+            "status": "blocked",
+            "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
+            "executed_steps": executed_steps,
+            "next_host_action": "restore_tashuo_window_focus",
+        })
+        return payload
+
+    tap_result = session._click_ratio(window, planned_steps[2]["tap_ratio"])
+    executed_steps.append({**planned_steps[2], "result": tap_result})
+    if tap_result.get("status") != "ok":
+        payload.update({
+            "status": "blocked",
+            "reason": tap_result.get("reason") or "tashuo_self_profile_avatar_tap_failed",
+            "executed_steps": executed_steps,
+        })
+        return payload
+    time.sleep(float(planned_steps[2]["wait_after_seconds"]))
+
+    refresh_result, window = _refresh_tashuo_mac_ios_window(session)
+    executed_steps.append({
+        "intent": "refresh_tashuo_mac_ios_window_after_avatar_tap",
+        "risk": "navigation_only",
+        "result": refresh_result,
+    })
+    if refresh_result.get("status") != "ok" or window is None:
+        payload.update({
+            "status": "blocked",
+            "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
+            "executed_steps": executed_steps,
+            "next_host_action": "restore_tashuo_window_focus",
+        })
+        return payload
+
+    detail_output = output_dir / "mac_ios_app.tashuo.self_profile_detail.png" if output_dir is not None else None
+    detail_screen = _capture_tashuo_window(session, output=detail_output, window=window, ocr=True)
+    payload["screen"] = platform._redacted_screen(detail_screen)
+    payload["screen_state"] = detail_screen.get("state", "unknown")
+    executed_steps.append({
+        **planned_steps[3],
+        "result": {"status": "ok" if detail_screen.get("status") == "ok" else "blocked"},
+    })
+    payload["executed_steps"] = executed_steps
+    if detail_screen.get("status") != "ok":
+        payload.update({"status": "blocked", "reason": detail_screen.get("reason") or "tashuo_visual_capture_failed"})
+    elif detail_screen.get("state") != "tashuo_profile":
+        payload.update({
+            "status": "needs_verification",
+            "reason": "tashuo_self_profile_detail_not_verified",
+            "next_host_action": "visual_analyze_current_screen",
+        })
+    return payload
+
+
+def scroll_tashuo_profile_read_mac_ios_app(
+    session: Any,
+    action: str,
+    *,
+    dry_run: bool = False,
+    output_dir: Path | None = None,
+) -> dict[str, Any]:
+    canonical_action = "profile-scroll-up" if action in {"profile-scroll-up", "profile_scroll_up"} else "profile-scroll-down"
+    step = _tashuo_action_steps(canonical_action)[0]
+    payload = {
+        **session._base_payload("ok"),
+        "action": canonical_action,
+        "target": "tashuo_profile_read",
+        "mode": "dry_run" if dry_run else "execute",
+        "planned_steps": [step],
+        "visual_only_navigation": False,
+        "ocr_used": True,
+        **tashuo_guardrails_payload(),
+    }
+    if dry_run:
+        return payload
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    doctor = session.doctor(capture=False)
+    payload["preflight"] = doctor
+    if doctor["status"] == "blocked":
+        payload.update({"status": "blocked", "reason": doctor.get("reason")})
+        return payload
+    window = platform._window_from_payload(doctor.get("window") or {})
+    before_output = output_dir / "mac_ios_app.tashuo.profile_scroll.before.png" if output_dir is not None else None
+    before_screen = _capture_tashuo_window(session, output=before_output, window=window, ocr=True)
+    payload["before_screen"] = platform._redacted_screen(before_screen)
+    if before_screen.get("status") != "ok":
+        payload.update({"status": "blocked", "reason": before_screen.get("reason") or "tashuo_profile_scroll_preflight_capture_failed"})
+        return payload
+    if not _tashuo_profile_read_screen_verified(before_screen):
+        payload.update({
+            "status": "blocked",
+            "reason": "tashuo_profile_scroll_precondition_not_verified",
+            "screen_state": before_screen.get("state", "unknown"),
+        })
+        return payload
+
+    result = session._execute_step(window, step)
+    executed_steps = [{**step, "result": result}]
+    payload["executed_steps"] = executed_steps
+    if result.get("status") != "ok":
+        payload.update({"status": "blocked", "reason": result.get("reason") or "tashuo_profile_scroll_failed"})
+        return payload
+    time.sleep(max(platform.DEFAULT_POST_ACTION_OBSERVATION_DELAY_SECONDS, float(step.get("wait_after_seconds", 0.0))))
+    after_output = output_dir / "mac_ios_app.tashuo.profile_scroll.after.png" if output_dir is not None else None
+    after_screen = _capture_tashuo_window(session, output=after_output, window=window, ocr=True)
+    payload["verification"] = platform._redacted_screen(after_screen)
+    payload["screen_state"] = after_screen.get("state", "unknown")
+    if after_screen.get("status") != "ok":
+        payload.update({"status": "blocked", "reason": after_screen.get("reason") or "tashuo_profile_scroll_postcondition_capture_failed"})
+    elif not _tashuo_profile_read_screen_verified(after_screen):
+        payload.update({
+            "status": "needs_verification",
+            "reason": "tashuo_profile_scroll_postcondition_not_verified",
+            "next_host_action": "visual_analyze_current_screen",
+        })
+    return payload
+
+
+def scroll_tashuo_profile_to_bottom_mac_ios_app(
+    session: Any,
+    *,
+    dry_run: bool = False,
+    output_dir: Path | None = None,
+    max_scrolls: int = TASHUO_PROFILE_BOTTOM_MAX_SCROLLS,
+) -> dict[str, Any]:
+    step = _tashuo_action_steps("profile-scroll-down")[0]
+    max_scrolls = max(0, int(max_scrolls))
+    payload = {
+        **session._base_payload("ok"),
+        "action": "profile-scroll-to-bottom",
+        "target": "tashuo_profile_bottom",
+        "mode": "dry_run" if dry_run else "execute",
+        "planned_steps": [
+            {
+                **step,
+                "repeat_until": "tashuo_profile_bottom_anchor_verified",
+                "max_scrolls": max_scrolls,
+            }
+        ],
+        "ocr_used": True,
+        "bottom_anchor": "分享给好友",
+        **tashuo_guardrails_payload(),
+    }
+    if dry_run:
+        return payload
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    doctor = session.doctor(capture=False)
+    payload["preflight"] = doctor
+    if doctor["status"] == "blocked":
+        payload.update({"status": "blocked", "reason": doctor.get("reason")})
+        return payload
+    window = platform._window_from_payload(doctor.get("window") or {})
+    attempts: list[dict[str, Any]] = []
+    executed_steps: list[dict[str, Any]] = []
+
+    initial_output = output_dir / "mac_ios_app.tashuo.profile_scroll_to_bottom.00.png" if output_dir is not None else None
+    screen = _capture_tashuo_window(session, output=initial_output, window=window, ocr=True)
+    attempts.append(_tashuo_profile_bottom_attempt(attempt=0, screen=screen))
+    payload["attempts"] = attempts
+    if screen.get("status") != "ok":
+        payload.update({"status": "blocked", "reason": screen.get("reason") or "tashuo_profile_bottom_capture_failed"})
+        return payload
+    if not _tashuo_profile_read_screen_verified(screen):
+        payload.update({
+            "status": "blocked",
+            "reason": "tashuo_profile_bottom_precondition_not_verified",
+            "screen_state": screen.get("state", "unknown"),
+        })
+        return payload
+    if _tashuo_profile_bottom_anchor_present(screen):
+        payload.update(_tashuo_profile_bottom_success(screen=screen, attempts=attempts, executed_steps=executed_steps))
+        return payload
+
+    previous_fingerprints = {str(screen.get("text_fingerprint") or "")}
+    for attempt in range(1, max_scrolls + 1):
+        scroll_result = session._execute_step(window, step)
+        executed_steps.append({**step, "result": scroll_result, "attempt": attempt})
+        payload["executed_steps"] = executed_steps
+        if scroll_result.get("status") != "ok":
+            payload.update({"status": "blocked", "reason": scroll_result.get("reason") or "tashuo_profile_bottom_scroll_failed"})
+            return payload
+        time.sleep(max(platform.DEFAULT_POST_ACTION_OBSERVATION_DELAY_SECONDS, float(step.get("wait_after_seconds", 0.0))))
+        output = (
+            output_dir / f"mac_ios_app.tashuo.profile_scroll_to_bottom.{attempt:02d}.png"
+            if output_dir is not None
+            else None
+        )
+        screen = _capture_tashuo_window(session, output=output, window=window, ocr=True)
+        attempt_payload = _tashuo_profile_bottom_attempt(attempt=attempt, screen=screen, scroll_result=scroll_result)
+        attempts.append(attempt_payload)
+        if screen.get("status") != "ok":
+            payload.update({"status": "blocked", "reason": screen.get("reason") or "tashuo_profile_bottom_capture_failed"})
+            return payload
+        if not _tashuo_profile_read_screen_verified(screen):
+            payload.update({
+                "status": "needs_verification",
+                "reason": "tashuo_profile_bottom_postcondition_not_verified",
+                "screen_state": screen.get("state", "unknown"),
+                "next_host_action": "visual_analyze_current_screen",
+            })
+            return payload
+        if _tashuo_profile_bottom_anchor_present(screen):
+            payload.update(_tashuo_profile_bottom_success(screen=screen, attempts=attempts, executed_steps=executed_steps))
+            return payload
+        fingerprint = str(screen.get("text_fingerprint") or "")
+        if fingerprint and fingerprint in previous_fingerprints:
+            payload.update({
+                "status": "needs_verification",
+                "reason": "tashuo_profile_bottom_anchor_not_found_after_no_progress",
+                "screen": platform._redacted_screen(screen),
+                "screen_state": screen.get("state", "unknown"),
+                "bottom_anchor_verified": False,
+                "attempt_count": len(attempts),
+                "next_host_action": "visual_analyze_current_screen",
+            })
+            return payload
+        if fingerprint:
+            previous_fingerprints.add(fingerprint)
+
+    payload.update({
+        "status": "needs_verification",
+        "reason": "tashuo_profile_bottom_anchor_not_found",
+        "screen": platform._redacted_screen(screen),
+        "screen_state": screen.get("state", "unknown"),
+        "bottom_anchor_verified": False,
+        "attempt_count": len(attempts),
+        "next_host_action": "visual_analyze_current_screen",
+    })
+    return payload
+
+
+def _tashuo_profile_read_screen_verified(screen: dict[str, Any]) -> bool:
+    if screen.get("status") != "ok":
+        return False
+    if screen.get("state") in {"tashuo_profile", "tashuo_self_profile", "tashuo_recommend"}:
+        return True
+    return _tashuo_profile_read_text_anchor_present(screen) or _tashuo_profile_bottom_anchor_present(screen)
+
+
+def _tashuo_profile_read_text_anchor_present(screen: dict[str, Any]) -> bool:
+    normalized = normalize_text(str(screen.get("text") or ""))
+    compact = re.sub(r"\s+", "", normalized)
+    if "我的资料" in compact:
+        return True
+    profile_mid_markers = (
+        "更多信息",
+        "有健身习惯",
+        "不饮酒",
+        "不吸烟",
+        "我的恋爱三观",
+        "查看详细解析",
+        "我的心灵测试",
+        "关于人生阶段",
+        "当前人生阶段",
+        "我的MBTI",
+        "近期动态",
+        "我在哪里",
+    )
+    return sum(1 for marker in profile_mid_markers if marker in compact) >= 2
+
+
+def _tashuo_profile_bottom_anchor_present(screen: dict[str, Any]) -> bool:
+    normalized = normalize_text(str(screen.get("text") or ""))
+    compact = re.sub(r"\s+", "", normalized)
+    return "分享给好友" in compact or ("分享" in compact and "好友" in compact)
+
+
+def _tashuo_profile_bottom_attempt(
+    *,
+    attempt: int,
+    screen: dict[str, Any],
+    scroll_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "attempt": attempt,
+        "screen": platform._redacted_screen(screen),
+        "screen_state": screen.get("state", "unknown"),
+        "bottom_anchor_verified": _tashuo_profile_bottom_anchor_present(screen),
+    }
+    if scroll_result is not None:
+        payload["scroll_result"] = scroll_result
+    return payload
+
+
+def _tashuo_profile_bottom_success(
+    *,
+    screen: dict[str, Any],
+    attempts: list[dict[str, Any]],
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "reason": "tashuo_profile_bottom_anchor_verified",
+        "screen": platform._redacted_screen(screen),
+        "screen_state": screen.get("state", "unknown"),
+        "bottom_anchor_verified": True,
+        "attempt_count": len(attempts),
+        "executed_steps": executed_steps,
+        "next_host_action": "extract_visible_self_profile_detail_facts",
+    }
+
+
 def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_dir: Path | None = None) -> dict[str, Any]:
     if not _is_mac_ios_app_session(session):
         return {
@@ -748,6 +1479,14 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
             "ocr_used": False,
         },
         {
+            "intent": "dismiss_tashuo_liked_you_modal_later",
+            "tap_ratio": _copy_tap_ratio(TASHUO_LIKED_YOU_MODAL_LATER_TAP_RATIO),
+            "risk": "dismiss_recoverable_modal_only",
+            "does_not_purchase": True,
+            "conditional_on_visual_state": "tashuo_liked_you_modal",
+            "wait_after_seconds": 0.45,
+        },
+        {
             "intent": "click_tashuo_conversation_navback_accessibility",
             "ax_description": "thin left navback",
             "risk": "navigation_only",
@@ -760,6 +1499,13 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
             "risk": "navigation_only",
             "conditional_on_visual_state": "tashuo_conversation",
             "fallback_for": "click_tashuo_conversation_navback_accessibility",
+            "wait_after_seconds": 0.45,
+        },
+        {
+            "intent": "tap_tashuo_secondary_page_navback_visual",
+            "tap_ratio": _copy_tap_ratio(TASHUO_CONVERSATION_NAVBACK_TAP_RATIO),
+            "risk": "navigation_only",
+            "conditional_on_visual_state": "tashuo_secondary_page_without_bottom_nav",
             "wait_after_seconds": 0.45,
         },
         {
@@ -808,11 +1554,7 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
         output_dir.mkdir(parents=True, exist_ok=True)
 
     executed_steps: list[dict[str, Any]] = []
-    open_result = session.runner.run(["open", "-b", bundle_id])
-    open_payload = {
-        "status": "ok" if open_result.returncode == 0 else "blocked",
-        "stderr": platform._short(open_result.stderr),
-    }
+    open_payload = _open_tashuo_mac_ios_app_bundle(session, bundle_id)
     executed_steps.append({**planned_steps[0], "result": open_payload})
     if open_payload["status"] != "ok":
         payload.update({"status": "blocked", "reason": "mac_ios_app_open_failed", "executed_steps": executed_steps})
@@ -870,13 +1612,70 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
             "executed_steps": executed_steps,
         })
         return payload
+    if initial_screen.get("liked_you_modal_present") or initial_screen.get("visual_state") == "tashuo_liked_you_modal":
+        dismiss_result = _dismiss_tashuo_liked_you_modal(session, window)
+        executed_steps.append({**planned_steps[3], "result": dismiss_result})
+        if dismiss_result.get("status") != "ok":
+            payload.update({
+                "status": "blocked",
+                "reason": dismiss_result.get("reason") or "tashuo_liked_you_modal_dismiss_failed",
+                "screen_state": initial_screen.get("state", "unknown"),
+                "next_host_action": "dismiss_tashuo_recoverable_modal_manually",
+                "executed_steps": executed_steps,
+            })
+            return payload
+        time.sleep(float(planned_steps[3]["wait_after_seconds"]))
+        refresh_result, refreshed_window = _refresh_tashuo_mac_ios_window(session)
+        executed_steps.append({
+            "intent": "refresh_tashuo_mac_ios_window_after_liked_you_modal",
+            "risk": "navigation_only",
+            "result": refresh_result,
+        })
+        if refresh_result.get("status") != "ok" or refreshed_window is None:
+            payload.update({
+                "status": "blocked",
+                "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
+                "screen_state": initial_screen.get("state", "unknown"),
+                "next_host_action": "restore_tashuo_window_focus",
+                "executed_steps": executed_steps,
+            })
+            return payload
+        window = refreshed_window
+        after_modal_output = (
+            output_dir / "mac_ios_app.tashuo.prepare_message_page.after_liked_you_modal.png"
+            if output_dir is not None
+            else None
+        )
+        after_modal_screen = _capture_tashuo_visual_screen(session, window, output=after_modal_output)
+        payload["after_liked_you_modal_screen"] = platform._redacted_screen(after_modal_screen)
+        payload["liked_you_modal_dismissed"] = True
+        if after_modal_screen.get("status") != "ok":
+            payload.update({
+                "status": "blocked",
+                "reason": after_modal_screen.get("reason") or "tashuo_visual_capture_failed",
+                "screen_state": after_modal_screen.get("state", "unknown"),
+                "executed_steps": executed_steps,
+            })
+            return payload
+        if after_modal_screen.get("liked_you_modal_present") or after_modal_screen.get("visual_state") == "tashuo_liked_you_modal":
+            payload.update({
+                "status": "needs_verification",
+                "reason": "tashuo_liked_you_modal_not_dismissed",
+                "screen_state": after_modal_screen.get("state", "unknown"),
+                "next_host_action": "dismiss_tashuo_recoverable_modal_manually",
+                "executed_steps": executed_steps,
+            })
+            return payload
+        initial_screen = after_modal_screen
+        payload["post_liked_you_modal_visual_state"] = initial_screen.get("visual_state", "unknown")
+        payload["post_liked_you_modal_active_tab"] = initial_screen.get("visual_active_tab", "unknown")
     if initial_screen.get("visual_state") == "tashuo_conversation":
         navback_result = _click_tashuo_conversation_navback_button(session)
-        executed_steps.append({**planned_steps[3], "result": navback_result})
+        executed_steps.append({**planned_steps[4], "result": navback_result})
         if navback_result.get("status") != "ok":
-            fallback_result = session._click_ratio(window, planned_steps[4]["tap_ratio"])
+            fallback_result = session._click_ratio(window, planned_steps[5]["tap_ratio"])
             executed_steps.append({
-                **planned_steps[4],
+                **planned_steps[5],
                 "accessibility_result": navback_result,
                 "result": fallback_result,
             })
@@ -889,9 +1688,25 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
                     "executed_steps": executed_steps,
                 })
                 return payload
-            time.sleep(float(planned_steps[4]["wait_after_seconds"]))
+            time.sleep(float(planned_steps[5]["wait_after_seconds"]))
         else:
-            time.sleep(float(planned_steps[3]["wait_after_seconds"]))
+            time.sleep(float(planned_steps[4]["wait_after_seconds"]))
+        refresh_result, refreshed_window = _refresh_tashuo_mac_ios_window(session)
+        executed_steps.append({
+            "intent": "refresh_tashuo_mac_ios_window_after_conversation_navback",
+            "risk": "navigation_only",
+            "result": refresh_result,
+        })
+        if refresh_result.get("status") != "ok" or refreshed_window is None:
+            payload.update({
+                "status": "blocked",
+                "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
+                "screen_state": initial_screen.get("state", "unknown"),
+                "next_host_action": "restore_tashuo_window_focus",
+                "executed_steps": executed_steps,
+            })
+            return payload
+        window = refreshed_window
         returned_output = (
             output_dir / "mac_ios_app.tashuo.prepare_message_page.after_navback.png"
             if output_dir is not None
@@ -911,6 +1726,54 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
         payload["post_navback_visual_state"] = returned_screen.get("visual_state", "unknown")
         payload["post_navback_active_tab"] = returned_screen.get("visual_active_tab", "unknown")
 
+    if _tashuo_secondary_page_without_bottom_nav(initial_screen):
+        back_result = session._click_ratio(window, planned_steps[6]["tap_ratio"])
+        executed_steps.append({**planned_steps[6], "result": back_result})
+        if back_result.get("status") != "ok":
+            payload.update({
+                "status": "blocked",
+                "reason": back_result.get("reason") or "tashuo_secondary_page_navback_failed",
+                "screen_state": initial_screen.get("state", "unknown"),
+                "next_host_action": "inspect_tashuo_secondary_page_navback",
+                "executed_steps": executed_steps,
+            })
+            return payload
+        time.sleep(float(planned_steps[6]["wait_after_seconds"]))
+        refresh_result, refreshed_window = _refresh_tashuo_mac_ios_window(session)
+        executed_steps.append({
+            "intent": "refresh_tashuo_mac_ios_window_after_secondary_navback",
+            "risk": "navigation_only",
+            "result": refresh_result,
+        })
+        if refresh_result.get("status") != "ok" or refreshed_window is None:
+            payload.update({
+                "status": "blocked",
+                "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
+                "screen_state": initial_screen.get("state", "unknown"),
+                "next_host_action": "restore_tashuo_window_focus",
+                "executed_steps": executed_steps,
+            })
+            return payload
+        window = refreshed_window
+        returned_output = (
+            output_dir / "mac_ios_app.tashuo.prepare_message_page.after_secondary_navback.png"
+            if output_dir is not None
+            else None
+        )
+        returned_screen = _capture_tashuo_visual_screen(session, window, output=returned_output)
+        payload["after_secondary_navback_screen"] = platform._redacted_screen(returned_screen)
+        if returned_screen.get("status") != "ok":
+            payload.update({
+                "status": "blocked",
+                "reason": returned_screen.get("reason") or "tashuo_visual_capture_failed",
+                "screen_state": returned_screen.get("state", "unknown"),
+                "executed_steps": executed_steps,
+            })
+            return payload
+        initial_screen = returned_screen
+        payload["post_secondary_navback_visual_state"] = returned_screen.get("visual_state", "unknown")
+        payload["post_secondary_navback_active_tab"] = returned_screen.get("visual_active_tab", "unknown")
+
     if not initial_screen.get("visual_bottom_nav_present"):
         payload.update({
             "status": "needs_verification",
@@ -929,7 +1792,7 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
             initial_screen=initial_screen,
         )
         payload["message_page_settle"] = settle_result
-        executed_steps.append({**planned_steps[7], "result": settle_result})
+        executed_steps.append({**planned_steps[9], "result": settle_result})
         payload.update({
             "screen": platform._redacted_screen(settled_screen),
             "screen_state": settled_screen.get("state", "unknown"),
@@ -942,18 +1805,36 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
                 "next_host_action": "visual_analyze_current_screen",
             })
         else:
-            executed_steps.append({**planned_steps[8], "result": {"status": "ok"}})
+            executed_steps.append({**planned_steps[10], "result": {"status": "ok"}})
         return payload
 
     ax_result = _click_tashuo_messages_radio_button(session)
-    executed_steps.append({**planned_steps[5], "result": ax_result})
+    executed_steps.append({**planned_steps[7], "result": ax_result})
     if ax_result["status"] != "ok":
-        tap_result = session._click_ratio(window, planned_steps[6]["tap_ratio"])
-        executed_steps.append({**planned_steps[6], "result": tap_result})
+        tap_result = session._click_ratio(window, planned_steps[8]["tap_ratio"])
+        executed_steps.append({**planned_steps[8], "result": tap_result})
         if tap_result["status"] != "ok":
             payload.update({"status": "blocked", "reason": tap_result.get("reason"), "executed_steps": executed_steps})
             return payload
-    time.sleep(float(planned_steps[5]["wait_after_seconds"]))
+        time.sleep(float(planned_steps[8]["wait_after_seconds"]))
+    else:
+        time.sleep(float(planned_steps[7]["wait_after_seconds"]))
+    refresh_result, refreshed_window = _refresh_tashuo_mac_ios_window(session)
+    executed_steps.append({
+        "intent": "refresh_tashuo_mac_ios_window_after_messages_tab",
+        "risk": "navigation_only",
+        "result": refresh_result,
+    })
+    if refresh_result.get("status") != "ok" or refreshed_window is None:
+        payload.update({
+            "status": "blocked",
+            "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
+            "screen_state": initial_screen.get("state", "unknown"),
+            "next_host_action": "restore_tashuo_window_focus",
+            "executed_steps": executed_steps,
+        })
+        return payload
+    window = refreshed_window
 
     final_screen, settle_result = _wait_for_tashuo_message_page_ready(
         session,
@@ -964,7 +1845,7 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
     payload["message_page_settle"] = settle_result
     payload["screen"] = platform._redacted_screen(final_screen)
     payload["screen_state"] = final_screen.get("state", "unknown")
-    executed_steps.append({**planned_steps[7], "result": settle_result})
+    executed_steps.append({**planned_steps[9], "result": settle_result})
     payload["executed_steps"] = executed_steps
     if final_screen.get("status") != "ok":
         payload.update({"status": "blocked", "reason": final_screen.get("reason") or "tashuo_visual_capture_failed"})
@@ -977,8 +1858,62 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
     elif final_screen.get("visual_active_tab") != "messages":
         payload.update({"status": "needs_verification", "reason": "tashuo_messages_tab_not_verified"})
     else:
-        executed_steps.append({**planned_steps[8], "result": {"status": "ok"}})
+        executed_steps.append({**planned_steps[10], "result": {"status": "ok"}})
     return payload
+
+
+def _tashuo_secondary_page_without_bottom_nav(screen: dict[str, Any]) -> bool:
+    if screen.get("visual_bottom_nav_present"):
+        return False
+    return str(screen.get("state") or screen.get("visual_state") or "") in {
+        "tashuo_profile",
+        "tashuo_self_profile",
+        "tashuo_recommend",
+        "tashuo_pending_question_list",
+    }
+
+
+def _refresh_tashuo_mac_ios_window(session: Any) -> tuple[dict[str, Any], Any | None]:
+    activate = session._activate_window()
+    payload: dict[str, Any] = {
+        "status": "ok" if activate.get("status") == "ok" else "blocked",
+        "activation": activate,
+    }
+    if activate.get("status") != "ok":
+        payload["reason"] = activate.get("reason") or "tashuo_activation_failed"
+        return payload, None
+
+    doctor = session.doctor(capture=False)
+    payload["doctor"] = {
+        "status": doctor.get("status"),
+        "reason": doctor.get("reason"),
+        "harness_backend": doctor.get("harness_backend"),
+    }
+    if doctor.get("status") != "ok":
+        payload.update({"status": "blocked", "reason": doctor.get("reason") or "tashuo_doctor_failed"})
+        return payload, None
+
+    window_payload = doctor.get("window") if isinstance(doctor.get("window"), dict) else None
+    if not window_payload:
+        payload.update({"status": "blocked", "reason": "tashuo_window_not_found"})
+        return payload, None
+    try:
+        window = platform._window_from_payload(window_payload)
+    except (KeyError, TypeError, ValueError) as exc:
+        payload.update({
+            "status": "blocked",
+            "reason": "tashuo_window_payload_invalid",
+            "error_type": type(exc).__name__,
+        })
+        return payload, None
+    payload["window"] = {
+        "name": window.name,
+        "frontmost": window.frontmost,
+        "width": window.width,
+        "height": window.height,
+        "window_id": window.window_id,
+    }
+    return payload, window
 
 
 def _capture_tashuo_visual_screen(session: Any, window: Any, *, output: Path | None = None) -> dict[str, Any]:
@@ -1009,6 +1944,7 @@ def _capture_tashuo_visual_screen(session: Any, window: Any, *, output: Path | N
             "visual_bottom_nav_present": False,
             "chat_list_visual_present": False,
             "recommend_card_visual_present": False,
+            "liked_you_modal_present": False,
             "ocr_status": "skipped",
             "text": "",
         }
@@ -1030,6 +1966,8 @@ def _capture_tashuo_visual_screen(session: Any, window: Any, *, output: Path | N
         "message_list_top_anchor_signal": visual.get("message_list_top_anchor_signal", {}),
         "recommend_card_visual_present": visual.get("recommend_card_visual_present", False),
         "recommend_card_visual_signal": visual.get("recommend_card_visual_signal", {}),
+        "liked_you_modal_present": visual.get("liked_you_modal_present", False),
+        "liked_you_modal_signal": visual.get("liked_you_modal_signal", {}),
         "conversation_toolbar_present": visual.get("conversation_toolbar_present", False),
         "ocr_status": "skipped",
         "text": "",
@@ -1308,6 +2246,206 @@ end tell
     }
 
 
+def _dismiss_tashuo_liked_you_modal(session: Any, window: Any) -> dict[str, Any]:
+    ax_result = _click_tashuo_liked_you_modal_later_button(session)
+    if ax_result.get("status") == "ok":
+        return {
+            "status": "ok",
+            "method": "macos_accessibility",
+            "does_not_purchase": True,
+            "ax_result": ax_result,
+        }
+    tap_result = session._click_ratio(window, TASHUO_LIKED_YOU_MODAL_LATER_TAP_RATIO)
+    if tap_result.get("status") != "ok":
+        return {
+            "status": "blocked",
+            "reason": tap_result.get("reason") or ax_result.get("reason") or "tashuo_liked_you_modal_dismiss_failed",
+            "does_not_purchase": True,
+            "ax_result": ax_result,
+            "tap_result": tap_result,
+        }
+    return {
+        "status": "ok",
+        "method": "visual_cancel_tap",
+        "does_not_purchase": True,
+        "tap_ratio": _copy_tap_ratio(TASHUO_LIKED_YOU_MODAL_LATER_TAP_RATIO),
+        "ax_result": ax_result,
+        "tap_result": tap_result,
+    }
+
+
+def _dismiss_tashuo_notification_prompt(session: Any, window: Any) -> dict[str, Any]:
+    ax_result = _click_tashuo_notification_prompt_close_button(session)
+    if ax_result.get("status") == "ok":
+        return {
+            "status": "ok",
+            "method": "macos_accessibility",
+            "does_not_enable_notifications": True,
+            "ax_result": ax_result,
+        }
+    tap_result = session._click_ratio(window, TASHUO_NOTIFICATION_PROMPT_CLOSE_TAP_RATIO)
+    if tap_result.get("status") != "ok":
+        return {
+            "status": "blocked",
+            "reason": tap_result.get("reason") or ax_result.get("reason") or "tashuo_notification_prompt_dismiss_failed",
+            "does_not_enable_notifications": True,
+            "ax_result": ax_result,
+            "tap_result": tap_result,
+        }
+    return {
+        "status": "ok",
+        "method": "visual_close_tap",
+        "does_not_enable_notifications": True,
+        "tap_ratio": _copy_tap_ratio(TASHUO_NOTIFICATION_PROMPT_CLOSE_TAP_RATIO),
+        "ax_result": ax_result,
+        "tap_result": tap_result,
+    }
+
+
+def _click_tashuo_notification_prompt_close_button(session: Any) -> dict[str, Any]:
+    runtime_config = getattr(session, "runtime_config", {}) if isinstance(getattr(session, "runtime_config", {}), dict) else {}
+    process_name = str(runtime_config.get("process_name") or "tashuo").replace("\\", "\\\\").replace('"', '\\"')
+    script = f'''
+-- DATING_BOOST_TASHUO_DISMISS_NOTIFICATION_PROMPT
+on labelOf(e)
+  set labelText to ""
+  tell application "System Events"
+    try
+      set labelText to labelText & (name of e as text) & "\\n"
+    end try
+    try
+      set labelText to labelText & (description of e as text) & "\\n"
+    end try
+    try
+      set labelText to labelText & (value of e as text) & "\\n"
+    end try
+  end tell
+  return labelText
+end labelOf
+
+on clickClose(e, depth)
+  tell application "System Events"
+    try
+      set labelText to my labelOf(e)
+      if labelText contains "关闭" or labelText contains "Close" or labelText contains "close" or labelText contains "xmark" then
+        click e
+        return "clicked"
+      end if
+    end try
+    if depth < 24 then
+      try
+        repeat with child in UI elements of e
+          set resultText to my clickClose(child, depth + 1)
+          if resultText is "clicked" then return "clicked"
+        end repeat
+      end try
+    end if
+  end tell
+  return "not_found"
+end clickClose
+
+tell application "System Events"
+  tell process "{process_name}"
+    return my clickClose(window 1, 0)
+  end tell
+end tell
+'''.strip()
+    result = session.runner.run(["osascript", "-e", script])
+    stdout = (result.stdout or "").strip()
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "tashuo_notification_prompt_ax_dismiss_failed",
+            "stderr": platform._short(result.stderr),
+            "input_backend": "macos_accessibility",
+        }
+    if stdout != "clicked":
+        return {
+            "status": "blocked",
+            "reason": "tashuo_notification_prompt_close_button_not_found",
+            "stdout": platform._short(stdout),
+            "input_backend": "macos_accessibility",
+        }
+    return {
+        "status": "ok",
+        "input_backend": "macos_accessibility",
+        "ax_label": "close",
+        "does_not_enable_notifications": True,
+    }
+
+
+def _click_tashuo_liked_you_modal_later_button(session: Any) -> dict[str, Any]:
+    runtime_config = getattr(session, "runtime_config", {}) if isinstance(getattr(session, "runtime_config", {}), dict) else {}
+    process_name = str(runtime_config.get("process_name") or "tashuo").replace("\\", "\\\\").replace('"', '\\"')
+    script = f'''
+-- DATING_BOOST_TASHUO_DISMISS_LIKED_YOU_MODAL
+on labelOf(e)
+  set labelText to ""
+  tell application "System Events"
+    try
+      set labelText to labelText & (name of e as text) & "\\n"
+    end try
+    try
+      set labelText to labelText & (description of e as text) & "\\n"
+    end try
+    try
+      set labelText to labelText & (value of e as text) & "\\n"
+    end try
+  end tell
+  return labelText
+end labelOf
+
+on clickDismiss(e, depth)
+  tell application "System Events"
+    try
+      set labelText to my labelOf(e)
+      if labelText contains "稍后再说" or labelText contains "以后再说" or labelText contains "暂不" or labelText contains "Not now" or labelText contains "Later" then
+        click e
+        return "clicked"
+      end if
+    end try
+    if depth < 24 then
+      try
+        repeat with child in UI elements of e
+          set resultText to my clickDismiss(child, depth + 1)
+          if resultText is "clicked" then return "clicked"
+        end repeat
+      end try
+    end if
+  end tell
+  return "not_found"
+end clickDismiss
+
+tell application "System Events"
+  tell process "{process_name}"
+    return my clickDismiss(window 1, 0)
+  end tell
+end tell
+'''.strip()
+    result = session.runner.run(["osascript", "-e", script])
+    stdout = (result.stdout or "").strip()
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "tashuo_liked_you_modal_ax_dismiss_failed",
+            "stderr": platform._short(result.stderr),
+            "input_backend": "macos_accessibility",
+        }
+    if stdout != "clicked":
+        return {
+            "status": "blocked",
+            "reason": "tashuo_liked_you_modal_later_button_not_found",
+            "stdout": platform._short(stdout),
+            "input_backend": "macos_accessibility",
+        }
+    return {
+        "status": "ok",
+        "input_backend": "macos_accessibility",
+        "ax_label": "later",
+        "does_not_purchase": True,
+    }
+
+
 def run_tashuo_workflow(
     session: Any,
     workflow: str,
@@ -1377,6 +2515,13 @@ def stage_tashuo_draft(
             "fallback_ok": True,
         },
         {
+            "intent": "tap_tashuo_message_input_after_clear",
+            "tap_ratio": _tashuo_message_input_tap_ratio(session, focused=True),
+            "focus_state": "focused",
+            "risk": "draft_staging_only",
+            "does_not_send": True,
+        },
+        {
             "intent": "copy_draft_to_clipboard",
             "risk": "draft_staging_only",
             "does_not_send": True,
@@ -1385,6 +2530,13 @@ def stage_tashuo_draft(
             "intent": "paste_clipboard_into_tashuo_message_input",
             "risk": "draft_staging_only",
             "does_not_send": True,
+        },
+        {
+            "intent": "set_tashuo_message_input_with_accessibility_if_paste_did_not_stage",
+            "risk": "draft_staging_only",
+            "does_not_send": True,
+            "fallback_only": True,
+            "requires_exact_text_verification_after_ax_set": True,
         },
     ]
     payload = {
@@ -1443,13 +2595,19 @@ def stage_tashuo_draft(
         executed_steps.append({**planned_steps[1], "result": clear_result})
         if clear_result.get("status") == "ok":
             time.sleep(0.1)
+        refocus_result = session._click_ratio(window, planned_steps[2]["tap_ratio"])
+        executed_steps.append({**planned_steps[2], "result": refocus_result})
+        if refocus_result["status"] != "ok":
+            payload.update({"status": "blocked", "reason": refocus_result["reason"]})
+            return payload
+        time.sleep(0.15)
         copy_result = session._copy_to_clipboard(draft_text)
-        executed_steps.append({**planned_steps[2], "result": copy_result})
+        executed_steps.append({**planned_steps[3], "result": copy_result})
         if copy_result["status"] != "ok":
             payload.update({"status": "blocked", "reason": copy_result["reason"]})
             return payload
         paste_result = session._paste_clipboard_into_frontmost_app(prefer_core_graphics_keyboard=True)
-        executed_steps.append({**planned_steps[3], "result": paste_result})
+        executed_steps.append({**planned_steps[4], "result": paste_result})
         if paste_result["status"] != "ok":
             payload.update({"status": "blocked", "reason": paste_result["reason"]})
             return payload
@@ -1470,6 +2628,33 @@ def stage_tashuo_draft(
             trusted_direct_input=clear_result.get("status") == "ok",
             ax_text_area_value=stage_ax_value,
         )
+        if payload["staged_text_verification"].get("status") != "verified":
+            ax_set_result = _set_tashuo_ax_text_area_value(session, draft_text)
+            payload["ax_set_text_area_result"] = ax_set_result
+            executed_steps.append({**planned_steps[5], "result": ax_set_result})
+            if ax_set_result.get("status") == "ok":
+                time.sleep(0.25)
+                ax_after = output_dir / "mac_ios_app.tashuo.after_ax_set_stage_draft.png" if output_dir is not None else None
+                ax_after_screen = _capture_tashuo_window(
+                    session,
+                    output=ax_after,
+                    window=window,
+                    ocr=not _is_mac_ios_app_session(session),
+                )
+                ax_stage_value = _tashuo_ax_text_area_value(session)
+                ax_verification = _stage_only_tashuo_verification(
+                    ax_after_screen,
+                    draft_text,
+                    baseline_screen=baseline_screen if isinstance(baseline_screen, dict) else None,
+                    first_screen=after_screen,
+                    trusted_direct_input=True,
+                    ax_text_area_value=ax_stage_value,
+                )
+                payload["ax_set_text_verification"] = ax_verification
+                payload["staging_input_backend"] = ax_set_result.get("input_backend")
+                if ax_verification.get("status") == "verified":
+                    payload["verification"] = platform._redacted_screen(ax_after_screen)
+                    payload["staged_text_verification"] = ax_verification
         payload["staged_text_verified"] = payload["staged_text_verification"]["status"] == "verified"
         payload["next_host_action"] = "verify_staged_text_before_send"
     finally:
@@ -1488,6 +2673,127 @@ def stage_tashuo_draft(
     return payload
 
 
+def clear_tashuo_message_input(
+    session: Any,
+    *,
+    dry_run: bool = False,
+    output_dir: Path | None = None,
+) -> dict[str, Any]:
+    if not _is_mac_ios_app_session(session):
+        return {
+            **session._base_payload("blocked"),
+            "action": "clear-message-input",
+            "target": "tashuo_message_input",
+            "reason": "tashuo_clear_message_input_requires_mac_ios_app_runtime",
+            **tashuo_guardrails_payload(),
+        }
+    planned_steps = [
+        {
+            "intent": "verify_tashuo_conversation_before_input_cleanup",
+            "risk": "visual_observation_only",
+            "does_not_send": True,
+        },
+        {
+            "intent": "tap_tashuo_message_input_before_cleanup",
+            "tap_ratio": _tashuo_message_input_tap_ratio(session, focused=False),
+            "risk": "draft_staging_cleanup_only",
+            "does_not_send": True,
+        },
+        {
+            "intent": "clear_tashuo_ax_text_area",
+            "risk": "draft_staging_cleanup_only",
+            "does_not_send": True,
+            "input_backend": "macos_accessibility",
+        },
+        {
+            "intent": "verify_tashuo_input_is_empty",
+            "risk": "visual_observation_only",
+            "does_not_send": True,
+            "verification": "accessibility_text_area_value",
+        },
+    ]
+    payload = {
+        **session._base_payload("ok"),
+        "action": "clear-message-input",
+        "target": "tashuo_message_input",
+        "mode": "dry_run" if dry_run else "execute",
+        "planned_steps": planned_steps,
+        "send_action_executed": False,
+        **tashuo_guardrails_payload(),
+    }
+    if dry_run:
+        return payload
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    before = output_dir / "mac_ios_app.tashuo.before_clear_message_input.png" if output_dir is not None else None
+    doctor = session.doctor(capture=True, output=before, ocr=False)
+    payload["preflight"] = doctor
+    if doctor.get("status") == "blocked":
+        payload.update({"status": "blocked", "reason": doctor.get("reason") or "tashuo_preflight_not_verified"})
+        return payload
+    screen_state = doctor.get("screen", {}).get("state")
+    if screen_state != "tashuo_conversation":
+        payload.update({
+            "status": "blocked",
+            "reason": "tashuo_conversation_not_verified_for_input_cleanup",
+            "screen_state": screen_state,
+        })
+        return payload
+
+    window = platform._window_from_payload(doctor.get("window") or {})
+    executed_steps: list[dict[str, Any]] = [{**planned_steps[0], "result": {"status": "ok", "screen_state": screen_state}}]
+    click_result = session._click_ratio(window, planned_steps[1]["tap_ratio"])
+    executed_steps.append({**planned_steps[1], "result": click_result})
+    if click_result.get("status") != "ok":
+        payload.update({
+            "status": "blocked",
+            "reason": click_result.get("reason") or "tashuo_input_cleanup_focus_failed",
+            "executed_steps": executed_steps,
+        })
+        return payload
+
+    clear_result = _clear_tashuo_ax_text_area(session)
+    executed_steps.append({**planned_steps[2], "result": clear_result})
+    if clear_result.get("status") == "ok":
+        time.sleep(0.2)
+    ax_value = _tashuo_ax_text_area_value(session)
+    final_text = str(ax_value.get("value") or "") if isinstance(ax_value, dict) and ax_value.get("status") == "ok" else ""
+    final_count = len(final_text)
+    after = output_dir / "mac_ios_app.tashuo.after_clear_message_input.png" if output_dir is not None else None
+    screen = _capture_tashuo_window(session, output=after, window=window, ocr=False)
+    verification = {
+        "schema_version": 1,
+        "status": "ok" if clear_result.get("status") == "ok" and ax_value.get("status") == "ok" and final_count == 0 else "blocked",
+        "verification_method": "tashuo_ax_text_area_value_after_clear",
+        "input_cleared": final_count == 0,
+        "final_input_character_count": final_count,
+        "ax_text_area_status": ax_value.get("status") if isinstance(ax_value, dict) else "blocked",
+        "final_input_hash": platform._hash_text(final_text) if final_text else None,
+        "screen": platform._redacted_screen(screen),
+    }
+    if clear_result.get("status") != "ok":
+        verification["reason"] = clear_result.get("reason") or "tashuo_ax_text_area_clear_failed"
+    elif ax_value.get("status") != "ok":
+        verification["reason"] = ax_value.get("reason") or "tashuo_ax_text_area_read_failed"
+    elif final_count != 0:
+        verification["reason"] = "tashuo_final_input_not_empty"
+    executed_steps.append({**planned_steps[3], "result": verification})
+    payload.update({
+        "executed_steps": executed_steps,
+        "clear_result": clear_result,
+        "final_input_verification": verification,
+        "input_cleared": verification["input_cleared"],
+        "final_input_character_count": final_count,
+    })
+    if verification["status"] != "ok":
+        payload.update({
+            "status": "blocked",
+            "reason": verification.get("reason") or "tashuo_input_cleanup_not_verified",
+        })
+    return payload
+
+
 def _click_tashuo_messages_radio_button(session: Any) -> dict[str, Any]:
     process_name = str(getattr(session, "window_title", "") or "她说").replace("\\", "\\\\").replace('"', '\\"')
     script = (
@@ -1503,6 +2809,23 @@ def _click_tashuo_messages_radio_button(session: Any) -> dict[str, Any]:
             "input_backend": "macos_accessibility",
         }
     return {"status": "ok", "input_backend": "macos_accessibility", "radio_button_index": 3}
+
+
+def _click_tashuo_mine_radio_button(session: Any) -> dict[str, Any]:
+    process_name = str(getattr(session, "window_title", "") or "她说").replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        f'tell application "System Events" to tell process "{process_name}" '
+        'to click radio button 4 of window 1'
+    )
+    result = session.runner.run(["osascript", "-e", script])
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "tashuo_mine_radio_button_click_failed",
+            "stderr": platform._short(result.stderr),
+            "input_backend": "macos_accessibility",
+        }
+    return {"status": "ok", "input_backend": "macos_accessibility", "radio_button_index": 4}
 
 
 def send_tashuo_message(
@@ -2388,6 +3711,7 @@ def _normalize_tashuo_message_list_relocation_evidence(source: dict[str, Any]) -
             "visual_anchor_max_hamming_distance": max_distance,
             "visual_anchor_scan_region": scan_region,
             "tap_ratio": tap_ratio,
+            "tap_ratio_source": source.get("tap_ratio_source"),
             "source_state": source.get("source_state"),
             "selection_method": source.get("selection_method") or "message_list_visual_anchor_scan",
         }
@@ -2429,6 +3753,14 @@ def _locate_tashuo_message_list_visual_target(
     path = str(list_screen.get("path") or "")
     if not path:
         return {"status": "blocked", "reason": "target_relocation_message_list_screen_path_missing"}
+    try:
+        screen_pixels = _read_png_pixels(Path(path))
+    except Exception as exc:
+        return {
+            "status": "blocked",
+            "reason": "target_binding_visual_anchor_read_failed",
+            "error": str(exc)[:80],
+        }
 
     row_height = max(0.03, min(0.28, float(source_region["y2"]) - float(source_region["y1"])))
     row_width = max(0.05, min(1.0, float(source_region["x2"]) - float(source_region["x1"])))
@@ -2438,18 +3770,52 @@ def _locate_tashuo_message_list_visual_target(
     source_x2 = source_x1 + row_width
     tap_ratio = evidence.get("tap_ratio") if isinstance(evidence.get("tap_ratio"), dict) else None
     tap_y_offset = 0.5
+    prior_tap_y: float | None = None
     if tap_ratio is not None:
         tap_y_offset = (float(tap_ratio["y"]) - float(source_region["y1"])) / row_height
+        prior_tap_y = max(0.0, min(1.0, float(tap_ratio["y"])))
     tap_y_offset = max(0.05, min(0.95, tap_y_offset))
     tap_x = float(tap_ratio["x"]) if tap_ratio is not None else (source_x1 + source_x2) / 2.0
     max_distance = int(evidence.get("visual_anchor_max_hamming_distance") or TASHUO_CHAT_LIST_VISUAL_ANCHOR_MAX_DISTANCE)
+    preserve_action_tap = _tashuo_message_list_relocation_preserves_action_tap(evidence)
+    if tap_ratio is not None and preserve_action_tap:
+        source_hash = _tashuo_visual_anchor_hash_for_pixels(screen_pixels, region=source_region)
+        observed_source_hash = str(source_hash.get("visual_anchor_hash") or "")
+        source_distance = (
+            _visual_anchor_hamming_distance(expected_hash, observed_source_hash)
+            if source_hash.get("status") == "ok" and observed_source_hash
+            else None
+        )
+        if source_distance is not None and source_distance <= max_distance:
+            safe_tap = _safe_tashuo_message_list_visual_anchor_tap_ratio(
+                _copy_tap_ratio(tap_ratio),
+                matched_region=source_region,
+                row_height=row_height,
+                preserve_action_tap=True,
+            )
+            return {
+                "status": "ok",
+                "location_method": "message_list_visual_anchor_current_region_tap",
+                "expected_visual_anchor_hash": expected_hash,
+                "observed_visual_anchor_hash": observed_source_hash or None,
+                "visual_anchor_hamming_distance": source_distance,
+                "visual_anchor_max_hamming_distance": max_distance,
+                "visual_anchor_region": source_region,
+                "tap_ratio": safe_tap["tap_ratio"],
+                "raw_tap_ratio": _copy_tap_ratio(tap_ratio),
+                "tap_adjustment": safe_tap["tap_adjustment"],
+                "tap_ratio_source": evidence.get("tap_ratio_source"),
+                "uses_fixed_row_index": False,
+                "visual_anchor_scanned": False,
+                "current_region_verified": True,
+            }
     step_y = max(0.004, min(0.012, row_height / 12.0))
     best: dict[str, Any] | None = None
     candidate_count = 0
     y = scan_y1
     while y <= scan_y2 - row_height + 0.0001:
         region = {"x1": source_x1, "y1": y, "x2": source_x2, "y2": y + row_height}
-        hash_result = _tashuo_visual_anchor_hash_for_path(Path(path), region=region)
+        hash_result = _tashuo_visual_anchor_hash_for_pixels(screen_pixels, region=region)
         candidate_count += 1
         observed_hash = str(hash_result.get("visual_anchor_hash") or "")
         distance = (
@@ -2462,8 +3828,24 @@ def _locate_tashuo_message_list_visual_target(
             "visual_anchor_region": region,
             "observed_visual_anchor_hash": observed_hash or None,
             "visual_anchor_hamming_distance": distance,
+            "visual_anchor_tap_y_delta": (
+                abs(max(0.0, min(1.0, y + row_height * tap_y_offset)) - prior_tap_y)
+                if prior_tap_y is not None
+                else None
+            ),
         }
-        if distance is not None and (best is None or distance < int(best["visual_anchor_hamming_distance"])):
+        if distance is not None and (
+            best is None
+            or distance < int(best["visual_anchor_hamming_distance"])
+            or (
+                distance == int(best["visual_anchor_hamming_distance"])
+                and candidate["visual_anchor_tap_y_delta"] is not None
+                and (
+                    best.get("visual_anchor_tap_y_delta") is None
+                    or float(candidate["visual_anchor_tap_y_delta"]) < float(best["visual_anchor_tap_y_delta"])
+                )
+            )
+        ):
             best = candidate
         y += step_y
 
@@ -2491,6 +3873,7 @@ def _locate_tashuo_message_list_visual_target(
         raw_tap_ratio,
         matched_region=matched_region,
         row_height=row_height,
+        preserve_action_tap=preserve_action_tap,
     )
     return {
         **best,
@@ -2502,9 +3885,15 @@ def _locate_tashuo_message_list_visual_target(
         "tap_ratio": safe_tap["tap_ratio"],
         "raw_tap_ratio": raw_tap_ratio,
         "tap_adjustment": safe_tap["tap_adjustment"],
+        "tap_ratio_source": evidence.get("tap_ratio_source"),
         "uses_fixed_row_index": False,
         "visual_anchor_scanned": True,
     }
+
+
+def _tashuo_message_list_relocation_preserves_action_tap(evidence: dict[str, Any]) -> bool:
+    source = str(evidence.get("tap_ratio_source") or "").strip().lower()
+    return source in {"corrected_all_messages_row_action"}
 
 
 def _safe_tashuo_message_list_visual_anchor_tap_ratio(
@@ -2512,6 +3901,7 @@ def _safe_tashuo_message_list_visual_anchor_tap_ratio(
     *,
     matched_region: dict[str, Any],
     row_height: float,
+    preserve_action_tap: bool = False,
 ) -> dict[str, Any]:
     tap_y = max(0.0, min(1.0, float(tap_ratio["y"])))
     adjusted = False
@@ -2529,7 +3919,14 @@ def _safe_tashuo_message_list_visual_anchor_tap_ratio(
         or region_y2 >= TASHUO_CHAT_LIST_BOTTOM_ROW_REGION_THRESHOLD
         or tap_y >= TASHUO_CHAT_LIST_BOTTOM_ROW_SAFE_TAP_Y
     )
-    if bottom_row:
+    if preserve_action_tap:
+        if tap_y >= TASHUO_CHAT_LIST_BOTTOM_NAV_TOP_RATIO:
+            safe_y = min(tap_y, TASHUO_CHAT_LIST_BOTTOM_ROW_SAFE_TAP_Y)
+            if safe_y < tap_y:
+                tap_y = safe_y
+                adjusted = True
+                reasons.append("bottom_nav_overlap_guard")
+    elif bottom_row:
         safe_y = max(0.0, min(1.0, min(tap_y, TASHUO_CHAT_LIST_BOTTOM_ROW_SAFE_TAP_Y)))
         if safe_y < tap_y:
             tap_y = safe_y
@@ -2630,6 +4027,15 @@ def _tashuo_visual_anchor_hash_for_path(
         pixels = _read_png_pixels(path)
     except Exception as exc:
         return {"status": "blocked", "reason": "target_binding_visual_anchor_read_failed", "error": str(exc)[:80]}
+    return _tashuo_visual_anchor_hash_for_pixels(pixels, region=region, grid_size=grid_size)
+
+
+def _tashuo_visual_anchor_hash_for_pixels(
+    pixels: dict[str, Any],
+    *,
+    region: dict[str, float] | None = None,
+    grid_size: int = 8,
+) -> dict[str, Any]:
     try:
         width = int(pixels["width"])
         height = int(pixels["height"])
@@ -3761,7 +5167,7 @@ def _verify_tashuo_step_precondition(
     output = None
     if output_dir is not None:
         output = output_dir / f"{_tashuo_capture_prefix(session)}.tashuo_precondition_{step_index:02d}.png"
-    screen = _capture_tashuo_window(session, output=output, window=window, ocr=not _is_mac_ios_app_session(session))
+    screen = _capture_tashuo_window(session, output=output, window=window, ocr=_tashuo_step_ocr_enabled(session, step))
     result = {
         "status": screen.get("status", "blocked"),
         "screen": platform._redacted_screen(screen),
@@ -3792,7 +5198,7 @@ def _verify_tashuo_step_postcondition(
     output = None
     if output_dir is not None:
         output = output_dir / f"{_tashuo_capture_prefix(session)}.tashuo_postcondition_{step_index:02d}.png"
-    screen = _capture_tashuo_window(session, output=output, window=window, ocr=not _is_mac_ios_app_session(session))
+    screen = _capture_tashuo_window(session, output=output, window=window, ocr=_tashuo_step_ocr_enabled(session, step))
     result = {
         "status": screen.get("status", "blocked"),
         "checked": True,
@@ -3804,6 +5210,16 @@ def _verify_tashuo_step_postcondition(
     else:
         state_check = _verify_tashuo_step_state(screen, step, key="expected_tashuo_states")
         if state_check["status"] != "ok":
+            notification_prompt_recovery = _recover_tashuo_notification_prompt_postcondition(
+                session,
+                window,
+                step,
+                first_result=result,
+                output_dir=output_dir,
+                step_index=step_index,
+            )
+            if notification_prompt_recovery is not None:
+                return notification_prompt_recovery
             retry = _retry_tashuo_step_postcondition_after_transition(
                 session,
                 window,
@@ -3817,6 +5233,65 @@ def _verify_tashuo_step_postcondition(
             result.update(state_check)
             result["reason"] = "tashuo_step_postcondition_not_verified"
     return result
+
+
+def _recover_tashuo_notification_prompt_postcondition(
+    session: Any,
+    window: Any,
+    step: dict[str, Any],
+    *,
+    first_result: dict[str, Any],
+    output_dir: Path | None,
+    step_index: int,
+) -> dict[str, Any] | None:
+    if not _tashuo_step_expects_state(step, "tashuo_conversation"):
+        return None
+    first_screen = first_result.get("screen") if isinstance(first_result.get("screen"), dict) else {}
+    prompt_visible = (
+        first_result.get("screen_state") == "tashuo_conversation_notification_prompt"
+        or first_screen.get("conversation_notification_prompt_present") is True
+    )
+    if not prompt_visible:
+        return None
+    dismiss_result = _dismiss_tashuo_notification_prompt(session, window)
+    if dismiss_result.get("status") != "ok":
+        return {
+            **first_result,
+            "status": "blocked",
+            "reason": dismiss_result.get("reason") or "tashuo_notification_prompt_dismiss_failed",
+            "dismiss_tashuo_notification_prompt": dismiss_result,
+        }
+    time.sleep(0.6)
+    output = None
+    if output_dir is not None:
+        output = output_dir / f"{_tashuo_capture_prefix(session)}.tashuo_postcondition_{step_index:02d}.notification_prompt_dismissed.png"
+    screen = _capture_tashuo_window(session, output=output, window=window, ocr=_tashuo_step_ocr_enabled(session, step))
+    result = {
+        "status": screen.get("status", "blocked"),
+        "checked": True,
+        "screen": platform._redacted_screen(screen),
+        "screen_state": screen.get("state", "unknown"),
+        "dismissed_tashuo_notification_prompt": True,
+        "dismiss_tashuo_notification_prompt": dismiss_result,
+        "first_screen_state": first_result.get("screen_state"),
+        "first_screen": first_screen,
+    }
+    if result["status"] != "ok":
+        result["reason"] = screen.get("reason") or "tashuo_postcondition_after_notification_prompt_dismiss_capture_failed"
+        return result
+    state_check = _verify_tashuo_step_state(screen, step, key="expected_tashuo_states")
+    if state_check["status"] != "ok":
+        result.update(state_check)
+        result["reason"] = "tashuo_step_postcondition_not_verified"
+    return result
+
+
+def _tashuo_step_expects_state(step: dict[str, Any], state: str) -> bool:
+    expected = step.get("expected_tashuo_states")
+    if not expected:
+        return False
+    expected_states = [str(expected)] if isinstance(expected, str) else [str(value) for value in expected]
+    return state in expected_states
 
 
 def _retry_tashuo_step_postcondition_after_transition(
@@ -3837,7 +5312,7 @@ def _retry_tashuo_step_postcondition_after_transition(
     output = None
     if output_dir is not None:
         output = output_dir / f"{_tashuo_capture_prefix(session)}.tashuo_postcondition_{step_index:02d}.retry.png"
-    screen = _capture_tashuo_window(session, output=output, window=window, ocr=not _is_mac_ios_app_session(session))
+    screen = _capture_tashuo_window(session, output=output, window=window, ocr=_tashuo_step_ocr_enabled(session, step))
     retry_result = {
         "status": screen.get("status", "blocked"),
         "checked": True,
@@ -3855,6 +5330,15 @@ def _retry_tashuo_step_postcondition_after_transition(
         retry_result.update(state_check)
         retry_result["reason"] = "tashuo_step_postcondition_not_verified"
     return retry_result
+
+
+def _tashuo_step_ocr_enabled(session: Any, step: dict[str, Any]) -> bool:
+    if not _is_mac_ios_app_session(session):
+        return True
+    return str(step.get("intent") or "") in {
+        "wheel_tashuo_profile_read_down",
+        "wheel_tashuo_profile_read_up",
+    }
 
 
 def _capture_tashuo_profile_read_step() -> dict[str, Any]:

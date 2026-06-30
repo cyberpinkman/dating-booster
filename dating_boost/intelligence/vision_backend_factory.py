@@ -23,9 +23,12 @@ def create_vision_backend(config: dict[str, Any]) -> VisionBackend:
     if backend_type == "openai":
         return OpenAIVisionBackend(model=str(config.get("model") or "gpt-4.1-mini"))
     if backend_type == "minimax":
-        return MiniMaxVisionBackend(
-            model=str(config.get("model") or MINIMAX_DEFAULT_MODEL),
-            base_url=str(config.get("base_url") or MINIMAX_DEFAULT_BASE_URL),
-            api_key_env=str(config.get("api_key_env") or MINIMAX_DEFAULT_API_KEY_ENV),
-        )
+        kwargs: dict[str, Any] = {
+            "model": str(config.get("model") or MINIMAX_DEFAULT_MODEL),
+            "base_url": str(config.get("base_url") or MINIMAX_DEFAULT_BASE_URL),
+            "api_key_env": str(config.get("api_key_env") or MINIMAX_DEFAULT_API_KEY_ENV),
+        }
+        if "timeout_seconds" in config:
+            kwargs["timeout_seconds"] = config.get("timeout_seconds")
+        return MiniMaxVisionBackend(**kwargs)
     raise ValueError(f"unsupported_vision_backend:{backend_type}")
