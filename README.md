@@ -70,6 +70,40 @@ TaShuo mac-ios-app 真实托管 smoke 入口：
 python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json
 ```
 
+Tinder/Bumble iPhone Mirroring 托管 stage smoke 入口：
+
+```bash
+python3 scripts/iphone_mirroring_managed_smoke.py --app-id tinder --data-dir .local/dating-boost --work-dir .local/dating-boost-iphone-smoke --authorization auth.json --goal goal.json --availability availability.json --json
+python3 scripts/iphone_mirroring_managed_smoke.py --app-id bumble --data-dir .local/dating-boost --work-dir .local/dating-boost-iphone-smoke --authorization auth.json --goal goal.json --availability availability.json --json
+```
+
+该脚本会先运行 skill doctor、release doctor、data doctor/migrate 和 capabilities
+兼容性检查，并确认 direct harness 仍是 executor-internal only；任何前置 gate
+失败都会在启动真实 GUI 前阻断。该脚本默认不替用户确认托管配置；如果返回
+`managed_session_config_confirmation_required`，先检查 `proposed_config`，确认后再用
+`--accept-managed-session-config` 重跑。若 iPhone Mirroring 锁定或不可用，脚本返回
+对应 blocked reason，不伪造实机通过。
+
+Tinder/Bumble iPhone Mirroring 现在也有 `prepare-message-page` 规划入口：
+它把当前 app 规整到消息/聊天列表，返回 `next_host_action=visual_plan_message_list`，
+让 host 从新鲜截图做视觉行规划。已有会话打开支持两条安全路径：OCR 可读昵称用
+`visible_name`/`target_binding` 定位；emoji 或非 OCR 昵称用
+`chat_list_row_to_thread` 加 `message_list_evidence.visual_anchor_hash` 和
+`visual_anchor_region` 在当前列表截图中重定位，不要退回通用 UI marker 或盲用固定 row。
+若发送前已经在目标线程内，可用 `current_thread_visual_identity` 加
+`thread_evidence.visual_anchor_hash` 验证当前线程视觉身份；这只验证目标，不替代
+staged-text OCR、input-cleared 或 outbound exact-text verification。
+如果这个视觉身份在发送前不匹配，且同一目标绑定里有 `message_list_evidence` 的视觉锚点，
+harness 会返回消息/聊天列表，按视觉锚点重定位同一行并重开线程，再重新验证目标后才允许 staging；
+没有同一目标视觉证据时必须阻断，不能换成 OCR 友好的对象。
+Tinder/Bumble default iPhone Mirroring 也支持 `harness <app> stage-draft`：
+stage mode 会粘贴草稿、做 exact staged-text OCR verification、记录 stage audit，
+但不点击 Send；如果 staging 前输入框看起来已有未发送内容，会在读取剪贴板或粘贴前阻断，
+避免把新草稿追加到旧文本上；OCR 不足时只进入人工 staged verification，不记录发送成功。
+Tinder/Bumble managed live send 必须携带 `chat_list_row_to_thread` 或
+`current_thread_visual_identity` 结构化目标绑定；`visible_name`/OCR 名字只能作为导航辅助，
+不能单独满足 live-send 目标绑定。
+
 ## Standalone Agent Runtime
 
 `standalone-session` is the opt-in migration path from host-native workflows to a local Dating Booster agent. Host-native remains the default production route. The primary standalone path is TaShuo mac-ios-app stage mode: phone-free live GUI observation, existing managed-session/operator contracts, and stage-only output by default. Live GUI send remains disabled unless the existing authorization, target binding, staged-text verification, and post-action verification contracts are satisfied.

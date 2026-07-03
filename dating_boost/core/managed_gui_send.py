@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from dating_boost.apps.registry import host_loop_app_ids, manifest_for_app
-from dating_boost.core.live_send_contract import validate_live_send_contract
 from dating_boost.core.safety import SafetyRepository
 
 
@@ -52,6 +51,9 @@ class ManagedGuiSendHostPort(Protocol):
         raise NotImplementedError
 
     def _live_send_action_request(self, work_item: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def _live_send_contract_block_reason(self, work_item: dict[str, Any], authorization: dict[str, Any]) -> str | None:
         raise NotImplementedError
 
     def _run_cli_json(
@@ -110,14 +112,7 @@ class ManagedGuiSendRunner:
 
         authorization_path = host._authorization_path()
         authorization = _read_json(authorization_path)
-        action_request = host._live_send_action_request(work_item)
-        contract_reason = validate_live_send_contract(
-            authorization,
-            action_request,
-            app_id=app_id,
-            draft_text=_work_item_payload_text(work_item),
-            data_dir=host.data_dir,
-        )
+        contract_reason = host._live_send_contract_block_reason(work_item, authorization)
         if contract_reason is not None:
             return host._finish("blocked", contract_reason, current=work_item)
 
@@ -834,7 +829,9 @@ def _managed_gui_send_refreshed_target_binding(
     thread_evidence["visual_anchor_hash"] = visual_hash
     if isinstance(anchor.get("visual_anchor_region"), dict):
         thread_evidence["visual_anchor_region"] = anchor.get("visual_anchor_region")
-    thread_evidence["screen_state"] = str(anchor.get("screen_state") or thread_evidence.get("screen_state") or "tashuo_conversation")
+    screen_state = anchor.get("screen_state") or thread_evidence.get("screen_state")
+    if screen_state:
+        thread_evidence["screen_state"] = str(screen_state)
     if harness_payload.get("post_action_observation_id"):
         thread_evidence["observation_id"] = harness_payload.get("post_action_observation_id")
     refreshed["thread_evidence"] = thread_evidence

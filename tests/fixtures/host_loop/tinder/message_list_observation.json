@@ -28,6 +28,13 @@
           "profile_cues": ["日料", "纯爱"],
           "conversation_fingerprint": "ada-reward"
         },
+        "selection_evidence": {
+          "source_state": "tinder_chat_list",
+          "opened_state": "tinder_conversation",
+          "row_index": 1,
+          "target_scope": "ordinary_conversation",
+          "open_action": "open-conversation"
+        },
         "evidence": "Visible first Tinder row with unread marker."
       }
     ]

@@ -39,6 +39,7 @@ DEFAULT_DATA_DIR = Path(".local") / "dating-boost-host-loop"
 DEFAULT_FIXTURE_NOW = "2026-05-26T00:00:00Z"
 REPORT_FINAL_STATUSES = {"wait", "blocked", "handoff", "scheduled_wait", "stopped", "error"}
 MESSAGE_SEQUENCE_SECONDS_PER_MESSAGE = 20
+IPHONE_MIRRORING_STRUCTURAL_BINDING_APP_IDS = {"tinder", "bumble"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -840,12 +841,17 @@ class HostLoopSupervisor:
         return None
 
     def _can_auto_stage_draft(self, work_item: dict[str, Any]) -> bool:
+        runtime = _normalized_harness_runtime(str(getattr(self.args, "harness_runtime", "") or ""))
+        app_id = str(self.args.app_id)
+        runtime_supports_stage_draft = (
+            (app_id == "tashuo" and runtime == "mac_ios_app")
+            or (app_id in {"tinder", "bumble"} and runtime in {"", "default"})
+        )
         return (
             self.fixture_host is None
             and self.args.send_mode == "stage"
-            and self.args.app_id == "tashuo"
+            and runtime_supports_stage_draft
             and str(work_item.get("work_item_type") or "") == "send_message"
-            and _normalized_harness_runtime(str(getattr(self.args, "harness_runtime", "") or "")) == "mac_ios_app"
         )
 
     def _stage_draft_with_harness(self, work_item: dict[str, Any], staged_path: Path) -> dict[str, Any] | None:
@@ -856,8 +862,6 @@ class HostLoopSupervisor:
             "harness",
             self.args.app_id,
             "stage-draft",
-            "--runtime",
-            runtime,
             "--data-dir",
             str(self.data_dir),
             "--text-file",
@@ -866,6 +870,8 @@ class HostLoopSupervisor:
             str(self.work_dir / "harness"),
             "--json",
         ]
+        if runtime:
+            command_args[3:3] = ["--runtime", runtime]
         try:
             harness_payload = self._run_cli_json(*command_args, allow_error=True)
         finally:
@@ -911,20 +917,26 @@ class HostLoopSupervisor:
             raise HostLoopError(str(exc)) from exc
 
     def _live_send_contract_block_reason(self, work_item: dict[str, Any], authorization: dict[str, Any]) -> str | None:
-        if self._requires_tashuo_mac_ios_structural_binding():
-            scan_batch = self._target_binding_scan_batch_or_none(work_item)
-            target_binding = _target_binding_for_work_item(work_item, scan_batch)
-            if not target_binding_structural_evidence_present("tashuo", target_binding):
-                if not isinstance(work_item.get("target_binding"), dict) and _thread_observation_for_work_item(work_item, scan_batch) is None:
-                    return "target_binding_lost_current_thread"
-                return "target_binding_structural_evidence_required"
-        return validate_live_send_contract(
+        app_id = str(self.args.app_id)
+        contract_reason = validate_live_send_contract(
             authorization,
             self._live_send_action_request(work_item),
-            app_id=self.args.app_id,
+            app_id=app_id,
             draft_text=_work_item_payload_text(work_item),
             data_dir=self.data_dir,
         )
+        if self._requires_structural_target_binding_for_live_send():
+            scan_batch = self._target_binding_scan_batch_or_none(work_item)
+            target_binding = _target_binding_for_work_item(work_item, scan_batch)
+            if not target_binding_structural_evidence_present(app_id, target_binding):
+                if not isinstance(work_item.get("target_binding"), dict) and _thread_observation_for_work_item(work_item, scan_batch) is None:
+                    if contract_reason not in {None, "action_request_target_binding_required"}:
+                        return contract_reason
+                    return "target_binding_lost_current_thread"
+                if contract_reason is not None:
+                    return contract_reason
+                return "target_binding_structural_evidence_required"
+        return contract_reason
 
     def _live_send_action_request(self, work_item: dict[str, Any]) -> dict[str, Any]:
         action_request = dict(work_item)
@@ -948,8 +960,11 @@ class HostLoopSupervisor:
             return f"runtime_live_send_not_supported:{self.args.app_id}:{runtime.replace('_', '-')}"
         return None
 
-    def _requires_tashuo_mac_ios_structural_binding(self) -> bool:
-        return self.args.app_id == "tashuo" and _normalized_harness_runtime(
+    def _requires_structural_target_binding_for_live_send(self) -> bool:
+        app_id = str(self.args.app_id)
+        if app_id in IPHONE_MIRRORING_STRUCTURAL_BINDING_APP_IDS:
+            return True
+        return app_id == "tashuo" and _normalized_harness_runtime(
             str(getattr(self.args, "harness_runtime", "") or "")
         ) == "mac_ios_app"
 
@@ -1462,11 +1477,13 @@ def _staged_verification_from_stage_draft(work_item: dict[str, Any], harness_pay
     if screenshot_ref:
         verification["screenshot_ref"] = screenshot_ref
     evidence = dict(verification.get("evidence") if isinstance(verification.get("evidence"), dict) else {})
+    app_id = str(harness_payload.get("app_id") or work_item.get("app_id") or "dating_app")
+    harness_backend = str(harness_payload.get("harness_backend") or "native_gui")
     evidence.update(
         {
-            "verification": "TaShuo mac-ios-app stage-draft verified the input box before stage-only audit.",
+            "verification": f"{app_id} {harness_backend} stage-draft verified the input box before stage-only audit.",
             "input_method": "harness_stage_draft",
-            "harness_runtime": "mac_ios_app",
+            "harness_runtime": harness_payload.get("harness_runtime") or harness_backend,
             "stage_attempt_status": harness_payload.get("stage_attempt_status"),
             "staged_text_verification_status": staged_text_verification.get("status"),
             "screen_exact_text_ocr_verified": staged_text_verification.get("screen_exact_text_ocr_verified") is True,
@@ -1676,6 +1693,8 @@ def _target_binding_for_work_item(work_item: dict[str, Any], pending_scan_batch:
             evidence = entry.get(evidence_key)
             if isinstance(evidence, dict) and evidence_key not in binding:
                 binding[evidence_key] = dict(evidence)
+        if isinstance(binding.get("selection_evidence"), dict):
+            binding.setdefault("binding_type", "chat_list_row_to_thread")
     if isinstance(thread, dict):
         thread_binding = thread.get("target_binding")
         if isinstance(thread_binding, dict):
@@ -1690,8 +1709,9 @@ def _target_binding_for_work_item(work_item: dict[str, Any], pending_scan_batch:
                     binding["thread_evidence"] = existing_evidence
                 else:
                     binding.setdefault(key, value)
-        if not target_binding_structural_evidence_present("tashuo", binding):
-            derived_binding = _derive_tashuo_current_thread_target_binding(thread, binding)
+        binding_app_id = _thread_observation_app_id(thread)
+        if binding_app_id and not target_binding_structural_evidence_present(binding_app_id, binding):
+            derived_binding = _derive_current_thread_visual_target_binding(thread, binding, app_id=binding_app_id)
             if isinstance(derived_binding, dict):
                 for key, value in derived_binding.items():
                     if key == "thread_evidence" and isinstance(value, dict):
@@ -1718,8 +1738,19 @@ def _derive_tashuo_current_thread_target_binding(
     thread: dict[str, Any],
     binding: dict[str, Any],
 ) -> dict[str, Any] | None:
+    return _derive_current_thread_visual_target_binding(thread, binding, app_id="tashuo")
+
+
+def _derive_current_thread_visual_target_binding(
+    thread: dict[str, Any],
+    binding: dict[str, Any],
+    *,
+    app_id: str,
+) -> dict[str, Any] | None:
     observation = thread.get("observation")
-    if not isinstance(observation, dict) or observation.get("app_id") != "tashuo":
+    if not isinstance(observation, dict) or observation.get("app_id") != app_id:
+        return None
+    if app_id not in {"tashuo", "tinder", "bumble"}:
         return None
     hints = observation.get("match_identity_hints")
     if not isinstance(hints, dict):
@@ -1737,34 +1768,73 @@ def _derive_tashuo_current_thread_target_binding(
     )
     observation_id = _stripped_or_none(observation.get("observation_id"))
     screenshot_path = _thread_screenshot_path(thread, observation)
-    if not (visible_name and fingerprint and latest_inbound_fingerprint and observation_id and screenshot_path):
+    if app_id == "tashuo" and not visible_name:
+        return None
+    if not (fingerprint and latest_inbound_fingerprint and observation_id and screenshot_path):
         return None
     if not screenshot_path.exists():
         return None
-    try:
-        from dating_boost.apps.tashuo.native import (
-            TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION,
-            _tashuo_visual_anchor_hash_for_path,
-        )
-    except Exception:
+    config = _current_thread_visual_anchor_config_for_app(app_id)
+    if not isinstance(config, dict):
         return None
-    anchor_region = dict(TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION)
-    anchor = _tashuo_visual_anchor_hash_for_path(screenshot_path, region=anchor_region)
+    anchor_region = dict(config["visual_anchor_region"])
+    hash_for_path = config["hash_for_path"]
+    anchor = hash_for_path(screenshot_path, region=anchor_region)
     visual_anchor_hash = _stripped_or_none(anchor.get("visual_anchor_hash")) if isinstance(anchor, dict) else None
     if not visual_anchor_hash:
         return None
-    return {
+    result: dict[str, Any] = {
         "binding_type": "current_thread_visual_identity",
-        "visible_name": visible_name,
         "conversation_fingerprint": fingerprint,
         "thread_evidence": {
             "observation_id": observation_id,
-            "screen_state": "tashuo_conversation",
+            "screen_state": config["screen_state"],
             "latest_inbound_fingerprint": latest_inbound_fingerprint,
             "visual_anchor_hash": visual_anchor_hash,
             "visual_anchor_region": anchor_region,
         },
     }
+    if visible_name:
+        result["visible_name"] = visible_name
+    return result
+
+
+def _thread_observation_app_id(thread: dict[str, Any] | None) -> str | None:
+    observation = thread.get("observation") if isinstance(thread, dict) else None
+    if not isinstance(observation, dict):
+        return None
+    app_id = _stripped_or_none(observation.get("app_id"))
+    return app_id if app_id in {"tashuo", "tinder", "bumble"} else None
+
+
+def _current_thread_visual_anchor_config_for_app(app_id: str) -> dict[str, Any] | None:
+    if app_id == "tashuo":
+        try:
+            from dating_boost.apps.tashuo.native import (
+                TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION,
+                _tashuo_visual_anchor_hash_for_path,
+            )
+        except Exception:
+            return None
+        return {
+            "screen_state": "tashuo_conversation",
+            "visual_anchor_region": TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION,
+            "hash_for_path": _tashuo_visual_anchor_hash_for_path,
+        }
+    if app_id in {"tinder", "bumble"}:
+        try:
+            from dating_boost.apps.native_gui_session import (
+                IPHONE_CURRENT_THREAD_VISUAL_ANCHOR_REGION,
+                _iphone_visual_anchor_hash_for_path,
+            )
+        except Exception:
+            return None
+        return {
+            "screen_state": f"{app_id}_conversation",
+            "visual_anchor_region": IPHONE_CURRENT_THREAD_VISUAL_ANCHOR_REGION,
+            "hash_for_path": _iphone_visual_anchor_hash_for_path,
+        }
+    return None
 
 
 def _thread_screenshot_path(thread: dict[str, Any], observation: dict[str, Any]) -> Path | None:

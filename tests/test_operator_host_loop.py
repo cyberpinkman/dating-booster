@@ -21,7 +21,11 @@ from dating_boost.host_loop import (
     _validate_managed_sequence_visual_confirmation,
 )
 from dating_boost.perception.observations import AppObservation
-from tests.test_gui_harness import _tashuo_mac_ios_app_conversation_with_messages_png
+from tests.test_gui_harness import (
+    _bumble_conversation_png,
+    _tashuo_mac_ios_app_conversation_with_messages_png,
+    _tinder_conversation_send_button_png,
+)
 
 
 FIXTURE_DIR = Path("tests/fixtures/host_loop/tinder")
@@ -417,6 +421,49 @@ class OperatorHostLoopTests(unittest.TestCase):
         self.assertEqual(binding["thread_evidence"]["latest_inbound_fingerprint"], "sha256:latest")
         self.assertTrue(binding["thread_evidence"]["visual_anchor_hash"])
 
+    def test_iphone_mirroring_target_binding_derives_current_thread_visual_identity_from_thread_screenshot(self):
+        fixtures = (
+            ("tinder", _tinder_conversation_send_button_png(), "tinder_conversation"),
+            ("bumble", _bumble_conversation_png(outgoing_bubble=False), "bumble_conversation"),
+        )
+        for app_id, screenshot_bytes, screen_state in fixtures:
+            with self.subTest(app_id=app_id), tempfile.TemporaryDirectory() as temp_dir:
+                screenshot_path = Path(temp_dir) / f"{app_id}_thread.png"
+                screenshot_path.write_bytes(screenshot_bytes)
+
+                binding = _target_binding_for_work_item(
+                    {"match_id": f"match_{app_id}", "candidate_key": f"{app_id}_thread"},
+                    {
+                        "schema_version": 1,
+                        "message_list_snapshot": {"entries": []},
+                        "thread_observations": [
+                            {
+                                "candidate_key": f"{app_id}_thread",
+                                "screenshot_ref": str(screenshot_path),
+                                "assessment": {
+                                    "latest_inbound_fingerprint": f"sha256:{app_id}:latest",
+                                },
+                                "observation": {
+                                    "observation_id": f"obs_{app_id}",
+                                    "app_id": app_id,
+                                    "match_identity_hints": {
+                                        "conversation_fingerprint": f"{app_id}:thread:fingerprint",
+                                    },
+                                },
+                            }
+                        ],
+                    },
+                )
+
+                self.assertEqual(binding["binding_type"], "current_thread_visual_identity")
+                self.assertNotIn("visible_name", binding)
+                self.assertEqual(binding["conversation_fingerprint"], f"{app_id}:thread:fingerprint")
+                self.assertEqual(binding["required_visible_text"], [])
+                self.assertEqual(binding["thread_evidence"]["observation_id"], f"obs_{app_id}")
+                self.assertEqual(binding["thread_evidence"]["screen_state"], screen_state)
+                self.assertEqual(binding["thread_evidence"]["latest_inbound_fingerprint"], f"sha256:{app_id}:latest")
+                self.assertTrue(binding["thread_evidence"]["visual_anchor_hash"])
+
     def test_fixture_host_loop_stage_mode_stages_message_without_recording_send_result(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
@@ -575,6 +622,125 @@ class OperatorHostLoopTests(unittest.TestCase):
         self.assertIn("screenshot_ref", recorded_result)
         self.assertFalse(recorded_result["evidence"]["sent"])
         self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+
+    def test_iphone_dating_stage_mode_runs_harness_stage_draft_without_runtime_override(self):
+        for app_id, auth_id, match_id, candidate_key in (
+            ("tinder", "auth_tinder_stage", "match_tinder", "tinder_ada"),
+            ("bumble", "auth_bumble_stage", "match_bumble", "bumble_ada"),
+        ):
+            with self.subTest(app_id=app_id), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                data_dir = root / "data"
+                work_dir = root / "work"
+                auth_path = root / f"{app_id}_auth.json"
+                payload_text = "今晚聊得挺舒服的。"
+                payload_hash = hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
+                self._write_json(auth_path, {
+                    "schema_version": 1,
+                    "authorization_id": auth_id,
+                    "scope": "send_chat_messages",
+                    "app_id": app_id,
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "allowed_actions": ["send_message"],
+                    "autonomous_send": True,
+                    "requires_post_action_verification": True,
+                    "revoked_at": None,
+                })
+                supervisor = HostLoopSupervisor(
+                    argparse.Namespace(
+                        data_dir=data_dir,
+                        authorization=auth_path,
+                        goal=None,
+                        availability=None,
+                        app_id=app_id,
+                        send_mode="stage",
+                        managed_gui_send=False,
+                        harness_runtime=None,
+                        work_dir=work_dir,
+                        max_steps=1,
+                        once=True,
+                        json=True,
+                        fixture_host=None,
+                        wait_timeout=None,
+                        poll_interval=1.0,
+                        adapter_package=None,
+                        skill_package=None,
+                        initial_surface="message-list",
+                        management_mode="conservative",
+                        max_threads_per_cycle=1,
+                        max_pages_per_cycle=None,
+                        cycle_send_limit=1,
+                    )
+                )
+                work_dir.mkdir(parents=True, exist_ok=True)
+                work_item = _wechat_managed_work_item(payload_text, payload_hash)
+                work_item.update({
+                    "work_item_id": f"work_{app_id}_stage",
+                    "action_request_id": f"act_{app_id}_stage",
+                    "match_id": match_id,
+                    "candidate_key": candidate_key,
+                    "autonomous_audit_binding": _audit_binding(
+                        authorization_id=auth_id,
+                        target_match_id=match_id,
+                        payload_hash=payload_hash,
+                    ),
+                    "target_binding": _iphone_current_thread_target_binding(app_id, match_id, candidate_key),
+                })
+                recorded_result: dict[str, object] = {}
+                stage_commands: list[tuple[str, ...]] = []
+
+                def fake_run_cli_json(*args: str, allow_error: bool = False, **kwargs: object) -> dict[str, object]:
+                    if args[:3] == ("harness", app_id, "stage-draft"):
+                        stage_commands.append(args)
+                        self.assertNotIn("--runtime", args)
+                        text_path = Path(args[args.index("--text-file") + 1])
+                        self.assertEqual(text_path.read_text(encoding="utf-8"), payload_text)
+                        self.assertIn("--data-dir", args)
+                        return {
+                            "schema_version": 1,
+                            "status": "ok",
+                            "action": "stage_draft",
+                            "app_id": app_id,
+                            "harness_backend": "iphone_mirroring_macos",
+                            "stage_attempt_status": "completed",
+                            "staged_text_verified": True,
+                            "staged_text_verification": {
+                                "status": "ok",
+                                "expected_payload_hash": payload_hash,
+                                "expected_character_count": len(payload_text),
+                                "screen_exact_text_ocr_verified": True,
+                                "exact_text_ocr_verified": True,
+                                "screen": {
+                                    "path": str(work_dir / "harness" / f"iphone_mirroring.{app_id}.after_stage_message.png"),
+                                    "state": f"{app_id}_conversation",
+                                    "status": "ok",
+                                },
+                            },
+                        }
+                    if args[:2] == ("operator", "record-stage-result"):
+                        result_path = Path(args[args.index("--input") + 1])
+                        recorded_result.update(json.loads(result_path.read_text(encoding="utf-8")))
+                        return {
+                            "schema_version": 1,
+                            "status": "ok",
+                            "event_id": f"stage_result_{app_id}",
+                            "action_request_id": recorded_result["action_request_id"],
+                            "result_status": recorded_result["result_status"],
+                            "path": "audit/stage_results.jsonl",
+                        }
+                    raise AssertionError(args)
+
+                with patch.object(supervisor, "_run_cli_json", fake_run_cli_json):
+                    result = supervisor._handle_send_message(work_item)
+
+                self.assertEqual(result["status"], "staged_waiting_user_confirmation")
+                self.assertEqual(len(stage_commands), 1)
+                self.assertEqual(recorded_result["result_status"], "succeeded")
+                self.assertEqual(recorded_result["stage_attempt_status"], "completed")
+                self.assertEqual(recorded_result["staged_text_verification"]["status"], "ok")
+                self.assertIn("iphone_mirroring_macos stage-draft", recorded_result["evidence"]["verification"])
+                self.assertFalse(recorded_result["evidence"]["sent"])
+                self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
 
     def test_host_loop_preflight_blocks_selected_runtime_scope_mismatch_before_cli_calls(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1829,7 +1995,11 @@ class OperatorHostLoopTests(unittest.TestCase):
                 target_match_id="match_tinder",
                 payload_hash=payload_hash,
             )
-            work_item["target_binding"] = {"required_visible_text": ["Ada"], "target_match_id": "match_tinder"}
+            work_item["target_binding"] = _iphone_current_thread_target_binding(
+                "tinder",
+                "match_tinder",
+                "tinder_ada",
+            )
             recorded_result: dict[str, object] = {}
 
             def fake_run_cli_json(*args: str, allow_error: bool = False, **kwargs: object) -> dict[str, object]:
@@ -1837,7 +2007,8 @@ class OperatorHostLoopTests(unittest.TestCase):
                     self.assertIn("--action-request", args)
                     action_path = Path(args[args.index("--action-request") + 1])
                     action_request = json.loads(action_path.read_text(encoding="utf-8"))
-                    self.assertEqual(action_request["target_binding"]["required_visible_text"], ["Ada"])
+                    self.assertEqual(action_request["target_binding"]["binding_type"], "current_thread_visual_identity")
+                    self.assertEqual(action_request["target_binding"]["thread_evidence"]["screen_state"], "tinder_conversation")
                     return {
                         "schema_version": 1,
                         "status": "ok",
@@ -1925,7 +2096,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                     target_match_id=match_id,
                     payload_hash=payload_hash,
                 )
-                work_item["target_binding"] = {"required_visible_text": ["Ada"], "target_match_id": match_id}
+                work_item["target_binding"] = _iphone_current_thread_target_binding(app_id, match_id, candidate_key)
 
                 def fake_run_cli_json(*args: str, allow_error: bool = False, **kwargs: object) -> dict[str, object]:
                     if args[:3] == ("harness", app_id, "send-message"):
@@ -2011,7 +2182,11 @@ class OperatorHostLoopTests(unittest.TestCase):
                 target_match_id="match_bumble",
                 payload_hash=payload_hash,
             )
-            work_item["target_binding"] = {"required_visible_text": ["Ada"], "target_match_id": "match_bumble"}
+            work_item["target_binding"] = _iphone_current_thread_target_binding(
+                "bumble",
+                "match_bumble",
+                "bumble_ada",
+            )
             recorded_result: dict[str, object] = {}
 
             def fake_run_cli_json(*args: str, allow_error: bool = False, **kwargs: object) -> dict[str, object]:
@@ -2020,7 +2195,8 @@ class OperatorHostLoopTests(unittest.TestCase):
                     action_path = Path(args[args.index("--action-request") + 1])
                     action_request = json.loads(action_path.read_text(encoding="utf-8"))
                     self.assertEqual(action_request["app_id"], "bumble")
-                    self.assertEqual(action_request["target_binding"]["required_visible_text"], ["Ada"])
+                    self.assertEqual(action_request["target_binding"]["binding_type"], "current_thread_visual_identity")
+                    self.assertEqual(action_request["target_binding"]["thread_evidence"]["screen_state"], "bumble_conversation")
                     return {
                         "schema_version": 1,
                         "status": "ok",
@@ -2051,6 +2227,295 @@ class OperatorHostLoopTests(unittest.TestCase):
         self.assertEqual(recorded_result["post_action_observation_id"], "gui_post_send_bumble_1234")
         self.assertTrue(recorded_result["evidence"]["managed_gui_send"])
         self.assertTrue(recorded_result["evidence"]["outbound_message_verified"])
+
+    def test_managed_iphone_mirroring_sequence_refreshes_target_binding_visual_anchor(self):
+        for app_id, auth_id, match_id, candidate_key in (
+            ("tinder", "auth_tinder_live", "match_tinder", "tinder_ada"),
+            ("bumble", "auth_bumble_live", "match_bumble", "bumble_ada"),
+        ):
+            with self.subTest(app_id=app_id), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                data_dir = root / "data"
+                work_dir = root / "work"
+                auth_path = root / f"{app_id}_auth.json"
+                messages = ["第一句", "第二句"]
+                payload_text = "\n".join(messages)
+                payload_hash = hashlib.sha256(
+                    json.dumps(
+                        {"payload_format": "message_sequence", "messages": messages},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                self._write_json(auth_path, {
+                    "schema_version": 1,
+                    "authorization_id": auth_id,
+                    "scope": "send_chat_messages",
+                    "app_id": app_id,
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "allowed_actions": ["send_message"],
+                    "autonomous_send": True,
+                    "live_send": True,
+                    "requires_post_action_verification": True,
+                    "revoked_at": None,
+                })
+                supervisor = HostLoopSupervisor(
+                    argparse.Namespace(
+                        data_dir=data_dir,
+                        authorization=auth_path,
+                        goal=None,
+                        availability=None,
+                        app_id=app_id,
+                        send_mode="live",
+                        managed_gui_send=True,
+                        work_dir=work_dir,
+                        max_steps=1,
+                        once=False,
+                        json=True,
+                        fixture_host=None,
+                        wait_timeout=None,
+                        poll_interval=1.0,
+                        adapter_package=None,
+                        skill_package=None,
+                    )
+                )
+                work_dir.mkdir(parents=True, exist_ok=True)
+                work_item = _wechat_managed_work_item(payload_text, payload_hash)
+                work_item.update({
+                    "work_item_id": f"work_{app_id}_send_sequence",
+                    "action_request_id": f"act_{app_id}_send_sequence",
+                    "match_id": match_id,
+                    "candidate_key": candidate_key,
+                    "payload_format": "message_sequence",
+                    "payload_messages": [
+                        {
+                            "index": index,
+                            "text": text,
+                            "message_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                            "character_count": len(text),
+                        }
+                        for index, text in enumerate(messages, start=1)
+                    ],
+                    "autonomous_audit_binding": _audit_binding(
+                        authorization_id=auth_id,
+                        target_match_id=match_id,
+                        payload_hash=payload_hash,
+                    ),
+                    "target_binding": _iphone_current_thread_target_binding(app_id, match_id, candidate_key),
+                })
+                calls: list[str] = []
+                second_action_request: dict[str, object] = {}
+                recorded_result: dict[str, object] = {}
+
+                def fake_run_cli_json(*args: str, allow_error: bool = False, **kwargs: object) -> dict[str, object]:
+                    if len(args) >= 3 and args[0] == "harness" and args[1] == app_id and "send-message" in args:
+                        text_path = Path(args[args.index("--text-file") + 1])
+                        action_path = Path(args[args.index("--action-request") + 1])
+                        calls.append(text_path.read_text(encoding="utf-8"))
+                        action_request = json.loads(action_path.read_text(encoding="utf-8"))
+                        if len(calls) == 2:
+                            second_action_request.update(action_request)
+                        return {
+                            "schema_version": 2,
+                            "status": "ok",
+                            "app_id": app_id,
+                            "action": "send_message",
+                            "post_action_observation_id": f"gui_post_send_{app_id}_{len(calls)}",
+                            "current_thread_visual_anchor": {
+                                "status": "ok",
+                                "screen_state": f"{app_id}_conversation",
+                                "visual_anchor_hash": f"fresh-{app_id}-{len(calls)}",
+                                "visual_anchor_region": {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65},
+                            },
+                            "evidence": {
+                                "staged_text_verified": True,
+                                "staged_exact_text_verified": True,
+                                "staged_exact_text_ocr_verified": True,
+                                "input_cleared_after_send": True,
+                                "post_action_screen_captured": True,
+                                "outbound_message_verified": True,
+                                "outbound_exact_text_verified": True,
+                                "outbound_exact_text_ocr_verified": True,
+                            },
+                        }
+                    if args[:2] == ("operator", "record-action-result"):
+                        result_path = Path(args[args.index("--input") + 1])
+                        recorded_result.update(json.loads(result_path.read_text(encoding="utf-8")))
+                        return {"schema_version": 1, "status": "ok", "recorded": True}
+                    raise AssertionError(args)
+
+                with patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-06-12T00:00:00Z"}), patch.object(
+                    supervisor,
+                    "_run_cli_json",
+                    fake_run_cli_json,
+                ):
+                    _write_draft_review_audit(data_dir, work_item)
+                    result = supervisor._handle_managed_gui_send(work_item)
+
+                self.assertIsNone(result)
+                self.assertEqual(calls, messages)
+                self.assertEqual(
+                    second_action_request["target_binding"]["thread_evidence"]["visual_anchor_hash"],
+                    f"fresh-{app_id}-1",
+                )
+                self.assertEqual(
+                    second_action_request["target_binding"]["thread_evidence"]["observation_id"],
+                    f"gui_post_send_{app_id}_1",
+                )
+                self.assertEqual(recorded_result["post_action_observation_id"], f"gui_post_send_{app_id}_2")
+
+    def test_managed_iphone_mirroring_sequence_accepts_already_sent_prefix(self):
+        for app_id, auth_id, match_id, candidate_key in (
+            ("tinder", "auth_tinder_live", "match_tinder", "tinder_ada"),
+            ("bumble", "auth_bumble_live", "match_bumble", "bumble_ada"),
+        ):
+            with self.subTest(app_id=app_id), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                data_dir = root / "data"
+                work_dir = root / "work"
+                auth_path = root / f"{app_id}_auth.json"
+                messages = ["第一句", "第二句"]
+                payload_text = "\n".join(messages)
+                payload_hash = hashlib.sha256(
+                    json.dumps(
+                        {"payload_format": "message_sequence", "messages": messages},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                self._write_json(auth_path, {
+                    "schema_version": 1,
+                    "authorization_id": auth_id,
+                    "scope": "send_chat_messages",
+                    "app_id": app_id,
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "allowed_actions": ["send_message"],
+                    "autonomous_send": True,
+                    "live_send": True,
+                    "requires_post_action_verification": True,
+                    "revoked_at": None,
+                })
+                supervisor = HostLoopSupervisor(
+                    argparse.Namespace(
+                        data_dir=data_dir,
+                        authorization=auth_path,
+                        goal=None,
+                        availability=None,
+                        app_id=app_id,
+                        send_mode="live",
+                        managed_gui_send=True,
+                        work_dir=work_dir,
+                        max_steps=1,
+                        once=False,
+                        json=True,
+                        fixture_host=None,
+                        wait_timeout=None,
+                        poll_interval=1.0,
+                        adapter_package=None,
+                        skill_package=None,
+                    )
+                )
+                work_dir.mkdir(parents=True, exist_ok=True)
+                work_item = _wechat_managed_work_item(payload_text, payload_hash)
+                work_item.update({
+                    "work_item_id": f"work_{app_id}_already_sent_sequence",
+                    "action_request_id": f"act_{app_id}_already_sent_sequence",
+                    "match_id": match_id,
+                    "candidate_key": candidate_key,
+                    "payload_format": "message_sequence",
+                    "payload_messages": [
+                        {
+                            "index": index,
+                            "text": text,
+                            "message_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                            "character_count": len(text),
+                        }
+                        for index, text in enumerate(messages, start=1)
+                    ],
+                    "autonomous_audit_binding": _audit_binding(
+                        authorization_id=auth_id,
+                        target_match_id=match_id,
+                        payload_hash=payload_hash,
+                    ),
+                    "target_binding": _iphone_current_thread_target_binding(app_id, match_id, candidate_key),
+                })
+                calls: list[str] = []
+                second_action_request: dict[str, object] = {}
+                recorded_result: dict[str, object] = {}
+
+                def fake_run_cli_json(*args: str, allow_error: bool = False, **kwargs: object) -> dict[str, object]:
+                    if len(args) >= 3 and args[0] == "harness" and args[1] == app_id and "send-message" in args:
+                        text_path = Path(args[args.index("--text-file") + 1])
+                        action_path = Path(args[args.index("--action-request") + 1])
+                        calls.append(text_path.read_text(encoding="utf-8"))
+                        if len(calls) == 1:
+                            return {
+                                "schema_version": 2,
+                                "status": "ok",
+                                "already_sent": True,
+                                "post_action_observation_id": f"gui_post_send_{app_id}_existing_1",
+                                "current_thread_visual_anchor": {
+                                    "status": "ok",
+                                    "screen_state": f"{app_id}_conversation",
+                                    "visual_anchor_hash": f"fresh-{app_id}-existing",
+                                    "visual_anchor_region": {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65},
+                                },
+                                "evidence": {
+                                    "staged_text_verified": False,
+                                    "staged_exact_text_verified": False,
+                                    "staged_exact_text_ocr_verified": False,
+                                    "input_cleared_after_send": True,
+                                    "post_action_screen_captured": True,
+                                    "outbound_message_verified": True,
+                                    "outbound_exact_text_verified": True,
+                                    "outbound_exact_text_ocr_verified": True,
+                                },
+                            }
+                        second_action_request.update(json.loads(action_path.read_text(encoding="utf-8")))
+                        return {
+                            "schema_version": 2,
+                            "status": "ok",
+                            "post_action_observation_id": f"gui_post_send_{app_id}_2",
+                            "evidence": {
+                                "staged_text_verified": True,
+                                "staged_exact_text_verified": True,
+                                "staged_exact_text_ocr_verified": True,
+                                "input_cleared_after_send": True,
+                                "post_action_screen_captured": True,
+                                "outbound_message_verified": True,
+                                "outbound_exact_text_verified": True,
+                                "outbound_exact_text_ocr_verified": True,
+                            },
+                        }
+                    if args[:2] == ("operator", "record-action-result"):
+                        result_path = Path(args[args.index("--input") + 1])
+                        recorded_result.update(json.loads(result_path.read_text(encoding="utf-8")))
+                        return {"schema_version": 1, "status": "ok", "recorded": True}
+                    raise AssertionError(args)
+
+                with patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-06-12T00:00:00Z"}), patch.object(
+                    supervisor,
+                    "_run_cli_json",
+                    fake_run_cli_json,
+                ):
+                    _write_draft_review_audit(data_dir, work_item)
+                    result = supervisor._handle_managed_gui_send(work_item)
+
+                self.assertIsNone(result)
+                self.assertEqual(calls, messages)
+                self.assertTrue(recorded_result["message_results"][0]["already_sent"])
+                self.assertFalse(recorded_result["message_results"][0]["evidence"]["staged_text_verified"])
+                self.assertEqual(
+                    second_action_request["target_binding"]["thread_evidence"]["visual_anchor_hash"],
+                    f"fresh-{app_id}-existing",
+                )
+                self.assertEqual(
+                    second_action_request["target_binding"]["thread_evidence"]["observation_id"],
+                    f"gui_post_send_{app_id}_existing_1",
+                )
+                self.assertEqual(recorded_result["post_action_observation_id"], f"gui_post_send_{app_id}_2")
 
     def test_managed_tashuo_live_send_uses_mac_ios_runtime_when_structural_binding_and_evidence_pass(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3643,6 +4108,7 @@ class OperatorHostLoopTests(unittest.TestCase):
                 payload_hash=payload_hash,
             )
             work_item["target_binding"] = {"required_visible_text": ["Ada"], "target_match_id": "match_tashuo"}
+            _write_draft_review_audit(data_dir, work_item)
 
             result = supervisor._live_send_contract_block_reason(
                 work_item,
@@ -3650,6 +4116,69 @@ class OperatorHostLoopTests(unittest.TestCase):
             )
 
         self.assertEqual(result, "target_binding_structural_evidence_required")
+
+    def test_iphone_mirroring_live_send_work_item_without_structural_binding_blocks(self):
+        for app_id, auth_id, match_id, candidate_key in (
+            ("tinder", "auth_tinder_live", "match_tinder", "tinder_ada"),
+            ("bumble", "auth_bumble_live", "match_bumble", "bumble_ada"),
+        ):
+            with self.subTest(app_id=app_id), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                data_dir = root / "data"
+                work_dir = root / "work"
+                auth_path = root / f"{app_id}_auth.json"
+                payload_text = "hello"
+                payload_hash = hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
+                self._write_json(auth_path, {
+                    "schema_version": 1,
+                    "authorization_id": auth_id,
+                    "scope": "send_chat_messages",
+                    "app_id": app_id,
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "allowed_actions": ["send_message"],
+                    "autonomous_send": True,
+                    "live_send": True,
+                    "requires_post_action_verification": True,
+                    "revoked_at": None,
+                })
+                supervisor = HostLoopSupervisor(
+                    argparse.Namespace(
+                        data_dir=data_dir,
+                        authorization=auth_path,
+                        goal=None,
+                        availability=None,
+                        app_id=app_id,
+                        send_mode="live",
+                        managed_gui_send=True,
+                        work_dir=work_dir,
+                        max_steps=1,
+                        once=False,
+                        json=True,
+                        fixture_host=None,
+                        wait_timeout=None,
+                        poll_interval=1.0,
+                        adapter_package=None,
+                        skill_package=None,
+                    )
+                )
+                work_dir.mkdir(parents=True, exist_ok=True)
+                work_item = _wechat_managed_work_item(payload_text, payload_hash)
+                work_item["match_id"] = match_id
+                work_item["candidate_key"] = candidate_key
+                work_item["autonomous_audit_binding"] = _audit_binding(
+                    authorization_id=auth_id,
+                    target_match_id=match_id,
+                    payload_hash=payload_hash,
+                )
+                work_item["target_binding"] = {"required_visible_text": ["Ada"], "target_match_id": match_id}
+                _write_draft_review_audit(data_dir, work_item)
+
+                result = supervisor._live_send_contract_block_reason(
+                    work_item,
+                    json.loads(auth_path.read_text(encoding="utf-8")),
+                )
+
+                self.assertEqual(result, "target_binding_structural_evidence_required")
 
     def test_tashuo_mac_ios_unmanaged_live_send_waits_for_action_result_after_verified_stage(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4115,6 +4644,21 @@ def _wechat_managed_work_item(payload_text: str, payload_hash: str) -> dict:
         "conversation_stage": "rapport_building",
         "conversation_move": "warm_reciprocal_question",
         "target_binding": {"required_visible_text": ["Ada"], "target_match_id": "match_wechat"},
+    }
+
+
+def _iphone_current_thread_target_binding(app_id: str, target_match_id: str, candidate_key: str) -> dict:
+    return {
+        "binding_type": "current_thread_visual_identity",
+        "target_match_id": target_match_id,
+        "candidate_key": candidate_key,
+        "conversation_fingerprint": f"{candidate_key}:thread",
+        "thread_evidence": {
+            "observation_id": f"obs_{candidate_key}",
+            "screen_state": f"{app_id}_conversation",
+            "latest_inbound_fingerprint": f"{candidate_key}:latest-inbound",
+            "visual_anchor_hash": "0123456789abcdef",
+        },
     }
 
 

@@ -60,6 +60,7 @@
   "stage_send_verification": [
     "Managed Bumble draft staging is supported only inside harness bumble send-message.",
     "Paste the draft into a verified Bumble conversation input first; direct typing is only a printable-ASCII fallback when paste does not stage.",
+    "Before paste, block if the baseline Bumble composer already shows an active Send button; never append a new draft onto existing input.",
     "After paste, direct typing, or IME space commit, OCR must verify staged text exactly equals payload_text before clicking Send.",
     "Visual send-button or yellow-bubble evidence alone is not exact-text verification.",
     "Opening Move replies still require user confirmation; autonomous Opening Move sending is not supported."
@@ -71,6 +72,8 @@
       "screenshot",
       "launch_app",
       "observe_screen",
+      "prepare_message_page",
+      "stage_draft",
       "open_profile_tab",
       "open_discover",
       "open_browse",
@@ -229,6 +232,10 @@
     "macOS pbcopy alone may not update iPhone Universal Clipboard; do not treat clipboard state as Bumble staging evidence.",
     "Bumble live send requires either a target-specific text marker such as the visible match name or allowed structural row-to-thread evidence; generic UI text like Opening Move, Aa, GIF, or Send is not enough.",
     "Emoji or otherwise non-OCR nicknames are valid targets in any message-list row; bind the intended row with chat_list_row_to_thread evidence instead of switching to an OCR-friendly conversation.",
+    "When a visible Bumble chat row has visual evidence, include message_list_evidence.visual_anchor_hash and visual_anchor_region so iPhone Mirroring can relocate the row before opening; fixed row_index is only a compatibility fallback.",
+    "For an already-open Bumble thread, current_thread_visual_identity can verify thread_evidence.visual_anchor_hash before staging; it does not replace exact staged-text OCR or outbound verification.",
+    "If current_thread_visual_identity mismatches and same-target message_list_evidence contains a visual anchor, iPhone Mirroring returns to chats, relocates the row by visual anchor, reopens it, and retries target verification before staging.",
+    "If the pre-stage Bumble composer shows an active Send button, iPhone Mirroring blocks before reading the clipboard or pasting.",
     "Visual send-button or yellow-bubble evidence can support diagnosis but cannot replace exact OCR verification of the payload text.",
     "Non-ABC input sources can leave app names in the iOS Spotlight candidate bar; verify the app result after typing before tapping.",
     "Premium gates such as liked-you reveal and plan selection are not agent actions."
@@ -266,6 +273,8 @@
       "screenshot",
       "launch_app",
       "observe_screen",
+      "prepare_message_page",
+      "stage_draft",
       "open_profile_tab",
       "open_discover",
       "open_browse",
@@ -290,6 +299,8 @@
       "screenshot",
       "launch_app",
       "observe_screen",
+      "prepare_message_page",
+      "stage_draft",
       "open_profile_tab",
       "open_discover",
       "open_browse",
@@ -421,8 +432,16 @@
     "requires_target_binding": true,
     "requires_target_specific_marker": true,
     "allowed_structural_binding_types": [
-      "chat_list_row_to_thread"
+      "chat_list_row_to_thread",
+      "current_thread_visual_identity"
     ],
+    "current_thread_mismatch_recovery": {
+      "supported": true,
+      "method": "message_list_visual_anchor_relocation",
+      "requires_message_list_evidence": true,
+      "max_attempts": 3,
+      "uses_fixed_row_index": false
+    },
     "generic_marker_blacklist": [
       "aa",
       "gif",

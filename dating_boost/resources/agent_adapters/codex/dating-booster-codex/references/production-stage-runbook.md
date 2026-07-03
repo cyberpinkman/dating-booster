@@ -35,7 +35,7 @@ agent and uses iPhone Mirroring only for observe, paste, and verify.
 10. Stop and report dirty source state when the local checkout has uncommitted
    source changes during a claimed production smoke.
 
-## Tinder Stage Smoke
+## Tinder/Bumble Stage Smoke
 
 Tinder, WeChat, Bumble, and TaShuo have host-loop GUI smoke coverage for their
 supported send surfaces. Bumble supports managed ordinary chat send, but
@@ -55,7 +55,8 @@ staging, but no WeChat-specific profile navigation chain.
 4. Codex must run `dating-boost harness tinder observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json`
    before selecting a bounded navigation chain and again after each chain when
    collecting smoke artifacts.
-5. Codex may use `dating-boost harness tinder action open-chats --data-dir .local/dating-boost --json`,
+5. Codex should use `dating-boost harness tinder action prepare-message-page --data-dir .local/dating-boost --output-dir .local/dating-boost-harness --json`
+   before visual message-list planning. It may then use
    `dating-boost harness tinder action open-conversation --options-json tinder-open-row-options.json --data-dir .local/dating-boost --json`,
    and `dating-boost harness tinder action open-thread-profile --data-dir .local/dating-boost --json` for
    bounded navigation after each screen is freshly observed. For match profile
@@ -66,12 +67,61 @@ staging, but no WeChat-specific profile navigation chain.
    Process one unopened match at a time; after a managed opener send, return
    with `dating-boost harness tinder action return-to-chats --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json`
    before selecting the next visible unopened match.
-6. Codex may observe the message list, open the requested thread, paste the
-   staged text into the input box, and verify the staged text.
+6. Codex may observe the message list and open the requested thread. Stage mode
+   should then use `dating-boost-host-loop` auto staging or
+   `dating-boost harness tinder stage-draft --text-file tinder-draft.txt --data-dir .local/dating-boost --json`
+   to paste and verify the staged text without clicking Send.
+   If the thread was already open, use `current_thread_visual_identity`; when
+   that visual identity mismatches and same-target `message_list_evidence`
+   carries a row visual anchor, the harness may return to the message list,
+   relocate the row, reopen it, and retry target verification before staging.
 7. The run must stop at `staged_waiting_user_confirmation`.
 8. Do not tap Send in the stage smoke.
 9. Save replay, audit export, current work item, and staged verification
    artifact before reporting the smoke.
+
+For Bumble ordinary-chat stage smoke, use the same stage-mode host-loop shape
+with `--app-id bumble`. Use
+`dating-boost harness bumble action prepare-message-page --data-dir .local/dating-boost --output-dir .local/dating-boost-harness --json`
+before visual chat-list planning, then prefer
+`dating-boost harness bumble action open-conversation --options-json bumble-open-row-options.json --data-dir .local/dating-boost --json`
+where the options JSON carries `visible_name` or `target_binding` for OCR-readable
+rows. The harness locates the row with OCR TSV and verifies the opened ordinary
+conversation. For non-OCR rows, carry `chat_list_row_to_thread` structural
+binding plus `message_list_evidence.visual_anchor_hash` and
+`visual_anchor_region`; the harness scans the current chat list for that row
+anchor before opening. Use fixed `row_index` only as a fallback; Opening Move
+prompts are observation/review surfaces and are not eligible for autonomous send.
+If the intended thread is already open, use `current_thread_visual_identity`
+with `thread_evidence.visual_anchor_hash` as target verification evidence; it
+does not replace staged-text OCR or post-send outbound verification. If that
+visual identity mismatches and same-target `message_list_evidence` carries a row
+visual anchor, the harness may return to the chat list, relocate the row,
+reopen it, and retry target verification before staging.
+Bumble live send requires `chat_list_row_to_thread` or
+`current_thread_visual_identity` structural target binding; OCR-readable
+`visible_name` alone is navigation assistance, not live-send target proof.
+Bumble stage smoke should use the same host-loop auto staging or
+`dating-boost harness bumble stage-draft --text-file bumble-draft.txt --data-dir .local/dating-boost --json`
+after the target ordinary conversation is open. It must stop after staged-text
+verification and must not click Send.
+
+For a bounded preflight wrapper around the same Tinder/Bumble managed stage
+surface, run:
+
+```bash
+python3 scripts/iphone_mirroring_managed_smoke.py --app-id tinder --data-dir .local/dating-boost --work-dir .local/dating-boost-iphone-smoke --authorization auth.json --goal goal.json --availability availability.json --json
+python3 scripts/iphone_mirroring_managed_smoke.py --app-id bumble --data-dir .local/dating-boost --work-dir .local/dating-boost-iphone-smoke --authorization auth.json --goal goal.json --availability availability.json --json
+```
+
+The wrapper runs skill doctor, release doctor, data doctor/migrate, capabilities
+compatibility checks, and verifies direct harness scope is executor-internal
+only before starting real GUI work. It does not auto-confirm managed-session
+config. If it returns
+`managed_session_config_confirmation_required`, inspect `proposed_config` and
+rerun with `--accept-managed-session-config` only after explicit confirmation.
+If iPhone Mirroring is locked or unavailable, record that blocked reason and
+skip real-device smoke.
 
 ## macOS WeChat Stage Smoke
 
@@ -124,20 +174,23 @@ is not the default public workflow.
 2. Use an authorization JSON with `app_id: tinder`, `live_send: true`,
    `autonomous_send: true`, `allowed_actions: ["send_message"]`, unexpired
    timestamps, and `requires_post_action_verification: true`.
-3. Run `dating-boost-host-loop run --data-dir .local/dating-boost
+3. Ensure the operator work item carries `chat_list_row_to_thread` or
+   `current_thread_visual_identity` structural target binding. `visible_name`
+   or header OCR alone is insufficient for Tinder live send.
+4. Run `dating-boost-host-loop run --data-dir .local/dating-boost
    --authorization tinder-auth.json --goal goal.json --availability
    availability.json --app-id tinder --send-mode live --managed-gui-send
    --work-dir .local/dating-boost-host-loop --json`.
-4. Direct `harness tinder send-message --authorization --action-request` is
+5. Direct `harness tinder send-message --authorization --action-request` is
    executor-internal only. Use it only with a system-generated work item or
    confirmed confirmation-flow hashes; do not handcraft action requests.
-5. Record `succeeded` only when the action request is policy-checked and
+6. Record `succeeded` only when the action request is policy-checked and
    hash-bound to the draft, the target chat is verified, the harness returns
    staged-text OCR verification, the outbound bubble is verified, and a
    `post_action_observation_id` exists.
-6. Record `unknown`, not `succeeded`, if post-action evidence is missing,
+7. Record `unknown`, not `succeeded`, if post-action evidence is missing,
    stale, truncated, or mismatched.
-7. Save only redacted replay, export, diagnostic bundle, and smoke result.
+8. Save only redacted replay, export, diagnostic bundle, and smoke result.
 
 ## Artifacts
 

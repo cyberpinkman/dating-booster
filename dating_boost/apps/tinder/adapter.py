@@ -61,8 +61,22 @@ class TinderAdapter(LegacyHarnessAdapter):
             target_binding=target_binding,
         )
 
+    def stage_draft(self, draft_text: str, *, dry_run: bool = False, output_dir: Path | None = None) -> dict[str, Any]:
+        return self.session.stage_tinder_draft(
+            draft_text,
+            dry_run=dry_run,
+            output_dir=output_dir,
+        )
+
+    def target_binding_policy(self) -> dict[str, Any]:
+        return {
+            **super().target_binding_policy(),
+            "requires_target_specific_marker": True,
+        }
+
     launch_tinder = launch
     observe_tinder_screen = observe
     run_tinder_action = run_action
     run_tinder_workflow = run_workflow
+    stage_tinder_draft = stage_draft
     send_tinder_message = send_message

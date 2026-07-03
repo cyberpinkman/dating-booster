@@ -639,6 +639,7 @@ class GuiHarnessTests(unittest.TestCase):
                 "Ada\nHi!\n今晚可以聊十分钟吗？\n发送\n",
                 "Ada\nHi!\n今晚可以聊十分钟吗？\nAa\nGIF\n",
             ],
+            screenshot_bytes=_bumble_conversation_png(outgoing_bubble=False),
         )
         harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
 
@@ -656,9 +657,182 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["evidence"]["post_action_screen_captured"])
         self.assertTrue(payload["evidence"]["outbound_message_verified"])
         self.assertTrue(payload["post_action_observation_id"].startswith("gui_post_send_"))
+        self.assertEqual(payload["current_thread_visual_anchor"]["status"], "ok")
+        self.assertEqual(payload["current_thread_visual_anchor"]["screen_state"], "bumble_conversation")
+        self.assertIn("visual_anchor_hash", payload["current_thread_visual_anchor"])
         self.assertEqual(payload["target_binding_verification"]["status"], "ok")
         self.assertTrue(any(command[:2] == ["xcrun", "swift"] for command in runner.commands))
         self.assertFalse(any('keystroke "v"' in " ".join(command) for command in runner.commands))
+
+    def test_bumble_stage_draft_executes_without_send_and_records_stage_evidence(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Ada\nHi!\nAa\nGIF\n",
+                "Ada\nHi!\nAa\nGIF\n",
+                "Ada\nHi!\n今晚可以聊十分钟吗？\n发送\n",
+            ],
+            screenshot_bytes=[
+                _bumble_conversation_png(outgoing_bubble=False),
+                _bumble_conversation_png(outgoing_bubble=False),
+                _bumble_conversation_png(active_send_button=True, outgoing_bubble=False),
+            ],
+        )
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.stage_draft("今晚可以聊十分钟吗？", dry_run=False, output_dir=Path(tempfile.mkdtemp()))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "stage_draft")
+        self.assertEqual(payload["stage_attempt_status"], "completed")
+        self.assertTrue(payload["staged_text_verified"])
+        self.assertEqual(payload["staged_text_verification"]["status"], "ok")
+        self.assertEqual(payload["next_host_action"], "verify_staged_text_before_send")
+        self.assertFalse(payload["send_action_executed"])
+        self.assertTrue(payload["evidence"]["stage_mode"])
+        self.assertFalse(payload["evidence"]["live_send_executed"])
+        self.assertFalse(any(step["intent"] == "tap_bumble_send_button" for step in payload["executed_steps"]))
+
+    def test_bumble_stage_draft_blocks_when_input_is_already_occupied_before_clipboard_mutation(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Ada\nHi!\nAa\nGIF\n",
+                "Ada\nHi!\n未发送草稿\nAa\nGIF\n",
+            ],
+            screenshot_bytes=[
+                _bumble_conversation_png(outgoing_bubble=False),
+                _bumble_conversation_png(active_send_button=True, outgoing_bubble=False),
+            ],
+        )
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.stage_draft("今晚可以聊十分钟吗？", dry_run=False, output_dir=Path(tempfile.mkdtemp()))
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "message_input_not_empty_before_staging")
+        self.assertEqual(payload["next_host_action"], "clear_existing_message_input_before_stage")
+        self.assertEqual(payload["pre_stage_input_guard"]["status"], "blocked")
+        self.assertTrue(payload["pre_stage_input_guard"]["active_send_button_visual_visible"])
+        self.assertFalse(any(command and command[0] == "pbpaste" for command in runner.commands))
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+        self.assertFalse(any("dating_boost_core_graphics_command_v" in " ".join(command) for command in runner.commands))
+
+    def test_bumble_stage_draft_relocates_current_thread_visual_identity_mismatch_before_staging(self):
+        draft = "今晚可以聊十分钟吗？"
+        visual_region = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65}
+        target_conversation_png = _bumble_conversation_png(outgoing_bubble=False)
+        wrong_conversation_png = _bumble_conversation_png(outgoing_bubble=True)
+        old_list_png = _iphone_message_list_with_target_row_png(target_center_y=0.52)
+        current_list_png = _iphone_message_list_with_target_row_png(target_center_y=0.68)
+        row_region = {"x1": 0.05, "y1": 0.47, "x2": 0.95, "y2": 0.57}
+        row_visual_hash = _png_average_hash(old_list_png, region=row_region)
+        runner = FakeRunner(
+            ocr_text=[
+                "Ada\nHi!\nAa\nGIF\n",
+                "Ada\nHi!\nAa\nGIF\n",
+                "Ada\nHi!\nAa\nGIF\n",
+                "Bumble\n聊天\n配对列表\n聊天（最近）\n",
+                "Bumble\n聊天\n配对列表\n聊天（最近）\n",
+                "Ada\nHi!\nAa\nGIF\n",
+                "Ada\nHi!\nAa\nGIF\n",
+                f"Ada\nHi!\n{draft}\n发送\n",
+            ],
+            screenshot_bytes=[
+                wrong_conversation_png,
+                wrong_conversation_png,
+                wrong_conversation_png,
+                current_list_png,
+                current_list_png,
+                target_conversation_png,
+                target_conversation_png,
+                _bumble_conversation_png(active_send_button=True, outgoing_bubble=False),
+            ],
+        )
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.session.send_bumble_message(
+            draft,
+            dry_run=False,
+            output_dir=Path(tempfile.mkdtemp()),
+            stage_only=True,
+            target_binding={
+                "binding_type": "current_thread_visual_identity",
+                "target_match_id": "match_bumble_relocate",
+                "candidate_key": "bumble_relocate",
+                "conversation_fingerprint": "bumble-conversation-relocate",
+                "thread_evidence": {
+                    "observation_id": "obs_bumble_relocate",
+                    "screen_state": "bumble_conversation",
+                    "latest_inbound_fingerprint": "inbound-hi",
+                    "visual_anchor_hash": _png_average_hash(target_conversation_png, region=visual_region),
+                    "visual_anchor_region": visual_region,
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+                "message_list_evidence": {
+                    "selection_method": "message_list_visual_anchor_scan",
+                    "visual_anchor_hash": row_visual_hash,
+                    "visual_anchor_region": row_region,
+                    "tap_ratio": {"x": 0.43, "y": 0.52},
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "stage_draft")
+        self.assertEqual(payload["target_binding_relocation"]["status"], "ok")
+        self.assertEqual(payload["target_binding_relocation"]["attempt_count"], 1)
+        self.assertEqual(
+            payload["target_binding_verification"]["recovered_by"],
+            "message_list_visual_relocation",
+        )
+        location = payload["target_binding_relocation"]["attempts"][0]["message_list_location"]
+        self.assertEqual(location["location_method"], "message_list_visual_anchor_scan")
+        self.assertFalse(location["uses_fixed_row_index"])
+        self.assertEqual(payload["stage_attempt_status"], "completed")
+        self.assertFalse(payload["send_action_executed"])
+        self.assertFalse(any(step["intent"] == "tap_bumble_send_button" for step in payload["executed_steps"]))
+
+    def test_bumble_send_message_is_idempotent_when_text_already_sent(self):
+        draft = "今晚可以聊十分钟吗？"
+        conversation_png = _bumble_conversation_png(outgoing_bubble=True)
+        visual_region = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65}
+        runner = FakeRunner(
+            ocr_text=[
+                "Ada\nHi!\nAa\nGIF\n",
+                "Ada\nHi!\nAa\nGIF\n",
+                f"Ada\nHi!\n{draft}\nAa\nGIF\n",
+            ],
+            screenshot_bytes=conversation_png,
+        )
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.send_bumble_message(
+            draft,
+            dry_run=False,
+            target_binding={
+                "binding_type": "current_thread_visual_identity",
+                "target_match_id": "match_bumble",
+                "candidate_key": "bumble_current_ada",
+                "conversation_fingerprint": "bumble-conversation-ada",
+                "thread_evidence": {
+                    "observation_id": "obs_bumble_current_ada",
+                    "screen_state": "bumble_conversation",
+                    "latest_inbound_fingerprint": "inbound-hi",
+                    "visual_anchor_hash": _png_average_hash(conversation_png, region=visual_region),
+                    "visual_anchor_region": visual_region,
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["already_sent"])
+        self.assertFalse(payload["evidence"]["staged_text_verified"])
+        self.assertTrue(payload["evidence"]["outbound_exact_text_ocr_verified"])
+        self.assertTrue(payload["evidence"]["input_cleared_after_send"])
+        self.assertEqual(payload["current_thread_visual_anchor"]["status"], "ok")
+        self.assertEqual(payload["current_thread_visual_anchor"]["screen_state"], "bumble_conversation")
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+        self.assertFalse(any("dating_boost_core_graphics_command_v" in " ".join(command) for command in runner.commands))
 
     def test_bumble_send_message_accepts_chat_list_row_structural_binding_for_emoji_nickname(self):
         runner = FakeRunner(
@@ -702,6 +876,91 @@ class GuiHarnessTests(unittest.TestCase):
             "bumble_chat_list_row_to_thread_structural_binding",
         )
         self.assertTrue(payload["target_binding_verification"]["emoji_nickname_supported"])
+
+    def test_bumble_current_thread_visual_identity_blocks_visual_mismatch(self):
+        conversation_png = _bumble_conversation_png(outgoing_bubble=False)
+        region = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65}
+        runner = FakeRunner(
+            ocr_text="GIF\n回复时间\nAa\n",
+            screenshot_bytes=conversation_png,
+        )
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness._verify_bumble_target_binding(
+            {
+                "binding_type": "current_thread_visual_identity",
+                "target_match_id": "match_bumble_current",
+                "candidate_key": "bumble_current",
+                "conversation_fingerprint": "conversation-current",
+                "thread_evidence": {
+                    "observation_id": "obs_bumble_current",
+                    "screen_state": "bumble_conversation",
+                    "latest_inbound_fingerprint": "inbound-current",
+                    "visual_anchor_hash": "0000000000000000",
+                    "visual_anchor_region": region,
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+            }
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "target_binding_visual_anchor_mismatch")
+        self.assertEqual(payload["verification_method"], "bumble_current_thread_visual_identity")
+        self.assertEqual(payload["screen_state"], "bumble_conversation")
+        self.assertIn("observed_visual_anchor_hash", payload)
+
+    def test_iphone_stage_draft_blocks_current_thread_visual_mismatch_without_relocation_evidence(self):
+        cases = (
+            (
+                "bumble",
+                _bumble_conversation_png(outgoing_bubble=False),
+                "GIF\n回复时间\nAa\n",
+                "send_bumble_message",
+                "bumble_conversation",
+            ),
+            (
+                "tinder",
+                _tinder_conversation_send_button_png(),
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "send_tinder_message",
+                "tinder_conversation",
+            ),
+        )
+        region = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65}
+        for app_id, screenshot, ocr_text, method_name, screen_state in cases:
+            with self.subTest(app_id=app_id):
+                runner = FakeRunner(
+                    ocr_text=[ocr_text, ocr_text],
+                    screenshot_bytes=screenshot,
+                )
+                harness = create_adapter(app_id=app_id, platform="darwin", runner=runner)
+
+                payload = getattr(harness.session, method_name)(
+                    "今晚可以聊十分钟吗？",
+                    dry_run=False,
+                    output_dir=Path(tempfile.mkdtemp()),
+                    stage_only=True,
+                    target_binding={
+                        "binding_type": "current_thread_visual_identity",
+                        "target_match_id": f"match_{app_id}_missing_relocation",
+                        "candidate_key": f"{app_id}_missing_relocation",
+                        "conversation_fingerprint": f"{app_id}-conversation",
+                        "thread_evidence": {
+                            "observation_id": f"obs_{app_id}_missing_relocation",
+                            "screen_state": screen_state,
+                            "latest_inbound_fingerprint": "inbound-current",
+                            "visual_anchor_hash": "0000000000000000",
+                            "visual_anchor_region": region,
+                            "visual_anchor_max_hamming_distance": 0,
+                        },
+                    },
+                )
+
+                self.assertEqual(payload["status"], "blocked")
+                self.assertEqual(payload["reason"], "target_relocation_visual_evidence_required")
+                self.assertEqual(payload["target_binding_relocation"]["status"], "blocked")
+                self.assertTrue(payload["target_binding_relocation"]["requires_message_list_visual_evidence"])
+                self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
 
     def test_bumble_send_message_commits_direct_type_ime_candidate_when_needed(self):
         runner = FakeRunner(
@@ -792,6 +1051,137 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["reason"], "target_binding_not_target_specific")
         self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
 
+    def test_bumble_open_conversation_dry_run_redacts_visible_name_locator(self):
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=FakeRunner(ocr_text="Bumble\n聊天\n"))
+
+        payload = harness.run_bumble_action("open-conversation", dry_run=True, visible_name="Ada")
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(
+            [step["intent"] for step in payload["planned_steps"]],
+            ["locate_bumble_visible_conversation_name", "tap_bumble_visible_conversation_row"],
+        )
+        self.assertIn("target_marker_hash", payload["planned_steps"][0])
+        self.assertNotIn("Ada", json.dumps(payload, ensure_ascii=False))
+
+    def test_bumble_open_conversation_dry_run_uses_visual_anchor_plan(self):
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=FakeRunner(ocr_text="Bumble\n聊天\n"))
+
+        payload = harness.run_bumble_action(
+            "open-conversation",
+            dry_run=True,
+            message_list_evidence={
+                "visual_anchor_hash": "ff07077f0101ffff",
+                "visual_anchor_region": {"x1": 0.05, "y1": 0.47, "x2": 0.95, "y2": 0.57},
+                "tap_ratio": {"x": 0.43, "y": 0.52},
+            },
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(
+            [step["intent"] for step in payload["planned_steps"]],
+            ["locate_bumble_conversation_row_visual_anchor", "tap_bumble_visible_conversation_row"],
+        )
+        self.assertEqual(payload["planned_steps"][0]["location_method"], "message_list_visual_anchor_scan")
+        self.assertIn("visual_anchor_hash", payload["planned_steps"][0]["message_list_visual_anchor"])
+
+    def test_bumble_open_conversation_dry_run_blocks_incomplete_visual_anchor_plan(self):
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=FakeRunner(ocr_text="Bumble\n聊天\n"))
+
+        payload = harness.run_bumble_action(
+            "open-conversation",
+            dry_run=True,
+            message_list_evidence={"visual_anchor_hash": "ff07077f0101ffff"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["planned_steps"][0]["intent"], "message_list_visual_anchor_evidence_incomplete")
+        self.assertEqual(payload["planned_steps"][0]["reason"], "target_relocation_visual_anchor_evidence_incomplete")
+        self.assertNotEqual(payload["planned_steps"][0]["intent"], "tap_conversation_row")
+
+    def test_bumble_open_conversation_executes_visible_name_locator_and_verifies_target(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n聊天（最近）\n",
+                "Bumble\n聊天\n配对列表\n聊天（最近）\nAda\nIris\n",
+                _ocr_tsv_for_line("Ada", top=330, height=28),
+                "Ada\nHi\nAa\nGIF\n",
+            ],
+            screenshot_bytes=_bumble_conversation_png(outgoing_bubble=False),
+        )
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.run_bumble_action(
+            "open-conversation",
+            dry_run=False,
+            visible_name="Ada",
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_bumble"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["open_mode"], "visible_name")
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+        self.assertEqual(payload["target_binding_verification"]["verification_method"], "bumble_open_conversation_visible_name")
+        self.assertEqual(payload["executed_steps"][0]["intent"], "tap_bumble_visible_conversation_row")
+        self.assertAlmostEqual(payload["executed_steps"][0]["tap_ratio"]["y"], 0.86)
+        self.assertNotIn("Ada", json.dumps(payload, ensure_ascii=False))
+
+    def test_bumble_open_conversation_relocates_visual_anchor_for_non_ocr_row(self):
+        old_list_png = _iphone_message_list_with_target_row_png(target_center_y=0.52)
+        current_list_png = _iphone_message_list_with_target_row_png(target_center_y=0.68)
+        row_region = {"x1": 0.05, "y1": 0.47, "x2": 0.95, "y2": 0.57}
+        row_visual_hash = _png_average_hash(old_list_png, region=row_region)
+        runner = FakeRunner(
+            ocr_text=[
+                "Bumble\n聊天\n配对列表\n聊天（最近）\n",
+                "Bumble\n聊天\n配对列表\n聊天（最近）\n",
+                "GIF\n回复时间\nAa\n",
+            ],
+            screenshot_bytes=[
+                current_list_png,
+                current_list_png,
+                _bumble_conversation_png(outgoing_bubble=False),
+            ],
+        )
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.run_bumble_action(
+            "open-conversation",
+            dry_run=False,
+            message_list_evidence={
+                "selection_method": "message_list_visual_anchor_scan",
+                "visual_anchor_hash": row_visual_hash,
+                "visual_anchor_region": row_region,
+                "tap_ratio": {"x": 0.43, "y": 0.52},
+            },
+            target_binding={
+                "binding_type": "chat_list_row_to_thread",
+                "target_match_id": "match_bumble_nonocr",
+                "candidate_key": "bumble_row_nonocr",
+                "selection_evidence": {
+                    "source_state": "bumble_chat_list",
+                    "opened_state": "bumble_conversation",
+                    "row_index": 3,
+                    "target_scope": "ordinary_conversation",
+                    "open_action": "open-conversation",
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["open_mode"], "message_list_visual_anchor")
+        location = payload["message_list_relocation"]["message_list_location"]
+        self.assertEqual(location["location_method"], "message_list_visual_anchor_scan")
+        self.assertFalse(location["uses_fixed_row_index"])
+        self.assertAlmostEqual(location["tap_ratio"]["y"], 0.68, delta=0.02)
+        self.assertEqual(payload["executed_steps"][0]["location_method"], "message_list_visual_anchor_scan")
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
+        self.assertEqual(
+            payload["target_binding_verification"]["verification_method"],
+            "bumble_open_conversation_visual_anchor_structural_binding",
+        )
+        self.assertNotIn("Ada", json.dumps(payload, ensure_ascii=False))
+
     def test_bumble_send_message_blocks_on_opening_move_page_without_user_confirmation_path(self):
         runner = FakeRunner(ocr_text="旺仔的Opening Move\n旺仔预设了Opening Move。发送消息回复。\n回复\n")
         harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
@@ -829,6 +1219,44 @@ class GuiHarnessTests(unittest.TestCase):
 
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["executed_steps"][0]["intent"], "tap_bumble_chats_tab")
+
+    def test_bumble_prepare_message_page_opens_chats_and_returns_visual_plan_contract(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Bumble\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+                "聊天\n配对列表 (2)\n你的Opening Moves\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+            ],
+            missing_commands={"xcrun"},
+        )
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.run_bumble_action("prepare-message-page", dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["screen_state"], "bumble_chat_list")
+        self.assertEqual(payload["next_host_action"], "visual_plan_message_list")
+        self.assertEqual(payload["executed_steps"][0]["intent"], "tap_bumble_chats_tab")
+        contract = payload["message_list_planning_contract"]
+        self.assertTrue(contract["use_visual_row_anchor_for_non_ocr_rows"])
+        self.assertIn("chat_list_row_to_thread", contract["allowed_target_bindings"])
+        self.assertTrue(contract["generic_ui_markers_are_not_target_binding"])
+
+    def test_bumble_prepare_message_page_returns_from_current_thread_without_raw_text(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Ada\nHi!\nAa\nGIF\n",
+                "聊天\n配对列表 (2)\n你的Opening Moves\n个人档案\n发现\n浏览用户\n为你心动\n聊天\n",
+            ]
+        )
+        harness = create_adapter(app_id="bumble", platform="darwin", runner=runner)
+
+        payload = harness.run_bumble_action("prepare-message-page", dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["screen_state"], "bumble_chat_list")
+        self.assertEqual(payload["executed_steps"][0]["intent"], "tap_bumble_back_to_chats")
+        self.assertEqual(payload["next_host_action"], "visual_plan_message_list")
+        self.assertNotIn("Ada", json.dumps(payload, ensure_ascii=False))
 
     def test_bumble_workflow_blocks_when_step_postcondition_is_not_verified(self):
         runner = FakeRunner(
@@ -4650,6 +5078,7 @@ class GuiHarnessTests(unittest.TestCase):
         harness = create_adapter(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\n聊天"))
 
         action_names = [
+            "prepare-message-page",
             "open-chats",
             "matches-carousel-next",
             "conversation-list-scroll-down",
@@ -4671,16 +5100,57 @@ class GuiHarnessTests(unittest.TestCase):
 
         self.assertTrue(all(payload["status"] == "ok" for payload in payloads))
         self.assertTrue(all(payload["blocked_actions"] == ["send", "like", "super_like", "unmatch", "report", "profile_edit"] for payload in payloads))
-        self.assertIn("wheel", payloads[1]["planned_steps"][0])
         self.assertIn("wheel", payloads[2]["planned_steps"][0])
         self.assertIn("wheel", payloads[3]["planned_steps"][0])
-        self.assertIn("wheel", payloads[10]["planned_steps"][0])
-        thread_profile_step = payloads[6]["planned_steps"][0]
+        self.assertIn("wheel", payloads[4]["planned_steps"][0])
+        self.assertIn("wheel", payloads[11]["planned_steps"][0])
+        self.assertEqual(payloads[0]["planned_steps"][-1]["intent"], "tap_chats_tab_if_needed")
+        thread_profile_step = payloads[7]["planned_steps"][0]
         self.assertEqual(thread_profile_step["tap_ratio"], {"x": 0.5, "y": 0.14})
         return_to_chats_step = payloads[-2]["planned_steps"][0]
         self.assertEqual(return_to_chats_step["intent"], "tap_thread_back_to_chats")
         feedback_survey_step = payloads[-1]["planned_steps"][0]
         self.assertEqual(feedback_survey_step["intent"], "tap_tinder_feedback_survey_ignore")
+
+    def test_tinder_prepare_message_page_opens_chats_and_returns_visual_plan_contract(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "滑动\n探索\n聊天\n个人资料\n",
+                "Tinder\nMatches\nMessages\n配对\n消息\n等你回应\n",
+            ]
+        )
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.run_tinder_action("prepare-message-page", dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["screen_state"], "tinder_messages")
+        self.assertEqual(payload["next_host_action"], "visual_plan_message_list")
+        self.assertEqual(payload["executed_steps"][0]["intent"], "tap_chats_tab")
+        contract = payload["message_list_planning_contract"]
+        self.assertTrue(contract["use_visual_row_anchor_for_non_ocr_rows"])
+        self.assertIn("chat_list_row_to_thread", contract["allowed_target_bindings"])
+        self.assertEqual(
+            contract["message_list_visual_anchor_scan_region"],
+            {"x1": 0.0, "y1": 0.32, "x2": 1.0, "y2": 0.89},
+        )
+
+    def test_tinder_prepare_message_page_returns_from_current_thread_without_raw_text(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nMatches\nMessages\n配对\n消息\n等你回应\n",
+            ]
+        )
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.run_tinder_action("prepare-message-page", dry_run=False)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["screen_state"], "tinder_messages")
+        self.assertEqual(payload["executed_steps"][0]["intent"], "tap_thread_back_to_chats")
+        self.assertEqual(payload["next_host_action"], "visual_plan_message_list")
+        self.assertNotIn("Ada", json.dumps(payload, ensure_ascii=False))
 
     def test_execute_planned_steps_blocks_malformed_step_before_screen_guards(self):
         runner = FakeRunner(ocr_text="Tinder\nMessages\n")
@@ -4747,6 +5217,63 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["target_binding_verification"]["status"], "ok")
         self.assertEqual(payload["executed_steps"][0]["intent"], "tap_visible_conversation_row")
         self.assertAlmostEqual(payload["executed_steps"][0]["tap_ratio"]["y"], 0.6225)
+        self.assertNotIn("Iris", json.dumps(payload, ensure_ascii=False))
+
+    def test_tinder_open_conversation_relocates_visual_anchor_from_existing_thread(self):
+        old_list_png = _iphone_message_list_with_target_row_png(target_center_y=0.42)
+        current_list_png = _iphone_message_list_with_target_row_png(target_center_y=0.64)
+        row_region = {"x1": 0.05, "y1": 0.37, "x2": 0.95, "y2": 0.47}
+        row_visual_hash = _png_average_hash(old_list_png, region=row_region)
+        runner = FakeRunner(
+            ocr_text=[
+                "GIF\nMessage\n",
+                "聊天\n新的配对\n消息\n",
+                "GIF\nMessage\n",
+            ],
+            screenshot_bytes=[
+                _tinder_conversation_send_button_png(),
+                current_list_png,
+                _tinder_conversation_send_button_png(),
+            ],
+        )
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.run_tinder_action(
+            "open-conversation",
+            dry_run=False,
+            message_list_evidence={
+                "selection_method": "message_list_visual_anchor_scan",
+                "visual_anchor_hash": row_visual_hash,
+                "visual_anchor_region": row_region,
+                "tap_ratio": {"x": 0.50, "y": 0.42},
+            },
+            target_binding={
+                "binding_type": "chat_list_row_to_thread",
+                "target_match_id": "match_tinder_nonocr",
+                "candidate_key": "tinder_row_nonocr",
+                "selection_evidence": {
+                    "source_state": "tinder_messages",
+                    "opened_state": "tinder_conversation",
+                    "row_index": 4,
+                    "target_scope": "ordinary_conversation",
+                    "open_action": "open-conversation",
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["open_mode"], "message_list_visual_anchor")
+        self.assertEqual(payload["executed_steps"][0]["intent"], "tap_thread_back_to_chats")
+        self.assertEqual(payload["executed_steps"][1]["intent"], "tap_visible_conversation_row")
+        location = payload["message_list_relocation"]["message_list_location"]
+        self.assertEqual(location["location_method"], "message_list_visual_anchor_scan")
+        self.assertFalse(location["uses_fixed_row_index"])
+        self.assertAlmostEqual(location["tap_ratio"]["y"], 0.64, delta=0.02)
+        self.assertEqual(
+            payload["target_binding_verification"]["verification_method"],
+            "tinder_open_conversation_visual_anchor_structural_binding",
+        )
+        self.assertEqual(payload["target_binding_verification"]["status"], "ok")
         self.assertNotIn("Iris", json.dumps(payload, ensure_ascii=False))
 
     def test_tinder_observe_distinguishes_chat_regions_and_redacts_raw_text(self):
@@ -4864,8 +5391,9 @@ class GuiHarnessTests(unittest.TestCase):
                 "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
                 "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
                 "Tinder\nAda\n昨天 21:14\n在吗\n今晚可以聊十分钟吗？\nSend\n",
-                "Tinder\nAda\n昨天 21:14\n在吗\n今晚可以聊十分钟吗？\n",
-            ]
+                "Tinder\nAda\n昨天 21:14\n在吗\n今晚可以聊十分钟吗？\nGIF\n",
+            ],
+            screenshot_bytes=_tinder_conversation_send_button_png(),
         )
         harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
 
@@ -4882,6 +5410,9 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertTrue(payload["evidence"]["input_cleared_after_send"])
         self.assertTrue(payload["evidence"]["outbound_message_verified"])
         self.assertIn("post_action_observation_id", payload)
+        self.assertEqual(payload["current_thread_visual_anchor"]["status"], "ok")
+        self.assertEqual(payload["current_thread_visual_anchor"]["screen_state"], "tinder_conversation")
+        self.assertIn("visual_anchor_hash", payload["current_thread_visual_anchor"])
         self.assertTrue(any(command and command[0] == "pbcopy" for command in runner.commands))
         self.assertTrue(any('keystroke "v"' in " ".join(command) for command in runner.commands))
         self.assertEqual(
@@ -4892,6 +5423,171 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["draft_clipboard_fingerprint"], payload["draft_fingerprint"])
         self.assertNotIn("今晚可以聊十分钟吗", json.dumps(payload, ensure_ascii=False))
         self.assertNotIn("previous clipboard", json.dumps(payload, ensure_ascii=False))
+
+    def test_tinder_stage_draft_executes_without_send_and_records_stage_evidence(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\n今晚可以聊十分钟吗？\nSend\n",
+            ],
+            screenshot_bytes=_tinder_conversation_send_button_png(),
+        )
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.stage_draft("今晚可以聊十分钟吗？", dry_run=False, output_dir=Path(tempfile.mkdtemp()))
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "stage_draft")
+        self.assertEqual(payload["stage_attempt_status"], "completed")
+        self.assertTrue(payload["staged_text_verified"])
+        self.assertEqual(payload["staged_text_verification"]["status"], "ok")
+        self.assertEqual(payload["next_host_action"], "verify_staged_text_before_send")
+        self.assertFalse(payload["send_action_executed"])
+        self.assertTrue(payload["evidence"]["stage_mode"])
+        self.assertFalse(payload["evidence"]["live_send_executed"])
+        self.assertFalse(any(step["intent"] == "tap_tinder_send_button" for step in payload["executed_steps"]))
+
+    def test_tinder_stage_draft_blocks_when_input_is_already_occupied_before_clipboard_mutation(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\n未发送草稿\nSend\n",
+            ],
+            screenshot_bytes=_tinder_conversation_send_button_png(),
+        )
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.stage_draft("今晚可以聊十分钟吗？", dry_run=False, output_dir=Path(tempfile.mkdtemp()))
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "message_input_not_empty_before_staging")
+        self.assertEqual(payload["next_host_action"], "clear_existing_message_input_before_stage")
+        self.assertEqual(payload["pre_stage_input_guard"]["status"], "blocked")
+        self.assertTrue(payload["pre_stage_input_guard"]["send_button_visual_visible"])
+        self.assertTrue(payload["pre_stage_input_guard"]["send_marker_visible"])
+        self.assertFalse(payload["pre_stage_input_guard"]["message_input_placeholder_visible"])
+        self.assertFalse(any(command and command[0] == "pbpaste" for command in runner.commands))
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+        self.assertFalse(any('keystroke "v"' in " ".join(command) for command in runner.commands))
+
+    def test_tinder_stage_draft_relocates_current_thread_visual_identity_mismatch_before_staging(self):
+        draft = "今晚可以聊十分钟吗？"
+        visual_region = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65}
+        target_conversation_png = _tinder_conversation_send_button_png()
+        wrong_conversation_png = _bumble_conversation_png(outgoing_bubble=True)
+        old_list_png = _iphone_message_list_with_target_row_png(target_center_y=0.42)
+        current_list_png = _iphone_message_list_with_target_row_png(target_center_y=0.64)
+        row_region = {"x1": 0.05, "y1": 0.37, "x2": 0.95, "y2": 0.47}
+        row_visual_hash = _png_average_hash(old_list_png, region=row_region)
+        runner = FakeRunner(
+            ocr_text=[
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\n新的配对\n消息\nAda\n等你回应\n",
+                "Tinder\n新的配对\n消息\nAda\n等你回应\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                f"Tinder\nAda\n昨天 21:14\n在吗\n{draft}\nSend\n",
+            ],
+            screenshot_bytes=[
+                wrong_conversation_png,
+                wrong_conversation_png,
+                wrong_conversation_png,
+                current_list_png,
+                current_list_png,
+                target_conversation_png,
+                target_conversation_png,
+                target_conversation_png,
+            ],
+        )
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.session.send_tinder_message(
+            draft,
+            dry_run=False,
+            output_dir=Path(tempfile.mkdtemp()),
+            stage_only=True,
+            target_binding={
+                "binding_type": "current_thread_visual_identity",
+                "target_match_id": "match_tinder_relocate",
+                "candidate_key": "tinder_relocate",
+                "conversation_fingerprint": "tinder-conversation-relocate",
+                "thread_evidence": {
+                    "observation_id": "obs_tinder_relocate",
+                    "screen_state": "tinder_conversation",
+                    "latest_inbound_fingerprint": "inbound-zai-ma",
+                    "visual_anchor_hash": _png_average_hash(target_conversation_png, region=visual_region),
+                    "visual_anchor_region": visual_region,
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+                "message_list_evidence": {
+                    "selection_method": "message_list_visual_anchor_scan",
+                    "visual_anchor_hash": row_visual_hash,
+                    "visual_anchor_region": row_region,
+                    "tap_ratio": {"x": 0.50, "y": 0.42},
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "stage_draft")
+        self.assertEqual(payload["target_binding_relocation"]["status"], "ok")
+        self.assertEqual(payload["target_binding_relocation"]["attempt_count"], 1)
+        self.assertEqual(
+            payload["target_binding_verification"]["recovered_by"],
+            "message_list_visual_relocation",
+        )
+        location = payload["target_binding_relocation"]["attempts"][0]["message_list_location"]
+        self.assertEqual(location["location_method"], "message_list_visual_anchor_scan")
+        self.assertFalse(location["uses_fixed_row_index"])
+        self.assertEqual(payload["stage_attempt_status"], "completed")
+        self.assertFalse(payload["send_action_executed"])
+        self.assertFalse(any(step["intent"] == "tap_tinder_send_button" for step in payload["executed_steps"]))
+
+    def test_tinder_send_message_is_idempotent_when_text_already_sent(self):
+        draft = "今晚可以聊十分钟吗？"
+        conversation_png = _tinder_conversation_send_button_png()
+        visual_region = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65}
+        runner = FakeRunner(
+            ocr_text=[
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                f"Tinder\nAda\n昨天 21:14\n在吗\n{draft}\nGIF\n",
+            ],
+            screenshot_bytes=conversation_png,
+        )
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            draft,
+            dry_run=False,
+            target_binding={
+                "binding_type": "current_thread_visual_identity",
+                "target_match_id": "match_ada",
+                "candidate_key": "tinder_current_ada",
+                "conversation_fingerprint": "tinder-conversation-ada",
+                "thread_evidence": {
+                    "observation_id": "obs_tinder_current_ada",
+                    "screen_state": "tinder_conversation",
+                    "latest_inbound_fingerprint": "inbound-zai-ma",
+                    "visual_anchor_hash": _png_average_hash(conversation_png, region=visual_region),
+                    "visual_anchor_region": visual_region,
+                    "visual_anchor_max_hamming_distance": 0,
+                },
+            },
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["already_sent"])
+        self.assertFalse(payload["evidence"]["staged_text_verified"])
+        self.assertTrue(payload["evidence"]["outbound_exact_text_ocr_verified"])
+        self.assertTrue(payload["evidence"]["input_cleared_after_send"])
+        self.assertEqual(payload["current_thread_visual_anchor"]["status"], "ok")
+        self.assertEqual(payload["current_thread_visual_anchor"]["screen_state"], "tinder_conversation")
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+        self.assertFalse(any('keystroke "v"' in " ".join(command) for command in runner.commands))
 
     def test_tinder_send_message_accepts_chat_list_row_structural_binding_for_emoji_nickname(self):
         runner = FakeRunner(
@@ -4929,6 +5625,37 @@ class GuiHarnessTests(unittest.TestCase):
             "tinder_chat_list_row_to_thread_structural_binding",
         )
         self.assertTrue(payload["target_binding_verification"]["emoji_nickname_supported"])
+
+    def test_tinder_current_thread_visual_identity_verifies_current_screen(self):
+        conversation_png = _tinder_conversation_send_button_png()
+        region = {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65}
+        visual_hash = _png_average_hash(conversation_png, region=region)
+        runner = FakeRunner(
+            ocr_text="GIF\nMessage\n",
+            screenshot_bytes=conversation_png,
+        )
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness._verify_tinder_target_binding(
+            {
+                "binding_type": "current_thread_visual_identity",
+                "target_match_id": "match_tinder_current",
+                "candidate_key": "tinder_current",
+                "conversation_fingerprint": "conversation-current",
+                "thread_evidence": {
+                    "observation_id": "obs_tinder_current",
+                    "screen_state": "tinder_conversation",
+                    "latest_inbound_fingerprint": "inbound-current",
+                    "visual_anchor_hash": visual_hash,
+                    "visual_anchor_region": region,
+                },
+            }
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["verification_method"], "tinder_current_thread_visual_identity")
+        self.assertEqual(payload["visual_anchor_hamming_distance"], 0)
+        self.assertNotIn("matched_marker_hashes", payload)
 
     def test_tinder_send_message_accepts_ocr_punctuation_noise_for_staged_text(self):
         runner = FakeRunner(
@@ -5099,6 +5826,44 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertNotIn("18.99", json.dumps(payload, ensure_ascii=False))
         self.assertNotIn("今晚可以聊十分钟吗", json.dumps(payload, ensure_ascii=False))
 
+    def test_tinder_stage_draft_paywall_recovery_retries_without_send(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "TINDER GOLD\n"
+                "See Who Likes You and match with them instantly with Tinder Gold™\n"
+                "Select a plan\n"
+                "Continue - $18.99 total\n",
+                "Tinder\n聊天\n新的配对\n消息\nAda\n等你回应\n",
+                "Tinder\n聊天\n新的配对\n消息\nAda\n等你回应\n",
+                "Tinder\n聊天\n新的配对\n消息\nAda\n等你回应\n",
+                _ocr_tsv_for_line("Ada", top=235, height=28),
+                "Ada\nGIF\n",
+                "Ada\nGIF\n",
+                "Ada\nGIF\n",
+                "Ada\nGIF\n",
+                "Ada\nGIF\n今晚可以聊十分钟吗？\nSend\n",
+            ],
+            screenshot_bytes=_tinder_bottom_nav_png("chats"),
+        )
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.session.send_tinder_message(
+            "今晚可以聊十分钟吗？",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
+            stage_only=True,
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["action"], "stage_draft")
+        self.assertTrue(payload["paywall_recovered_and_retried"])
+        self.assertEqual(payload["subscription_paywall_recovery"]["status"], "ok")
+        self.assertEqual(payload["stage_attempt_status"], "completed")
+        self.assertFalse(payload["send_action_executed"])
+        self.assertFalse(any(step["intent"] == "tap_tinder_send_button" for step in payload["executed_steps"]))
+        self.assertNotIn("outbound_message_verification", payload)
+        self.assertNotIn("18.99", json.dumps(payload, ensure_ascii=False))
+
     def test_tinder_action_dismisses_subscription_paywall_without_purchase_path(self):
         runner = FakeRunner(
             ocr_text=[
@@ -5234,6 +5999,58 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["reason"], "target_binding_mismatch")
         self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+
+    def test_tinder_send_message_blocks_generic_target_binding_markers_before_staging(self):
+        runner = FakeRunner(ocr_text="Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n")
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "hi",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Message", "Send"], "target_match_id": "match_ada"},
+        )
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "target_binding_not_target_specific")
+        self.assertFalse(any(command and command[0] == "pbcopy" for command in runner.commands))
+
+    def test_tinder_send_message_commits_direct_type_ime_candidate_when_paste_does_not_stage(self):
+        runner = FakeRunner(
+            ocr_text=[
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nMessage\nSend\n",
+                "Tinder\nAda\n昨天 21:14\n在吗\nhi\nSend\n",
+                "Tinder\nAda\n刚刚\n在吗\nhi\n",
+            ],
+        )
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=runner)
+
+        payload = harness.send_tinder_message(
+            "hi",
+            dry_run=False,
+            target_binding={"required_visible_text": ["Ada"], "target_match_id": "match_ada"},
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(
+            [step["intent"] for step in payload["executed_steps"]],
+            [
+                "tap_tinder_message_input",
+                "paste_clipboard_into_tinder_message_input",
+                "type_tinder_message_input_if_paste_did_not_stage",
+                "commit_tinder_message_input_ime_candidate_if_needed",
+                "tap_tinder_send_button",
+            ],
+        )
+        self.assertTrue(any('keystroke "hi"' in " ".join(command) for command in runner.commands))
+        self.assertTrue(
+            any("key code 49" in " ".join(command) and "control down" not in " ".join(command) for command in runner.commands)
+        )
+        self.assertTrue(payload["staged_text_verified"])
+        self.assertTrue(payload["evidence"]["outbound_message_verified"])
 
     def test_cli_exposes_tinder_observe_with_redacted_payload(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -5506,6 +6323,50 @@ class GuiHarnessTests(unittest.TestCase):
         self.assertEqual(payload["harness_backend"], "mac_ios_app")
         self.assertEqual(harness_class.call_args.kwargs["runtime"], "mac-ios-app")
         harness_class.return_value.stage_tashuo_draft.assert_called_once()
+
+    def test_cli_exposes_iphone_dating_app_stage_draft(self):
+        for app_id, method_name in (
+            ("tinder", "stage_tinder_draft"),
+            ("bumble", "stage_bumble_draft"),
+        ):
+            with self.subTest(app_id=app_id), tempfile.TemporaryDirectory() as temp_dir:
+                data_dir = Path(temp_dir) / "data"
+                _select_runtime_scope(data_dir, app_id)
+                draft_path = Path(temp_dir) / "draft.txt"
+                draft_text = "今晚聊得挺舒服的。"
+                draft_path.write_text(draft_text, encoding="utf-8")
+                with _patch_cli_adapter() as harness_class:
+                    getattr(harness_class.return_value, method_name).return_value = {
+                        "schema_version": 1,
+                        "status": "ok",
+                        "app_id": app_id,
+                        "harness_backend": "iphone_mirroring_macos",
+                        "action": "stage_draft",
+                        "stage_attempt_status": "completed",
+                        "staged_text_verified": True,
+                    }
+
+                    exit_code, payload = _run_cli_json([
+                        "harness",
+                        app_id,
+                        "stage-draft",
+                        "--data-dir",
+                        str(data_dir),
+                        "--text-file",
+                        str(draft_path),
+                        "--dry-run",
+                        "--json",
+                    ])
+
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(payload["action"], "stage_draft")
+                self.assertEqual(payload["app_id"], app_id)
+                self.assertIsNone(harness_class.call_args.kwargs["runtime"])
+                getattr(harness_class.return_value, method_name).assert_called_once_with(
+                    draft_text,
+                    dry_run=True,
+                    output_dir=None,
+                )
 
     def test_cli_passes_explicit_runtime_to_tashuo_send_message(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -7020,6 +7881,40 @@ def _bumble_conversation_png(*, active_send_button: bool = False, outgoing_bubbl
     fill(0.12, 0.90, 0.88, 0.955, (248, 248, 248, 255))
     fill(0.16, 0.92, 0.21, 0.94, (95, 95, 95, 255))
     fill(0.93 if active_send_button else 0.91, 0.90, 0.98, 0.955, (248, 211, 59, 255) if active_send_button else (225, 225, 225, 255))
+    return _png_from_pixels(pixels, width, height)
+
+
+def _iphone_message_list_with_target_row_png(
+    *,
+    target_center_y: float,
+    target_accent: tuple[int, int, int, int] = (92, 168, 126, 255),
+) -> bytes:
+    width, height = 200, 400
+    pixels = [[(255, 255, 255, 255) for _ in range(width)] for _ in range(height)]
+
+    def fill(x1: float, y1: float, x2: float, y2: float, color: tuple[int, int, int, int]) -> None:
+        for y in range(max(0, int(y1 * height)), min(height, int(y2 * height))):
+            for x in range(max(0, int(x1 * width)), min(width, int(x2 * width))):
+                pixels[y][x] = color
+
+    fill(0.00, 0.00, 1.00, 1.00, (255, 255, 255, 255))
+    for center_y, accent, is_target in (
+        (0.34, (190, 120, 90, 255), False),
+        (target_center_y, target_accent, True),
+        (0.82, (120, 130, 190, 255), False),
+    ):
+        y1 = center_y - 0.05
+        y2 = center_y + 0.05
+        fill(0.05, y1, 0.95, y2, (248, 248, 252, 255))
+        if is_target:
+            fill(0.08, y1 + 0.014, 0.20, y1 + 0.074, accent)
+            fill(0.25, y1 + 0.014, 0.62, y1 + 0.036, (42, 42, 48, 255))
+            fill(0.25, y1 + 0.055, 0.88, y1 + 0.074, accent)
+            fill(0.70, y1 + 0.016, 0.88, y1 + 0.034, (245, 219, 70, 255))
+        else:
+            fill(0.08, y1 + 0.020, 0.18, y1 + 0.062, (220, 222, 232, 255))
+            fill(0.25, y1 + 0.024, 0.76, y1 + 0.040, (190, 192, 202, 255))
+    fill(0.00, 0.90, 1.00, 1.00, (255, 255, 255, 255))
     return _png_from_pixels(pixels, width, height)
 
 

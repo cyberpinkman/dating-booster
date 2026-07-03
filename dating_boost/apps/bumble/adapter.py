@@ -48,6 +48,13 @@ class BumbleAdapter(LegacyHarnessAdapter):
             target_binding=target_binding,
         )
 
+    def stage_draft(self, draft_text: str, *, dry_run: bool = False, output_dir: Path | None = None) -> dict[str, Any]:
+        return self.session.stage_bumble_draft(
+            draft_text,
+            dry_run=dry_run,
+            output_dir=output_dir,
+        )
+
     def target_binding_policy(self) -> dict[str, Any]:
         return {
             **super().target_binding_policy(),
@@ -58,4 +65,5 @@ class BumbleAdapter(LegacyHarnessAdapter):
     observe_bumble_screen = observe
     run_bumble_action = run_action
     run_bumble_workflow = run_workflow
+    stage_bumble_draft = stage_draft
     send_bumble_message = send_message

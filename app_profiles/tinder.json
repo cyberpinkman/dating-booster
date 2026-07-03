@@ -20,6 +20,7 @@
   ],
   "stage_send_verification": [
     "Paste Chinese text into the input box; do not rely on direct Chinese typing.",
+    "Before paste, block if the baseline composer appears occupied by non-payload text; never append a new draft onto existing input.",
     "Verify staged text exactly equals payload_text before send.",
     "If input position drifts, exit and reopen the thread."
   ],
@@ -30,6 +31,8 @@
       "screenshot",
       "launch_app",
       "observe_screen",
+      "prepare_message_page",
+      "stage_draft",
       "open_self_profile",
       "open_self_profile_preview",
       "profile_photo_next",
@@ -219,7 +222,11 @@
     "Input box position can change after full-screen input closes.",
     "Re-locate the current input box before every click.",
     "Do not reuse stale coordinates.",
-    "Emoji or otherwise non-OCR nicknames are valid targets in any message-list row; bind the intended row with chat_list_row_to_thread evidence instead of switching to an OCR-friendly conversation."
+    "Emoji or otherwise non-OCR nicknames are valid targets in any message-list row; bind the intended row with chat_list_row_to_thread evidence instead of switching to an OCR-friendly conversation.",
+    "When a visible Tinder row has visual evidence, include message_list_evidence.visual_anchor_hash and visual_anchor_region so iPhone Mirroring can relocate the row before opening; fixed row_index is only a compatibility fallback.",
+    "For an already-open Tinder thread, current_thread_visual_identity can verify thread_evidence.visual_anchor_hash before staging; it does not replace exact staged-text OCR or outbound verification.",
+    "If current_thread_visual_identity mismatches and same-target message_list_evidence contains a visual anchor, iPhone Mirroring returns to messages, relocates the row by visual anchor, reopens it, and retries target verification before staging.",
+    "If the pre-stage Tinder composer appears occupied and the Message placeholder is absent, iPhone Mirroring blocks before reading the clipboard or pasting."
   ],
   "unsupported_actions": [
     "like",
@@ -259,6 +266,8 @@
       "screenshot",
       "launch_app",
       "observe_screen",
+      "prepare_message_page",
+      "stage_draft",
       "open_self_profile",
       "open_self_profile_preview",
       "profile_photo_next",
@@ -285,6 +294,8 @@
       "screenshot",
       "launch_app",
       "observe_screen",
+      "prepare_message_page",
+      "stage_draft",
       "open_self_profile",
       "open_self_profile_preview",
       "profile_photo_next",
@@ -453,11 +464,41 @@
   },
   "target_binding": {
     "requires_target_binding": true,
-    "requires_target_specific_marker": false,
+    "requires_target_specific_marker": true,
     "allowed_structural_binding_types": [
-      "chat_list_row_to_thread"
+      "chat_list_row_to_thread",
+      "current_thread_visual_identity"
     ],
-    "generic_marker_blacklist": [],
+    "current_thread_mismatch_recovery": {
+      "supported": true,
+      "method": "message_list_visual_anchor_relocation",
+      "requires_message_list_evidence": true,
+      "max_attempts": 3,
+      "uses_fixed_row_index": false
+    },
+    "generic_marker_blacklist": [
+      "gif",
+      "hi",
+      "hello",
+      "hey",
+      "message",
+      "send",
+      "your turn",
+      "new match",
+      "new matches",
+      "likes you",
+      "tinder gold",
+      "select a plan",
+      "continue",
+      "聊天",
+      "新的配对",
+      "消息",
+      "发送",
+      "等你回应",
+      "查看谁喜欢你",
+      "选择套餐",
+      "继续"
+    ],
     "visual_only_exact_verification_allowed": false
   },
   "live_send_requirements": {

@@ -63,6 +63,8 @@ def validate_thread_observation_contract(item: dict[str, Any], *, path: str, err
         draft_payload = item.get("draft")
         _validate_object_fields(draft_payload, DRAFT_REQUIRED_FIELDS, f"{path}.draft", errors)
         if isinstance(draft_payload, dict):
+            for field in ("naturalness_notes", "risk_flags", "missing_info"):
+                _require_string_list(draft_payload, field, f"{path}.draft", errors)
             try:
                 parse_draft_response(draft_payload)
             except (KeyError, TypeError, ValueError) as exc:
@@ -81,3 +83,9 @@ def _validate_object_fields(value: Any, fields: list[str], path: str, errors: li
     for field in fields:
         if field not in value:
             errors.append(f"{path}.{field} is required")
+
+
+def _require_string_list(value: dict[str, Any], key: str, path: str, errors: list[str]) -> None:
+    items = value.get(key)
+    if not isinstance(items, list) or not all(isinstance(item, str) for item in items):
+        errors.append(f"{path}.{key} must be a list of strings")

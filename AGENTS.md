@@ -141,6 +141,7 @@ dating-boost runtime select --data-dir .local/dating-boost --app-id tinder --run
 dating-boost harness doctor --app-id tinder --data-dir .local/dating-boost --json
 dating-boost harness tinder launch --dry-run --data-dir .local/dating-boost --json
 dating-boost harness tinder observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
+dating-boost harness tinder action prepare-message-page --data-dir .local/dating-boost --output-dir .local/dating-boost-harness --json
 dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --data-dir .local/dating-boost --json
 dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --data-dir .local/dating-boost --json
 dating-boost harness tinder workflow new-match-open --dry-run --options-json tinder-new-match-options.json --data-dir .local/dating-boost --json
@@ -148,9 +149,13 @@ dating-boost harness tinder workflow new-match-read-profile --dry-run --options-
 dating-boost harness tinder action open-conversation --options-json tinder-open-conversation-options.json --data-dir .local/dating-boost --json
 dating-boost harness tinder action dismiss-subscription-paywall --data-dir .local/dating-boost --json
 dating-boost harness tinder action dismiss-feedback-survey --data-dir .local/dating-boost --json
+dating-boost harness tinder stage-draft --text-file tinder-draft.txt --data-dir .local/dating-boost --dry-run --json
 ```
 
+`prepare-message-page` 会把 Tinder 规整到消息列表：如果已在普通会话则返回列表，如果在顶层页则点聊天 tab，然后返回 `next_host_action=visual_plan_message_list`。后续由 host agent 视觉规划消息列表；不要先跑 OCR 再回退视觉，也不要用固定 row 坐标直接进入聊天线程。
+`stage-draft` 是 stage-only：只粘贴草稿并验证输入框 staged text，不点击 Send；真实执行必须传 `--data-dir`，让 safety pause 可以阻断 staging。
 `chat-read-match-profile` 只用于已有消息行。`new-match-open` 打开未开聊匹配并停在会话页。`new-match-read-profile` 读取未开聊匹配资料后回到当前会话。
+已有普通会话优先用 `open-conversation` 的 `visible_name` 或 `target_binding` 让 harness 用 OCR TSV 定位行。emoji 或非 OCR 昵称使用 `chat_list_row_to_thread` 结构证据，并在 options JSON 里携带 `message_list_evidence.visual_anchor_hash`、`visual_anchor_region`、可选 `tap_ratio`/`visual_anchor_scan_region`，让 harness 在当前消息列表截图中重定位该行；固定 `row_index` 只是兼容 fallback。若已经在目标线程内，可用 `current_thread_visual_identity` 绑定 `thread_evidence.visual_anchor_hash` 验证当前线程视觉身份；若发送/预 staging 前该视觉身份不匹配，且同一目标绑定里有 `message_list_evidence` 视觉锚点，harness 会返回消息列表、按视觉锚点重开同一行并重新验证目标。它不替代 staged-text OCR 或 outbound verification。Tinder managed live send 必须携带 `chat_list_row_to_thread` 或 `current_thread_visual_identity` 结构化目标绑定，不能只靠 `visible_name`/OCR 名字。不要用 `Aa`、`GIF`、`Send`、`聊天`、`等你回应` 这类通用 UI marker 代替目标绑定。
 
 如果出现订阅、Gold、Likes You、plan-selection paywall，只能关闭并重新导航；subscription purchase 或 plan selection 不是 agent action。反馈问卷用 ignore/no-rating 路径关闭，`rating_submitted` 必须是 false。
 
@@ -162,12 +167,18 @@ dating-boost harness doctor --app-id bumble --data-dir .local/dating-boost --jso
 dating-boost harness bumble launch --dry-run --data-dir .local/dating-boost --json
 dating-boost harness bumble observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
 dating-boost harness bumble action open-chats --dry-run --data-dir .local/dating-boost --json
+dating-boost harness bumble action prepare-message-page --data-dir .local/dating-boost --output-dir .local/dating-boost-harness --json
+dating-boost harness bumble action open-conversation --options-json bumble-open-conversation-options.json --data-dir .local/dating-boost --json
 dating-boost harness bumble workflow browse-profile-read --dry-run --options-json bumble-profile-options.json --data-dir .local/dating-boost --json
 dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --data-dir .local/dating-boost --json
 dating-boost harness bumble workflow opening-move-open --dry-run --options-json bumble-opening-move-options.json --data-dir .local/dating-boost --json
+dating-boost harness bumble stage-draft --text-file bumble-draft.txt --data-dir .local/dating-boost --dry-run --json
 ```
 
 Opening Move 是 role-sensitive：女性用户场景下 agent 不决定是否启用/跳过，也不判断男性回复是否足够好；男性用户场景下可以为用户 review 起草 Opening Move 回复。
+`prepare-message-page` 会把 Bumble 规整到聊天列表：如果已在普通会话或 Opening Move 页则返回列表，如果在顶层页则点聊天 tab，然后返回 `next_host_action=visual_plan_message_list`。后续由 host agent 视觉规划聊天列表；不要用固定 row 坐标直接进入聊天线程。
+`stage-draft` 是 stage-only：只粘贴草稿并验证输入框 staged text，不点击 Send；OCR 不足时等待 host staged verification，不记录发送结果。
+已有普通会话优先用 `open-conversation` 的 `visible_name` 或 `target_binding` 让 harness 用 OCR TSV 定位行。emoji 或非 OCR 昵称使用 `chat_list_row_to_thread` 结构证据，并在 options JSON 里携带 `message_list_evidence.visual_anchor_hash`、`visual_anchor_region`、可选 `tap_ratio`/`visual_anchor_scan_region`，让 harness 在当前聊天列表截图中重定位该行；固定 `row_index` 只是兼容 fallback。若已经在目标线程内，可用 `current_thread_visual_identity` 绑定 `thread_evidence.visual_anchor_hash` 验证当前线程视觉身份；若发送/预 staging 前该视觉身份不匹配，且同一目标绑定里有 `message_list_evidence` 视觉锚点，harness 会返回聊天列表、按视觉锚点重开同一行并重新验证目标。它不替代 staged-text OCR 或 outbound verification。Bumble managed live send 必须携带 `chat_list_row_to_thread` 或 `current_thread_visual_identity` 结构化目标绑定，不能只靠 `visible_name`/OCR 名字。不要用 `Aa`、`GIF`、`Send`、`Opening Move`、`聊天` 这类通用 UI marker 代替目标绑定。
 
 ## TaShuo quick path
 
@@ -235,6 +246,16 @@ dating-boost managed-session stop --data-dir .local/dating-boost --json
 生产默认 `--management-mode conservative`；真实链路压测可显式使用 `--management-mode high-throughput --max-threads-per-cycle N --cycle-send-limit N`。高吞吐只提高每轮处理/发送预算，不绕过授权、target binding、staged-text verification 或 post-send verification。不要让用户设置 `max_pages_per_cycle`；消息列表扫描到第一个 7 天无进展的历史行后停止，后面的行不属于本轮托管窗口。
 TaShuo 本地 iOS app 托管必须显式传 `--harness-runtime mac-ios-app`。如果当前 `runtime select` 已选择 mac-ios-app 而命令漏传 runtime，会被 `runtime_scope_mismatch` 阻断，不允许回落到默认 iPhone Mirroring runtime。
 `managed-session run/tick` 返回 `relationship_progress_snapshot`，用于 host 展示本轮全对象状态摘要、下一优先队列和每个对象下一步；`managed-session stop` 和 host-loop final response 返回用户可读 `relationship_progress_report`。
+
+Tinder/Bumble iPhone Mirroring 托管 stage smoke：
+
+```bash
+python3 scripts/iphone_mirroring_managed_smoke.py --app-id tinder --data-dir .local/dating-boost --work-dir .local/dating-boost-iphone-smoke --authorization auth.json --goal goal.json --availability availability.json --json
+python3 scripts/iphone_mirroring_managed_smoke.py --app-id bumble --data-dir .local/dating-boost --work-dir .local/dating-boost-iphone-smoke --authorization auth.json --goal goal.json --availability availability.json --json
+```
+
+该 smoke 会先运行 skill doctor、release doctor、data doctor/migrate 和 capabilities 兼容性检查，并确认 direct harness 仍是 executor-internal only；任何前置 gate 失败都会在启动真实 GUI 前阻断。该 smoke 默认不自动确认 managed-session 配置；如果返回 `managed_session_config_confirmation_required`，先展示/检查 `proposed_config`，用户确认后再用 `--accept-managed-session-config` 重跑。iPhone Mirroring 锁定或不可用时返回 blocked reason，按实机不可用跳过，不伪造成功。
+Tinder/Bumble iPhone Mirroring stage/send 在粘贴前必须检查当前输入框是否已有未发送内容；若 baseline composer 看起来已占用，必须在读取剪贴板或粘贴前阻断，不能把新草稿追加到旧文本上。
 
 当 `managed-session run --wait` 返回 `host_work_required`，host agent 处理其中的 operator work item。如果用 host-loop supervisor 处理，使用同一个 data/work dir 运行：
 

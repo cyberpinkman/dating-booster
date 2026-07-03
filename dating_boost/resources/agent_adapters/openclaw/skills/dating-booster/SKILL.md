@@ -182,6 +182,7 @@ dating-boost harness tinder workflow new-match-read-profile --dry-run --options-
 dating-boost harness tinder action open-conversation --options-json tinder-open-iris-options.json --data-dir .local/dating-boost --json
 dating-boost harness tinder action dismiss-subscription-paywall --data-dir .local/dating-boost --json
 dating-boost harness tinder action dismiss-feedback-survey --data-dir .local/dating-boost --json
+dating-boost harness tinder stage-draft --text-file tinder-draft.txt --dry-run --data-dir .local/dating-boost --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --data-dir .local/dating-boost --json
 ```
 
@@ -191,6 +192,8 @@ chats for the next candidate. Use `chat-read-match-profile` for existing
 conversation rows.
 For existing conversations, prefer `open-conversation --options-json <path>` with `visible_name` or `target_binding`; row coordinates are compatibility
 fallbacks only. Keep target-binding evidence inside the options JSON.
+If `current_thread_visual_identity` mismatches before stage/send and the same target binding includes `message_list_evidence` with a row visual anchor, the harness can return to chats, relocate that row by visual anchor, reopen it, and retry target verification before staging.
+Use `harness tinder stage-draft` for stage-only review: it verifies staged input text and must not click Send.
 
 If `harness tinder observe` or any send/navigation result reports
 `tinder_subscription_paywall`, `subscription_paywall_visible`, or
@@ -219,6 +222,26 @@ dating-boost harness wechat send-message --text-file wechat-draft.txt --data-dir
 
 Prefer `--text-file` so private draft text does not enter shell history or
 process arguments.
+
+## Bumble iPhone Mirroring Harness
+
+Use the Bumble harness for iPhone Mirroring work:
+
+```bash
+dating-boost runtime select --data-dir .local/dating-boost --app-id bumble --runtime default --json
+dating-boost harness doctor --app-id bumble --data-dir .local/dating-boost --json
+dating-boost harness bumble launch --dry-run --data-dir .local/dating-boost --json
+dating-boost harness bumble observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
+dating-boost harness bumble action open-chats --dry-run --data-dir .local/dating-boost --json
+dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --data-dir .local/dating-boost --json
+dating-boost harness bumble workflow opening-move-open --dry-run --options-json bumble-opening-move-options.json --data-dir .local/dating-boost --json
+dating-boost harness bumble stage-draft --text-file bumble-draft.txt --dry-run --data-dir .local/dating-boost --json
+dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --data-dir .local/dating-boost --json
+```
+
+Bumble live send is limited to ordinary chat messages. Opening Move is role-sensitive: for women, the user decides whether to start, skip, or accept Opening Move; for men, OpenClaw may draft a response for user confirmation, but must not autonomously send an Opening Move response.
+If `current_thread_visual_identity` mismatches before stage/send and the same target binding includes `message_list_evidence` with a row visual anchor, the harness can return to chats, relocate that row by visual anchor, reopen it, and retry target verification before staging.
+Use `harness bumble stage-draft` for stage-only review: it verifies staged input text and must not click Send.
 
 ## Managed Live-Send
 

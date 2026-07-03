@@ -258,6 +258,7 @@ dating-boost harness tinder launch --dry-run --data-dir .local/dating-boost --js
 dating-boost harness tinder open-profile --dry-run --data-dir .local/dating-boost --json
 dating-boost harness tinder open-profile --launch-if-needed --data-dir .local/dating-boost --json
 dating-boost harness tinder observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
+dating-boost harness tinder action prepare-message-page --data-dir .local/dating-boost --output-dir .local/dating-boost-harness --json
 dating-boost harness tinder action profile-photo-next --dry-run --data-dir .local/dating-boost --json
 dating-boost harness tinder workflow self-profile-read --dry-run --options-json tinder-self-profile-options.json --data-dir .local/dating-boost --json
 dating-boost harness tinder workflow chat-read-match-profile --dry-run --options-json tinder-chat-profile-options.json --data-dir .local/dating-boost --json
@@ -266,10 +267,17 @@ dating-boost harness tinder workflow new-match-read-profile --dry-run --options-
 dating-boost harness tinder action open-conversation --options-json tinder-open-iris-options.json --data-dir .local/dating-boost --json
 dating-boost harness tinder action dismiss-subscription-paywall --data-dir .local/dating-boost --json
 dating-boost harness tinder action dismiss-feedback-survey --data-dir .local/dating-boost --json
+dating-boost harness tinder stage-draft --text-file tinder-draft.txt --dry-run --data-dir .local/dating-boost --json
 dating-boost harness tinder send-message --text-file tinder-draft.txt --dry-run --data-dir .local/dating-boost --json
 ```
 
-Use `dating-boost harness tinder open-profile --data-dir .local/dating-boost --json` only for safe navigation
+Use `dating-boost harness tinder action prepare-message-page --data-dir .local/dating-boost --json`
+at message-list planning startup. It returns from an open conversation to the
+message list, or taps the chats tab from a top-level Tinder page, then stops
+with `next_host_action=visual_plan_message_list` so the host can plan rows from
+the fresh screenshot. Do not use fixed row coordinates as the first choice after
+prepare; collect `message_list_evidence` with a visual row anchor for non-OCR
+rows. Use `dating-boost harness tinder open-profile --data-dir .local/dating-boost --json` only for safe navigation
 to the Tinder profile tab after doctor confirms the mirrored window is unlocked.
 If Tinder is not already verified foreground, use `--launch-if-needed`; the
 harness returns iPhone Mirroring to Home Screen and opens Tinder through
@@ -296,6 +304,14 @@ allowed, an unpaused safety switch, a policy-checked/hash-bound action request,
 target-chat binding, staged-text OCR verification, outbound-bubble verification,
 and a `post_action_observation_id`. It must not like, super-like, unmatch,
 report, or edit profile data.
+For stage-only Tinder runs, `harness tinder stage-draft` may paste a
+policy-checked draft into the current ordinary conversation and verify the
+staged input text without clicking Send. It must use `--data-dir` for real
+staging so safety pause can block it. If OCR evidence is insufficient, the
+host-loop must wait for staged verification instead of recording a send result.
+If the baseline Tinder composer appears occupied by non-payload text, the
+harness must block before reading the clipboard or pasting; never append a new
+draft onto existing input.
 
 If observe, navigation, or send returns `tinder_subscription_paywall`,
 `subscription_paywall_visible`, or `tinder_subscription_paywall_dismissed`, do
@@ -309,6 +325,30 @@ or `feedback_survey_visible`, run
 `dating-boost harness tinder action dismiss-feedback-survey --data-dir .local/dating-boost --json`. This must
 use the ignore/no-rating path; `rating_submitted` must remain false.
 
+For existing Tinder conversations, prefer `open-conversation --options-json
+<path>` with OCR-readable `visible_name` or `target_binding`. For emoji or
+otherwise non-OCR nicknames, keep the same target and use
+`chat_list_row_to_thread` structural binding plus `message_list_evidence` with
+`visual_anchor_hash`, `visual_anchor_region`, and optional `tap_ratio` /
+`visual_anchor_scan_region`. The iPhone Mirroring harness scans the current
+message list for that visual anchor, returns from an already-open thread to
+chats when needed, opens the matched row, and verifies the ordinary conversation.
+If already in the intended thread, `current_thread_visual_identity` may bind
+`thread_evidence.visual_anchor_hash` to verify the current conversation before
+staging. If that visual identity mismatches before send/stage and the same
+target binding carries `message_list_evidence` with a row visual anchor, the
+harness returns to the message list, relocates the row by visual anchor, reopens
+it, and retries target verification before staging. It verifies target identity
+only; staged-text OCR, input-cleared evidence, and outbound verification remain
+required.
+Tinder managed live send must carry `chat_list_row_to_thread` or
+`current_thread_visual_identity` structural target binding. `visible_name` or
+header OCR alone is only navigation assistance and is insufficient for live
+send.
+Do not replace the target with generic UI markers such as `Aa`, `GIF`, `Send`,
+`聊天`, or `等你回应`; fixed `row_index` coordinates are only a compatibility
+fallback.
+
 ## Bumble iPhone Mirroring Input
 
 Bumble supports navigation plus opt-in managed ordinary chat send. Before real
@@ -320,13 +360,19 @@ dating-boost harness doctor --app-id bumble --data-dir .local/dating-boost --jso
 dating-boost harness bumble launch --dry-run --data-dir .local/dating-boost --json
 dating-boost harness bumble observe --output-dir .local/dating-boost-harness --data-dir .local/dating-boost --json
 dating-boost harness bumble action open-chats --dry-run --data-dir .local/dating-boost --json
+dating-boost harness bumble action prepare-message-page --data-dir .local/dating-boost --output-dir .local/dating-boost-harness --json
 dating-boost harness bumble workflow browse-profile-read --dry-run --options-json bumble-profile-options.json --data-dir .local/dating-boost --json
 dating-boost harness bumble workflow chat-read-match-profile --dry-run --options-json bumble-chat-profile-options.json --data-dir .local/dating-boost --json
 dating-boost harness bumble workflow opening-move-open --dry-run --options-json bumble-opening-move-options.json --data-dir .local/dating-boost --json
+dating-boost harness bumble stage-draft --text-file bumble-draft.txt --dry-run --data-dir .local/dating-boost --json
 dating-boost harness bumble send-message --text-file bumble-draft.txt --dry-run --data-dir .local/dating-boost --json
 ```
 
-Use `harness bumble observe` before choosing a bounded navigation action. It
+Use `harness bumble action prepare-message-page` at chat-list planning startup.
+It returns from a conversation or Opening Move page to the chat list, or taps
+the chats tab from a top-level Bumble page, then stops with
+`next_host_action=visual_plan_message_list` so the host can plan rows from the
+fresh screenshot. Use `harness bumble observe` before choosing a bounded navigation action. It
 returns redacted page/layout hints for browse cards, self profile, discover,
 liked-you, chat list, conversations, Opening Move prompts, visible reply
 deadlines such as `轮到您了`/`小时后失效`, and Premium gates. Safe navigation may
@@ -342,6 +388,38 @@ does not satisfy exact-text verification. It must not like, pass, SuperSwipe,
 unmatch, report, edit profile, call, video-call, or purchase Premium. Do not use
 horizontal swipes on Bumble browse cards for read-only work; they can like or
 pass.
+For stage-only Bumble runs, `harness bumble stage-draft` may paste a
+policy-checked draft into the current ordinary conversation and verify the
+staged input text without clicking Send. It must use `--data-dir` for real
+staging so safety pause can block it. Opening Move replies remain
+user-confirmation paths and are not autonomous stage/send work.
+If the baseline Bumble composer already shows an active Send button, the
+harness must block before reading the clipboard or pasting; never append a new
+draft onto existing input.
+
+For existing Bumble conversations, prefer
+`action open-conversation --options-json <path>` with `visible_name` or
+`target_binding` when the visible row text is OCR-readable. The harness locates
+the row with OCR TSV, taps the located row, and verifies the resulting ordinary
+conversation before staging. Fixed `row_index` coordinates are a compatibility
+fallback, not the preferred path. For emoji or non-OCR nicknames, carry
+`chat_list_row_to_thread` structural evidence plus `message_list_evidence` with
+`visual_anchor_hash`, `visual_anchor_region`, and optional `tap_ratio` /
+`visual_anchor_scan_region`; the harness scans the current chat list for the
+row visual anchor and verifies the opened ordinary conversation. Do not replace
+the target with a generic OCR marker such as `Aa`, `GIF`, `Send`,
+`Opening Move`, or `聊天`. If already in the intended thread,
+`current_thread_visual_identity` may bind `thread_evidence.visual_anchor_hash`
+to verify the current conversation before staging. If that visual identity
+mismatches before send/stage and the same target binding carries
+`message_list_evidence` with a row visual anchor, the harness returns to the
+chat list, relocates the row by visual anchor, reopens it, and retries target
+verification before staging. It verifies target identity only; staged-text OCR,
+input-cleared evidence, and outbound verification remain required.
+Bumble managed live send must carry `chat_list_row_to_thread` or
+`current_thread_visual_identity` structural target binding. `visible_name` or
+header OCR alone is only navigation assistance and is insufficient for live
+send.
 
 Opening Move is role-sensitive. For a female user's account, do not decide
 whether to enable Opening Move, skip it, accept a male reply, or reject a male
@@ -619,6 +697,13 @@ mac-ios-app and this flag is omitted, the run must block with
 `runtime_scope_mismatch` before any default-runtime GUI adapter is created.
 For a real TaShuo mac-ios-app managed smoke check without sending messages, use
 `python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`.
+For Tinder/Bumble iPhone Mirroring managed stage smoke, use
+`python3 scripts/iphone_mirroring_managed_smoke.py --app-id tinder --data-dir .local/dating-boost --work-dir .local/dating-boost-iphone-smoke --authorization auth.json --goal goal.json --availability availability.json --json`
+or the same command with `--app-id bumble`. The wrapper does not auto-confirm
+managed-session config by default; inspect `proposed_config` and rerun with
+`--accept-managed-session-config` only after explicit confirmation. If iPhone
+Mirroring is locked or unavailable, treat the returned blocked reason as a real
+environment skip, not a product success.
 `managed-session run/tick` includes `relationship_progress_snapshot`; use it to
 summarize all-object state, waiting reasons, next wake, and the next priority
 queue while the session remains active. Stop/final responses include the

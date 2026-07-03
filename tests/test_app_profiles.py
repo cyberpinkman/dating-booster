@@ -223,11 +223,67 @@ class AppProfileContractTests(unittest.TestCase):
         self.assertTrue(mac_runtime["target_binding"]["visual_only_exact_verification_allowed"])
         self.assertTrue(mac_runtime["live_send_requirements"]["visual_only_exact_verification_allowed"])
 
+    def test_tinder_and_bumble_default_iphone_mirroring_support_stage_draft(self):
+        for app_id in ("tinder", "bumble"):
+            with self.subTest(app_id=app_id):
+                profile = json.loads((PROFILE_DIR / f"{app_id}.json").read_text(encoding="utf-8"))
+
+                self.assertIn("prepare_message_page", profile["native_gui_harness"]["supported_stage_actions"])
+                self.assertIn("stage_draft", profile["native_gui_harness"]["supported_stage_actions"])
+                self.assertIn("prepare_message_page", profile["capabilities"]["stage_actions"])
+                self.assertIn("stage_draft", profile["capabilities"]["stage_actions"])
+
     def test_iphone_dating_apps_allow_row_to_thread_binding_for_non_ocr_nicknames(self):
         for app_id in ("tinder", "bumble", "tashuo"):
             with self.subTest(app_id=app_id):
                 profile = json.loads((PROFILE_DIR / f"{app_id}.json").read_text(encoding="utf-8"))
                 self.assertIn("chat_list_row_to_thread", profile["target_binding"]["allowed_structural_binding_types"])
+
+    def test_discovery_apps_allow_current_thread_visual_identity_binding(self):
+        for app_id in ("tinder", "bumble", "tashuo"):
+            with self.subTest(app_id=app_id):
+                profile = json.loads((PROFILE_DIR / f"{app_id}.json").read_text(encoding="utf-8"))
+                self.assertIn(
+                    "current_thread_visual_identity",
+                    profile["target_binding"]["allowed_structural_binding_types"],
+                )
+                pitfalls = "\n".join(profile["known_gui_pitfalls"])
+                self.assertIn("visual_anchor", pitfalls)
+
+    def test_iphone_dating_apps_recover_current_thread_visual_mismatch_by_message_list_anchor(self):
+        for app_id in ("tinder", "bumble"):
+            with self.subTest(app_id=app_id):
+                profile = json.loads((PROFILE_DIR / f"{app_id}.json").read_text(encoding="utf-8"))
+                recovery = profile["target_binding"]["current_thread_mismatch_recovery"]
+
+                self.assertTrue(recovery["supported"])
+                self.assertEqual(recovery["method"], "message_list_visual_anchor_relocation")
+                self.assertTrue(recovery["requires_message_list_evidence"])
+                self.assertEqual(recovery["max_attempts"], 3)
+                self.assertFalse(recovery["uses_fixed_row_index"])
+                pitfalls = "\n".join(profile["known_gui_pitfalls"])
+                self.assertIn("current_thread_visual_identity mismatches", pitfalls)
+                self.assertIn("retries target verification before staging", pitfalls)
+
+    def test_iphone_dating_apps_block_occupied_input_before_staging(self):
+        for app_id in ("tinder", "bumble"):
+            with self.subTest(app_id=app_id):
+                profile = json.loads((PROFILE_DIR / f"{app_id}.json").read_text(encoding="utf-8"))
+                stage_rules = "\n".join(profile["stage_send_verification"])
+                pitfalls = "\n".join(profile["known_gui_pitfalls"])
+
+                self.assertIn("Before paste", stage_rules)
+                self.assertIn("never append", stage_rules)
+                self.assertIn("blocks before reading the clipboard or pasting", pitfalls)
+
+    def test_discovery_apps_require_target_specific_binding_markers_for_live_send(self):
+        for app_id in ("tinder", "bumble", "tashuo"):
+            with self.subTest(app_id=app_id):
+                profile = json.loads((PROFILE_DIR / f"{app_id}.json").read_text(encoding="utf-8"))
+                target_binding = profile["target_binding"]
+
+                self.assertTrue(target_binding["requires_target_specific_marker"])
+                self.assertIn("send", target_binding["generic_marker_blacklist"])
 
     def test_live_send_required_evidence_names_match_harness_payload_keys(self):
         known_evidence_keys = {
