@@ -1,20 +1,15 @@
 from __future__ import annotations
 
-import hashlib
-import json
-import os
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 from dating_boost.core.automation_prioritization import (
     HISTORICAL_THREAD_CUTOFF_DAYS,
     _candidate_type_for_entry,
-    _entry_has_reply_cue,
     _entry_history_reason,
     _is_handoff_assessment,
     _is_non_chat_message_list_entry,
-    _is_non_chat_message_list_state,
     _next_priority_queue,
     _prioritize_entries,
     _split_entries_at_history_cutoff,
@@ -26,18 +21,14 @@ from dating_boost.core.automation_report import (
     _report_with_memory_display,
 )
 from dating_boost.core.context_pack import build_context_pack
-from dating_boost.core.draft_evidence import build_draft_evidence
-from dating_boost.core.draft_generation_audit import DraftGenerationAuditRepository
-from dating_boost.core.draft_review_audit import DraftReviewAuditRepository
 from dating_boost.core.goals import DEFAULT_GOAL_TYPE, get_goal_type_definition
 from dating_boost.core.memory.ingest import store_observation_with_memory
 from dating_boost.core.memory.proposals import extract_proposals
 from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.core.memory.retrieval import build_memory_context
 from dating_boost.core.memory.review_queue import ReviewQueueRepository
-from dating_boost.core.models import Divergence, ReplyMode
+from dating_boost.core.models import ReplyMode
 from dating_boost.core.planner import PlannerRepository, planner_context_items
-from dating_boost.core.production_store import payload_digest
 from dating_boost.core.relationship_report import (
     RELATIONSHIP_PROGRESS_NEXT_ACTION,
     build_relationship_progress_report,
@@ -45,188 +36,35 @@ from dating_boost.core.relationship_report import (
 from dating_boost.core.repositories import JsonMemoryRepository
 from dating_boost.core.storage import JsonStorage
 from dating_boost.core.user_disclosure import UserDisclosureRepository
-from dating_boost.intelligence.reply_generator import DraftResponse
 from dating_boost.perception.observations import AppObservation
-from dating_boost.policy.draft_review import (
-    draft_messages_payload_hash,
-    draft_payload_messages,
-    draft_strategy_evidence,
-    review_draft,
-)
+from dating_boost.policy.draft_review import review_draft
 
-
-ACTIVE_SLOT_STATUSES = {"soft_mentioned", "handoff_pending", "user_confirmed"}
-
-WORK_TOPIC_KEYWORDS = (
-    "工作",
-    "上班",
-    "公司",
-    "职业",
-    "事业",
-    "职场",
-    "同事",
-    "老板",
-    "客户",
-    "项目",
-    "业务",
-    "运营",
-    "产品",
-    "销售",
-    "kpi",
-    "绩效",
-    "加班",
-    "救火",
-    "救火队长",
-    "提前把坑",
-    "坑都填",
-    "开会",
-    "汇报",
+from dating_boost.core.automation_send_gate import (
+    _authorization_revoked_or_expired,
+    _can_request_nudge,
+    _can_request_send,
+    _handoff_reason,
+    _queue_send_request_for_repository,
+    _release_active_send_request_after_failure,
+    _send_authorization_block_reason,
+    _target_profile_ready_for_send,
 )
-
-WORK_HIGH_SALIENCE_MARKERS = (
-    "热爱工作",
-    "喜欢工作",
-    "很喜欢工作",
-    "事业心",
-    "搞事业",
-    "创业",
-    "工作狂",
-    "职业规划",
-    "职场",
-    "管理者",
-    "带团队",
+from dating_boost.core.automation_state import (
+    _action_result_mismatch,
+    _digest,
+    _draft_payload_hash,
+    _goal_type_from_payload,
+    _new_state,
+    _non_empty,
+    _normalize_scan_cursor,
+    _now_iso,
+    _parse_iso_utc,
+    _provisional_match_id,
+    _reserve_slot,
+    _stage_result_mismatch,
+    _state_update,
+    _unique_strings,
 )
-
-LIFESTYLE_HOOK_KEYWORDS = (
-    "露营",
-    "咖啡",
-    "电影",
-    "音乐",
-    "唱歌",
-    "旅行",
-    "看展",
-    "健身",
-    "瑜伽",
-    "美食",
-    "日料",
-    "宠物",
-    "猫",
-    "狗",
-    "桌游",
-    "狼人杀",
-    "户外",
-    "滑雪",
-    "爬山",
-    "摄影",
-    "阅读",
-    "酒吧",
-    "live",
-    "concert",
-)
-
-SLOW_WARM_CONTEXT_MARKERS = ("慢热", "慢慢熟", "慢慢来", "熟了")
-SLOW_WARM_RESTATEMENTS = (
-    "聊天慢慢熟",
-    "慢慢熟",
-    "刚开始话少",
-    "熟了",
-    "熟了会",
-    "慢热",
-)
-TRANSIENT_TOPIC_KEYWORDS = (
-    "天气",
-    "下雨",
-    "雨",
-    "太阳",
-    "雪",
-    "降温",
-    "升温",
-    "今天",
-    "今晚",
-    "刚才",
-    "现在",
-    "weather",
-    "rain",
-    "sun",
-    "sunny",
-    "today",
-    "tonight",
-    "now",
-)
-WEAK_STRATEGIC_DELTA_MARKERS = (
-    "keep",
-    "light exchange",
-    "natural exchange",
-    "继续聊",
-    "轻松",
-    "自然",
-    "接梗",
-    "气氛",
-)
-LOW_VALUE_CONFIRMATION_MARKERS = (
-    "是不是",
-    "是不是也",
-    "是不是还",
-    "是不是就",
-    "是不是直接",
-    "有没有",
-    "有没有也",
-    "会不会",
-    "会不会也",
-    "你是不是也",
-    "你那天是不是",
-)
-UNKNOWN_FOLLOWUP_MARKERS = (
-    "一般",
-    "平时",
-    "通常",
-    "习惯",
-    "会先",
-    "后来",
-    "最后",
-    "怎么",
-    "什么",
-    "干嘛",
-    "玩什么",
-    "做什么",
-    "哪",
-    "安排",
-    "处理",
-    "改成",
-    "变成",
-)
-ANSWERABLE_HANDLE_MARKERS = (
-    "?",
-    "？",
-    "吗",
-    "嘛",
-    "么",
-    "呢",
-    "是不是",
-    "会不会",
-    "哪",
-    "什么",
-    "怎么",
-    "谁",
-    "几",
-    "多少",
-    "我",
-    "咱",
-    "我们",
-    "下次",
-    "改天",
-    "周末",
-    "见",
-    "线下",
-    "咖啡",
-    "吃",
-    "喝",
-    "一起",
-)
-
-
-from dating_boost.core.automation_send_gate import *
-from dating_boost.core.automation_state import *
 
 
 class AutomationRepository:
@@ -1240,230 +1078,21 @@ class AutomationRepository:
         target_binding: Any = None,
         standalone_draft_review: Any = None,
     ) -> None:
-        raw_draft = dict(draft_payload)
-        draft = _draft_from_dict(raw_draft)
-        disclosure_repo = UserDisclosureRepository(self.root)
-        disclosure_source = str(
-            raw_draft.get("disclosure_source") or ("simulated_soft" if draft.conversation_move in {
-                "light_self_disclosure",
-                "reciprocal_disclosure",
-                "low_investment_repair",
-            } else "none")
-        )
-        used_material_ids = [
-            str(item)
-            for item in raw_draft.get("used_user_material_ids", [])
-            if str(item).strip()
-        ] if isinstance(raw_draft.get("used_user_material_ids"), list) else []
-
-        evidence = build_draft_evidence(
-            self.root,
-            match_id,
-            reply_mode=ReplyMode.ADAPTIVE,
+        _queue_send_request_for_repository(
+            self,
+            action_requests=action_requests,
+            scan_requests=scan_requests,
+            warnings=warnings,
+            state=state,
+            match_id=match_id,
+            candidate_key=candidate_key,
             observation=observation,
-            draft_kind="nudge" if is_nudge else "reply",
-            now=self._now(),
-            app_id=observation.app_id,
-            runtime=observation.provenance.get("runtime") or observation.provenance.get("harness_runtime") or "default",
-            require_user_profile_source=True,
-        )
-        if evidence.status != "ok":
-            _mark_draft_revision_required(state, reason=evidence.primary_reason or "draft_evidence_blocked")
-            warnings.append(evidence.primary_reason or "draft_evidence_blocked")
-            warnings.append("draft_evidence_required")
-            _append_draft_revision_request(
-                scan_requests,
-                candidate_key=candidate_key,
-                match_id=match_id,
-                visible_name=observation.match_identity_hints.visible_name,
-                reason=evidence.primary_reason or "draft_evidence_blocked",
-            )
-            return
-
-        stage_only_generation_soft_accept = _stage_only_generation_soft_accept_allowed(
-            raw_draft,
+            draft_payload=draft_payload,
+            latest_fingerprint=latest_fingerprint,
+            is_nudge=is_nudge,
             authorization=authorization,
-            standalone_draft_review=standalone_draft_review,
-        )
-        generation_contract_reason = _host_supplied_generation_contract_block_reason(
-            raw_draft,
-            allow_stage_only_soft_accept=stage_only_generation_soft_accept,
-        )
-        if generation_contract_reason is not None:
-            _mark_draft_revision_required(state, reason=generation_contract_reason)
-            warnings.append(generation_contract_reason)
-            warnings.append("draft_generation_required")
-            _append_draft_revision_request(
-                scan_requests,
-                candidate_key=candidate_key,
-                match_id=match_id,
-                visible_name=observation.match_identity_hints.visible_name,
-                reason=generation_contract_reason,
-            )
-            return
-
-        generation_binding = _host_supplied_generation_binding(
-            self.root,
-            evidence_id=evidence.evidence_id,
-            context_pack=evidence.context_pack,
-            draft_payload=raw_draft,
-            created_at=self._now(),
-            allow_stage_only_soft_accept=stage_only_generation_soft_accept,
-        )
-        self_review_probability = int(generation_binding["draft_self_review_summary"]["ai_or_weird_probability"])
-        if self_review_probability > 40 and not stage_only_generation_soft_accept:
-            _mark_draft_revision_required(state, reason="draft_self_review_probability_high")
-            warnings.append("draft_self_review_probability_high")
-            warnings.append("draft_revision_required")
-            _append_draft_revision_request(
-                scan_requests,
-                candidate_key=candidate_key,
-                match_id=match_id,
-                visible_name=observation.match_identity_hints.visible_name,
-                reason="draft_self_review_probability_high",
-            )
-            return
-        if self_review_probability > 40:
-            warnings.append("stage_only_draft_self_review_soft_accepted")
-
-        context_pack = evidence.context_pack
-        review = review_draft(
-            raw_draft,
-            context_pack,
-            mode="managed_live",
-            observation=observation,
+            review_draft_fn=review_draft,
             planner_recommendation=planner_recommendation,
-            disclosure_profile=disclosure_repo.load_profile_or_none(),
-        )
-        DraftReviewAuditRepository(self.root).append_review(
-            review,
-            draft_payload=raw_draft,
-            context_pack=context_pack,
-            mode="managed_live",
-            target_match_id=match_id,
-        )
-        stage_only_review_soft_accept = _stage_only_review_soft_accept_allowed(
-            authorization=authorization,
-            review=review,
+            target_binding=target_binding,
             standalone_draft_review=standalone_draft_review,
         )
-        if not review.allowed_for_managed_send and not stage_only_review_soft_accept:
-            _mark_draft_revision_required(state, reason=review.primary_reason)
-            finding_codes = [finding.code for finding in review.findings]
-            warnings.extend(code for code in finding_codes if code not in warnings)
-            if any(finding.category == "content" for finding in review.findings):
-                warnings.append("draft_blocked")
-            warnings.append("draft_revision_required")
-            _append_draft_revision_request(
-                scan_requests,
-                candidate_key=candidate_key,
-                match_id=match_id,
-                visible_name=observation.match_identity_hints.visible_name,
-                reason=review.primary_reason,
-            )
-            return
-        if stage_only_review_soft_accept:
-            warnings.append("stage_only_draft_review_soft_accepted")
-
-        payload_messages = draft_payload_messages(raw_draft, draft.best_reply)
-        payload_hash = draft_messages_payload_hash(payload_messages)
-        retry_suffix = _send_retry_suffix(state, payload_hash)
-        if state.get("last_outbound_payload_hash") == payload_hash:
-            if _state_has_active_send_request(state):
-                warnings.append("duplicate_send_request_suppressed")
-                return
-            retry_suffix = retry_suffix or _stale_same_payload_retry_suffix(state)
-        if retry_suffix:
-            state["send_retry_count"] = max(int(state.get("send_retry_count") or 0), _retry_suffix_number(retry_suffix))
-
-        action_request_id = f"action_request_{match_id}_{payload_hash[:12]}{retry_suffix}"
-        precondition = {
-            "schema_version": 1,
-            "action": "send_message",
-            "target_match_id": match_id,
-            "candidate_key": candidate_key,
-            "pre_action_observation_id": observation.observation_id,
-            "latest_inbound_fingerprint": latest_fingerprint,
-        }
-        precondition_hash = payload_digest(precondition)
-        autonomous_audit_binding = {
-            "schema_version": 1,
-            "binding_type": "autonomous_authorization",
-            "authorization_id": authorization.get("authorization_id"),
-            "action": "send_message",
-            "target_match_id": match_id,
-            "payload_hash": payload_hash,
-            "precondition_hash": precondition_hash,
-        }
-        low_investment_repair_applied = draft.conversation_move == "low_investment_repair"
-        payload_text = "\n".join(message["text"] for message in payload_messages)
-        action_request = {
-            "schema_version": 1,
-            "action_request_id": action_request_id,
-            "match_id": match_id,
-            "candidate_key": candidate_key,
-            "action": "send_message",
-            "payload_text": payload_text,
-            "payload_hash": payload_hash,
-            "payload_format": "message_sequence" if len(payload_messages) > 1 else "single_message",
-            "payload_messages": payload_messages,
-            "message_count": len(payload_messages),
-            "precondition_hash": precondition_hash,
-            "autonomous_audit_binding": autonomous_audit_binding,
-            "pre_action_observation_id": observation.observation_id,
-            "target_profile_observation": observation.profile_observation.to_dict(),
-            "requires_post_action_verification": True,
-            "policy": {
-                "allowed": review.allowed_for_managed_send or stage_only_review_soft_accept,
-                "allowed_for_stage": review.allowed_for_stage,
-                "allowed_for_managed_send": review.allowed_for_managed_send,
-                "severity": "low" if (review.allowed_for_managed_send or stage_only_review_soft_accept) else "high",
-                "reason": "stage_only_draft_review_soft_accepted" if stage_only_review_soft_accept else review.primary_reason,
-                "requires_user_confirmation": review.requires_user_confirmation,
-                "draft_review_id": review.review_id,
-            },
-            "draft_evidence_id": evidence.evidence_id,
-            "draft_generation_id": generation_binding["draft_generation_id"],
-            "latest_turn_id": evidence.latest_turn_id,
-            "conversation_thread_revision": evidence.conversation_thread_revision,
-            "draft_self_review_summary": generation_binding["draft_self_review_summary"],
-            "draft_review_id": review.review_id,
-            "draft_review_summary": review.summary,
-            "planner_revision": planner_recommendation.get("planner_revision") if planner_recommendation else None,
-            "conversation_stage": planner_recommendation.get("conversation_stage") if planner_recommendation else None,
-            "conversation_move": draft.conversation_move,
-            "planner_alignment": "ok" if planner_recommendation else "not_provided",
-            "next_milestone": planner_recommendation.get("next_milestone") if planner_recommendation else None,
-            "disclosure_source": disclosure_source,
-            "used_user_material_ids": used_material_ids,
-            "question_debt_after": planner_recommendation.get("question_debt") if planner_recommendation else state.get("question_debt"),
-            "reciprocity_balance_after": planner_recommendation.get("reciprocity_balance") if planner_recommendation else state.get("reciprocity_balance"),
-            "low_investment_repair_applied": low_investment_repair_applied,
-            "draft_strategy_evidence": draft_strategy_evidence(
-                raw_draft,
-                planner_recommendation,
-                observation,
-            ),
-        }
-        if isinstance(target_binding, dict):
-            action_request["target_binding"] = dict(target_binding)
-        action_requests.append(action_request)
-        state.pop("draft_revision_required", None)
-        state.pop("draft_revision_reason", None)
-        state.pop("draft_strategy_block_reason", None)
-        state["state"] = "send_requested"
-        state["last_action"] = "send_message"
-        state["last_action_request_id"] = action_request_id
-        state["last_outbound_payload_hash"] = payload_hash
-        state["last_precondition_hash"] = precondition_hash
-        state["last_autonomous_audit_binding"] = autonomous_audit_binding
-        state["last_pre_action_observation_id"] = observation.observation_id
-        state["last_draft_id"] = f"draft_{payload_hash[:12]}"
-        state.pop("last_action_result_error", None)
-        state["last_disclosure_source"] = disclosure_source if disclosure_source != "none" else None
-        state["used_user_material_ids"] = used_material_ids
-        state["low_investment_repair_applied"] = low_investment_repair_applied
-        if is_nudge:
-            state["last_nudged_inbound_fingerprint"] = latest_fingerprint
-            state["nudge_count_since_inbound"] = int(state.get("nudge_count_since_inbound") or 0) + 1
-            state["next_due_at"] = None
