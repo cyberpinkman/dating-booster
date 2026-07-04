@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from dating_boost.apps.iphone_targeting import *
 
+
+def _bumble_guardrails_payload() -> dict[str, Any]:
+    return {
+        "blocked_actions": list(BUMBLE_BLOCKED_GUI_ACTIONS),
+        "opening_move_policy": copy.deepcopy(BUMBLE_OPENING_MOVE_POLICY),
+    }
+
+
 def observe_bumble_screen(self, *, output_dir: Path | None = None) -> dict[str, Any]:
     payload = {
         **self._base_payload("ok"),
