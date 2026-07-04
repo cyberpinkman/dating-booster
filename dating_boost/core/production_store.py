@@ -818,6 +818,17 @@ class ProductionDataStore:
         lock["released_at"] = now_text
         return lock
 
+    def get_lock(self, lock_name: str) -> dict[str, Any] | None:
+        self.ensure_schema()
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM locks WHERE lock_name = ?", (lock_name,)).fetchone()
+        if row is None:
+            return None
+        lock = dict(row)
+        lock["schema_version"] = AUTOMATION_LOCK_SCHEMA_VERSION
+        lock["lock_name"] = lock_name
+        return lock
+
     def force_release_lock(self, lock_name: str, *, now: str | None = None) -> dict[str, Any]:
         self.ensure_schema()
         now_text = now or _now_iso()

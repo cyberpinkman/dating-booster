@@ -18,6 +18,8 @@ DAEMON_STATE_PATH = Path("daemon") / "state.json"
 DAEMON_EVENTS_PATH = Path("daemon") / "events.jsonl"
 DAEMON_STOP_PATH = Path("daemon") / "stop.json"
 LAUNCHD_LABEL = "com.dating-booster.daemon"
+DEFAULT_STOP_WAIT_TIMEOUT_SECONDS = 10.0
+STOP_POLL_INTERVAL_SECONDS = 0.05
 
 
 class DaemonRepository:
@@ -38,11 +40,11 @@ class DaemonRepository:
             }
         self._clear_stop_request()
         try:
-            running = self._write_state(status="running", owner=owner, stop_reason=None, now=now)
+            running = self._write_state(status="running", owner=owner, stop_reason=None, now=now, run_id=run_id)
             self._append_event("heartbeat", {"owner": owner, "once": once, "run_id": run_id}, now=now)
             if once:
                 standalone_payload = _run_standalone_tick(self.root) if standalone_tick else None
-                stopped = self._write_state(status="stopped", owner=owner, stop_reason="once_completed", now=now)
+                stopped = self._write_state(status="stopped", owner=owner, stop_reason="once_completed", now=now, run_id=run_id)
                 return {
                     "schema_version": DAEMON_STATE_SCHEMA_VERSION,
                     "status": "stopped",
@@ -54,7 +56,13 @@ class DaemonRepository:
             interval = _heartbeat_interval()
             while True:
                 if self._stop_requested():
-                    stopped = self._write_state(status="stopped", owner=owner, stop_reason="manual_stop", now=_now_iso())
+                    stopped = self._write_state(
+                        status="stopped",
+                        owner=owner,
+                        stop_reason="manual_stop",
+                        now=_now_iso(),
+                        run_id=run_id,
+                    )
                     self._append_event("stop", {"reason": "manual_stop", "run_id": run_id}, now=_now_iso())
                     return {
                         "schema_version": DAEMON_STATE_SCHEMA_VERSION,
@@ -65,10 +73,22 @@ class DaemonRepository:
                     }
                 time.sleep(interval)
                 heartbeat_at = _now_iso()
-                running = self._write_state(status="running", owner=owner, stop_reason=None, now=heartbeat_at)
+                running = self._write_state(
+                    status="running",
+                    owner=owner,
+                    stop_reason=None,
+                    now=heartbeat_at,
+                    run_id=run_id,
+                )
                 self._append_event("heartbeat", {"owner": owner, "once": once, "run_id": run_id}, now=heartbeat_at)
         except KeyboardInterrupt:
-            stopped = self._write_state(status="stopped", owner=owner, stop_reason="interrupted", now=_now_iso())
+            stopped = self._write_state(
+                status="stopped",
+                owner=owner,
+                stop_reason="interrupted",
+                now=_now_iso(),
+                run_id=run_id,
+            )
             return {
                 "schema_version": DAEMON_STATE_SCHEMA_VERSION,
                 "status": "stopped",
@@ -95,15 +115,46 @@ class DaemonRepository:
         )
         return {"schema_version": DAEMON_STATE_SCHEMA_VERSION, "status": "ok", "state": state}
 
-    def stop(self, *, now: str) -> dict[str, Any]:
-        self._write_stop_request(now=now)
-        state = self._write_state(status="stopped", owner="manual", stop_reason="manual_stop", now=now)
-        self._append_event("stop", {"reason": "manual_stop"}, now=now)
+    def stop(self, *, now: str, wait_timeout_seconds: float | None = None) -> dict[str, Any]:
+        current_state = self._read_state()
+        current_lock = self._store.get_lock("daemon")
+        target_run_id = _active_run_id(current_state, current_lock)
+        target_pid = _active_pid(current_state)
+        self._write_stop_request(now=now, target_run_id=target_run_id, target_pid=target_pid)
+        self._append_event(
+            "stop_requested",
+            {"reason": "manual_stop", "target_run_id": target_run_id, "target_pid": target_pid},
+            now=now,
+        )
+        if target_run_id is not None or target_pid is not None:
+            wait = self._wait_for_stop_ack(
+                target_run_id=target_run_id,
+                target_pid=target_pid,
+                timeout_seconds=_stop_wait_timeout(wait_timeout_seconds),
+            )
+            if wait["status"] == "acknowledged":
+                return {
+                    "schema_version": DAEMON_STATE_SCHEMA_VERSION,
+                    "status": "stopped",
+                    "state": wait["state"],
+                    "lock": wait["lock"],
+                    "stop_wait_status": "acknowledged",
+                }
+
+        state = self._write_state(
+            status="stopped",
+            owner="manual",
+            stop_reason="manual_stop",
+            now=now,
+            run_id=target_run_id,
+        )
+        self._append_event("stop", {"reason": "manual_stop", "target_run_id": target_run_id}, now=now)
         return {
             "schema_version": DAEMON_STATE_SCHEMA_VERSION,
             "status": "stopped",
             "state": state,
             "lock": self._store.force_release_lock("daemon", now=now),
+            "stop_wait_status": "timeout" if target_run_id is not None or target_pid is not None else "no_active_daemon",
         }
 
     def install(self, *, dry_run: bool) -> dict[str, Any]:
@@ -134,7 +185,15 @@ class DaemonRepository:
             "removed": removed,
         }
 
-    def _write_state(self, *, status: str, owner: str, stop_reason: str | None, now: str) -> dict[str, Any]:
+    def _write_state(
+        self,
+        *,
+        status: str,
+        owner: str,
+        stop_reason: str | None,
+        now: str,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
         payload = {
             "schema_version": DAEMON_STATE_SCHEMA_VERSION,
             "status": status,
@@ -143,6 +202,8 @@ class DaemonRepository:
             "stop_reason": stop_reason,
             "pid": os.getpid(),
         }
+        if run_id is not None:
+            payload["run_id"] = run_id
         self._storage.write_json(DAEMON_STATE_PATH, payload)
         return payload
 
@@ -157,7 +218,7 @@ class DaemonRepository:
             },
         )
 
-    def _write_stop_request(self, *, now: str) -> None:
+    def _write_stop_request(self, *, now: str, target_run_id: str | None, target_pid: int | None) -> None:
         self._storage.write_json(
             DAEMON_STOP_PATH,
             {
@@ -165,6 +226,8 @@ class DaemonRepository:
                 "status": "stop_requested",
                 "requested_at": now,
                 "pid": os.getpid(),
+                "target_run_id": target_run_id,
+                "target_pid": target_pid,
             },
         )
 
@@ -175,6 +238,43 @@ class DaemonRepository:
         path = self.root / DAEMON_STOP_PATH
         if path.exists():
             path.unlink()
+
+    def _read_state(self) -> dict[str, Any] | None:
+        path = self.root / DAEMON_STATE_PATH
+        if not path.exists():
+            return None
+        return self._storage.read_json(DAEMON_STATE_PATH, expected_schema_version=DAEMON_STATE_SCHEMA_VERSION)
+
+    def _wait_for_stop_ack(
+        self,
+        *,
+        target_run_id: str | None,
+        target_pid: int | None,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        while True:
+            state = self._read_state()
+            lock = self._store.get_lock("daemon")
+            if _state_acknowledges_stop(state, target_run_id=target_run_id, target_pid=target_pid) and _lock_released(
+                lock,
+                target_run_id=target_run_id,
+            ):
+                return {
+                    "status": "acknowledged",
+                    "state": state,
+                    "lock": lock
+                    or {
+                        "schema_version": 1,
+                        "lock_name": "daemon",
+                        "status": "missing",
+                        "run_id": target_run_id,
+                    },
+                }
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"status": "timeout", "state": state, "lock": lock}
+            time.sleep(min(STOP_POLL_INTERVAL_SECONDS, remaining))
 
 
 def launchd_plist_path() -> Path:
@@ -215,6 +315,59 @@ def _heartbeat_interval() -> float:
         return max(0.01, float(os.environ.get("DATING_BOOST_DAEMON_HEARTBEAT_INTERVAL", "5")))
     except ValueError:
         return 5.0
+
+
+def _stop_wait_timeout(value: float | None) -> float:
+    if value is not None:
+        return max(0.0, float(value))
+    try:
+        return max(0.0, float(os.environ.get("DATING_BOOST_DAEMON_STOP_TIMEOUT", DEFAULT_STOP_WAIT_TIMEOUT_SECONDS)))
+    except ValueError:
+        return DEFAULT_STOP_WAIT_TIMEOUT_SECONDS
+
+
+def _active_run_id(state: dict[str, Any] | None, lock: dict[str, Any] | None) -> str | None:
+    if isinstance(state, dict) and state.get("status") == "running":
+        run_id = state.get("run_id")
+        if isinstance(run_id, str) and run_id:
+            return run_id
+    if isinstance(lock, dict) and lock.get("status") == "active":
+        run_id = lock.get("run_id")
+        if isinstance(run_id, str) and run_id:
+            return run_id
+    return None
+
+
+def _active_pid(state: dict[str, Any] | None) -> int | None:
+    if not isinstance(state, dict) or state.get("status") != "running":
+        return None
+    pid = state.get("pid")
+    return pid if isinstance(pid, int) and not isinstance(pid, bool) else None
+
+
+def _state_acknowledges_stop(
+    state: dict[str, Any] | None,
+    *,
+    target_run_id: str | None,
+    target_pid: int | None,
+) -> bool:
+    if not isinstance(state, dict):
+        return False
+    if state.get("status") != "stopped" or state.get("stop_reason") != "manual_stop":
+        return False
+    if target_run_id is not None and state.get("run_id") != target_run_id:
+        return False
+    if target_pid is not None and state.get("pid") != target_pid:
+        return False
+    return True
+
+
+def _lock_released(lock: dict[str, Any] | None, *, target_run_id: str | None) -> bool:
+    if lock is None:
+        return True
+    if target_run_id is not None and lock.get("run_id") != target_run_id:
+        return True
+    return lock.get("status") != "active"
 
 
 def _now_iso() -> str:

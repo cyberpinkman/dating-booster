@@ -383,6 +383,8 @@ class PublicProductionTests(unittest.TestCase):
 
             self.assertEqual(stop_exit, 0)
             self.assertEqual(stop_payload["status"], "stopped")
+            self.assertEqual(stop_payload["stop_wait_status"], "acknowledged")
+            self.assertEqual(stop_payload["lock"]["status"], "released")
             self.assertEqual(stderr, "")
             self.assertIn('"stop_reason": "manual_stop"', stdout)
             self.assertEqual(run_exit, 0)
