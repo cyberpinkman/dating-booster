@@ -88,32 +88,14 @@ def _initial_tashuo_live_send_payload(
     ).initial_payload(session._base_payload("ok"))
 
 
-def send_tashuo_message(
+def _prepare_tashuo_live_send_context(
     session: Any,
+    payload: dict[str, Any],
     draft_text: str,
     *,
-    dry_run: bool = False,
     output_dir: Path | None = None,
     target_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    steps = _tashuo_live_send_steps(session)
-    input_step = steps["input"]
-    focused_input_step = steps["focused_input"]
-    paste_step = steps["paste"]
-    ax_set_text_step = steps["ax_set_text"]
-    type_fallback_step = steps["type_fallback"]
-    ime_commit_step = steps["ime_commit"]
-    send_step = steps["send"]
-    payload = _initial_tashuo_live_send_payload(
-        session,
-        draft_text=draft_text,
-        dry_run=dry_run,
-        planned_steps=steps["planned"],
-    )
-    if dry_run:
-        return payload
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
     if (
         target_binding is not None
         and _is_mac_ios_app_session(session)
@@ -130,7 +112,7 @@ def send_tashuo_message(
                 "requires_structural_binding": True,
             },
         })
-        return payload
+        return {"return_payload": payload}
 
     capture_prefix = _tashuo_capture_prefix(session)
     preflight_output = output_dir / f"{capture_prefix}.before_send_message.png" if output_dir is not None else None
@@ -138,7 +120,7 @@ def send_tashuo_message(
     payload["preflight"] = preflight
     if preflight.get("status") != "ok":
         payload.update({"status": "blocked", "reason": preflight.get("reason") or "tashuo_preflight_not_verified"})
-        return payload
+        return {"return_payload": payload}
     window = platform._window_from_payload(preflight.get("window") or {})
     preflight_screen = preflight.get("screen") if isinstance(preflight.get("screen"), dict) else {}
     if preflight_screen.get("state") == "tashuo_question_gate":
@@ -147,10 +129,10 @@ def send_tashuo_message(
             "reason": "tashuo_question_gate_requires_user_confirmation",
             "next_host_action": "ask_user_to_confirm_question_gate_reply",
         })
-        return payload
+        return {"return_payload": payload}
     if preflight_screen.get("state") != "tashuo_conversation":
         payload.update({"status": "blocked", "reason": "tashuo_conversation_not_verified"})
-        return payload
+        return {"return_payload": payload}
 
     if target_binding is not None:
         target_verification = _verify_tashuo_target_binding(session, target_binding, output_dir=output_dir)
@@ -180,30 +162,30 @@ def send_tashuo_message(
                         "status": "blocked",
                         "reason": relocation.get("reason") or target_verification.get("reason") or "target_binding_mismatch",
                     })
-                    return payload
+                    return {"return_payload": payload}
             else:
                 payload.update({
                     "status": "blocked",
                     "reason": target_verification.get("reason") or "target_binding_mismatch",
                 })
-                return payload
+                return {"return_payload": payload}
 
     baseline_output = output_dir / f"{capture_prefix}.before_stage_message.png" if output_dir is not None else None
     baseline_screen = _capture_tashuo_window(session, output=baseline_output, window=window, ocr=not _is_mac_ios_app_session(session))
     payload["pre_stage_observation"] = platform._redacted_screen(baseline_screen)
     if baseline_screen.get("status") != "ok":
         payload.update({"status": "blocked", "reason": baseline_screen.get("reason") or "pre_stage_screen_not_captured"})
-        return payload
+        return {"return_payload": payload}
     if baseline_screen.get("state") == "tashuo_question_gate":
         payload.update({
             "status": "blocked",
             "reason": "tashuo_question_gate_requires_user_confirmation",
             "next_host_action": "ask_user_to_confirm_question_gate_reply",
         })
-        return payload
+        return {"return_payload": payload}
     if baseline_screen.get("state") != "tashuo_conversation":
         payload.update({"status": "blocked", "reason": "tashuo_conversation_not_verified"})
-        return payload
+        return {"return_payload": payload}
 
     already_sent_ax_static_text_values = _tashuo_ax_static_text_values(session) if _is_mac_ios_app_session(session) else None
     already_sent_ax_text_area_value = _tashuo_ax_text_area_value(session) if _is_mac_ios_app_session(session) else None
@@ -243,19 +225,43 @@ def send_tashuo_message(
             "visual_only_exact_verification_allowed": bool(already_sent_verification.get("visual_only_exact_verification_allowed")),
             "post_action_observation_id": post_observation_id,
         }
-        return payload
+        return {"return_payload": payload}
 
+    return {
+        "capture_prefix": capture_prefix,
+        "window": window,
+        "baseline_screen": baseline_screen,
+    }
+
+
+def _stage_tashuo_live_send_input(
+    session: Any,
+    payload: dict[str, Any],
+    draft_text: str,
+    *,
+    output_dir: Path | None,
+    capture_prefix: str,
+    window: Any,
+    baseline_screen: dict[str, Any],
+    steps: dict[str, Any],
+) -> dict[str, Any]:
+    input_step = steps["input"]
+    focused_input_step = steps["focused_input"]
+    paste_step = steps["paste"]
+    ax_set_text_step = steps["ax_set_text"]
+    type_fallback_step = steps["type_fallback"]
+    ime_commit_step = steps["ime_commit"]
     previous_clipboard = session._read_clipboard()
     payload["previous_clipboard_read"] = previous_clipboard["status"] == "ok"
     if previous_clipboard["status"] != "ok":
         payload.update({"status": "blocked", "reason": previous_clipboard.get("reason")})
-        return payload
+        return {"return_payload": payload}
     payload.update(platform._text_fingerprint_fields("previous_clipboard", previous_clipboard.get("text", "")))
     copy_result = session._copy_to_clipboard(draft_text)
     payload["draft_clipboard_copy"] = copy_result["status"] == "ok"
     if copy_result["status"] != "ok":
         payload.update({"status": "blocked", "reason": copy_result.get("reason")})
-        return payload
+        return {"return_payload": payload}
 
     executed_steps: list[dict[str, Any]] = []
     staged_screen = baseline_screen
@@ -264,14 +270,14 @@ def send_tashuo_message(
         executed_steps.append({**input_step, "result": input_result})
         if input_result["status"] != "ok":
             payload.update({"status": "blocked", "reason": input_result.get("reason"), "executed_steps": executed_steps})
-            return payload
+            return {"return_payload": payload}
         time.sleep(0.45)
 
         paste_result = session._paste_clipboard_into_frontmost_app(prefer_core_graphics_keyboard=True)
         executed_steps.append({**paste_step, "result": paste_result})
         if paste_result["status"] != "ok":
             payload.update({"status": "blocked", "reason": paste_result.get("reason"), "executed_steps": executed_steps})
-            return payload
+            return {"return_payload": payload}
         time.sleep(0.3)
 
         staged_output = output_dir / f"{capture_prefix}.after_stage_message.png" if output_dir is not None else None
@@ -327,7 +333,7 @@ def send_tashuo_message(
                 "reason": direct_type_block_reason,
                 "executed_steps": executed_steps,
             })
-            return payload
+            return {"return_payload": payload}
         direct_type_fallback_candidate = (
             direct_type_input_candidate
             and platform._direct_type_fallback_allowed(draft_text)
@@ -341,7 +347,7 @@ def send_tashuo_message(
                     "reason": type_result.get("reason") or "direct_text_entry_failed",
                     "executed_steps": executed_steps,
                 })
-                return payload
+                return {"return_payload": payload}
             time.sleep(0.3)
             staged_output = output_dir / f"{capture_prefix}.after_type_message.png" if output_dir is not None else None
             staged_screen = _capture_tashuo_window(session, output=staged_output, window=window, ocr=not _is_mac_ios_app_session(session))
@@ -363,7 +369,7 @@ def send_tashuo_message(
                     "reason": ime_commit_result.get("reason") or "ime_commit_space_failed",
                     "executed_steps": executed_steps,
                 })
-                return payload
+                return {"return_payload": payload}
             time.sleep(0.3)
             staged_output = output_dir / f"{capture_prefix}.after_ime_commit_message.png" if output_dir is not None else None
             staged_screen = _capture_tashuo_window(session, output=staged_output, window=window, ocr=not _is_mac_ios_app_session(session))
@@ -396,7 +402,7 @@ def send_tashuo_message(
                     "next_host_action": "visually_verify_staged_text_before_live_send",
                     "executed_steps": executed_steps,
                 })
-                return payload
+                return {"return_payload": payload}
             cleanup_result = _cleanup_failed_tashuo_stage(
                 session,
                 window,
@@ -410,7 +416,7 @@ def send_tashuo_message(
                 "reason": staged_verification.get("reason") or "staged_text_not_verified",
                 "executed_steps": executed_steps,
             })
-            return payload
+            return {"return_payload": payload}
     finally:
         restore_result = session._copy_to_clipboard(previous_clipboard.get("text", ""))
         payload["clipboard_restored"] = restore_result["status"] == "ok"
@@ -424,7 +430,30 @@ def send_tashuo_message(
             "reason": "clipboard_restore_failed",
             "executed_steps": executed_steps,
         })
-        return payload
+        return {"return_payload": payload}
+
+    return {
+        "executed_steps": executed_steps,
+        "staged_screen": staged_screen,
+        "staged_verification": staged_verification,
+    }
+
+
+def _complete_tashuo_live_send(
+    session: Any,
+    payload: dict[str, Any],
+    draft_text: str,
+    *,
+    output_dir: Path | None,
+    capture_prefix: str,
+    window: Any,
+    steps: dict[str, Any],
+    executed_steps: list[dict[str, Any]],
+    staged_screen: dict[str, Any],
+    staged_verification: dict[str, Any],
+) -> dict[str, Any]:
+    focused_input_step = steps["focused_input"]
+    send_step = steps["send"]
 
     if payload.get("staging_input_backend") == "macos_accessibility":
         refocus_step = {
@@ -527,3 +556,60 @@ def send_tashuo_message(
     elif not outbound_verified:
         payload.update({"status": "needs_verification", "reason": "outbound_message_not_verified"})
     return payload
+
+
+def send_tashuo_message(
+    session: Any,
+    draft_text: str,
+    *,
+    dry_run: bool = False,
+    output_dir: Path | None = None,
+    target_binding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    steps = _tashuo_live_send_steps(session)
+    payload = _initial_tashuo_live_send_payload(
+        session,
+        draft_text=draft_text,
+        dry_run=dry_run,
+        planned_steps=steps["planned"],
+    )
+    if dry_run:
+        return payload
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    prepared = _prepare_tashuo_live_send_context(
+        session,
+        payload,
+        draft_text,
+        output_dir=output_dir,
+        target_binding=target_binding,
+    )
+    if prepared.get("return_payload") is not None:
+        return prepared["return_payload"]
+
+    staged = _stage_tashuo_live_send_input(
+        session,
+        payload,
+        draft_text,
+        output_dir=output_dir,
+        capture_prefix=str(prepared["capture_prefix"]),
+        window=prepared["window"],
+        baseline_screen=prepared["baseline_screen"],
+        steps=steps,
+    )
+    if staged.get("return_payload") is not None:
+        return staged["return_payload"]
+
+    return _complete_tashuo_live_send(
+        session,
+        payload,
+        draft_text,
+        output_dir=output_dir,
+        capture_prefix=str(prepared["capture_prefix"]),
+        window=prepared["window"],
+        steps=steps,
+        executed_steps=staged["executed_steps"],
+        staged_screen=staged["staged_screen"],
+        staged_verification=staged["staged_verification"],
+    )
