@@ -21,7 +21,7 @@ from dating_boost.host_loop import (
     _validate_managed_sequence_visual_confirmation,
 )
 from dating_boost.perception.observations import AppObservation
-from tests.test_gui_harness import (
+from tests.gui_harness_support import (
     _bumble_conversation_png,
     _tashuo_mac_ios_app_conversation_with_messages_png,
     _tinder_conversation_send_button_png,
