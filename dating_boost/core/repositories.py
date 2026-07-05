@@ -15,6 +15,40 @@ def _validate_match_id(match_id: str) -> None:
         raise ValueError(f"invalid match_id: {match_id!r}")
 
 
+def user_profile_to_dict(profile: UserProfile) -> dict[str, Any]:
+    return {
+        "schema_version": profile.schema_version,
+        "user_id": profile.user_id,
+        "facts": [item.to_dict() for item in profile.facts],
+        "preferences": [item.to_dict() for item in profile.preferences],
+        "boundaries": [item.to_dict() for item in profile.boundaries],
+        "style_examples": list(profile.style_examples),
+        "goals": list(profile.goals),
+        "persona_baseline": profile.persona_baseline,
+        "persona_range": list(profile.persona_range),
+        "stance_range": list(profile.stance_range),
+        "updated_at": profile.updated_at,
+        "default_reply_mode": profile.default_reply_mode.value,
+    }
+
+
+def user_profile_from_dict(data: dict[str, Any]) -> UserProfile:
+    return UserProfile(
+        schema_version=data["schema_version"],
+        user_id=data["user_id"],
+        facts=[MemoryItem.from_dict(item) for item in data["facts"]],
+        preferences=[MemoryItem.from_dict(item) for item in data["preferences"]],
+        boundaries=[MemoryItem.from_dict(item) for item in data["boundaries"]],
+        style_examples=list(data["style_examples"]),
+        goals=list(data["goals"]),
+        persona_baseline=data["persona_baseline"],
+        persona_range=list(data["persona_range"]),
+        stance_range=list(data["stance_range"]),
+        updated_at=data["updated_at"],
+        default_reply_mode=ReplyMode(data.get("default_reply_mode", ReplyMode.ADAPTIVE.value)),
+    )
+
+
 class JsonMemoryRepository:
     _USER_PROFILE_PATH = Path("user_profile.json")
 
@@ -42,36 +76,10 @@ class JsonMemoryRepository:
         _validate_match_id(match_id)
 
     def _profile_to_dict(self, profile: UserProfile) -> dict[str, Any]:
-        return {
-            "schema_version": profile.schema_version,
-            "user_id": profile.user_id,
-            "facts": [item.to_dict() for item in profile.facts],
-            "preferences": [item.to_dict() for item in profile.preferences],
-            "boundaries": [item.to_dict() for item in profile.boundaries],
-            "style_examples": list(profile.style_examples),
-            "goals": list(profile.goals),
-            "persona_baseline": profile.persona_baseline,
-            "persona_range": list(profile.persona_range),
-            "stance_range": list(profile.stance_range),
-            "updated_at": profile.updated_at,
-            "default_reply_mode": profile.default_reply_mode.value,
-        }
+        return user_profile_to_dict(profile)
 
     def _profile_from_dict(self, data: dict[str, Any]) -> UserProfile:
-        return UserProfile(
-            schema_version=data["schema_version"],
-            user_id=data["user_id"],
-            facts=[MemoryItem.from_dict(item) for item in data["facts"]],
-            preferences=[MemoryItem.from_dict(item) for item in data["preferences"]],
-            boundaries=[MemoryItem.from_dict(item) for item in data["boundaries"]],
-            style_examples=list(data["style_examples"]),
-            goals=list(data["goals"]),
-            persona_baseline=data["persona_baseline"],
-            persona_range=list(data["persona_range"]),
-            stance_range=list(data["stance_range"]),
-            updated_at=data["updated_at"],
-            default_reply_mode=ReplyMode(data.get("default_reply_mode", ReplyMode.ADAPTIVE.value)),
-        )
+        return user_profile_from_dict(data)
 
 
 class ObservationRepository:

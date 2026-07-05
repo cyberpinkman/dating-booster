@@ -67,7 +67,12 @@ from dating_boost.core.planner import PlannerRepository, planner_context_items
 from dating_boost.core.production_store import ProductionDataStore, payload_digest
 from dating_boost.core.release import release_doctor
 from dating_boost.core.replay import latest_replay_markdown, latest_replay_payload
-from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
+from dating_boost.core.repositories import (
+    JsonMemoryRepository,
+    MatchRepository,
+    ObservationRepository,
+    user_profile_from_dict,
+)
 from dating_boost.core.runtime_scope import RuntimeScopeRepository
 from dating_boost.core.scan_authoring import (
     assemble_scan_batch,
@@ -522,10 +527,8 @@ def _print_action_decision(args: argparse.Namespace) -> int:
 
 
 def _handle_init_profile(args: argparse.Namespace) -> int:
-    from dating_boost.cli_memory import _profile_from_dict
-
     data = _read_json_object(args.input)
-    profile = _profile_from_dict(data)
+    profile = user_profile_from_dict(data)
     JsonMemoryRepository(args.data_dir).save_user_profile(profile)
 
     _print_json(

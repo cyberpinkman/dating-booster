@@ -196,11 +196,7 @@ def _stage_bumble_send_input(
     type_fallback_step = steps["type_fallback"]
     ime_commit_step = steps["ime_commit"]
 
-    pre_stage_input_guard = _iphone_pre_stage_input_guard(
-        app_id="bumble",
-        screen=baseline_screen,
-        expected_text=draft_text,
-    )
+    pre_stage_input_guard = _bumble_pre_stage_input_guard(baseline_screen, draft_text)
     payload["pre_stage_input_guard"] = pre_stage_input_guard
     if pre_stage_input_guard.get("status") == "blocked":
         payload.update({
@@ -623,6 +619,21 @@ def _bumble_send_marker_visible(text: str) -> bool:
         if stripped in {"send", "发送"}:
             return True
     return False
+
+def _bumble_pre_stage_input_guard(screen: dict[str, Any], expected_text: str) -> dict[str, Any]:
+    guard = _iphone_pre_stage_input_guard(
+        app_id="bumble",
+        screen=screen,
+        expected_text=expected_text,
+    )
+    active_send_button_visible = _bumble_active_send_button_visual_visible(screen)
+    guard["active_send_button_visual_visible"] = active_send_button_visible
+    if active_send_button_visible:
+        guard.update({
+            "status": "blocked",
+            "reason": "message_input_not_empty_before_staging",
+        })
+    return guard
 
 def _bumble_active_send_button_visual_visible(screen: dict[str, Any]) -> bool:
     stats = _screen_region_stats(screen, 0.88, 0.89, 0.98, 0.96)

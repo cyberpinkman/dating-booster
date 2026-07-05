@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import shutil
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,7 @@ DAEMON_EVENTS_PATH = Path("daemon") / "events.jsonl"
 DAEMON_STOP_PATH = Path("daemon") / "stop.json"
 LAUNCHD_LABEL = "com.dating-booster.daemon"
 DEFAULT_STOP_WAIT_TIMEOUT_SECONDS = 10.0
+DEFAULT_STOP_DISCOVERY_TIMEOUT_SECONDS = 2.0
 STOP_POLL_INTERVAL_SECONDS = 0.05
 
 
@@ -120,6 +122,12 @@ class DaemonRepository:
         current_lock = self._store.get_lock("daemon")
         target_run_id = _active_run_id(current_state, current_lock)
         target_pid = _active_pid(current_state)
+        if target_run_id is None and target_pid is None:
+            discovered = self._wait_for_active_target(timeout_seconds=_stop_discovery_timeout())
+            current_state = discovered["state"]
+            current_lock = discovered["lock"]
+            target_run_id = _active_run_id(current_state, current_lock)
+            target_pid = _active_pid(current_state)
         self._write_stop_request(now=now, target_run_id=target_run_id, target_pid=target_pid)
         self._append_event(
             "stop_requested",
@@ -276,6 +284,18 @@ class DaemonRepository:
                 return {"status": "timeout", "state": state, "lock": lock}
             time.sleep(min(STOP_POLL_INTERVAL_SECONDS, remaining))
 
+    def _wait_for_active_target(self, *, timeout_seconds: float) -> dict[str, Any]:
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        while True:
+            state = self._read_state()
+            lock = self._store.get_lock("daemon")
+            if _active_run_id(state, lock) is not None or _active_pid(state) is not None:
+                return {"state": state, "lock": lock}
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"state": state, "lock": lock}
+            time.sleep(min(STOP_POLL_INTERVAL_SECONDS, remaining))
+
 
 def launchd_plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
@@ -324,6 +344,16 @@ def _stop_wait_timeout(value: float | None) -> float:
         return max(0.0, float(os.environ.get("DATING_BOOST_DAEMON_STOP_TIMEOUT", DEFAULT_STOP_WAIT_TIMEOUT_SECONDS)))
     except ValueError:
         return DEFAULT_STOP_WAIT_TIMEOUT_SECONDS
+
+
+def _stop_discovery_timeout() -> float:
+    try:
+        return max(
+            0.0,
+            float(os.environ.get("DATING_BOOST_DAEMON_STOP_DISCOVERY_TIMEOUT", DEFAULT_STOP_DISCOVERY_TIMEOUT_SECONDS)),
+        )
+    except ValueError:
+        return DEFAULT_STOP_DISCOVERY_TIMEOUT_SECONDS
 
 
 def _active_run_id(state: dict[str, Any] | None, lock: dict[str, Any] | None) -> str | None:
@@ -411,6 +441,75 @@ def _run_standalone_tick(root: Path) -> dict[str, Any] | None:
 
 
 def daemon_entry(argv: list[str] | None = None) -> int:
-    from dating_boost.cli import main
+    parser = argparse.ArgumentParser(
+        prog="dating-boostd",
+        description="Dating Booster daemon supervisor.",
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    return main(["daemon", *(sys.argv[1:] if argv is None else argv)])
+    run_parser = subparsers.add_parser("run")
+    run_parser.add_argument("--data-dir", required=True, type=Path)
+    run_parser.add_argument("--once", action="store_true")
+    run_parser.add_argument("--standalone-tick", action="store_true")
+    run_parser.add_argument("--json", action="store_true")
+    run_parser.set_defaults(_daemon_handler=_daemon_entry_run)
+
+    for command, handler in (
+        ("install", _daemon_entry_install),
+        ("uninstall", _daemon_entry_uninstall),
+        ("status", _daemon_entry_status),
+        ("stop", _daemon_entry_stop),
+    ):
+        command_parser = subparsers.add_parser(command)
+        command_parser.add_argument("--data-dir", required=True, type=Path)
+        command_parser.add_argument("--dry-run", action="store_true")
+        command_parser.add_argument("--json", action="store_true")
+        command_parser.set_defaults(_daemon_handler=handler)
+
+    argv_list = list(argv) if argv is not None else None
+    if argv_list and argv_list[0] == "daemon":
+        argv_list = argv_list[1:]
+    args = parser.parse_args(argv_list)
+    return args._daemon_handler(args)
+
+
+def _daemon_entry_run(args: argparse.Namespace) -> int:
+    payload = DaemonRepository(args.data_dir).run(
+        once=args.once,
+        owner="dating-boostd",
+        now=_now_iso(),
+        standalone_tick=bool(args.standalone_tick),
+    )
+    _daemon_entry_print_json(payload)
+    standalone_tick = payload.get("standalone_tick") if isinstance(payload.get("standalone_tick"), dict) else None
+    if standalone_tick and standalone_tick.get("status") == "blocked":
+        return 2
+    return 0 if payload.get("status") != "blocked" else 2
+
+
+def _daemon_entry_install(args: argparse.Namespace) -> int:
+    payload = DaemonRepository(args.data_dir).install(dry_run=args.dry_run)
+    _daemon_entry_print_json(payload)
+    return 0
+
+
+def _daemon_entry_uninstall(args: argparse.Namespace) -> int:
+    payload = DaemonRepository(args.data_dir).uninstall(dry_run=args.dry_run)
+    _daemon_entry_print_json(payload)
+    return 0
+
+
+def _daemon_entry_status(args: argparse.Namespace) -> int:
+    payload = DaemonRepository(args.data_dir).status()
+    _daemon_entry_print_json(payload)
+    return 0
+
+
+def _daemon_entry_stop(args: argparse.Namespace) -> int:
+    payload = DaemonRepository(args.data_dir).stop(now=_now_iso())
+    _daemon_entry_print_json(payload)
+    return 0
+
+
+def _daemon_entry_print_json(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))

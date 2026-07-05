@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+
+from dating_boost.apps.registry import create_adapter as _registry_create_adapter
 from dating_boost.cli_ops import *
 
 def _add_harness_app_parsers(harness_subparsers: argparse._SubParsersAction) -> None:
@@ -139,13 +142,20 @@ def _unsupported_native_harness_payload(app_id: str) -> dict[str, object] | None
 
 
 def _create_harness_adapter(app_id: str, window_title: str | None, *, runtime: str | None = None):
-    from dating_boost import cli as cli_module
-
-    return cli_module.create_adapter(
+    adapter_factory = _active_cli_adapter_factory()
+    return adapter_factory(
         app_id,
         window_title=_harness_window_title(app_id, window_title, runtime),
         runtime=runtime,
     )
+
+
+def _active_cli_adapter_factory():
+    cli_module = sys.modules.get("dating_boost.cli")
+    cli_factory = getattr(cli_module, "create_adapter", None) if cli_module is not None else None
+    if cli_factory is not None and cli_factory is not _registry_create_adapter:
+        return cli_factory
+    return _registry_create_adapter
 
 
 def _runtime_scope_block_payload(args: argparse.Namespace, app_id: str, runtime: str | None) -> dict[str, Any] | None:

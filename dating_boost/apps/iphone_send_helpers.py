@@ -120,38 +120,6 @@ def _iphone_pre_stage_input_guard(
         "observed_character_count": len(observed_text) if observed_text else None,
         "screen": _redacted_screen(screen),
     }
-    if app_id == "bumble":
-        from dating_boost.apps.bumble.runtime import _bumble_active_send_button_visual_visible
-
-        active_send_button_visible = _bumble_active_send_button_visual_visible(screen)
-        guard["active_send_button_visual_visible"] = active_send_button_visible
-        if active_send_button_visible:
-            guard.update({
-                "status": "blocked",
-                "reason": "message_input_not_empty_before_staging",
-            })
-        return guard
-    if app_id == "tinder":
-        from dating_boost.apps.tinder.runtime import (
-            _tinder_message_input_placeholder_visible,
-            _tinder_send_button_visual_visible,
-            _tinder_send_marker_visible,
-        )
-
-        send_button_visual_visible = _tinder_send_button_visual_visible(screen)
-        send_marker_visible = _tinder_send_marker_visible(observed_text)
-        placeholder_visible = _tinder_message_input_placeholder_visible(observed_text)
-        guard.update({
-            "send_button_visual_visible": send_button_visual_visible,
-            "send_marker_visible": send_marker_visible,
-            "message_input_placeholder_visible": placeholder_visible,
-        })
-        if send_button_visual_visible and send_marker_visible and not placeholder_visible:
-            guard.update({
-                "status": "blocked",
-                "reason": "message_input_not_empty_before_staging",
-            })
-        return guard
     return guard
 
 

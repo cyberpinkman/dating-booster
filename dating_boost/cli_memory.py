@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dating_boost.cli_ops import *
+from dating_boost.core.repositories import user_profile_from_dict as _core_user_profile_from_dict
 
 def _handle_import_observation(args: argparse.Namespace) -> int:
     try:
@@ -1333,20 +1334,7 @@ def _observation_summary(observation: AppObservation) -> str:
 
 
 def _profile_from_dict(data: dict[str, Any]) -> UserProfile:
-    return UserProfile(
-        schema_version=data["schema_version"],
-        user_id=data["user_id"],
-        facts=[MemoryItem.from_dict(item) for item in data["facts"]],
-        preferences=[MemoryItem.from_dict(item) for item in data["preferences"]],
-        boundaries=[MemoryItem.from_dict(item) for item in data["boundaries"]],
-        style_examples=list(data["style_examples"]),
-        goals=list(data["goals"]),
-        persona_baseline=data["persona_baseline"],
-        persona_range=list(data["persona_range"]),
-        stance_range=list(data["stance_range"]),
-        updated_at=data["updated_at"],
-        default_reply_mode=ReplyMode(data.get("default_reply_mode", ReplyMode.ADAPTIVE.value)),
-    )
+    return _core_user_profile_from_dict(data)
 
 
 def _profile_to_context_dict(profile: UserProfile) -> dict[str, Any]:

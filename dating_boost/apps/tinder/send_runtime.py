@@ -284,11 +284,7 @@ def _stage_tinder_send_input(
             return {"return_payload": payload}
         stage_ready = True
     else:
-        pre_stage_input_guard = _iphone_pre_stage_input_guard(
-            app_id="tinder",
-            screen=baseline_screen,
-            expected_text=draft_text,
-        )
+        pre_stage_input_guard = _tinder_pre_stage_input_guard(baseline_screen, draft_text)
         payload["pre_stage_input_guard"] = pre_stage_input_guard
         if pre_stage_input_guard.get("status") == "blocked":
             payload.update({
@@ -704,6 +700,28 @@ def _tinder_message_input_placeholder_visible(text: str) -> bool:
         if normalized in placeholder_markers or comparable in placeholder_markers:
             return True
     return False
+
+def _tinder_pre_stage_input_guard(screen: dict[str, Any], expected_text: str) -> dict[str, Any]:
+    observed_text = str(screen.get("text") or "")
+    guard = _iphone_pre_stage_input_guard(
+        app_id="tinder",
+        screen=screen,
+        expected_text=expected_text,
+    )
+    send_button_visual_visible = _tinder_send_button_visual_visible(screen)
+    send_marker_visible = _tinder_send_marker_visible(observed_text)
+    placeholder_visible = _tinder_message_input_placeholder_visible(observed_text)
+    guard.update({
+        "send_button_visual_visible": send_button_visual_visible,
+        "send_marker_visible": send_marker_visible,
+        "message_input_placeholder_visible": placeholder_visible,
+    })
+    if send_button_visual_visible and send_marker_visible and not placeholder_visible:
+        guard.update({
+            "status": "blocked",
+            "reason": "message_input_not_empty_before_staging",
+        })
+    return guard
 
 def _verify_staged_tinder_message(
     screen: dict[str, Any],
