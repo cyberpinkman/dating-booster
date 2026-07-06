@@ -196,6 +196,59 @@ def _stage_bumble_send_input(
     type_fallback_step = steps["type_fallback"]
     ime_commit_step = steps["ime_commit"]
 
+    prepared = _prepare_bumble_stage_clipboard(self, payload, draft_text, baseline_screen)
+    if prepared.get("return_payload") is not None:
+        return prepared
+    previous_clipboard = prepared["previous_clipboard"]
+
+    executed_steps: list[dict[str, Any]] = []
+    try:
+        staged = _paste_and_verify_bumble_stage_input(
+            self,
+            payload,
+            draft_text,
+            output_dir=output_dir,
+            target_binding=target_binding,
+            stage_only=stage_only,
+            window=window,
+            baseline_screen=baseline_screen,
+            input_step=input_step,
+            paste_step=paste_step,
+            type_fallback_step=type_fallback_step,
+            ime_commit_step=ime_commit_step,
+            executed_steps=executed_steps,
+        )
+        if staged.get("return_payload") is not None:
+            return staged
+    finally:
+        restore_result = self._copy_to_clipboard(previous_clipboard.get("text", ""))
+        payload["clipboard_restored"] = restore_result["status"] == "ok"
+        payload["clipboard_restore_status"] = restore_result["status"]
+        if restore_result["status"] != "ok":
+            payload["clipboard_restore_reason"] = restore_result.get("reason")
+
+    if payload["clipboard_restored"] is not True:
+        payload.update({
+            "status": "blocked",
+            "reason": "clipboard_restore_failed",
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+
+    return {
+        "executed_steps": executed_steps,
+        "staged_screen": staged["staged_screen"],
+        "staged_verification": staged["staged_verification"],
+        "stage_send_input_backend": payload.get("staging_input_backend") or staged["paste_result"].get("input_backend"),
+    }
+
+
+def _prepare_bumble_stage_clipboard(
+    self,
+    payload: dict[str, Any],
+    draft_text: str,
+    baseline_screen: dict[str, Any],
+) -> dict[str, Any]:
     pre_stage_input_guard = _bumble_pre_stage_input_guard(baseline_screen, draft_text)
     payload["pre_stage_input_guard"] = pre_stage_input_guard
     if pre_stage_input_guard.get("status") == "blocked":
@@ -219,150 +272,267 @@ def _stage_bumble_send_input(
     if copy_result["status"] != "ok":
         payload.update({"status": "blocked", "reason": copy_result.get("reason")})
         return {"return_payload": payload}
+    return {"previous_clipboard": previous_clipboard}
 
-    executed_steps: list[dict[str, Any]] = []
-    staged_screen = baseline_screen
-    try:
-        input_result = self._click_ratio(window, input_step["tap_ratio"])
-        executed_steps.append({**input_step, "result": input_result})
-        if input_result["status"] != "ok":
-            payload.update({"status": "blocked", "reason": input_result.get("reason"), "executed_steps": executed_steps})
-            return {"return_payload": payload}
-        time.sleep(0.45)
 
-        paste_result = self._paste_clipboard_into_frontmost_app(prefer_core_graphics_keyboard=True)
-        executed_steps.append({**paste_step, "result": paste_result})
-        if paste_result["status"] != "ok":
-            payload.update({"status": "blocked", "reason": paste_result.get("reason"), "executed_steps": executed_steps})
-            return {"return_payload": payload}
-        time.sleep(0.3)
+def _paste_and_verify_bumble_stage_input(
+    self,
+    payload: dict[str, Any],
+    draft_text: str,
+    *,
+    output_dir: Path | None,
+    target_binding: dict[str, Any] | None,
+    stage_only: bool,
+    window: Any,
+    baseline_screen: dict[str, Any],
+    input_step: dict[str, Any],
+    paste_step: dict[str, Any],
+    type_fallback_step: dict[str, Any],
+    ime_commit_step: dict[str, Any],
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    initial = _paste_bumble_stage_input(
+        self,
+        payload,
+        draft_text,
+        output_dir=output_dir,
+        window=window,
+        baseline_screen=baseline_screen,
+        input_step=input_step,
+        paste_step=paste_step,
+        executed_steps=executed_steps,
+    )
+    if initial.get("return_payload") is not None:
+        return initial
+    fallback = _bumble_stage_direct_type_fallback_if_needed(
+        self,
+        payload,
+        draft_text,
+        output_dir=output_dir,
+        window=window,
+        baseline_screen=baseline_screen,
+        staged_screen=initial["staged_screen"],
+        staged_verification=initial["staged_verification"],
+        type_fallback_step=type_fallback_step,
+        ime_commit_step=ime_commit_step,
+        executed_steps=executed_steps,
+    )
+    if fallback.get("return_payload") is not None:
+        return fallback
+    staged_screen = fallback["staged_screen"]
+    staged_verification = fallback["staged_verification"]
+    finish = _finish_bumble_stage_verification(
+        payload,
+        draft_text,
+        stage_only=stage_only,
+        target_binding=target_binding,
+        staged_screen=staged_screen,
+        staged_verification=staged_verification,
+        paste_result=initial["paste_result"],
+        executed_steps=executed_steps,
+    )
+    if finish.get("return_payload") is not None:
+        return finish
+    return {
+        "staged_screen": staged_screen,
+        "staged_verification": staged_verification,
+        "paste_result": initial["paste_result"],
+    }
 
-        staged_output = output_dir / "iphone_mirroring.bumble.after_stage_message.png" if output_dir is not None else None
-        staged_screen = self.capture_window(output=staged_output, window=window)
-        staged_verification = _verify_staged_bumble_message(
-            staged_screen,
-            draft_text,
-            baseline_screen=baseline_screen,
-        )
-        if (
-            staged_verification.get("status") != "ok"
-            and _bumble_direct_type_fallback_allowed(draft_text)
-            and not _bumble_active_send_button_visual_visible(staged_screen)
-        ):
-            type_result = self._type_text_into_frontmost_app(draft_text)
-            executed_steps.append({**type_fallback_step, "result": type_result})
-            if type_result["status"] != "ok":
-                payload.update({
-                    "status": "blocked",
-                    "reason": type_result.get("reason") or "direct_text_entry_failed",
-                    "executed_steps": executed_steps,
-                })
-                return {"return_payload": payload}
-            time.sleep(0.3)
-            staged_output = output_dir / "iphone_mirroring.bumble.after_type_message.png" if output_dir is not None else None
-            staged_screen = self.capture_window(output=staged_output, window=window)
-            staged_verification = _verify_staged_bumble_message(
-                staged_screen,
-                draft_text,
-                baseline_screen=baseline_screen,
-                trusted_direct_input=True,
-            )
-            if (
-                staged_verification.get("status") != "ok"
-                and not _bumble_active_send_button_visual_visible(staged_screen)
-            ):
-                ime_commit_result = self._press_space_key()
-                executed_steps.append({**ime_commit_step, "result": ime_commit_result})
-                if ime_commit_result["status"] != "ok":
-                    payload.update({
-                    "status": "blocked",
-                    "reason": ime_commit_result.get("reason") or "ime_commit_space_failed",
-                    "executed_steps": executed_steps,
-                })
-                    return {"return_payload": payload}
-                time.sleep(0.3)
-                staged_output = output_dir / "iphone_mirroring.bumble.after_ime_commit_message.png" if output_dir is not None else None
-                staged_screen = self.capture_window(output=staged_output, window=window)
-                staged_verification = _verify_staged_bumble_message(
-                    staged_screen,
-                    draft_text,
-                    baseline_screen=baseline_screen,
-                    trusted_direct_input=True,
-                )
-            payload["staging_input_backend"] = type_result.get("input_backend")
-        payload["staged_text_verification"] = staged_verification
-        payload["staged_text_verified"] = staged_verification.get("status") == "ok"
-        if staged_verification.get("status") != "ok":
-            if stage_only and staged_verification.get("status") == "needs_verification":
-                payload.update(
-                    _iphone_stage_draft_payload_update(
-                        staged_screen=staged_screen,
-                        staged_verification=_iphone_stage_needs_user_verification(staged_verification),
-                        executed_steps=executed_steps,
-                        conversation_state="bumble_conversation",
-                        send_input_backend=payload.get("staging_input_backend") or paste_result.get("input_backend"),
-                    )
-                )
-                return {"return_payload": payload}
-            payload.update({
-                "status": "blocked",
-                "reason": staged_verification.get("reason") or "staged_text_not_verified",
-                "executed_steps": executed_steps,
-            })
-            return {"return_payload": payload}
-        if _bumble_staged_text_requires_host_visual_verification(
-            staged_verification,
-            draft_text,
-            target_binding=target_binding,
-            screen=staged_screen,
-        ):
-            payload["visual_verification_request"] = _bumble_visual_staged_verification_request(
-                staged_screen,
-                staged_verification,
-                draft_text,
-            )
-            if stage_only:
-                payload.update(
-                    _iphone_stage_draft_payload_update(
-                        staged_screen=staged_screen,
-                        staged_verification=_iphone_stage_needs_user_verification(
-                            staged_verification,
-                            reason="staged_text_requires_visual_verification",
-                        ),
-                        executed_steps=executed_steps,
-                        conversation_state="bumble_conversation",
-                        send_input_backend=payload.get("staging_input_backend") or paste_result.get("input_backend"),
-                    )
-                )
-                return {"return_payload": payload}
-            payload.update({
-                "status": "needs_host_visual_verification",
-                "reason": "staged_text_requires_visual_verification",
-                "next_host_action": "visually_verify_staged_text_before_live_send",
-                "executed_steps": executed_steps,
-            })
-            return {"return_payload": payload}
-    finally:
-        restore_result = self._copy_to_clipboard(previous_clipboard.get("text", ""))
-        payload["clipboard_restored"] = restore_result["status"] == "ok"
-        payload["clipboard_restore_status"] = restore_result["status"]
-        if restore_result["status"] != "ok":
-            payload["clipboard_restore_reason"] = restore_result.get("reason")
 
-    if payload["clipboard_restored"] is not True:
+def _paste_bumble_stage_input(
+    self,
+    payload: dict[str, Any],
+    draft_text: str,
+    *,
+    output_dir: Path | None,
+    window: Any,
+    baseline_screen: dict[str, Any],
+    input_step: dict[str, Any],
+    paste_step: dict[str, Any],
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    input_result = self._click_ratio(window, input_step["tap_ratio"])
+    executed_steps.append({**input_step, "result": input_result})
+    if input_result["status"] != "ok":
+        payload.update({"status": "blocked", "reason": input_result.get("reason"), "executed_steps": executed_steps})
+        return {"return_payload": payload}
+    time.sleep(0.45)
+
+    paste_result = self._paste_clipboard_into_frontmost_app(prefer_core_graphics_keyboard=True)
+    executed_steps.append({**paste_step, "result": paste_result})
+    if paste_result["status"] != "ok":
+        payload.update({"status": "blocked", "reason": paste_result.get("reason"), "executed_steps": executed_steps})
+        return {"return_payload": payload}
+    time.sleep(0.3)
+
+    staged_output = output_dir / "iphone_mirroring.bumble.after_stage_message.png" if output_dir is not None else None
+    staged_screen = self.capture_window(output=staged_output, window=window)
+    staged_verification = _verify_staged_bumble_message(
+        staged_screen,
+        draft_text,
+        baseline_screen=baseline_screen,
+    )
+    return {"staged_screen": staged_screen, "staged_verification": staged_verification, "paste_result": paste_result}
+
+
+def _bumble_stage_direct_type_fallback_if_needed(
+    self,
+    payload: dict[str, Any],
+    draft_text: str,
+    *,
+    output_dir: Path | None,
+    window: Any,
+    baseline_screen: dict[str, Any],
+    staged_screen: dict[str, Any],
+    staged_verification: dict[str, Any],
+    type_fallback_step: dict[str, Any],
+    ime_commit_step: dict[str, Any],
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not (
+        staged_verification.get("status") != "ok"
+        and _bumble_direct_type_fallback_allowed(draft_text)
+        and not _bumble_active_send_button_visual_visible(staged_screen)
+    ):
+        return {"staged_screen": staged_screen, "staged_verification": staged_verification}
+
+    type_result = self._type_text_into_frontmost_app(draft_text)
+    executed_steps.append({**type_fallback_step, "result": type_result})
+    if type_result["status"] != "ok":
         payload.update({
             "status": "blocked",
-            "reason": "clipboard_restore_failed",
+            "reason": type_result.get("reason") or "direct_text_entry_failed",
             "executed_steps": executed_steps,
         })
         return {"return_payload": payload}
+    time.sleep(0.3)
+    staged_output = output_dir / "iphone_mirroring.bumble.after_type_message.png" if output_dir is not None else None
+    staged_screen = self.capture_window(output=staged_output, window=window)
+    staged_verification = _verify_staged_bumble_message(
+        staged_screen,
+        draft_text,
+        baseline_screen=baseline_screen,
+        trusted_direct_input=True,
+    )
+    if (
+        staged_verification.get("status") != "ok"
+        and not _bumble_active_send_button_visual_visible(staged_screen)
+    ):
+        committed = _bumble_commit_ime_after_direct_type(
+            self,
+            payload,
+            draft_text,
+            output_dir=output_dir,
+            window=window,
+            baseline_screen=baseline_screen,
+            ime_commit_step=ime_commit_step,
+            executed_steps=executed_steps,
+        )
+        if committed.get("return_payload") is not None:
+            return committed
+        staged_screen = committed["staged_screen"]
+        staged_verification = committed["staged_verification"]
+    payload["staging_input_backend"] = type_result.get("input_backend")
+    return {"staged_screen": staged_screen, "staged_verification": staged_verification}
 
-    return {
-        "executed_steps": executed_steps,
-        "staged_screen": staged_screen,
-        "staged_verification": staged_verification,
-        "stage_send_input_backend": payload.get("staging_input_backend") or paste_result.get("input_backend"),
-    }
+
+def _bumble_commit_ime_after_direct_type(
+    self,
+    payload: dict[str, Any],
+    draft_text: str,
+    *,
+    output_dir: Path | None,
+    window: Any,
+    baseline_screen: dict[str, Any],
+    ime_commit_step: dict[str, Any],
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    ime_commit_result = self._press_space_key()
+    executed_steps.append({**ime_commit_step, "result": ime_commit_result})
+    if ime_commit_result["status"] != "ok":
+        payload.update({
+            "status": "blocked",
+            "reason": ime_commit_result.get("reason") or "ime_commit_space_failed",
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+    time.sleep(0.3)
+    staged_output = output_dir / "iphone_mirroring.bumble.after_ime_commit_message.png" if output_dir is not None else None
+    staged_screen = self.capture_window(output=staged_output, window=window)
+    staged_verification = _verify_staged_bumble_message(
+        staged_screen,
+        draft_text,
+        baseline_screen=baseline_screen,
+        trusted_direct_input=True,
+    )
+    return {"staged_screen": staged_screen, "staged_verification": staged_verification}
+
+
+def _finish_bumble_stage_verification(
+    payload: dict[str, Any],
+    draft_text: str,
+    *,
+    stage_only: bool,
+    target_binding: dict[str, Any] | None,
+    staged_screen: dict[str, Any],
+    staged_verification: dict[str, Any],
+    paste_result: dict[str, Any],
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    payload["staged_text_verification"] = staged_verification
+    payload["staged_text_verified"] = staged_verification.get("status") == "ok"
+    if staged_verification.get("status") != "ok":
+        if stage_only and staged_verification.get("status") == "needs_verification":
+            payload.update(
+                _iphone_stage_draft_payload_update(
+                    staged_screen=staged_screen,
+                    staged_verification=_iphone_stage_needs_user_verification(staged_verification),
+                    executed_steps=executed_steps,
+                    conversation_state="bumble_conversation",
+                    send_input_backend=payload.get("staging_input_backend") or paste_result.get("input_backend"),
+                )
+            )
+            return {"return_payload": payload}
+        payload.update({
+            "status": "blocked",
+            "reason": staged_verification.get("reason") or "staged_text_not_verified",
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+    if _bumble_staged_text_requires_host_visual_verification(
+        staged_verification,
+        draft_text,
+        target_binding=target_binding,
+        screen=staged_screen,
+    ):
+        payload["visual_verification_request"] = _bumble_visual_staged_verification_request(
+            staged_screen,
+            staged_verification,
+            draft_text,
+        )
+        if stage_only:
+            payload.update(
+                _iphone_stage_draft_payload_update(
+                    staged_screen=staged_screen,
+                    staged_verification=_iphone_stage_needs_user_verification(
+                        staged_verification,
+                        reason="staged_text_requires_visual_verification",
+                    ),
+                    executed_steps=executed_steps,
+                    conversation_state="bumble_conversation",
+                    send_input_backend=payload.get("staging_input_backend") or paste_result.get("input_backend"),
+                )
+            )
+            return {"return_payload": payload}
+        payload.update({
+            "status": "needs_host_visual_verification",
+            "reason": "staged_text_requires_visual_verification",
+            "next_host_action": "visually_verify_staged_text_before_live_send",
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+    return {}
 
 
 def _complete_bumble_send(
