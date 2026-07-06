@@ -5,12 +5,8 @@ import json
 from typing import Any
 
 from dating_boost.core.memory.models import (
-    EvidenceRef,
-    MemoryEvent,
-    MemoryEventType,
-    MemoryFact,
-    MemoryFactType,
-    MemoryScope,
+    EvidenceRef, MemoryEvent, MemoryEventType, MemoryFact,
+    MemoryFactType, MemoryScope,
 )
 from dating_boost.perception.observations import AppObservation
 

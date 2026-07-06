@@ -5,13 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.intelligence.backends import (
-    MINIMAX_DEFAULT_API_KEY_ENV,
-    MINIMAX_DEFAULT_BASE_URL,
-    MINIMAX_DEFAULT_MODEL,
-    MiniMaxBackend,
-    ModelBackend,
-    OpenAIBackend,
-    ScriptedBackend,
+    MINIMAX_DEFAULT_API_KEY_ENV, MINIMAX_DEFAULT_BASE_URL, MINIMAX_DEFAULT_MODEL, MiniMaxBackend,
+    ModelBackend, OpenAIBackend, ScriptedBackend,
 )
 
 

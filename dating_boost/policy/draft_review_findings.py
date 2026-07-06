@@ -10,10 +10,7 @@ from dating_boost.policy.content import evaluate_draft_content
 from dating_boost.policy.draft_review_models import DraftReviewFinding
 from dating_boost.policy.draft_review_payload import draft_question_count, looks_like_direct_question
 from dating_boost.policy.draft_review_strategy import (
-    _draft_answers_or_riffs,
-    _has_next_handle,
-    _has_tag_stacking,
-    _latest_asks_or_reacts,
+    _draft_answers_or_riffs, _has_next_handle, _has_tag_stacking, _latest_asks_or_reacts,
     _normalized_strategy_text,
 )
 

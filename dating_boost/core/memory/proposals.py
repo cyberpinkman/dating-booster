@@ -6,12 +6,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from dating_boost.core.memory.models import (
-    MemoryFact,
-    MemoryFactType,
-    MemoryScope,
-    MatchMemoryProjection,
-    normalized_fact_key,
-    normalize_memory_value,
+    MemoryFact, MemoryFactType, MemoryScope, MatchMemoryProjection,
+    normalized_fact_key, normalize_memory_value,
 )
 from dating_boost.core.memory.review_queue import ReviewItem, build_dedupe_key
 from dating_boost.perception.observations import AppObservation

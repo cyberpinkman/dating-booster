@@ -5,12 +5,8 @@ import unittest
 from pathlib import Path
 
 from dating_boost.core.memory.models import (
-    EvidenceRef,
-    MatchMemoryProjection,
-    MemoryFact,
-    MemoryFactStatus,
-    MemoryFactType,
-    MemoryScope,
+    EvidenceRef, MatchMemoryProjection, MemoryFact, MemoryFactStatus,
+    MemoryFactType, MemoryScope,
 )
 from dating_boost.core.memory.proposals import classify_risk, extract_proposals
 from dating_boost.core.memory.review_queue import ReviewQueueRepository

@@ -7,10 +7,7 @@ from typing import Any
 from dating_boost.core.action_audit import ActionAuditRepository
 from dating_boost.core.draft_evidence import ConversationThreadRepository, LatestTurnRepository
 from dating_boost.core.automation import (
-    AutomationRepository,
-    HISTORICAL_THREAD_CUTOFF_DAYS,
-    _next_priority_queue,
-    _now_iso,
+    AutomationRepository, HISTORICAL_THREAD_CUTOFF_DAYS, _next_priority_queue, _now_iso,
     _release_active_send_request_after_failure,
 )
 from dating_boost.core.production_store import ProductionDataStore

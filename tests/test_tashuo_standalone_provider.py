@@ -6,10 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from dating_boost.apps.tashuo.standalone import (
-    TaShuoMacIosStageExecutor,
-    TaShuoMacIosStandaloneObservationProvider,
-    TaShuoStandalonePrecheckHarness,
-    TaShuoStandaloneTargetCache,
+    TaShuoMacIosStageExecutor, TaShuoMacIosStandaloneObservationProvider, TaShuoStandalonePrecheckHarness, TaShuoStandaloneTargetCache,
     _correct_tashuo_message_list_tap_ratios,
 )
 from dating_boost.core.scan_authoring import validate_scan_batch

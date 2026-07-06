@@ -1,15 +1,7 @@
 from dating_boost.core.memory.models import (
-    CommitmentMemory,
-    EvidenceRef,
-    IdentityTrustStatus,
-    MatchMemoryProjection,
-    MemoryConflict,
-    MemoryEvent,
-    MemoryEventType,
-    MemoryFact,
-    MemoryFactStatus,
-    MemoryFactType,
-    MemoryScope,
+    CommitmentMemory, EvidenceRef, IdentityTrustStatus, MatchMemoryProjection,
+    MemoryConflict, MemoryEvent, MemoryEventType, MemoryFact,
+    MemoryFactStatus, MemoryFactType, MemoryScope,
 )
 from dating_boost.core.memory.proposals import classify_risk, extract_proposals
 from dating_boost.core.memory.reducers import reduce_match_memory

@@ -16,10 +16,7 @@ from dating_boost.apps.registry import supported_app_ids
 from dating_boost.core.draft_evidence import UserMemoryRepository
 from dating_boost.core.live_send_contract import target_binding_structural_evidence_present, validate_live_send_contract
 from dating_boost.core.managed_gui_send import (
-    ManagedGuiSendError,
-    ManagedGuiSendRunner,
-    _managed_gui_send_required_evidence,
-    _validate_managed_sequence_visual_confirmation,
+    ManagedGuiSendError, ManagedGuiSendRunner, _managed_gui_send_required_evidence, _validate_managed_sequence_visual_confirmation,
     _work_item_payload_text,
 )
 from dating_boost.core.operator import DEFAULT_MESSAGE_LIST_SCAN_BOUNDARY, OperatorRepository
@@ -54,4 +51,15 @@ class HostLoopCommandError(RuntimeError):
         reason = payload.get("reason") or payload.get("status") or "unknown_cli_error"
         super().__init__(f"dating-boost {' '.join(command)} failed: {reason}")
 
-__all__ = [name for name in globals() if not name.startswith("__")]
+__all__ = [
+    'annotations', 'argparse', 'hashlib', 'json',
+    'os', 'shutil', 'subprocess', 'sys',
+    'time', 'Path', 'Any', 'supported_app_ids',
+    'UserMemoryRepository', 'target_binding_structural_evidence_present', 'validate_live_send_contract', 'ManagedGuiSendError',
+    'ManagedGuiSendRunner', '_managed_gui_send_required_evidence', '_validate_managed_sequence_visual_confirmation', '_work_item_payload_text',
+    'DEFAULT_MESSAGE_LIST_SCAN_BOUNDARY', 'OperatorRepository', 'ProductionDataStore', 'RELATIONSHIP_PROGRESS_NEXT_ACTION',
+    'build_relationship_progress_report', 'RuntimeScopeRepository', 'SafetyRepository', 'SupportLogRepository',
+    'ProfileObservation', 'ROOT', 'DEFAULT_DATA_DIR', 'DEFAULT_FIXTURE_NOW',
+    'REPORT_FINAL_STATUSES', 'MESSAGE_SEQUENCE_SECONDS_PER_MESSAGE', 'IPHONE_MIRRORING_STRUCTURAL_BINDING_APP_IDS', 'HostLoopError',
+    'HostLoopCommandError',
+]

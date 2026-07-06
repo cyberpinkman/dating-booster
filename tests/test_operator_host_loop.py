@@ -13,12 +13,8 @@ import shutil
 from dating_boost.cli import main
 from dating_boost.core.operator import OperatorRepository
 from dating_boost.host_loop import (
-    HostLoopCommandError,
-    HostLoopError,
-    HostLoopSupervisor,
-    _target_binding_for_work_item,
-    _thread_template,
-    _validate_managed_sequence_visual_confirmation,
+    HostLoopCommandError, HostLoopError, HostLoopSupervisor, _target_binding_for_work_item,
+    _thread_template, _validate_managed_sequence_visual_confirmation,
 )
 from dating_boost.perception.observations import AppObservation
 from tests.gui_harness_support import (

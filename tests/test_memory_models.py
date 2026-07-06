@@ -2,14 +2,8 @@ import json
 import unittest
 
 from dating_boost.core.memory.models import (
-    EvidenceRef,
-    IdentityTrustStatus,
-    MatchMemoryProjection,
-    MemoryEvent,
-    MemoryEventType,
-    MemoryFact,
-    MemoryFactStatus,
-    MemoryFactType,
+    EvidenceRef, IdentityTrustStatus, MatchMemoryProjection, MemoryEvent,
+    MemoryEventType, MemoryFact, MemoryFactStatus, MemoryFactType,
     MemoryScope,
 )
 

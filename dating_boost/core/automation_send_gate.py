@@ -4,19 +4,12 @@ from datetime import datetime
 from typing import Any
 
 from dating_boost.core.automation_send_evidence import (
-    _draft_from_dict,
-    _host_supplied_generation_binding,
-    _host_supplied_generation_contract_block_reason,
-    _prepare_send_draft_contract,
-    _stage_only_generation_soft_accept_allowed,
-    _stage_only_review_soft_accept_allowed,
+    _draft_from_dict, _host_supplied_generation_binding, _host_supplied_generation_contract_block_reason, _prepare_send_draft_contract,
+    _stage_only_generation_soft_accept_allowed, _stage_only_review_soft_accept_allowed,
 )
 from dating_boost.core.automation_send_payload import _append_send_action_request
 from dating_boost.core.automation_send_retry import (
-    _release_active_send_request_after_failure,
-    _retry_suffix_number,
-    _send_retry_suffix,
-    _stale_same_payload_retry_suffix,
+    _release_active_send_request_after_failure, _retry_suffix_number, _send_retry_suffix, _stale_same_payload_retry_suffix,
     _state_has_active_send_request,
 )
 from dating_boost.core.automation_send_revision import (

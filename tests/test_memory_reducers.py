@@ -3,16 +3,9 @@ import unittest
 from pathlib import Path
 
 from dating_boost.core.memory.models import (
-    CommitmentMemory,
-    EvidenceRef,
-    IdentityTrustStatus,
-    MatchMemoryProjection,
-    MemoryEvent,
-    MemoryEventType,
-    MemoryFact,
-    MemoryFactStatus,
-    MemoryFactType,
-    MemoryScope,
+    CommitmentMemory, EvidenceRef, IdentityTrustStatus, MatchMemoryProjection,
+    MemoryEvent, MemoryEventType, MemoryFact, MemoryFactStatus,
+    MemoryFactType, MemoryScope,
 )
 from dating_boost.core.memory.reducers import reduce_match_memory
 from dating_boost.core.memory.repositories import MemoryRepository

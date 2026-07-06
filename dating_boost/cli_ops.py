@@ -13,12 +13,8 @@ from typing import Any
 
 from dating_boost.apps.registry import adapter_manifests, create_adapter, managed_session_policy, manifest_for_app, supported_app_ids
 from dating_boost.core.agent_adapters import (
-    install_claude_code_adapter,
-    install_codex_adapter,
-    install_openclaw_adapter,
-    run_claude_code_adapter_doctor,
-    run_codex_adapter_doctor,
-    run_openclaw_adapter_doctor,
+    install_claude_code_adapter, install_codex_adapter, install_openclaw_adapter, run_claude_code_adapter_doctor,
+    run_codex_adapter_doctor, run_openclaw_adapter_doctor,
 )
 from dating_boost.core.action_audit import ActionAuditRepository
 from dating_boost.core.automation import AutomationRepository
@@ -30,29 +26,17 @@ from dating_boost.core.draft_evidence import DraftEvidencePack, build_draft_evid
 from dating_boost.core.draft_review_audit import DraftReviewAuditRepository
 from dating_boost.core.feedback import create_feedback_event
 from dating_boost.core.live_send_contract import (
-    live_send_action_request_block_reason,
-    live_send_authorization_block_reason,
-    live_send_next_host_action,
-    managed_live_send_guidance,
+    live_send_action_request_block_reason, live_send_authorization_block_reason, live_send_next_host_action, managed_live_send_guidance,
     validate_live_send_contract,
 )
 from dating_boost.core.managed_session import (
-    DEFAULT_NUDGE_DELAY_MINUTES,
-    MANAGED_SESSION_SCAN_BOUNDARY,
-    MANAGED_SESSION_USER_CONFIGURABLE_FIELDS,
-    ManagedSessionRepository,
-    managed_session_config_confirm_token,
-    managed_session_proposed_config,
+    DEFAULT_NUDGE_DELAY_MINUTES, MANAGED_SESSION_SCAN_BOUNDARY, MANAGED_SESSION_USER_CONFIGURABLE_FIELDS, ManagedSessionRepository,
+    managed_session_config_confirm_token, managed_session_proposed_config,
 )
 from dating_boost.core.memory.ingest import store_observation_with_memory
 from dating_boost.core.memory.models import (
-    CommitmentMemory,
-    EvidenceRef,
-    MemoryEvent,
-    MemoryEventType,
-    MemoryFact,
-    MemoryFactType,
-    MemoryScope,
+    CommitmentMemory, EvidenceRef, MemoryEvent, MemoryEventType,
+    MemoryFact, MemoryFactType, MemoryScope,
 )
 from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.core.memory.retrieval import build_memory_context
@@ -864,4 +848,49 @@ def _print_json(data: dict[str, Any]) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True))
 
 
-__all__ = [name for name in globals() if not name.startswith("__")]
+__all__ = [
+    'annotations', 'argparse', 'datetime', 'timezone',
+    'hashlib', 'json', 'os', 'sys',
+    'time', 'asdict', 'Path', 'Any',
+    'adapter_manifests', 'create_adapter', 'managed_session_policy', 'manifest_for_app',
+    'supported_app_ids', 'install_claude_code_adapter', 'install_codex_adapter', 'install_openclaw_adapter',
+    'run_claude_code_adapter_doctor', 'run_codex_adapter_doctor', 'run_openclaw_adapter_doctor', 'ActionAuditRepository',
+    'AutomationRepository', 'build_capabilities', 'build_context_pack', 'DaemonRepository',
+    'DiagnosticsRepository', 'DraftEvidencePack', 'build_draft_evidence', 'DraftReviewAuditRepository',
+    'create_feedback_event', 'live_send_action_request_block_reason', 'live_send_authorization_block_reason', 'live_send_next_host_action',
+    'managed_live_send_guidance', 'validate_live_send_contract', 'DEFAULT_NUDGE_DELAY_MINUTES', 'MANAGED_SESSION_SCAN_BOUNDARY',
+    'MANAGED_SESSION_USER_CONFIGURABLE_FIELDS', 'ManagedSessionRepository', 'managed_session_config_confirm_token', 'managed_session_proposed_config',
+    'store_observation_with_memory', 'CommitmentMemory', 'EvidenceRef', 'MemoryEvent',
+    'MemoryEventType', 'MemoryFact', 'MemoryFactType', 'MemoryScope',
+    'MemoryRepository', 'build_memory_context', 'Divergence', 'MemoryItem',
+    'ReplyMode', 'UserProfile', 'normalize_observation', 'observation_template',
+    'validate_observation', 'OperatorRepository', 'PlannerRepository', 'planner_context_items',
+    'ProductionDataStore', 'payload_digest', 'release_doctor', 'latest_replay_markdown',
+    'latest_replay_payload', 'JsonMemoryRepository', 'MatchRepository', 'ObservationRepository',
+    'user_profile_from_dict', 'RuntimeScopeRepository', 'assemble_scan_batch', 'normalize_scan_batch',
+    'scan_template', 'validate_scan_batch', 'run_skill_doctor', 'SafetyRepository',
+    'StorageError', 'SupportLogRepository', 'classify_text_topics', 'context_source_manifest',
+    'create_model_backend', 'MINIMAX_DEFAULT_API_KEY_ENV', 'MINIMAX_DEFAULT_BASE_URL', 'MINIMAX_DEFAULT_MODEL',
+    'ModelBackend', 'DraftGenerationResult', 'generate_reply_with_refinement', 'DraftResponse',
+    'run_conversation_eval', 'run_memory_eval', 'run_memory_review_eval', 'load_observation',
+    'AppObservation', 'build_observation_from_screenshot_analysis', 'Action', 'authorize_action',
+    'DraftReviewDecision', 'review_draft', 'UserDisclosureRepository', 'interview_template',
+    'MVP_TIMESTAMP', 'SUPPORTED_NATIVE_HARNESS_APPS', 'SUPPORTED_MANAGED_SESSION_APPS', '_now_iso',
+    '_run_authorization', '_unsupported_harness_app_argv_payload', '_run_handler_with_support_logging', '_handle_capabilities',
+    '_handle_skill_doctor', '_handle_adapter_claude_code_install', '_handle_adapter_claude_code_doctor', '_handle_adapter_openclaw_install',
+    '_handle_adapter_openclaw_doctor', '_handle_adapter_hermes_install', '_handle_adapter_hermes_doctor', '_handle_adapter_codex_install',
+    '_handle_adapter_codex_doctor', '_handle_data_doctor', '_handle_data_migrate', '_handle_data_export',
+    '_handle_data_delete', '_handle_data_unlock', '_handle_data_lock', '_handle_data_rekey',
+    '_handle_data_backup', '_handle_data_restore', '_recovery_passphrase', '_handle_safety_pause',
+    '_handle_safety_resume', '_handle_safety_status', '_handle_daemon_run', '_handle_daemon_install',
+    '_handle_daemon_uninstall', '_handle_daemon_status', '_handle_daemon_stop', '_handle_diagnostics_doctor',
+    '_handle_diagnostics_bundle', '_handle_support_session_start', '_handle_support_session_stop', '_handle_support_record_event',
+    '_handle_support_bundle', '_handle_runtime_select', '_handle_runtime_status', '_handle_runtime_clear',
+    '_handle_confirmation_create', '_handle_confirmation_confirm', '_handle_confirmation_validate', '_handle_authorize',
+    '_handle_policy_check_action', '_print_action_decision', '_handle_init_profile', '_handle_user_interview_template',
+    '_handle_user_ingest_profile', '_handle_user_ingest_interview', '_handle_user_disclosure_profile', '_handle_user_readiness',
+    '_select_backend', '_record_support_draft_review', '_record_support_draft_generation', '_record_support_harness_result',
+    '_record_support_harness_action', '_support_target_match_id', '_support_safe_harness_payload', '_read_json_object',
+    '_read_json_payload', '_add_confirmation_binding_args', '_unique_cli_strings', '_digest',
+    '_validate_storage_id', '_print_json',
+]

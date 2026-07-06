@@ -4,14 +4,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from dating_boost.apps.tashuo.standalone_common import (
-    TARGET_CACHE_MAX_AGE_SECONDS,
-    TARGET_VISUAL_ANCHOR_CACHE_MAX_AGE_SECONDS,
-    _is_synthetic_message_list_visible_name,
-    _latest_preview_corroborates_thread,
-    _normalized_visible_name,
-    _stable_text_hash,
-    _visible_name_identity_conflict,
-    _visual_anchor_region_from_source,
+    TARGET_CACHE_MAX_AGE_SECONDS, TARGET_VISUAL_ANCHOR_CACHE_MAX_AGE_SECONDS, _is_synthetic_message_list_visible_name, _latest_preview_corroborates_thread,
+    _normalized_visible_name, _stable_text_hash, _visible_name_identity_conflict, _visual_anchor_region_from_source,
 )
 from dating_boost.apps.tashuo.standalone_message_list import _message_list_evidence_from_target
 from dating_boost.apps.tashuo.standalone_thread import _latest_inbound_messages, _normalize_visible_messages

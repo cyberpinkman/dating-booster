@@ -9,13 +9,8 @@ from unittest.mock import patch
 from dating_boost.cli import main
 from dating_boost.core.draft_evidence import ConversationThreadRepository, LatestTurnRepository, UserMemoryRepository
 from dating_boost.core.memory.models import (
-    EvidenceRef,
-    IdentityTrustStatus,
-    MatchMemoryProjection,
-    MemoryFact,
-    MemoryFactStatus,
-    MemoryFactType,
-    MemoryScope,
+    EvidenceRef, IdentityTrustStatus, MatchMemoryProjection, MemoryFact,
+    MemoryFactStatus, MemoryFactType, MemoryScope,
 )
 from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.core.repositories import ObservationRepository

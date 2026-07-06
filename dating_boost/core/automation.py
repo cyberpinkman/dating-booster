@@ -38,12 +38,8 @@ from dating_boost.core.automation_send_gate import (
     _release_active_send_request_after_failure,
 )
 from dating_boost.core.automation_state import (
-    _action_result_mismatch,
-    _digest,
-    _goal_type_from_payload,
-    _non_empty,
-    _now_iso,
-    _stage_result_mismatch,
+    _action_result_mismatch, _digest, _goal_type_from_payload, _non_empty,
+    _now_iso, _stage_result_mismatch,
 )
 
 

@@ -16,10 +16,7 @@ from dating_boost.apps.registry import supported_app_ids
 from dating_boost.core.draft_evidence import UserMemoryRepository
 from dating_boost.core.live_send_contract import target_binding_structural_evidence_present, validate_live_send_contract
 from dating_boost.core.managed_gui_send import (
-    ManagedGuiSendError,
-    ManagedGuiSendRunner,
-    _managed_gui_send_required_evidence,
-    _validate_managed_sequence_visual_confirmation,
+    ManagedGuiSendError, ManagedGuiSendRunner, _managed_gui_send_required_evidence, _validate_managed_sequence_visual_confirmation,
     _work_item_payload_text,
 )
 from dating_boost.core.operator import DEFAULT_MESSAGE_LIST_SCAN_BOUNDARY, OperatorRepository
@@ -43,9 +40,52 @@ IPHONE_MIRRORING_STRUCTURAL_BINDING_APP_IDS = {"tinder", "bumble"}
 
 
 from dating_boost.host_loop_common import HostLoopCommandError, HostLoopError
-from dating_boost.host_loop_templates import *
-from dating_boost.host_loop_targeting import *
-from dating_boost.host_loop_reporting import *
+from dating_boost.host_loop_templates import (
+    annotations, argparse, hashlib, json,
+    os, shutil, subprocess, sys,
+    time, Path, Any, supported_app_ids,
+    UserMemoryRepository, target_binding_structural_evidence_present, validate_live_send_contract, ManagedGuiSendError,
+    ManagedGuiSendRunner, _managed_gui_send_required_evidence, _validate_managed_sequence_visual_confirmation, _work_item_payload_text,
+    DEFAULT_MESSAGE_LIST_SCAN_BOUNDARY, OperatorRepository, ProductionDataStore, RELATIONSHIP_PROGRESS_NEXT_ACTION,
+    build_relationship_progress_report, RuntimeScopeRepository, SafetyRepository, SupportLogRepository,
+    ProfileObservation, ROOT, DEFAULT_DATA_DIR, DEFAULT_FIXTURE_NOW,
+    REPORT_FINAL_STATUSES, MESSAGE_SEQUENCE_SECONDS_PER_MESSAGE, IPHONE_MIRRORING_STRUCTURAL_BINDING_APP_IDS, HostLoopError,
+    HostLoopCommandError, _message_list_template, _thread_template, _staged_verification_template,
+    _staged_verification, _staged_verification_from_stage_draft, _stage_result_from_verification, _action_result_template,
+    _action_result_fixture, _validate_staged_verification, _validate_action_result, _session_hint,
+    _safe_name, _same_work_item, _template_path, _required_string,
+    _message_list_evidence, _thread_identity_evidence, _thread_provenance_evidence, _native_backend,
+)
+from dating_boost.host_loop_targeting import (
+    annotations, argparse, hashlib, json,
+    os, shutil, subprocess, sys,
+    time, Path, Any, supported_app_ids,
+    UserMemoryRepository, target_binding_structural_evidence_present, validate_live_send_contract, ManagedGuiSendError,
+    ManagedGuiSendRunner, _managed_gui_send_required_evidence, _validate_managed_sequence_visual_confirmation, _work_item_payload_text,
+    DEFAULT_MESSAGE_LIST_SCAN_BOUNDARY, OperatorRepository, ProductionDataStore, RELATIONSHIP_PROGRESS_NEXT_ACTION,
+    build_relationship_progress_report, RuntimeScopeRepository, SafetyRepository, SupportLogRepository,
+    ProfileObservation, ROOT, DEFAULT_DATA_DIR, DEFAULT_FIXTURE_NOW,
+    REPORT_FINAL_STATUSES, MESSAGE_SEQUENCE_SECONDS_PER_MESSAGE, IPHONE_MIRRORING_STRUCTURAL_BINDING_APP_IDS, HostLoopError,
+    HostLoopCommandError, _safe_name, _read_json, _try_read_json_object,
+    _redacted_stage_draft_payload, _target_binding_for_work_item, _derive_tashuo_current_thread_target_binding, _derive_current_thread_visual_target_binding,
+    _thread_observation_app_id, _current_thread_visual_anchor_config_for_app, _thread_screenshot_path, _target_profile_ready_for_work_item,
+    _target_profile_payload_for_work_item, _scan_batch_from_consumed_observations, _thread_observation_for_work_item, _message_list_entry_for_work_item,
+    _stripped_or_none, _load_app_profile, _host_instructions, _normalized_harness_runtime,
+    _next_host_action, _next_host_action_for_block_reason, _unique_strings,
+)
+from dating_boost.host_loop_reporting import (
+    annotations, argparse, hashlib, json,
+    os, shutil, subprocess, sys,
+    time, Path, Any, supported_app_ids,
+    UserMemoryRepository, target_binding_structural_evidence_present, validate_live_send_contract, ManagedGuiSendError,
+    ManagedGuiSendRunner, _managed_gui_send_required_evidence, _validate_managed_sequence_visual_confirmation, _work_item_payload_text,
+    DEFAULT_MESSAGE_LIST_SCAN_BOUNDARY, OperatorRepository, ProductionDataStore, RELATIONSHIP_PROGRESS_NEXT_ACTION,
+    build_relationship_progress_report, RuntimeScopeRepository, SafetyRepository, SupportLogRepository,
+    ProfileObservation, ROOT, DEFAULT_DATA_DIR, DEFAULT_FIXTURE_NOW,
+    REPORT_FINAL_STATUSES, MESSAGE_SEQUENCE_SECONDS_PER_MESSAGE, IPHONE_MIRRORING_STRUCTURAL_BINDING_APP_IDS, HostLoopError,
+    HostLoopCommandError, _data_dir_path, _host_loop_relationship_report_paths, _digest,
+    _now_iso, _write_json, _print_human,
+)
 
 
 def main(argv: list[str] | None = None) -> int:

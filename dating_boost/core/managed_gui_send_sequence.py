@@ -7,12 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.managed_gui_send_common import (
-    MESSAGE_SEQUENCE_SECONDS_PER_MESSAGE,
-    ManagedGuiSendError,
-    _now_iso,
-    _read_json,
-    _safe_name,
-    _write_json,
+    MESSAGE_SEQUENCE_SECONDS_PER_MESSAGE, ManagedGuiSendError, _now_iso, _read_json,
+    _safe_name, _write_json,
 )
 from dating_boost.core.managed_gui_send_evidence import _managed_gui_send_normalized_evidence
 

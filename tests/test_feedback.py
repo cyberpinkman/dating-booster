@@ -8,13 +8,8 @@ from pathlib import Path
 from dating_boost.cli import main
 from dating_boost.core.feedback import FeedbackLabel, create_feedback_event
 from dating_boost.core.memory.models import (
-    EvidenceRef,
-    MemoryEvent,
-    MemoryEventType,
-    MemoryFact,
-    MemoryFactStatus,
-    MemoryFactType,
-    MemoryScope,
+    EvidenceRef, MemoryEvent, MemoryEventType, MemoryFact,
+    MemoryFactStatus, MemoryFactType, MemoryScope,
 )
 from dating_boost.core.memory.reducers import reduce_match_memory
 from dating_boost.core.memory.repositories import MemoryRepository

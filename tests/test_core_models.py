@@ -1,12 +1,8 @@
 import unittest
 
 from dating_boost.core.models import (
-    Confidence,
-    MemoryItem,
-    MemoryKind,
-    MemoryStatus,
-    ReplyMode,
-    UserProfile,
+    Confidence, MemoryItem, MemoryKind, MemoryStatus,
+    ReplyMode, UserProfile,
 )
 
 

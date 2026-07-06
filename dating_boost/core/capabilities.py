@@ -7,10 +7,7 @@ from typing import Any
 from dating_boost import __version__
 from dating_boost.apps.registry import adapter_manifests, capability_manifest
 from dating_boost.core.production_store import (
-    BACKUP_RECOVERY_KEY_SCHEMA_VERSION,
-    DIAGNOSTIC_BUNDLE_SCHEMA_VERSION,
-    ENCRYPTED_PAYLOAD_SCHEMA_VERSION,
-    KEYCHAIN_BINDING_SCHEMA_VERSION,
+    BACKUP_RECOVERY_KEY_SCHEMA_VERSION, DIAGNOSTIC_BUNDLE_SCHEMA_VERSION, ENCRYPTED_PAYLOAD_SCHEMA_VERSION, KEYCHAIN_BINDING_SCHEMA_VERSION,
     RELEASE_MANIFEST_SCHEMA_VERSION,
 )
 from dating_boost.core.production_store import ProductionDataStore

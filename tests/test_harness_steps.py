@@ -2,10 +2,7 @@ import unittest
 
 from dating_boost.core.gui_harness import NativeGuiHarness
 from dating_boost.core.harness_steps import (
-    harness_step_validation_reason,
-    marker_step,
-    swipe_step,
-    tap_step,
+    harness_step_validation_reason, marker_step, swipe_step, tap_step,
     wheel_step,
 )
 from dating_boost.harness.base import WindowInfo

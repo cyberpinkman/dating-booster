@@ -4,14 +4,8 @@ from dataclasses import replace
 from typing import Any
 
 from dating_boost.core.memory.models import (
-    CommitmentMemory,
-    IdentityTrustStatus,
-    MatchMemoryProjection,
-    MemoryConflict,
-    MemoryEvent,
-    MemoryEventType,
-    MemoryFact,
-    MemoryFactStatus,
+    CommitmentMemory, IdentityTrustStatus, MatchMemoryProjection, MemoryConflict,
+    MemoryEvent, MemoryEventType, MemoryFact, MemoryFactStatus,
     MemoryFactType,
 )
 

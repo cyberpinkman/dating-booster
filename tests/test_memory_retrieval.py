@@ -2,14 +2,8 @@ import unittest
 from pathlib import Path
 
 from dating_boost.core.memory.models import (
-    CommitmentMemory,
-    EvidenceRef,
-    IdentityTrustStatus,
-    MatchMemoryProjection,
-    MemoryFact,
-    MemoryFactStatus,
-    MemoryFactType,
-    MemoryScope,
+    CommitmentMemory, EvidenceRef, IdentityTrustStatus, MatchMemoryProjection,
+    MemoryFact, MemoryFactStatus, MemoryFactType, MemoryScope,
 )
 from dating_boost.core.memory.retrieval import build_memory_context
 from dating_boost.core.memory.semantic import SemanticHookCandidate
