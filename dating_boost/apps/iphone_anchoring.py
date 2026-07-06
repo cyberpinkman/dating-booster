@@ -34,6 +34,54 @@ def _recover_iphone_current_thread_visual_identity_mismatch(
     verify_target_binding: Any,
     max_attempts: int = IPHONE_TARGET_RELOCATION_MAX_ATTEMPTS,
 ) -> dict[str, Any]:
+    preflight = _iphone_visual_identity_relocation_preflight(
+        app_id=app_id,
+        target_binding=target_binding,
+        target_verification=target_verification,
+        message_list_visual_anchor_scan_region=message_list_visual_anchor_scan_region,
+        max_attempts=max_attempts,
+    )
+    base = preflight["base"]
+    if preflight.get("return_payload") is not None:
+        return preflight["return_payload"]
+    evidence = preflight["evidence"]
+
+    return _run_iphone_visual_identity_relocation_attempts(
+        self,
+        base=base,
+        evidence=evidence,
+        context={
+            "app_id": app_id,
+            "target_binding": target_binding,
+            "output_dir": output_dir,
+            "chat_list_state": chat_list_state,
+            "conversation_state": conversation_state,
+            "foreground_states": foreground_states,
+            "open_chats_step": open_chats_step,
+            "return_to_chats_step": return_to_chats_step,
+            "secondary_close_steps": secondary_close_steps,
+            "guardrails": guardrails,
+            "layout_hints_fn": layout_hints_fn,
+            "message_list_visual_anchor_scan_region": message_list_visual_anchor_scan_region,
+            "tap_intent": tap_intent,
+            "tap_x": tap_x,
+            "tap_y_min": tap_y_min,
+            "tap_y_max": tap_y_max,
+            "output_prefix": output_prefix,
+            "verify_target_binding": verify_target_binding,
+            "max_attempts": max_attempts,
+        },
+    )
+
+
+def _iphone_visual_identity_relocation_preflight(
+    *,
+    app_id: str,
+    target_binding: dict[str, Any],
+    target_verification: dict[str, Any] | None,
+    message_list_visual_anchor_scan_region: dict[str, float],
+    max_attempts: int,
+) -> dict[str, Any]:
     base = {
         "recovery_method": f"{app_id}_iphone_mirroring_message_list_visual_relocation",
         "target_match_id": target_binding.get("target_match_id"),
@@ -45,17 +93,23 @@ def _recover_iphone_current_thread_visual_identity_mismatch(
     }
     if target_binding.get("binding_type") != "current_thread_visual_identity":
         return {
-            **base,
-            "status": "blocked",
-            "reason": (target_verification or {}).get("reason") or "target_binding_visual_identity_required",
-            "recovery_skipped": True,
+            "base": base,
+            "return_payload": {
+                **base,
+                "status": "blocked",
+                "reason": (target_verification or {}).get("reason") or "target_binding_visual_identity_required",
+                "recovery_skipped": True,
+            },
         }
     if (target_verification or {}).get("reason") != "target_binding_visual_anchor_mismatch":
         return {
-            **base,
-            "status": "blocked",
-            "reason": (target_verification or {}).get("reason") or "target_binding_mismatch",
-            "recovery_skipped": True,
+            "base": base,
+            "return_payload": {
+                **base,
+                "status": "blocked",
+                "reason": (target_verification or {}).get("reason") or "target_binding_mismatch",
+                "recovery_skipped": True,
+            },
         }
 
     evidence = _message_list_visual_anchor_evidence_from_options(
@@ -66,112 +120,64 @@ def _recover_iphone_current_thread_visual_identity_mismatch(
     )
     if evidence.get("status") != "ok":
         return {
-            **base,
-            **evidence,
-            "status": "blocked",
-            "reason": evidence.get("reason") or "target_relocation_visual_evidence_required",
-        }
-
-    attempts: list[dict[str, Any]] = []
-    for attempt_index in range(1, max_attempts + 1):
-        prepare_payload = self._prepare_iphone_message_page(
-            {
-                **self._base_payload("ok"),
-                "action": "recover-target-binding",
-                "mode": "execute",
-                "attempt_index": attempt_index,
-                **guardrails,
-            },
-            app_id=app_id,
-            output_dir=output_dir,
-            output_prefix=output_prefix,
-            chat_list_state=chat_list_state,
-            returnable_states={conversation_state},
-            foreground_states=foreground_states,
-            open_chats_step=open_chats_step,
-            return_to_chats_step=return_to_chats_step,
-            secondary_close_steps=secondary_close_steps,
-            guardrails=guardrails,
-            layout_hints_fn=layout_hints_fn,
-            message_list_visual_anchor_scan_region=message_list_visual_anchor_scan_region,
-        )
-        attempt: dict[str, Any] = {
-            "attempt_index": attempt_index,
-            "message_list_recovery": _redacted_iphone_prepare_message_page_payload(prepare_payload),
-        }
-        if prepare_payload.get("status") != "ok":
-            attempts.append(attempt)
-            return {
+            "base": base,
+            "return_payload": {
                 **base,
+                **evidence,
                 "status": "blocked",
-                "reason": prepare_payload.get("reason") or "target_relocation_message_list_not_verified",
-                "attempts": attempts,
-            }
+                "reason": evidence.get("reason") or "target_relocation_visual_evidence_required",
+            },
+        }
+    return {"base": base, "evidence": evidence}
 
-        window = self._window_info()
-        if window is None:
-            attempts.append(attempt)
-            return {**base, "status": "blocked", "reason": "iphone_mirroring_window_not_found", "attempts": attempts}
-        list_output = output_dir / f"{output_prefix}.target_relocation_{attempt_index:02d}.message_list.png" if output_dir is not None else None
-        list_screen = self.capture_window(output=list_output, window=window)
-        location = _locate_iphone_message_list_visual_anchor_target(
-            list_screen,
-            evidence,
-            chat_list_state=chat_list_state,
-            tap_x=tap_x,
-            tap_y_min=tap_y_min,
-            tap_y_max=tap_y_max,
+
+def _run_iphone_visual_identity_relocation_attempts(
+    self,
+    *,
+    base: dict[str, Any],
+    evidence: dict[str, Any],
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    attempts: list[dict[str, Any]] = []
+    max_attempts = int(context["max_attempts"])
+    for attempt_index in range(1, max_attempts + 1):
+        attempt_result = _run_iphone_visual_identity_relocation_attempt(
+            self,
+            attempt_index=attempt_index,
+            app_id=context["app_id"],
+            target_binding=context["target_binding"],
+            output_dir=context["output_dir"],
+            chat_list_state=context["chat_list_state"],
+            conversation_state=context["conversation_state"],
+            foreground_states=context["foreground_states"],
+            open_chats_step=context["open_chats_step"],
+            return_to_chats_step=context["return_to_chats_step"],
+            secondary_close_steps=context["secondary_close_steps"],
+            guardrails=context["guardrails"],
+            layout_hints_fn=context["layout_hints_fn"],
+            message_list_visual_anchor_scan_region=context["message_list_visual_anchor_scan_region"],
+            tap_intent=context["tap_intent"],
+            tap_x=context["tap_x"],
+            tap_y_min=context["tap_y_min"],
+            tap_y_max=context["tap_y_max"],
+            output_prefix=context["output_prefix"],
+            evidence=evidence,
+            verify_target_binding=context["verify_target_binding"],
         )
-        attempt["message_list_location"] = location
-        if location.get("status") != "ok":
-            attempts.append(attempt)
+        attempts.append(attempt_result["attempt"])
+        blocked = _iphone_visual_identity_relocation_attempt_blocked_payload(
+            base,
+            attempt_result,
+            attempts=attempts,
+        )
+        if blocked is not None:
+            return blocked
+        if attempt_result.get("retry"):
             if attempt_index < max_attempts:
                 time.sleep(0.25)
                 continue
             break
-
-        tap_ratio = location.get("tap_ratio") if isinstance(location.get("tap_ratio"), dict) else None
-        if tap_ratio is None:
-            attempts.append(attempt)
-            return {
-                **base,
-                "status": "blocked",
-                "reason": "target_relocation_tap_ratio_unavailable",
-                "attempts": attempts,
-            }
-        if app_id == "bumble":
-            tap_step = {
-                **_bumble_tap_step(
-                    tap_intent,
-                    x=float(tap_ratio["x"]),
-                    y=float(tap_ratio["y"]),
-                    requires_states=chat_list_state,
-                    expected_states=conversation_state,
-                ),
-                "location_method": location.get("location_method"),
-                "message_list_location": location,
-            }
-        else:
-            tap_step = {
-                **_tap_step(tap_intent, x=float(tap_ratio["x"]), y=float(tap_ratio["y"])),
-                "location_method": location.get("location_method"),
-                "message_list_location": location,
-            }
-        click_result = self._execute_step(window, tap_step)
-        attempt["open_target_click"] = {**tap_step, "result": click_result}
-        if click_result.get("status") != "ok":
-            attempts.append(attempt)
-            return {
-                **base,
-                "status": "blocked",
-                "reason": click_result.get("reason") or "target_relocation_open_click_failed",
-                "attempts": attempts,
-            }
-        time.sleep(float(tap_step.get("wait_after_seconds", 0.2)))
-
-        verification = verify_target_binding(target_binding, output_dir=output_dir)
-        attempt["target_binding_verification"] = verification
-        attempts.append(attempt)
+        verification = attempt_result["verification"]
         if verification.get("status") == "ok":
             return {
                 **base,
@@ -191,7 +197,49 @@ def _recover_iphone_current_thread_visual_identity_mismatch(
                 "reason": verification.get("reason") or "target_relocation_target_verification_failed",
                 "attempts": attempts,
             }
+    return _iphone_visual_identity_relocation_exhausted_payload(base, attempts)
 
+
+def _iphone_visual_identity_relocation_attempt_blocked_payload(
+    base: dict[str, Any],
+    attempt_result: dict[str, Any],
+    *,
+    attempts: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if attempt_result.get("retry"):
+        return None
+    if attempt_result.get("status") == "window_missing":
+        return {**base, "status": "blocked", "reason": "iphone_mirroring_window_not_found", "attempts": attempts}
+    if attempt_result.get("status") == "prepare_failed":
+        prepare_payload = attempt_result["prepare_payload"]
+        return {
+            **base,
+            "status": "blocked",
+            "reason": prepare_payload.get("reason") or "target_relocation_message_list_not_verified",
+            "attempts": attempts,
+        }
+    if attempt_result.get("status") == "tap_ratio_missing":
+        return {
+            **base,
+            "status": "blocked",
+            "reason": "target_relocation_tap_ratio_unavailable",
+            "attempts": attempts,
+        }
+    if attempt_result.get("status") == "click_failed":
+        click_result = attempt_result["click_result"]
+        return {
+            **base,
+            "status": "blocked",
+            "reason": click_result.get("reason") or "target_relocation_open_click_failed",
+            "attempts": attempts,
+        }
+    return None
+
+
+def _iphone_visual_identity_relocation_exhausted_payload(
+    base: dict[str, Any],
+    attempts: list[dict[str, Any]],
+) -> dict[str, Any]:
     return {
         **base,
         "status": "blocked",
@@ -205,6 +253,156 @@ def _recover_iphone_current_thread_visual_identity_mismatch(
         ),
         "attempts": attempts,
     }
+
+
+def _run_iphone_visual_identity_relocation_attempt(
+    self,
+    *,
+    attempt_index: int,
+    app_id: str,
+    target_binding: dict[str, Any],
+    output_dir: Path | None,
+    chat_list_state: str,
+    conversation_state: str,
+    foreground_states: set[str],
+    open_chats_step: dict[str, Any],
+    return_to_chats_step: dict[str, Any],
+    secondary_close_steps: dict[str, dict[str, Any]],
+    guardrails: dict[str, Any],
+    layout_hints_fn: Any,
+    message_list_visual_anchor_scan_region: dict[str, float],
+    tap_intent: str,
+    tap_x: float,
+    tap_y_min: float,
+    tap_y_max: float,
+    output_prefix: str,
+    evidence: dict[str, Any],
+    verify_target_binding: Any,
+) -> dict[str, Any]:
+    prepare_payload = self._prepare_iphone_message_page(
+        {
+            **self._base_payload("ok"),
+            "action": "recover-target-binding",
+            "mode": "execute",
+            "attempt_index": attempt_index,
+            **guardrails,
+        },
+        app_id=app_id,
+        output_dir=output_dir,
+        output_prefix=output_prefix,
+        chat_list_state=chat_list_state,
+        returnable_states={conversation_state},
+        foreground_states=foreground_states,
+        open_chats_step=open_chats_step,
+        return_to_chats_step=return_to_chats_step,
+        secondary_close_steps=secondary_close_steps,
+        guardrails=guardrails,
+        layout_hints_fn=layout_hints_fn,
+        message_list_visual_anchor_scan_region=message_list_visual_anchor_scan_region,
+    )
+    attempt: dict[str, Any] = {
+        "attempt_index": attempt_index,
+        "message_list_recovery": _redacted_iphone_prepare_message_page_payload(prepare_payload),
+    }
+    if prepare_payload.get("status") != "ok":
+        return {"status": "prepare_failed", "attempt": attempt, "prepare_payload": prepare_payload}
+
+    window = self._window_info()
+    if window is None:
+        return {"status": "window_missing", "attempt": attempt}
+
+    location = _locate_iphone_visual_identity_relocation_target(
+        self,
+        window=window,
+        output_dir=output_dir,
+        output_prefix=output_prefix,
+        attempt_index=attempt_index,
+        evidence=evidence,
+        chat_list_state=chat_list_state,
+        tap_x=tap_x,
+        tap_y_min=tap_y_min,
+        tap_y_max=tap_y_max,
+    )
+    attempt["message_list_location"] = location
+    if location.get("status") != "ok":
+        return {"status": "location_failed", "retry": True, "attempt": attempt}
+
+    tap_step_result = _iphone_relocation_open_target_tap_step(
+        app_id,
+        location,
+        tap_intent=tap_intent,
+        chat_list_state=chat_list_state,
+        conversation_state=conversation_state,
+    )
+    if tap_step_result.get("status") != "ok":
+        return {"status": "tap_ratio_missing", "attempt": attempt}
+    tap_step = tap_step_result["tap_step"]
+    click_result = self._execute_step(window, tap_step)
+    attempt["open_target_click"] = {**tap_step, "result": click_result}
+    if click_result.get("status") != "ok":
+        return {"status": "click_failed", "attempt": attempt, "click_result": click_result}
+    time.sleep(float(tap_step.get("wait_after_seconds", 0.2)))
+
+    verification = verify_target_binding(target_binding, output_dir=output_dir)
+    attempt["target_binding_verification"] = verification
+    return {"status": "verified" if verification.get("status") == "ok" else "verification_failed", "attempt": attempt, "verification": verification}
+
+
+def _locate_iphone_visual_identity_relocation_target(
+    self,
+    *,
+    window: Any,
+    output_dir: Path | None,
+    output_prefix: str,
+    attempt_index: int,
+    evidence: dict[str, Any],
+    chat_list_state: str,
+    tap_x: float,
+    tap_y_min: float,
+    tap_y_max: float,
+) -> dict[str, Any]:
+    list_output = output_dir / f"{output_prefix}.target_relocation_{attempt_index:02d}.message_list.png" if output_dir is not None else None
+    list_screen = self.capture_window(output=list_output, window=window)
+    return _locate_iphone_message_list_visual_anchor_target(
+        list_screen,
+        evidence,
+        chat_list_state=chat_list_state,
+        tap_x=tap_x,
+        tap_y_min=tap_y_min,
+        tap_y_max=tap_y_max,
+    )
+
+
+def _iphone_relocation_open_target_tap_step(
+    app_id: str,
+    location: dict[str, Any],
+    *,
+    tap_intent: str,
+    chat_list_state: str,
+    conversation_state: str,
+) -> dict[str, Any]:
+    tap_ratio = location.get("tap_ratio") if isinstance(location.get("tap_ratio"), dict) else None
+    if tap_ratio is None:
+        return {"status": "blocked", "reason": "target_relocation_tap_ratio_unavailable"}
+    if app_id == "bumble":
+        tap_step = {
+            **_bumble_tap_step(
+                tap_intent,
+                x=float(tap_ratio["x"]),
+                y=float(tap_ratio["y"]),
+                requires_states=chat_list_state,
+                expected_states=conversation_state,
+            ),
+            "location_method": location.get("location_method"),
+            "message_list_location": location,
+        }
+    else:
+        tap_step = {
+            **_tap_step(tap_intent, x=float(tap_ratio["x"]), y=float(tap_ratio["y"])),
+            "location_method": location.get("location_method"),
+            "message_list_location": location,
+        }
+    return {"status": "ok", "tap_step": tap_step}
 
 
 def _verify_iphone_current_thread_visual_identity(
@@ -356,6 +554,49 @@ def _locate_iphone_message_list_visual_anchor_target(
     tap_y_min: float,
     tap_y_max: float,
 ) -> dict[str, Any]:
+    setup = _iphone_message_list_visual_anchor_scan_setup(
+        list_screen,
+        evidence,
+        chat_list_state=chat_list_state,
+    )
+    if setup.get("status") != "ok":
+        return setup
+    scan_result = _scan_iphone_message_list_visual_anchor_candidates(setup)
+    best = scan_result["best"]
+    candidate_count = scan_result["candidate_count"]
+    if best is None:
+        return {
+            "status": "blocked",
+            "reason": "target_relocation_visual_anchor_unavailable",
+            "candidate_count": candidate_count,
+        }
+    max_distance = setup["max_distance"]
+    expected_hash = setup["expected_hash"]
+    if int(best["visual_anchor_hamming_distance"]) > max_distance:
+        return {
+            **best,
+            "status": "blocked",
+            "reason": "target_relocation_visual_anchor_not_found",
+            "expected_visual_anchor_hash": expected_hash,
+            "visual_anchor_max_hamming_distance": max_distance,
+            "candidate_count": candidate_count,
+        }
+    return _finish_iphone_message_list_visual_anchor_location(
+        best,
+        setup,
+        tap_x=tap_x,
+        tap_y_min=tap_y_min,
+        tap_y_max=tap_y_max,
+        candidate_count=candidate_count,
+    )
+
+
+def _iphone_message_list_visual_anchor_scan_setup(
+    list_screen: dict[str, Any],
+    evidence: dict[str, Any],
+    *,
+    chat_list_state: str,
+) -> dict[str, Any]:
     if list_screen.get("status") != "ok":
         return {"status": "blocked", "reason": list_screen.get("reason") or "target_relocation_message_list_not_captured"}
     if list_screen.get("state") != chat_list_state:
@@ -383,18 +624,38 @@ def _locate_iphone_message_list_visual_anchor_target(
 
     row_height = max(0.03, min(0.28, float(source_region["y2"]) - float(source_region["y1"])))
     row_width = max(0.05, min(1.0, float(source_region["x2"]) - float(source_region["x1"])))
-    scan_y1 = max(0.0, min(1.0 - row_height, float(scan_region["y1"])))
-    scan_y2 = max(scan_y1 + row_height, min(1.0, float(scan_region["y2"])))
-    source_x1 = max(0.0, min(1.0 - row_width, float(source_region["x1"])))
-    source_x2 = source_x1 + row_width
     tap_ratio = evidence.get("tap_ratio") if isinstance(evidence.get("tap_ratio"), dict) else None
     tap_y_offset = 0.5
     prior_tap_y: float | None = None
     if tap_ratio is not None:
         tap_y_offset = (float(tap_ratio["y"]) - float(source_region["y1"])) / row_height
         prior_tap_y = max(0.0, min(1.0, float(tap_ratio["y"])))
-    tap_y_offset = max(0.05, min(0.95, tap_y_offset))
-    max_distance = int(evidence.get("visual_anchor_max_hamming_distance") or IPHONE_MESSAGE_LIST_VISUAL_ANCHOR_MAX_DISTANCE)
+    return {
+        "status": "ok",
+        "screen_pixels": screen_pixels,
+        "expected_hash": expected_hash,
+        "row_height": row_height,
+        "row_width": row_width,
+        "scan_y1": max(0.0, min(1.0 - row_height, float(scan_region["y1"]))),
+        "scan_y2": max(max(0.0, min(1.0 - row_height, float(scan_region["y1"]))) + row_height, min(1.0, float(scan_region["y2"]))),
+        "source_x1": max(0.0, min(1.0 - row_width, float(source_region["x1"]))),
+        "tap_ratio": tap_ratio,
+        "tap_y_offset": max(0.05, min(0.95, tap_y_offset)),
+        "prior_tap_y": prior_tap_y,
+        "max_distance": int(evidence.get("visual_anchor_max_hamming_distance") or IPHONE_MESSAGE_LIST_VISUAL_ANCHOR_MAX_DISTANCE),
+    }
+
+
+def _scan_iphone_message_list_visual_anchor_candidates(setup: dict[str, Any]) -> dict[str, Any]:
+    screen_pixels = setup["screen_pixels"]
+    expected_hash = setup["expected_hash"]
+    row_height = setup["row_height"]
+    source_x1 = setup["source_x1"]
+    source_x2 = source_x1 + setup["row_width"]
+    scan_y1 = setup["scan_y1"]
+    scan_y2 = setup["scan_y2"]
+    tap_y_offset = setup["tap_y_offset"]
+    prior_tap_y = setup["prior_tap_y"]
     step_y = max(0.004, min(0.012, row_height / 12.0))
     best: dict[str, Any] | None = None
     candidate_count = 0
@@ -434,21 +695,21 @@ def _locate_iphone_message_list_visual_anchor_target(
         ):
             best = candidate
         y += step_y
-    if best is None:
-        return {
-            "status": "blocked",
-            "reason": "target_relocation_visual_anchor_unavailable",
-            "candidate_count": candidate_count,
-        }
-    if int(best["visual_anchor_hamming_distance"]) > max_distance:
-        return {
-            **best,
-            "status": "blocked",
-            "reason": "target_relocation_visual_anchor_not_found",
-            "expected_visual_anchor_hash": expected_hash,
-            "visual_anchor_max_hamming_distance": max_distance,
-            "candidate_count": candidate_count,
-        }
+    return {"best": best, "candidate_count": candidate_count}
+
+
+def _finish_iphone_message_list_visual_anchor_location(
+    best: dict[str, Any],
+    setup: dict[str, Any],
+    *,
+    tap_x: float,
+    tap_y_min: float,
+    tap_y_max: float,
+    candidate_count: int,
+) -> dict[str, Any]:
+    row_height = setup["row_height"]
+    tap_y_offset = setup["tap_y_offset"]
+    tap_ratio = setup["tap_ratio"]
     matched_region = best["visual_anchor_region"]
     raw_tap_ratio = {
         "x": max(0.0, min(1.0, float(tap_ratio["x"]) if tap_ratio is not None else tap_x)),
@@ -464,8 +725,8 @@ def _locate_iphone_message_list_visual_anchor_target(
         **best,
         "status": "ok",
         "location_method": "message_list_visual_anchor_scan",
-        "expected_visual_anchor_hash": expected_hash,
-        "visual_anchor_max_hamming_distance": max_distance,
+        "expected_visual_anchor_hash": setup["expected_hash"],
+        "visual_anchor_max_hamming_distance": setup["max_distance"],
         "candidate_count": candidate_count,
         "tap_ratio": safe_tap["tap_ratio"],
         "raw_tap_ratio": raw_tap_ratio,

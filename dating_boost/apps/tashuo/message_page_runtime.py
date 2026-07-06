@@ -19,7 +19,71 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
         }
     runtime_config = getattr(session, "runtime_config", {}) if isinstance(getattr(session, "runtime_config", {}), dict) else {}
     bundle_id = str(runtime_config.get("bundle_id") or "com.intelcupid.tashuo")
-    planned_steps = [
+    planned_steps = _tashuo_prepare_message_page_steps(runtime_config, bundle_id=bundle_id)
+    payload = {
+        **session._base_payload("ok"),
+        "action": "prepare-message-page",
+        "target": "tashuo_message_page",
+        "mode": "dry_run" if dry_run else "execute",
+        "planned_steps": planned_steps,
+        "visual_only_navigation": True,
+        "ocr_used": False,
+        "message_page_followup": "visual_analysis_only",
+        "next_host_action": "visual_plan_message_list",
+        **tashuo_guardrails_payload(),
+    }
+    if dry_run:
+        return payload
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    executed_steps: list[dict[str, Any]] = []
+    prepared = _open_preflight_capture_tashuo_message_page(
+        session,
+        payload,
+        planned_steps,
+        bundle_id=bundle_id,
+        runtime_config=runtime_config,
+        output_dir=output_dir,
+        executed_steps=executed_steps,
+    )
+    if prepared.get("return_payload") is not None:
+        return prepared["return_payload"]
+
+    window = prepared["window"]
+    initial_screen = prepared["screen"]
+    for resolver in (
+        _dismiss_tashuo_liked_you_modal_if_present,
+        _return_tashuo_conversation_to_message_list_if_needed,
+        _return_tashuo_secondary_page_if_needed,
+    ):
+        resolved = resolver(
+            session,
+            payload,
+            planned_steps,
+            window=window,
+            screen=initial_screen,
+            output_dir=output_dir,
+            executed_steps=executed_steps,
+        )
+        if resolved.get("return_payload") is not None:
+            return resolved["return_payload"]
+        window = resolved["window"]
+        initial_screen = resolved["screen"]
+
+    return _settle_or_open_tashuo_messages_page(
+        session,
+        payload,
+        planned_steps,
+        window=window,
+        screen=initial_screen,
+        output_dir=output_dir,
+        executed_steps=executed_steps,
+    )
+
+
+def _tashuo_prepare_message_page_steps(runtime_config: dict[str, Any], *, bundle_id: str) -> list[dict[str, Any]]:
+    return [
         {
             "intent": "open_tashuo_mac_ios_app_bundle",
             "bundle_id": bundle_id,
@@ -95,29 +159,23 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
             "ocr_used": False,
         },
     ]
-    payload = {
-        **session._base_payload("ok"),
-        "action": "prepare-message-page",
-        "target": "tashuo_message_page",
-        "mode": "dry_run" if dry_run else "execute",
-        "planned_steps": planned_steps,
-        "visual_only_navigation": True,
-        "ocr_used": False,
-        "message_page_followup": "visual_analysis_only",
-        "next_host_action": "visual_plan_message_list",
-        **tashuo_guardrails_payload(),
-    }
-    if dry_run:
-        return payload
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
 
-    executed_steps: list[dict[str, Any]] = []
+
+def _open_preflight_capture_tashuo_message_page(
+    session: Any,
+    payload: dict[str, Any],
+    planned_steps: list[dict[str, Any]],
+    *,
+    bundle_id: str,
+    runtime_config: dict[str, Any],
+    output_dir: Path | None,
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
     open_payload = _open_tashuo_mac_ios_app_bundle(session, bundle_id)
     executed_steps.append({**planned_steps[0], "result": open_payload})
     if open_payload["status"] != "ok":
         payload.update({"status": "blocked", "reason": "mac_ios_app_open_failed", "executed_steps": executed_steps})
-        return payload
+        return {"return_payload": payload}
     time.sleep(float(planned_steps[0]["wait_after_seconds"]))
 
     activate_payload = session._activate_window()
@@ -128,7 +186,7 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
             "reason": activate_payload.get("reason") or "mac_ios_app_activation_failed",
             "executed_steps": executed_steps,
         })
-        return payload
+        return {"return_payload": payload}
     time.sleep(float(planned_steps[1]["wait_after_seconds"]))
 
     doctor = session.doctor(capture=False)
@@ -153,10 +211,11 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
             payload["preflight"] = doctor
             if doctor["status"] == "blocked":
                 payload.update({"status": "blocked", "reason": doctor.get("reason"), "executed_steps": executed_steps})
-                return payload
+                return {"return_payload": payload}
         else:
             payload.update({"status": "blocked", "reason": doctor.get("reason"), "executed_steps": executed_steps})
-            return payload
+            return {"return_payload": payload}
+
     window = platform._window_from_payload(doctor.get("window") or {})
     initial_output = output_dir / "mac_ios_app.tashuo.prepare_message_page.initial.png" if output_dir is not None else None
     initial_screen = _capture_tashuo_visual_screen(session, window, output=initial_output)
@@ -170,185 +229,239 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
             "reason": initial_screen.get("reason") or "tashuo_visual_capture_failed",
             "executed_steps": executed_steps,
         })
-        return payload
-    if initial_screen.get("liked_you_modal_present") or initial_screen.get("visual_state") == "tashuo_liked_you_modal":
-        dismiss_result = _dismiss_tashuo_liked_you_modal(session, window)
-        executed_steps.append({**planned_steps[3], "result": dismiss_result})
-        if dismiss_result.get("status") != "ok":
-            payload.update({
-                "status": "blocked",
-                "reason": dismiss_result.get("reason") or "tashuo_liked_you_modal_dismiss_failed",
-                "screen_state": initial_screen.get("state", "unknown"),
-                "next_host_action": "dismiss_tashuo_recoverable_modal_manually",
-                "executed_steps": executed_steps,
-            })
-            return payload
-        time.sleep(float(planned_steps[3]["wait_after_seconds"]))
-        refresh_result, refreshed_window = _refresh_tashuo_mac_ios_window(session)
-        executed_steps.append({
-            "intent": "refresh_tashuo_mac_ios_window_after_liked_you_modal",
-            "risk": "navigation_only",
-            "result": refresh_result,
-        })
-        if refresh_result.get("status") != "ok" or refreshed_window is None:
-            payload.update({
-                "status": "blocked",
-                "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
-                "screen_state": initial_screen.get("state", "unknown"),
-                "next_host_action": "restore_tashuo_window_focus",
-                "executed_steps": executed_steps,
-            })
-            return payload
-        window = refreshed_window
-        after_modal_output = (
-            output_dir / "mac_ios_app.tashuo.prepare_message_page.after_liked_you_modal.png"
-            if output_dir is not None
-            else None
-        )
-        after_modal_screen = _capture_tashuo_visual_screen(session, window, output=after_modal_output)
-        payload["after_liked_you_modal_screen"] = platform._redacted_screen(after_modal_screen)
-        payload["liked_you_modal_dismissed"] = True
-        if after_modal_screen.get("status") != "ok":
-            payload.update({
-                "status": "blocked",
-                "reason": after_modal_screen.get("reason") or "tashuo_visual_capture_failed",
-                "screen_state": after_modal_screen.get("state", "unknown"),
-                "executed_steps": executed_steps,
-            })
-            return payload
-        if after_modal_screen.get("liked_you_modal_present") or after_modal_screen.get("visual_state") == "tashuo_liked_you_modal":
-            payload.update({
-                "status": "needs_verification",
-                "reason": "tashuo_liked_you_modal_not_dismissed",
-                "screen_state": after_modal_screen.get("state", "unknown"),
-                "next_host_action": "dismiss_tashuo_recoverable_modal_manually",
-                "executed_steps": executed_steps,
-            })
-            return payload
-        initial_screen = after_modal_screen
-        payload["post_liked_you_modal_visual_state"] = initial_screen.get("visual_state", "unknown")
-        payload["post_liked_you_modal_active_tab"] = initial_screen.get("visual_active_tab", "unknown")
-    if initial_screen.get("visual_state") == "tashuo_conversation":
-        navback_result = _click_tashuo_conversation_navback_button(session)
-        executed_steps.append({**planned_steps[4], "result": navback_result})
-        if navback_result.get("status") != "ok":
-            fallback_result = session._click_ratio(window, planned_steps[5]["tap_ratio"])
-            executed_steps.append({
-                **planned_steps[5],
-                "accessibility_result": navback_result,
-                "result": fallback_result,
-            })
-            if fallback_result.get("status") != "ok":
-                payload.update({
-                    "status": "blocked",
-                    "reason": fallback_result.get("reason") or navback_result.get("reason") or "tashuo_conversation_navback_failed",
-                    "screen_state": initial_screen.get("state", "unknown"),
-                    "next_host_action": "inspect_tashuo_conversation_navback",
-                    "executed_steps": executed_steps,
-                })
-                return payload
-            time.sleep(float(planned_steps[5]["wait_after_seconds"]))
-        else:
-            time.sleep(float(planned_steps[4]["wait_after_seconds"]))
-        refresh_result, refreshed_window = _refresh_tashuo_mac_ios_window(session)
-        executed_steps.append({
-            "intent": "refresh_tashuo_mac_ios_window_after_conversation_navback",
-            "risk": "navigation_only",
-            "result": refresh_result,
-        })
-        if refresh_result.get("status") != "ok" or refreshed_window is None:
-            payload.update({
-                "status": "blocked",
-                "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
-                "screen_state": initial_screen.get("state", "unknown"),
-                "next_host_action": "restore_tashuo_window_focus",
-                "executed_steps": executed_steps,
-            })
-            return payload
-        window = refreshed_window
-        returned_output = (
-            output_dir / "mac_ios_app.tashuo.prepare_message_page.after_navback.png"
-            if output_dir is not None
-            else None
-        )
-        returned_screen = _capture_tashuo_visual_screen(session, window, output=returned_output)
-        payload["after_navback_screen"] = platform._redacted_screen(returned_screen)
-        if returned_screen.get("status") != "ok":
-            payload.update({
-                "status": "blocked",
-                "reason": returned_screen.get("reason") or "tashuo_visual_capture_failed",
-                "screen_state": returned_screen.get("state", "unknown"),
-                "executed_steps": executed_steps,
-            })
-            return payload
-        initial_screen = returned_screen
-        payload["post_navback_visual_state"] = returned_screen.get("visual_state", "unknown")
-        payload["post_navback_active_tab"] = returned_screen.get("visual_active_tab", "unknown")
+        return {"return_payload": payload}
+    return {"window": window, "screen": initial_screen}
 
-    if _tashuo_secondary_page_without_bottom_nav(initial_screen):
-        back_result = session._click_ratio(window, planned_steps[6]["tap_ratio"])
-        executed_steps.append({**planned_steps[6], "result": back_result})
-        if back_result.get("status") != "ok":
-            payload.update({
-                "status": "blocked",
-                "reason": back_result.get("reason") or "tashuo_secondary_page_navback_failed",
-                "screen_state": initial_screen.get("state", "unknown"),
-                "next_host_action": "inspect_tashuo_secondary_page_navback",
-                "executed_steps": executed_steps,
-            })
-            return payload
-        time.sleep(float(planned_steps[6]["wait_after_seconds"]))
-        refresh_result, refreshed_window = _refresh_tashuo_mac_ios_window(session)
-        executed_steps.append({
-            "intent": "refresh_tashuo_mac_ios_window_after_secondary_navback",
-            "risk": "navigation_only",
-            "result": refresh_result,
-        })
-        if refresh_result.get("status") != "ok" or refreshed_window is None:
-            payload.update({
-                "status": "blocked",
-                "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
-                "screen_state": initial_screen.get("state", "unknown"),
-                "next_host_action": "restore_tashuo_window_focus",
-                "executed_steps": executed_steps,
-            })
-            return payload
-        window = refreshed_window
-        returned_output = (
-            output_dir / "mac_ios_app.tashuo.prepare_message_page.after_secondary_navback.png"
-            if output_dir is not None
-            else None
-        )
-        returned_screen = _capture_tashuo_visual_screen(session, window, output=returned_output)
-        payload["after_secondary_navback_screen"] = platform._redacted_screen(returned_screen)
-        if returned_screen.get("status") != "ok":
-            payload.update({
-                "status": "blocked",
-                "reason": returned_screen.get("reason") or "tashuo_visual_capture_failed",
-                "screen_state": returned_screen.get("state", "unknown"),
-                "executed_steps": executed_steps,
-            })
-            return payload
-        initial_screen = returned_screen
-        payload["post_secondary_navback_visual_state"] = returned_screen.get("visual_state", "unknown")
-        payload["post_secondary_navback_active_tab"] = returned_screen.get("visual_active_tab", "unknown")
 
-    if not initial_screen.get("visual_bottom_nav_present"):
+def _dismiss_tashuo_liked_you_modal_if_present(
+    session: Any,
+    payload: dict[str, Any],
+    planned_steps: list[dict[str, Any]],
+    *,
+    window: Any,
+    screen: dict[str, Any],
+    output_dir: Path | None,
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not (screen.get("liked_you_modal_present") or screen.get("visual_state") == "tashuo_liked_you_modal"):
+        return {"window": window, "screen": screen}
+
+    dismiss_result = _dismiss_tashuo_liked_you_modal(session, window)
+    executed_steps.append({**planned_steps[3], "result": dismiss_result})
+    if dismiss_result.get("status") != "ok":
+        payload.update({
+            "status": "blocked",
+            "reason": dismiss_result.get("reason") or "tashuo_liked_you_modal_dismiss_failed",
+            "screen_state": screen.get("state", "unknown"),
+            "next_host_action": "dismiss_tashuo_recoverable_modal_manually",
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+    time.sleep(float(planned_steps[3]["wait_after_seconds"]))
+    refresh_result, refreshed_window = _refresh_tashuo_mac_ios_window(session)
+    executed_steps.append({
+        "intent": "refresh_tashuo_mac_ios_window_after_liked_you_modal",
+        "risk": "navigation_only",
+        "result": refresh_result,
+    })
+    if refresh_result.get("status") != "ok" or refreshed_window is None:
+        payload.update({
+            "status": "blocked",
+            "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
+            "screen_state": screen.get("state", "unknown"),
+            "next_host_action": "restore_tashuo_window_focus",
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+    window = refreshed_window
+    after_modal_output = (
+        output_dir / "mac_ios_app.tashuo.prepare_message_page.after_liked_you_modal.png"
+        if output_dir is not None
+        else None
+    )
+    after_modal_screen = _capture_tashuo_visual_screen(session, window, output=after_modal_output)
+    payload["after_liked_you_modal_screen"] = platform._redacted_screen(after_modal_screen)
+    payload["liked_you_modal_dismissed"] = True
+    if after_modal_screen.get("status") != "ok":
+        payload.update({
+            "status": "blocked",
+            "reason": after_modal_screen.get("reason") or "tashuo_visual_capture_failed",
+            "screen_state": after_modal_screen.get("state", "unknown"),
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+    if after_modal_screen.get("liked_you_modal_present") or after_modal_screen.get("visual_state") == "tashuo_liked_you_modal":
+        payload.update({
+            "status": "needs_verification",
+            "reason": "tashuo_liked_you_modal_not_dismissed",
+            "screen_state": after_modal_screen.get("state", "unknown"),
+            "next_host_action": "dismiss_tashuo_recoverable_modal_manually",
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+    payload["post_liked_you_modal_visual_state"] = after_modal_screen.get("visual_state", "unknown")
+    payload["post_liked_you_modal_active_tab"] = after_modal_screen.get("visual_active_tab", "unknown")
+    return {"window": window, "screen": after_modal_screen}
+
+
+def _return_tashuo_conversation_to_message_list_if_needed(
+    session: Any,
+    payload: dict[str, Any],
+    planned_steps: list[dict[str, Any]],
+    *,
+    window: Any,
+    screen: dict[str, Any],
+    output_dir: Path | None,
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if screen.get("visual_state") != "tashuo_conversation":
+        return {"window": window, "screen": screen}
+
+    navback_result = _click_tashuo_conversation_navback_button(session)
+    executed_steps.append({**planned_steps[4], "result": navback_result})
+    if navback_result.get("status") != "ok":
+        fallback_result = session._click_ratio(window, planned_steps[5]["tap_ratio"])
+        executed_steps.append({
+            **planned_steps[5],
+            "accessibility_result": navback_result,
+            "result": fallback_result,
+        })
+        if fallback_result.get("status") != "ok":
+            payload.update({
+                "status": "blocked",
+                "reason": fallback_result.get("reason") or navback_result.get("reason") or "tashuo_conversation_navback_failed",
+                "screen_state": screen.get("state", "unknown"),
+                "next_host_action": "inspect_tashuo_conversation_navback",
+                "executed_steps": executed_steps,
+            })
+            return {"return_payload": payload}
+        time.sleep(float(planned_steps[5]["wait_after_seconds"]))
+    else:
+        time.sleep(float(planned_steps[4]["wait_after_seconds"]))
+
+    refresh_result, refreshed_window = _refresh_tashuo_mac_ios_window(session)
+    executed_steps.append({
+        "intent": "refresh_tashuo_mac_ios_window_after_conversation_navback",
+        "risk": "navigation_only",
+        "result": refresh_result,
+    })
+    if refresh_result.get("status") != "ok" or refreshed_window is None:
+        payload.update({
+            "status": "blocked",
+            "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
+            "screen_state": screen.get("state", "unknown"),
+            "next_host_action": "restore_tashuo_window_focus",
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+    window = refreshed_window
+    returned_output = (
+        output_dir / "mac_ios_app.tashuo.prepare_message_page.after_navback.png"
+        if output_dir is not None
+        else None
+    )
+    returned_screen = _capture_tashuo_visual_screen(session, window, output=returned_output)
+    payload["after_navback_screen"] = platform._redacted_screen(returned_screen)
+    if returned_screen.get("status") != "ok":
+        payload.update({
+            "status": "blocked",
+            "reason": returned_screen.get("reason") or "tashuo_visual_capture_failed",
+            "screen_state": returned_screen.get("state", "unknown"),
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+    payload["post_navback_visual_state"] = returned_screen.get("visual_state", "unknown")
+    payload["post_navback_active_tab"] = returned_screen.get("visual_active_tab", "unknown")
+    return {"window": window, "screen": returned_screen}
+
+
+def _return_tashuo_secondary_page_if_needed(
+    session: Any,
+    payload: dict[str, Any],
+    planned_steps: list[dict[str, Any]],
+    *,
+    window: Any,
+    screen: dict[str, Any],
+    output_dir: Path | None,
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not _tashuo_secondary_page_without_bottom_nav(screen):
+        return {"window": window, "screen": screen}
+
+    back_result = session._click_ratio(window, planned_steps[6]["tap_ratio"])
+    executed_steps.append({**planned_steps[6], "result": back_result})
+    if back_result.get("status") != "ok":
+        payload.update({
+            "status": "blocked",
+            "reason": back_result.get("reason") or "tashuo_secondary_page_navback_failed",
+            "screen_state": screen.get("state", "unknown"),
+            "next_host_action": "inspect_tashuo_secondary_page_navback",
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+    time.sleep(float(planned_steps[6]["wait_after_seconds"]))
+    refresh_result, refreshed_window = _refresh_tashuo_mac_ios_window(session)
+    executed_steps.append({
+        "intent": "refresh_tashuo_mac_ios_window_after_secondary_navback",
+        "risk": "navigation_only",
+        "result": refresh_result,
+    })
+    if refresh_result.get("status") != "ok" or refreshed_window is None:
+        payload.update({
+            "status": "blocked",
+            "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
+            "screen_state": screen.get("state", "unknown"),
+            "next_host_action": "restore_tashuo_window_focus",
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+    window = refreshed_window
+    returned_output = (
+        output_dir / "mac_ios_app.tashuo.prepare_message_page.after_secondary_navback.png"
+        if output_dir is not None
+        else None
+    )
+    returned_screen = _capture_tashuo_visual_screen(session, window, output=returned_output)
+    payload["after_secondary_navback_screen"] = platform._redacted_screen(returned_screen)
+    if returned_screen.get("status") != "ok":
+        payload.update({
+            "status": "blocked",
+            "reason": returned_screen.get("reason") or "tashuo_visual_capture_failed",
+            "screen_state": returned_screen.get("state", "unknown"),
+            "executed_steps": executed_steps,
+        })
+        return {"return_payload": payload}
+    payload["post_secondary_navback_visual_state"] = returned_screen.get("visual_state", "unknown")
+    payload["post_secondary_navback_active_tab"] = returned_screen.get("visual_active_tab", "unknown")
+    return {"window": window, "screen": returned_screen}
+
+
+def _settle_or_open_tashuo_messages_page(
+    session: Any,
+    payload: dict[str, Any],
+    planned_steps: list[dict[str, Any]],
+    *,
+    window: Any,
+    screen: dict[str, Any],
+    output_dir: Path | None,
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not screen.get("visual_bottom_nav_present"):
         payload.update({
             "status": "needs_verification",
             "reason": "tashuo_top_level_tab_bar_not_verified",
-            "screen_state": initial_screen.get("state", "unknown"),
+            "screen_state": screen.get("state", "unknown"),
             "next_host_action": "visual_analyze_current_screen",
             "executed_steps": executed_steps,
         })
         return payload
-    if initial_screen.get("visual_active_tab") == "messages":
+    if screen.get("visual_active_tab") == "messages":
         settled_screen, settle_result = _wait_for_tashuo_message_page_ready(
             session,
             window,
             output_dir=output_dir,
             output_stem="mac_ios_app.tashuo.prepare_message_page.messages",
-            initial_screen=initial_screen,
+            initial_screen=screen,
         )
         payload["message_page_settle"] = settle_result
         executed_steps.append({**planned_steps[9], "result": settle_result})
@@ -388,7 +501,7 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
         payload.update({
             "status": "blocked",
             "reason": refresh_result.get("reason") or "tashuo_window_refresh_failed",
-            "screen_state": initial_screen.get("state", "unknown"),
+            "screen_state": screen.get("state", "unknown"),
             "next_host_action": "restore_tashuo_window_focus",
             "executed_steps": executed_steps,
         })
@@ -419,6 +532,7 @@ def prepare_tashuo_message_page(session: Any, *, dry_run: bool = False, output_d
     else:
         executed_steps.append({**planned_steps[10], "result": {"status": "ok"}})
     return payload
+
 
 def _tashuo_secondary_page_without_bottom_nav(screen: dict[str, Any]) -> bool:
     if screen.get("visual_bottom_nav_present"):

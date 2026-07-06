@@ -47,124 +47,63 @@ def _prepare_iphone_message_page(
     recoveries: list[dict[str, Any]] = []
     for attempt in range(4):
         state = str(screen.get("state") or "unknown")
-        if app_id == "tinder" and state == TINDER_SUBSCRIPTION_PAYWALL_STATE:
-            recovery = self._dismiss_tinder_subscription_paywall(
-                window,
-                output_dir=output_dir,
-                label=f"prepare_message_page_{attempt + 1:02d}",
-            )
-            recoveries.append({"kind": "subscription_paywall", "result": recovery})
-            if recovery.get("status") != "ok":
-                payload.update(
-                    {
-                        "status": "blocked",
-                        "reason": recovery.get("reason") or "tinder_subscription_paywall_recovery_failed",
-                        "recoveries": recoveries,
-                        "executed_steps": executed_steps,
-                    }
-                )
-                return payload
-            recovery_output = (
-                output_dir / f"{output_prefix}.prepare_message_page.after_paywall_recovery_{attempt + 1:02d}.png"
-                if output_dir is not None
-                else None
-            )
-            screen = self.capture_window(output=recovery_output, window=window)
+        recovery_result = _recover_iphone_prepare_message_page_blocker(
+            self,
+            payload,
+            app_id=app_id,
+            state=state,
+            window=window,
+            output_dir=output_dir,
+            output_prefix=output_prefix,
+            attempt=attempt,
+            recoveries=recoveries,
+            executed_steps=executed_steps,
+        )
+        if recovery_result.get("return_payload") is not None:
+            return recovery_result["return_payload"]
+        if recovery_result.get("screen") is not None:
+            screen = recovery_result["screen"]
             continue
-        if app_id == "tinder" and state == TINDER_FEEDBACK_SURVEY_STATE:
-            recovery = self._dismiss_tinder_feedback_survey(
-                window,
-                output_dir=output_dir,
-                label=f"prepare_message_page_{attempt + 1:02d}",
-            )
-            recoveries.append({"kind": "feedback_survey", "result": recovery})
-            if recovery.get("status") != "ok":
-                payload.update(
-                    {
-                        "status": "blocked",
-                        "reason": recovery.get("reason") or "tinder_feedback_survey_recovery_failed",
-                        "recoveries": recoveries,
-                        "executed_steps": executed_steps,
-                    }
-                )
-                return payload
-            recovery_output = (
-                output_dir / f"{output_prefix}.prepare_message_page.after_feedback_recovery_{attempt + 1:02d}.png"
-                if output_dir is not None
-                else None
-            )
-            screen = self.capture_window(output=recovery_output, window=window)
-            continue
-        if state == chat_list_state:
-            payload["prepared_message_page_observation"] = _redacted_screen(screen)
-            payload["screen_state"] = state
-            payload["layout_hints"] = layout_hints_fn(screen)
-            payload["next_host_action"] = "visual_plan_message_list"
-            payload["message_list_planning_contract"] = {
-                "source": "fresh_message_list_observation",
-                "use_visual_row_anchor_for_non_ocr_rows": True,
-                "message_list_visual_anchor_scan_region": dict(message_list_visual_anchor_scan_region),
-                "record_tap_ratio_from_visual_plan": True,
-                "allowed_target_bindings": ["chat_list_row_to_thread", "current_thread_visual_identity"],
-                "visible_name_navigation_allowed": True,
-                "generic_ui_markers_are_not_target_binding": True,
-                "fixed_row_index_only_compatibility_fallback": True,
-            }
-            if executed_steps:
-                payload["executed_steps"] = executed_steps
-            if recoveries:
-                payload["recoveries"] = recoveries
-            return payload
-        if state in secondary_close_steps:
-            step = secondary_close_steps[state]
-        elif state in returnable_states:
-            step = return_to_chats_step
-        elif state in foreground_states:
-            if app_id == "bumble" and not _bumble_top_level_bottom_nav_present(screen):
-                payload.update(
-                    {
-                        "status": "blocked",
-                        "reason": "bumble_top_level_tab_bar_not_verified",
-                        "screen_state": state,
-                        "executed_steps": executed_steps,
-                    }
-                )
-                return payload
-            step = open_chats_step
-        else:
-            payload.update(
-                {
-                    "status": "blocked",
-                    "reason": f"{app_id}_foreground_not_verified",
-                    "screen_state": state,
-                    "executed_steps": executed_steps,
-                }
-            )
-            return payload
 
-        result = self._execute_step(window, step)
-        executed_steps.append({**step, "result": result})
-        if result.get("status") != "ok":
-            payload.update(
-                {
-                    "status": "blocked",
-                    "reason": result.get("reason") or "prepare_message_page_step_failed",
-                    "executed_steps": executed_steps,
-                }
+        if state == chat_list_state:
+            return _finish_iphone_message_page_ready(
+                payload,
+                screen,
+                state=state,
+                layout_hints_fn=layout_hints_fn,
+                message_list_visual_anchor_scan_region=message_list_visual_anchor_scan_region,
+                executed_steps=executed_steps,
+                recoveries=recoveries,
             )
-            return payload
-        time.sleep(float(step.get("wait_after_seconds", 0.2)))
-        output = output_dir / f"{output_prefix}.prepare_message_page.after_step_{attempt + 1:02d}.png" if output_dir is not None else None
-        screen = self.capture_window(output=output, window=window)
-        if screen.get("status") != "ok":
-            payload.update(
-                {
-                    "status": "blocked",
-                    "reason": screen.get("reason") or "prepare_message_page_step_capture_failed",
-                    "executed_steps": executed_steps,
-                }
-            )
-            return payload
+
+        step_result = _select_iphone_prepare_message_page_step(
+            payload,
+            app_id=app_id,
+            state=state,
+            screen=screen,
+            returnable_states=returnable_states,
+            foreground_states=foreground_states,
+            open_chats_step=open_chats_step,
+            return_to_chats_step=return_to_chats_step,
+            secondary_close_steps=secondary_close_steps,
+            executed_steps=executed_steps,
+        )
+        if step_result.get("return_payload") is not None:
+            return step_result["return_payload"]
+
+        execution = _execute_iphone_prepare_message_page_step(
+            self,
+            payload,
+            step_result["step"],
+            window=window,
+            output_dir=output_dir,
+            output_prefix=output_prefix,
+            attempt=attempt,
+            executed_steps=executed_steps,
+        )
+        if execution.get("return_payload") is not None:
+            return execution["return_payload"]
+        screen = execution["screen"]
 
     payload.update(
         {
@@ -177,6 +116,176 @@ def _prepare_iphone_message_page(
     if recoveries:
         payload["recoveries"] = recoveries
     return payload
+
+
+def _recover_iphone_prepare_message_page_blocker(
+    self,
+    payload: dict[str, Any],
+    *,
+    app_id: str,
+    state: str,
+    window: Any,
+    output_dir: Path | None,
+    output_prefix: str,
+    attempt: int,
+    recoveries: list[dict[str, Any]],
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if app_id == "tinder" and state == TINDER_SUBSCRIPTION_PAYWALL_STATE:
+        recovery = self._dismiss_tinder_subscription_paywall(
+            window,
+            output_dir=output_dir,
+            label=f"prepare_message_page_{attempt + 1:02d}",
+        )
+        recoveries.append({"kind": "subscription_paywall", "result": recovery})
+        if recovery.get("status") != "ok":
+            payload.update(
+                {
+                    "status": "blocked",
+                    "reason": recovery.get("reason") or "tinder_subscription_paywall_recovery_failed",
+                    "recoveries": recoveries,
+                    "executed_steps": executed_steps,
+                }
+            )
+            return {"return_payload": payload}
+        recovery_output = (
+            output_dir / f"{output_prefix}.prepare_message_page.after_paywall_recovery_{attempt + 1:02d}.png"
+            if output_dir is not None
+            else None
+        )
+        return {"screen": self.capture_window(output=recovery_output, window=window)}
+    if app_id == "tinder" and state == TINDER_FEEDBACK_SURVEY_STATE:
+        recovery = self._dismiss_tinder_feedback_survey(
+            window,
+            output_dir=output_dir,
+            label=f"prepare_message_page_{attempt + 1:02d}",
+        )
+        recoveries.append({"kind": "feedback_survey", "result": recovery})
+        if recovery.get("status") != "ok":
+            payload.update(
+                {
+                    "status": "blocked",
+                    "reason": recovery.get("reason") or "tinder_feedback_survey_recovery_failed",
+                    "recoveries": recoveries,
+                    "executed_steps": executed_steps,
+                }
+            )
+            return {"return_payload": payload}
+        recovery_output = (
+            output_dir / f"{output_prefix}.prepare_message_page.after_feedback_recovery_{attempt + 1:02d}.png"
+            if output_dir is not None
+            else None
+        )
+        return {"screen": self.capture_window(output=recovery_output, window=window)}
+    return {}
+
+
+def _finish_iphone_message_page_ready(
+    payload: dict[str, Any],
+    screen: dict[str, Any],
+    *,
+    state: str,
+    layout_hints_fn: Any,
+    message_list_visual_anchor_scan_region: dict[str, float],
+    executed_steps: list[dict[str, Any]],
+    recoveries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    payload["prepared_message_page_observation"] = _redacted_screen(screen)
+    payload["screen_state"] = state
+    payload["layout_hints"] = layout_hints_fn(screen)
+    payload["next_host_action"] = "visual_plan_message_list"
+    payload["message_list_planning_contract"] = {
+        "source": "fresh_message_list_observation",
+        "use_visual_row_anchor_for_non_ocr_rows": True,
+        "message_list_visual_anchor_scan_region": dict(message_list_visual_anchor_scan_region),
+        "record_tap_ratio_from_visual_plan": True,
+        "allowed_target_bindings": ["chat_list_row_to_thread", "current_thread_visual_identity"],
+        "visible_name_navigation_allowed": True,
+        "generic_ui_markers_are_not_target_binding": True,
+        "fixed_row_index_only_compatibility_fallback": True,
+    }
+    if executed_steps:
+        payload["executed_steps"] = executed_steps
+    if recoveries:
+        payload["recoveries"] = recoveries
+    return payload
+
+
+def _select_iphone_prepare_message_page_step(
+    payload: dict[str, Any],
+    *,
+    app_id: str,
+    state: str,
+    screen: dict[str, Any],
+    returnable_states: set[str],
+    foreground_states: set[str],
+    open_chats_step: dict[str, Any],
+    return_to_chats_step: dict[str, Any],
+    secondary_close_steps: dict[str, dict[str, Any]],
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if state in secondary_close_steps:
+        return {"step": secondary_close_steps[state]}
+    if state in returnable_states:
+        return {"step": return_to_chats_step}
+    if state in foreground_states:
+        if app_id == "bumble" and not _bumble_top_level_bottom_nav_present(screen):
+            payload.update(
+                {
+                    "status": "blocked",
+                    "reason": "bumble_top_level_tab_bar_not_verified",
+                    "screen_state": state,
+                    "executed_steps": executed_steps,
+                }
+            )
+            return {"return_payload": payload}
+        return {"step": open_chats_step}
+    payload.update(
+        {
+            "status": "blocked",
+            "reason": f"{app_id}_foreground_not_verified",
+            "screen_state": state,
+            "executed_steps": executed_steps,
+        }
+    )
+    return {"return_payload": payload}
+
+
+def _execute_iphone_prepare_message_page_step(
+    self,
+    payload: dict[str, Any],
+    step: dict[str, Any],
+    *,
+    window: Any,
+    output_dir: Path | None,
+    output_prefix: str,
+    attempt: int,
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    result = self._execute_step(window, step)
+    executed_steps.append({**step, "result": result})
+    if result.get("status") != "ok":
+        payload.update(
+            {
+                "status": "blocked",
+                "reason": result.get("reason") or "prepare_message_page_step_failed",
+                "executed_steps": executed_steps,
+            }
+        )
+        return {"return_payload": payload}
+    time.sleep(float(step.get("wait_after_seconds", 0.2)))
+    output = output_dir / f"{output_prefix}.prepare_message_page.after_step_{attempt + 1:02d}.png" if output_dir is not None else None
+    screen = self.capture_window(output=output, window=window)
+    if screen.get("status") != "ok":
+        payload.update(
+            {
+                "status": "blocked",
+                "reason": screen.get("reason") or "prepare_message_page_step_capture_failed",
+                "executed_steps": executed_steps,
+            }
+        )
+        return {"return_payload": payload}
+    return {"screen": screen}
 
 
 def _open_conversation_by_message_list_visual_anchor(
@@ -214,12 +323,79 @@ def _open_conversation_by_message_list_visual_anchor(
         "planned_steps": planned_steps,
         **guardrails,
     }
+    executed_steps: list[dict[str, Any]] = []
+
+    preflight = _preflight_iphone_visual_anchor_open_conversation(
+        self,
+        payload,
+        app_id=app_id,
+        output_dir=output_dir,
+        output_prefix=output_prefix,
+    )
+    if preflight.get("return_payload") is not None:
+        return preflight["return_payload"]
+
+    navigation = _navigate_iphone_to_visual_anchor_source(
+        self,
+        payload,
+        app_id=app_id,
+        window=preflight["window"],
+        screen_state=preflight["screen_state"],
+        chat_list_state=chat_list_state,
+        conversation_state=conversation_state,
+        foreground_states=foreground_states,
+        open_chats_step=open_chats_step,
+        return_to_chats_step=return_to_chats_step,
+        executed_steps=executed_steps,
+    )
+    if navigation.get("return_payload") is not None:
+        return navigation["return_payload"]
+
+    opened = _relocate_and_tap_iphone_visual_anchor_target(
+        self,
+        payload,
+        app_id=app_id,
+        visual_evidence=visual_evidence,
+        window=preflight["window"],
+        output_dir=output_dir,
+        output_prefix=output_prefix,
+        chat_list_state=chat_list_state,
+        conversation_state=conversation_state,
+        tap_intent=tap_intent,
+        tap_x=tap_x,
+        tap_y_min=tap_y_min,
+        tap_y_max=tap_y_max,
+        executed_steps=executed_steps,
+    )
+    if opened.get("return_payload") is not None:
+        return opened["return_payload"]
+
+    return _verify_iphone_visual_anchor_open_conversation_target(
+        payload,
+        app_id=app_id,
+        target_binding=target_binding,
+        verification_screen=opened["verification_screen"],
+        conversation_state=conversation_state,
+        verification_method=verification_method,
+        source_states=source_states,
+        blocked_state_reasons=blocked_state_reasons,
+    )
+
+
+def _preflight_iphone_visual_anchor_open_conversation(
+    self,
+    payload: dict[str, Any],
+    *,
+    app_id: str,
+    output_dir: Path | None,
+    output_prefix: str,
+) -> dict[str, Any]:
     before = output_dir / f"{output_prefix}.open_conversation.before.png" if output_dir is not None else None
     doctor = self.doctor(capture=True, output=before)
     payload["preflight"] = doctor
     if doctor["status"] == "blocked":
         payload.update({"status": "blocked", "reason": doctor.get("reason")})
-        return payload
+        return {"return_payload": payload}
     window = _window_from_payload(doctor.get("window") or {})
     screen_state = doctor.get("screen", {}).get("state")
     if app_id == "tinder" and screen_state == TINDER_SUBSCRIPTION_PAYWALL_STATE:
@@ -236,7 +412,7 @@ def _open_conversation_by_message_list_visual_anchor(
                     "reason": recovery.get("reason") or "tinder_subscription_paywall_recovery_failed",
                 }
             )
-            return payload
+            return {"return_payload": payload}
         screen_state = recovery.get("verification", {}).get("state")
     if app_id == "tinder" and screen_state == TINDER_FEEDBACK_SURVEY_STATE:
         recovery = self._dismiss_tinder_feedback_survey(
@@ -252,10 +428,25 @@ def _open_conversation_by_message_list_visual_anchor(
                     "reason": recovery.get("reason") or "tinder_feedback_survey_recovery_failed",
                 }
             )
-            return payload
+            return {"return_payload": payload}
         screen_state = recovery.get("verification", {}).get("state")
+    return {"window": window, "screen_state": screen_state}
 
-    executed_steps: list[dict[str, Any]] = []
+
+def _navigate_iphone_to_visual_anchor_source(
+    self,
+    payload: dict[str, Any],
+    *,
+    app_id: str,
+    window: Any,
+    screen_state: str,
+    chat_list_state: str,
+    conversation_state: str,
+    foreground_states: set[str],
+    open_chats_step: dict[str, Any],
+    return_to_chats_step: dict[str, Any],
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
     if screen_state == conversation_state:
         back_result = self._execute_step(window, return_to_chats_step)
         executed_steps.append({**return_to_chats_step, "result": back_result})
@@ -267,31 +458,52 @@ def _open_conversation_by_message_list_visual_anchor(
                     "executed_steps": executed_steps,
                 }
             )
-            return payload
+            return {"return_payload": payload}
         time.sleep(float(return_to_chats_step.get("wait_after_seconds", 0.2)))
-    elif screen_state != chat_list_state:
-        if screen_state not in foreground_states:
-            payload.update(
-                {
-                    "status": "blocked",
-                    "reason": f"{app_id}_foreground_not_verified",
-                    "screen_state": screen_state,
-                }
-            )
-            return payload
-        open_result = self._execute_step(window, open_chats_step)
-        executed_steps.append({**open_chats_step, "result": open_result})
-        if open_result.get("status") != "ok":
-            payload.update(
-                {
-                    "status": "blocked",
-                    "reason": open_result.get("reason") or "open_chats_failed",
-                    "executed_steps": executed_steps,
-                }
-            )
-            return payload
-        time.sleep(float(open_chats_step.get("wait_after_seconds", 0.2)))
+        return {}
+    if screen_state == chat_list_state:
+        return {}
+    if screen_state not in foreground_states:
+        payload.update(
+            {
+                "status": "blocked",
+                "reason": f"{app_id}_foreground_not_verified",
+                "screen_state": screen_state,
+            }
+        )
+        return {"return_payload": payload}
+    open_result = self._execute_step(window, open_chats_step)
+    executed_steps.append({**open_chats_step, "result": open_result})
+    if open_result.get("status") != "ok":
+        payload.update(
+            {
+                "status": "blocked",
+                "reason": open_result.get("reason") or "open_chats_failed",
+                "executed_steps": executed_steps,
+            }
+        )
+        return {"return_payload": payload}
+    time.sleep(float(open_chats_step.get("wait_after_seconds", 0.2)))
+    return {}
 
+
+def _relocate_and_tap_iphone_visual_anchor_target(
+    self,
+    payload: dict[str, Any],
+    *,
+    app_id: str,
+    visual_evidence: dict[str, Any],
+    window: Any,
+    output_dir: Path | None,
+    output_prefix: str,
+    chat_list_state: str,
+    conversation_state: str,
+    tap_intent: str,
+    tap_x: float,
+    tap_y_min: float,
+    tap_y_max: float,
+    executed_steps: list[dict[str, Any]],
+) -> dict[str, Any]:
     list_output = output_dir / f"{output_prefix}.conversation_visual_anchor_list.png" if output_dir is not None else None
     list_screen = self.capture_window(output=list_output, window=window)
     location = _locate_iphone_message_list_visual_anchor_target(
@@ -317,17 +529,56 @@ def _open_conversation_by_message_list_visual_anchor(
                 "executed_steps": executed_steps,
             }
         )
-        return payload
-    tap_ratio = location.get("tap_ratio") if isinstance(location.get("tap_ratio"), dict) else None
-    if tap_ratio is None:
+        return {"return_payload": payload}
+    tap_step_result = _iphone_visual_anchor_tap_step(
+        app_id,
+        location,
+        tap_intent=tap_intent,
+        chat_list_state=chat_list_state,
+        conversation_state=conversation_state,
+    )
+    if tap_step_result.get("return_payload") is not None:
+        payload.update(tap_step_result["return_payload"])
+        payload["executed_steps"] = executed_steps
+        return {"return_payload": payload}
+    tap_step = tap_step_result["tap_step"]
+    tap_result = self._execute_step(window, tap_step)
+    executed_steps.append({**tap_step, "result": tap_result})
+    payload["executed_steps"] = executed_steps
+    if tap_result.get("status") != "ok":
         payload.update(
             {
                 "status": "blocked",
-                "reason": "target_relocation_tap_ratio_unavailable",
-                "executed_steps": executed_steps,
+                "reason": tap_result.get("reason") or "tap_visual_anchor_conversation_row_failed",
             }
         )
-        return payload
+        return {"return_payload": payload}
+    time.sleep(float(tap_step.get("wait_after_seconds", 0.2)))
+    verification_output = output_dir / f"{output_prefix}.open_conversation.after_visual_anchor_tap.png" if output_dir is not None else None
+    verification_screen = self.capture_window(output=verification_output, window=window)
+    payload["verification"] = _redacted_screen(verification_screen)
+    if verification_screen.get("status") != "ok":
+        payload.update(
+            {
+                "status": "blocked",
+                "reason": verification_screen.get("reason") or "open_conversation_verification_failed",
+            }
+        )
+        return {"return_payload": payload}
+    return {"verification_screen": verification_screen}
+
+
+def _iphone_visual_anchor_tap_step(
+    app_id: str,
+    location: dict[str, Any],
+    *,
+    tap_intent: str,
+    chat_list_state: str,
+    conversation_state: str,
+) -> dict[str, Any]:
+    tap_ratio = location.get("tap_ratio") if isinstance(location.get("tap_ratio"), dict) else None
+    if tap_ratio is None:
+        return {"return_payload": {"status": "blocked", "reason": "target_relocation_tap_ratio_unavailable"}}
     if app_id == "bumble":
         tap_step = {
             **_bumble_tap_step(
@@ -346,29 +597,20 @@ def _open_conversation_by_message_list_visual_anchor(
             "location_method": location.get("location_method"),
             "message_list_location": location,
         }
-    tap_result = self._execute_step(window, tap_step)
-    executed_steps.append({**tap_step, "result": tap_result})
-    payload["executed_steps"] = executed_steps
-    if tap_result.get("status") != "ok":
-        payload.update(
-            {
-                "status": "blocked",
-                "reason": tap_result.get("reason") or "tap_visual_anchor_conversation_row_failed",
-            }
-        )
-        return payload
-    time.sleep(float(tap_step.get("wait_after_seconds", 0.2)))
-    verification_output = output_dir / f"{output_prefix}.open_conversation.after_visual_anchor_tap.png" if output_dir is not None else None
-    verification_screen = self.capture_window(output=verification_output, window=window)
-    payload["verification"] = _redacted_screen(verification_screen)
-    if verification_screen.get("status") != "ok":
-        payload.update(
-            {
-                "status": "blocked",
-                "reason": verification_screen.get("reason") or "open_conversation_verification_failed",
-            }
-        )
-        return payload
+    return {"tap_step": tap_step}
+
+
+def _verify_iphone_visual_anchor_open_conversation_target(
+    payload: dict[str, Any],
+    *,
+    app_id: str,
+    target_binding: dict[str, Any] | None,
+    verification_screen: dict[str, Any],
+    conversation_state: str,
+    verification_method: str,
+    source_states: set[str],
+    blocked_state_reasons: dict[str, str],
+) -> dict[str, Any]:
     blocked_reason = blocked_state_reasons.get(str(verification_screen.get("state") or ""))
     if blocked_reason:
         payload.update(
