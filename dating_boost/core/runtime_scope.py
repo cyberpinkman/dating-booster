@@ -39,10 +39,10 @@ class RuntimeScopeRepository:
         self._storage = JsonStorage(self.root)
 
     def read(self) -> dict[str, Any] | None:
-        path = self.root / RUNTIME_SCOPE_PATH
-        if not path.exists():
+        try:
+            return self._storage.read_json(RUNTIME_SCOPE_PATH, expected_schema_version=RUNTIME_SCOPE_SCHEMA_VERSION)
+        except FileNotFoundError:
             return None
-        return self._storage.read_json(RUNTIME_SCOPE_PATH, expected_schema_version=RUNTIME_SCOPE_SCHEMA_VERSION)
 
     def select(self, *, app_id: str, runtime: str | None, source: str = "manual") -> dict[str, Any]:
         app_id = _validate_app_id(app_id)
@@ -76,10 +76,7 @@ class RuntimeScopeRepository:
         return payload
 
     def clear(self, *, reason: str = "manual_clear") -> dict[str, Any]:
-        path = self.root / RUNTIME_SCOPE_PATH
-        existed = path.exists()
-        if existed:
-            path.unlink()
+        existed = self._storage.delete_json(RUNTIME_SCOPE_PATH)
         return {
             "schema_version": RUNTIME_SCOPE_SCHEMA_VERSION,
             "status": "cleared" if existed else "not_found",

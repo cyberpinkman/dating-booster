@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from dating_boost import __version__
 from dating_boost.cli import main
+from dating_boost.core.storage import JsonStorage
 
 
 REQUIRED_AGENT_NATIVE_COMMANDS = {
@@ -255,8 +256,7 @@ class AgentNativeCliTests(unittest.TestCase):
                 "accepted",
             ])
 
-            events_path = data_dir / "matches" / "match_alex" / "feedback_events.jsonl"
-            events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+            events = JsonStorage(data_dir).read_jsonl(Path("matches/match_alex/feedback_events.jsonl"))
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(payload["status"], "ok")
@@ -298,8 +298,7 @@ class AgentNativeCliTests(unittest.TestCase):
                 self.assertEqual(exit_code, 0)
                 self.assertEqual(payload["status"], "ok")
 
-            audit_path = data_dir / "audit" / "action_results.jsonl"
-            events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            events = JsonStorage(data_dir).read_jsonl(Path("audit/action_results.jsonl"))
 
             self.assertEqual([event["result_status"] for event in events], ["succeeded", "failed", "unknown"])
             self.assertEqual(events[0]["schema_version"], 1)
@@ -362,7 +361,7 @@ class AgentNativeCliTests(unittest.TestCase):
 
                     self.assertEqual(exit_code, 2)
                     self.assertEqual(error_payload["status"], "error")
-                    self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+                    self.assertFalse(JsonStorage(data_dir).exists(Path("audit/action_results.jsonl")))
 
     def test_action_record_correction_appends_without_rewriting_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -385,7 +384,8 @@ class AgentNativeCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self._run(["action", "record-result", "--data-dir", str(data_dir), "--input", str(result_path)])
-            original_events = (data_dir / "audit" / "action_results.jsonl").read_text(encoding="utf-8").splitlines()
+            storage = JsonStorage(data_dir)
+            original_events = storage.read_jsonl(Path("audit/action_results.jsonl"))
             correction_path.write_text(
                 json.dumps(
                     {
@@ -407,11 +407,8 @@ class AgentNativeCliTests(unittest.TestCase):
                     "--input",
                     str(correction_path),
                 ])
-            current_events = (data_dir / "audit" / "action_results.jsonl").read_text(encoding="utf-8").splitlines()
-            corrections = [
-                json.loads(line)
-                for line in (data_dir / "audit" / "action_corrections.jsonl").read_text(encoding="utf-8").splitlines()
-            ]
+            current_events = storage.read_jsonl(Path("audit/action_results.jsonl"))
+            corrections = storage.read_jsonl(Path("audit/action_corrections.jsonl"))
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(payload["status"], "ok")

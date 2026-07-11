@@ -9,6 +9,7 @@ from io import StringIO
 from pathlib import Path
 
 from dating_boost.cli import main
+from dating_boost.core.storage import JsonStorage
 
 
 FIXTURE_DIR = Path("tests/fixtures/host_loop/tinder")
@@ -65,10 +66,10 @@ class HostNativePhaseCTests(unittest.TestCase):
             self.assertEqual(payload["next_host_action"], "review_staged_text_and_confirm_or_cancel")
             work_item_id = payload["current_work_item"]["work_item_id"]
             self.assertTrue((work_dir / f"staged_verification.{work_item_id}.json").exists())
-            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
-            timeline_path = data_dir / "host_loop" / "timeline.jsonl"
-            self.assertTrue(timeline_path.exists())
-            events = [json.loads(line) for line in timeline_path.read_text(encoding="utf-8").splitlines()]
+            storage = JsonStorage(data_dir)
+            self.assertFalse(storage.exists(Path("audit/action_results.jsonl")))
+            events = storage.read_jsonl(Path("host_loop/timeline.jsonl"))
+            self.assertTrue(events)
             self.assertTrue(any(event["event_type"] == "staged_verification" for event in events))
 
             status_payload = self._run_host_loop("status", "--data-dir", str(data_dir), "--work-dir", str(work_dir), "--json")

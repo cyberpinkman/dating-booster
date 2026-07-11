@@ -284,9 +284,8 @@ class OperatorRepository:
         raise ValueError("observation_type must be message_list or thread")
 
     def record_action_result(self, payload: dict[str, Any]) -> dict[str, Any]:
+        session, current_work_item = self._validate_result_binding(payload, result_kind="action")
         self._validate_confirmation_contract(payload)
-        session = self._load_session()
-        current_work_item = dict(session.get("current_work_item") or {})
         event = ActionAuditRepository(self.root).append_action_result(payload, created_at=_now_iso())
         self._automation.apply_action_result(event)
         if event.get("action") == "send_message":
@@ -332,18 +331,19 @@ class OperatorRepository:
         latest_repo.clear(match_id, reason="outbound_confirmed", cleared_at=str(event.get("created_at") or _now_iso()))
 
     def record_stage_result(self, payload: dict[str, Any]) -> dict[str, Any]:
-        session = self._load_session()
+        session, _ = self._validate_result_binding(payload, result_kind="stage")
         event = ActionAuditRepository(self.root).append_stage_result(payload, created_at=_now_iso())
         self._automation.apply_stage_result(event)
         session["cycle_send_count"] = int(session.get("cycle_send_count") or 0) + 1
         self._write_session(session)
-        self._clear_current_work_item(
-            session,
-            expected_type="send_message",
-            expected_action_request_id=event.get("action_request_id"),
-        )
-        if not self._load_work_queue():
-            self._clear_pending_scan_file()
+        if event.get("result_status") != "succeeded":
+            self._clear_current_work_item(
+                session,
+                expected_type="send_message",
+                expected_action_request_id=event.get("action_request_id"),
+            )
+            if not self._load_work_queue():
+                self._clear_pending_scan_file()
         return {
             "schema_version": 1,
             "status": "ok",
@@ -352,6 +352,40 @@ class OperatorRepository:
             "result_status": event["result_status"],
             "path": "audit/stage_results.jsonl",
         }
+
+    def _validate_result_binding(
+        self,
+        payload: dict[str, Any],
+        *,
+        result_kind: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        session = self._load_session()
+        if session.get("status") != "active":
+            raise ValueError("operator_session_not_active")
+        current = session.get("current_work_item")
+        if not isinstance(current, dict) or current.get("work_item_type") != "send_message":
+            raise ValueError("operator_current_send_work_item_required")
+
+        expected_values = {
+            "action_request_id": current.get("action_request_id"),
+            "target_match_id": current.get("match_id") or current.get("target_match_id"),
+            "payload_hash": current.get("payload_hash"),
+            "pre_action_observation_id": current.get("pre_action_observation_id"),
+            "precondition_hash": current.get("precondition_hash"),
+        }
+        for field, expected in expected_values.items():
+            if expected is None and field in {"pre_action_observation_id", "precondition_hash"}:
+                continue
+            if payload.get(field) != expected:
+                raise ValueError(f"result_binding_mismatch:{field}")
+
+        if result_kind == "action" and payload.get("action") != "send_message":
+            raise ValueError("result_binding_mismatch:action")
+        expected_audit_binding = current.get("autonomous_audit_binding")
+        if isinstance(expected_audit_binding, dict) and not payload.get("confirmation_id"):
+            if payload.get("autonomous_audit_binding") != expected_audit_binding:
+                raise ValueError("result_binding_mismatch:autonomous_audit_binding")
+        return session, dict(current)
 
     def _validate_confirmation_contract(self, payload: dict[str, Any]) -> None:
         if payload.get("action") != "send_message" or payload.get("result_status") != "succeeded":
@@ -366,11 +400,11 @@ class OperatorRepository:
             None,
         )
         if state is None:
-            return
+            raise ValueError("confirmation_contract_state_not_found")
         expected_binding = state.get("last_autonomous_audit_binding")
         precondition_hash = state.get("last_precondition_hash")
         if not isinstance(precondition_hash, str) or not precondition_hash:
-            return
+            raise ValueError("confirmation_contract_precondition_missing")
         confirmation_id = payload.get("confirmation_id")
         if isinstance(confirmation_id, str) and confirmation_id.strip():
             validation = ProductionDataStore(self.root).validate_confirmation_hashes(
@@ -549,9 +583,7 @@ class OperatorRepository:
         self._clear_current_work_file()
 
     def _clear_current_work_file(self) -> None:
-        path = self._storage.root / "operator" / "current_work_item.json"
-        if path.exists():
-            path.unlink()
+        self._storage.delete_json(Path("operator") / "current_work_item.json")
 
     def _load_work_queue(self) -> list[dict[str, Any]]:
         try:
@@ -568,14 +600,10 @@ class OperatorRepository:
         )
 
     def _clear_work_queue_file(self) -> None:
-        path = self._storage.root / "operator" / "work_queue.json"
-        if path.exists():
-            path.unlink()
+        self._storage.delete_json(Path("operator") / "work_queue.json")
 
     def _clear_pending_scan_file(self) -> None:
-        path = self._storage.root / "operator" / "pending_scan_batch.json"
-        if path.exists():
-            path.unlink()
+        self._storage.delete_json(Path("operator") / "pending_scan_batch.json")
 
     def _load_pending_scan_batch(self) -> dict[str, Any] | None:
         try:

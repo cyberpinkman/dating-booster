@@ -289,6 +289,10 @@ class ProductionReliabilityTests(unittest.TestCase):
                         "work_item_id": "action_request_ada",
                         "work_item_type": "send_message",
                         "action_request_id": "action_request_ada",
+                        "match_id": "match_ada",
+                        "payload_hash": "hash_ada",
+                        "pre_action_observation_id": "obs_before",
+                        "precondition_hash": "sha256:precondition",
                     },
                 },
             )
@@ -301,6 +305,7 @@ class ProductionReliabilityTests(unittest.TestCase):
                     "target_match_id": "match_ada",
                     "payload_hash": "hash_ada",
                     "pre_action_observation_id": "obs_before",
+                    "precondition_hash": "sha256:precondition",
                     "post_action_observation_id": "obs_after",
                     "result_status": "succeeded",
                     "evidence": {"verification": "post-send bubble visible"},

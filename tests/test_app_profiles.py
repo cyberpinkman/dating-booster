@@ -8,6 +8,8 @@ from jsonschema import Draft202012Validator
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE_DIR = ROOT / "app_profiles"
 SCHEMA_PATH = ROOT / "schemas" / "app_profile.schema.json"
+PACKAGED_PROFILE_DIR = ROOT / "dating_boost" / "resources" / "app_profiles"
+PACKAGED_SCHEMA_PATH = ROOT / "dating_boost" / "resources" / "schemas" / "app_profile.schema.json"
 
 SUPPORT_LEVELS = {
     "native_observation",
@@ -40,6 +42,15 @@ REQUIRED_FIELDS = {
 
 
 class AppProfileContractTests(unittest.TestCase):
+    def test_installable_app_profile_resources_match_source_contracts(self):
+        source_profiles = {path.name: path.read_bytes() for path in PROFILE_DIR.glob("*.json")}
+        packaged_profiles = {path.name: path.read_bytes() for path in PACKAGED_PROFILE_DIR.glob("*.json")}
+
+        self.assertTrue(source_profiles)
+        self.assertEqual(packaged_profiles, source_profiles)
+        self.assertTrue(PACKAGED_SCHEMA_PATH.exists())
+        self.assertEqual(PACKAGED_SCHEMA_PATH.read_bytes(), SCHEMA_PATH.read_bytes())
+
     def test_schema_file_defines_required_profile_contract(self):
         schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 

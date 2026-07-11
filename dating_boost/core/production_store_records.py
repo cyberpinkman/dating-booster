@@ -95,6 +95,17 @@ class ProductionStoreRecordsMixin:
         payload = self._decode_document(row["path"], row["payload_json"])
         return payload if isinstance(payload, dict) else {"payload": payload}
 
+    def document_exists(self, relative_path: str) -> bool:
+        self.ensure_schema()
+        with self._connect() as conn:
+            row = conn.execute("SELECT 1 FROM documents WHERE path = ?", (relative_path,)).fetchone()
+        return row is not None
+
+    def delete_document(self, relative_path: str) -> int:
+        self.ensure_schema()
+        with self._connect() as conn:
+            return int(conn.execute("DELETE FROM documents WHERE path = ?", (relative_path,)).rowcount)
+
     def list_documents(self, *, prefix: str) -> list[dict[str, Any]]:
         self.ensure_schema()
         with self._connect() as conn:
@@ -123,7 +134,7 @@ class ProductionStoreRecordsMixin:
                 SELECT stream, event_id, target_match_id, payload_json, created_at
                 FROM audit_events
                 WHERE stream = ?
-                ORDER BY created_at, event_id
+                ORDER BY rowid
                 """,
                 (stream,),
             ).fetchall()
@@ -140,6 +151,17 @@ class ProductionStoreRecordsMixin:
                 }
             )
         return events
+
+    def audit_stream_exists(self, relative_path: str) -> bool:
+        self.ensure_schema()
+        with self._connect() as conn:
+            row = conn.execute("SELECT 1 FROM audit_events WHERE stream = ? LIMIT 1", (relative_path,)).fetchone()
+        return row is not None
+
+    def delete_audit_stream(self, relative_path: str) -> int:
+        self.ensure_schema()
+        with self._connect() as conn:
+            return int(conn.execute("DELETE FROM audit_events WHERE stream = ?", (relative_path,)).rowcount)
 
     def delete_documents_with_prefix(self, prefix: str) -> int:
         _validate_match_local_prefix(prefix)

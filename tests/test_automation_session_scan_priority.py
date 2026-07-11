@@ -18,6 +18,7 @@ from tests.automation_session_support import (
     patch,
     tempfile,
 )
+from dating_boost.core.storage import JsonStorage
 
 
 class AutomationSessionScanPriorityTests(AutomationSessionTestCase):
@@ -157,8 +158,8 @@ class AutomationSessionScanPriorityTests(AutomationSessionTestCase):
             ])
             automation_dir = data_dir / "automation"
             automation_dir.mkdir(parents=True, exist_ok=True)
-            self._write_json(
-                automation_dir / "states.json",
+            JsonStorage(data_dir).write_json(
+                Path("automation") / "states.json",
                 {
                     "schema_version": 1,
                     "states": [
@@ -244,8 +245,8 @@ class AutomationSessionScanPriorityTests(AutomationSessionTestCase):
             ])
             automation_dir = data_dir / "automation"
             automation_dir.mkdir(parents=True, exist_ok=True)
-            self._write_json(
-                automation_dir / "states.json",
+            JsonStorage(data_dir).write_json(
+                Path("automation") / "states.json",
                 {
                     "schema_version": 1,
                     "states": [
@@ -329,8 +330,8 @@ class AutomationSessionScanPriorityTests(AutomationSessionTestCase):
             ])
             automation_dir = data_dir / "automation"
             automation_dir.mkdir(parents=True, exist_ok=True)
-            self._write_json(
-                automation_dir / "states.json",
+            JsonStorage(data_dir).write_json(
+                Path("automation") / "states.json",
                 {
                     "schema_version": 1,
                     "states": [
@@ -410,8 +411,8 @@ class AutomationSessionScanPriorityTests(AutomationSessionTestCase):
             ])
             automation_dir = data_dir / "automation"
             automation_dir.mkdir(parents=True, exist_ok=True)
-            self._write_json(
-                automation_dir / "states.json",
+            JsonStorage(data_dir).write_json(
+                Path("automation") / "states.json",
                 {
                     "schema_version": 1,
                     "states": [
@@ -616,8 +617,8 @@ class AutomationSessionScanPriorityTests(AutomationSessionTestCase):
             ])
             automation_dir = data_dir / "automation"
             automation_dir.mkdir(parents=True, exist_ok=True)
-            self._write_json(
-                automation_dir / "states.json",
+            JsonStorage(data_dir).write_json(
+                Path("automation") / "states.json",
                 {
                     "schema_version": 1,
                     "states": [
@@ -941,8 +942,8 @@ class AutomationSessionScanPriorityTests(AutomationSessionTestCase):
             ])
             automation_dir = data_dir / "automation"
             automation_dir.mkdir(parents=True, exist_ok=True)
-            self._write_json(
-                automation_dir / "states.json",
+            JsonStorage(data_dir).write_json(
+                Path("automation") / "states.json",
                 {
                     "schema_version": 1,
                     "states": [
@@ -1021,8 +1022,8 @@ class AutomationSessionScanPriorityTests(AutomationSessionTestCase):
             ])
             automation_dir = data_dir / "automation"
             automation_dir.mkdir(parents=True, exist_ok=True)
-            self._write_json(
-                automation_dir / "states.json",
+            JsonStorage(data_dir).write_json(
+                Path("automation") / "states.json",
                 {
                     "schema_version": 1,
                     "states": [

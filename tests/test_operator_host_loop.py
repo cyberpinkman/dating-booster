@@ -28,6 +28,11 @@ from tests.operator_host_loop_support import (
     sys,
     tempfile,
 )
+from dating_boost.core.storage import JsonStorage
+
+
+def _audit_events(data_dir: Path, filename: str) -> list[dict]:
+    return JsonStorage(data_dir).read_jsonl(Path("audit") / filename)
 
 
 class OperatorHostLoopCoreTests(OperatorHostLoopTestCase):
@@ -483,13 +488,10 @@ class OperatorHostLoopCoreTests(OperatorHostLoopTestCase):
             self.assertTrue((work_dir / "current_work_item.json").exists())
             work_item_id = payload["current_work_item"]["work_item_id"]
             self.assertTrue((work_dir / f"staged_verification.{work_item_id}.json").exists())
-            self.assertTrue((data_dir / "audit" / "stage_results.jsonl").exists())
-            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+            self.assertTrue(_audit_events(data_dir, "stage_results.jsonl"))
+            self.assertFalse(_audit_events(data_dir, "action_results.jsonl"))
             self.assertTrue(payload["stage_results_recorded"])
-            stage_events = [
-                json.loads(line)
-                for line in (data_dir / "audit" / "stage_results.jsonl").read_text(encoding="utf-8").splitlines()
-            ]
+            stage_events = _audit_events(data_dir, "stage_results.jsonl")
             self.assertEqual(stage_events[0]["result_status"], "succeeded")
             self.assertIn("without recording send result", payload["stop_reason"])
 
@@ -616,7 +618,7 @@ class OperatorHostLoopCoreTests(OperatorHostLoopTestCase):
         self.assertTrue(recorded_result["staged_text_verification"]["screen_exact_text_ocr_verified"])
         self.assertIn("screenshot_ref", recorded_result)
         self.assertFalse(recorded_result["evidence"]["sent"])
-        self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+        self.assertFalse(_audit_events(data_dir, "action_results.jsonl"))
 
     def test_iphone_dating_stage_mode_runs_harness_stage_draft_without_runtime_override(self):
         for app_id, auth_id, match_id, candidate_key in (
@@ -735,7 +737,7 @@ class OperatorHostLoopCoreTests(OperatorHostLoopTestCase):
                 self.assertEqual(recorded_result["staged_text_verification"]["status"], "ok")
                 self.assertIn("iphone_mirroring_macos stage-draft", recorded_result["evidence"]["verification"])
                 self.assertFalse(recorded_result["evidence"]["sent"])
-                self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+                self.assertFalse(_audit_events(data_dir, "action_results.jsonl"))
 
     def test_host_loop_preflight_blocks_selected_runtime_scope_mismatch_before_cli_calls(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1024,8 +1026,8 @@ class OperatorHostLoopCoreTests(OperatorHostLoopTestCase):
             self.assertNotIn("scan_message_list", step_types)
             self.assertNotIn("open_thread", step_types)
             self.assertIn("send_message", step_types)
-            self.assertTrue((data_dir / "audit" / "stage_results.jsonl").exists())
-            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+            self.assertTrue(_audit_events(data_dir, "stage_results.jsonl"))
+            self.assertFalse(_audit_events(data_dir, "action_results.jsonl"))
 
     def test_fixture_host_loop_blocks_with_target_profile_required_when_thread_profile_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1157,10 +1159,7 @@ class OperatorHostLoopCoreTests(OperatorHostLoopTestCase):
                 str(action_result_path),
                 "--json",
             )
-            audit_events = [
-                json.loads(line)
-                for line in (data_dir / "audit" / "action_results.jsonl").read_text(encoding="utf-8").splitlines()
-            ]
+            audit_events = _audit_events(data_dir, "action_results.jsonl")
 
             self.assertEqual(first_confirm["status"], "confirmed")
             self.assertEqual(status_payload["status"], "idle")
@@ -1225,7 +1224,7 @@ class OperatorHostLoopCoreTests(OperatorHostLoopTestCase):
             self.assertEqual(missing_payload["stop_reason"], "staged_verification_required_before_confirmation")
             self.assertEqual(failed_payload["status"], "blocked")
             self.assertEqual(failed_payload["stop_reason"], "staged text was not verified as succeeded")
-            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+            self.assertFalse(_audit_events(data_dir, "action_results.jsonl"))
 
     def test_fixture_host_loop_live_mode_requires_staged_verification_before_recording_result(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1247,9 +1246,8 @@ class OperatorHostLoopCoreTests(OperatorHostLoopTestCase):
             )
 
             self.assertIn(payload["status"], {"completed", "waiting", "wait"})
-            audit_path = data_dir / "audit" / "action_results.jsonl"
-            self.assertTrue(audit_path.exists())
-            events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+            events = _audit_events(data_dir, "action_results.jsonl")
+            self.assertTrue(events)
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0]["result_status"], "succeeded")
             self.assertTrue(payload["staged_verifications"])
@@ -1257,9 +1255,9 @@ class OperatorHostLoopCoreTests(OperatorHostLoopTestCase):
             self.assertFalse(any(path.name.startswith("staged_verification.") for path in work_dir.glob("*.json")))
             self.assertTrue(any("staged_verification" in path.name for path in (work_dir / "consumed").iterdir()))
             self.assertIn("machine_report_path", payload)
-            self.assertTrue(Path(payload["machine_report_path"]).exists())
+            self.assertTrue(JsonStorage(data_dir).exists(Path("automation") / "reports" / "machine_latest.json"))
             self.assertIn("human_report_path", payload)
-            self.assertTrue(Path(payload["human_report_path"]).exists())
+            self.assertTrue(JsonStorage(data_dir).exists(Path("automation") / "reports" / "human_latest.md"))
             self.assertEqual(payload["next_host_action"], "present_relationship_progress_report")
             report = payload["relationship_progress_report"]
             self.assertEqual(report["format"], "markdown")
@@ -1289,7 +1287,7 @@ class OperatorHostLoopCoreTests(OperatorHostLoopTestCase):
 
             self.assertEqual(payload["status"], "blocked")
             self.assertEqual(payload["stop_reason"], "safety_paused")
-            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+            self.assertFalse(_audit_events(data_dir, "action_results.jsonl"))
 
     def test_live_mode_requires_explicit_live_send_authorization(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1318,7 +1316,7 @@ class OperatorHostLoopCoreTests(OperatorHostLoopTestCase):
 
             self.assertEqual(payload["status"], "blocked")
             self.assertEqual(payload["stop_reason"], "live_send_authorization_required")
-            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+            self.assertFalse(_audit_events(data_dir, "action_results.jsonl"))
 
     def test_live_mode_blocks_authorization_match_mismatch_before_action_result(self):
         with tempfile.TemporaryDirectory() as temp_dir:

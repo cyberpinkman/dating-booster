@@ -33,6 +33,24 @@ BLOCKED_DRAFT_TEXT_KEYS = {
     "payload_text",
     "staged_text",
 }
+MANAGED_STATE_TOP_LEVEL = {
+    "audit",
+    "automation",
+    "beta",
+    "daemon",
+    "host_loop",
+    "managed_session",
+    "matches",
+    "memory",
+    "operator",
+    "policy",
+    "runtime",
+    "safety",
+    "standalone_session",
+    "support",
+    "user",
+}
+MANAGED_STATE_ROOT_FILES = {"user_profile.json"}
 
 __all__ = [
     "AUTOMATION_LOCK_SCHEMA_VERSION",
@@ -44,6 +62,8 @@ __all__ = [
     "ENCRYPTED_PAYLOAD_SCHEMA_VERSION",
     "KEYCHAIN_BINDING_SCHEMA_VERSION",
     "KNOWN_SCHEMA_VERSIONS",
+    "MANAGED_STATE_ROOT_FILES",
+    "MANAGED_STATE_TOP_LEVEL",
     "LockAcquireResult",
     "MIGRATION_SCHEMA_VERSION",
     "MigrationBlocked",
@@ -53,6 +73,7 @@ __all__ = [
     "_digest",
     "_is_blocked_payload",
     "_is_match_local_path",
+    "_is_managed_state_path",
     "_now_iso",
     "_parse_iso",
     "_redact_if_blocked",
@@ -87,6 +108,15 @@ def delete_confirm_token(scope: str, match_id: str | None) -> str:
     if scope == "archived":
         return "delete:archived"
     return "delete:all"
+
+
+def _is_managed_state_path(relative_path: Path) -> bool:
+    parts = relative_path.parts
+    if not parts:
+        return False
+    if len(parts) == 1:
+        return parts[0] in MANAGED_STATE_ROOT_FILES
+    return parts[0] in MANAGED_STATE_TOP_LEVEL
 
 
 def _validate_match_local_prefix(prefix: str) -> None:

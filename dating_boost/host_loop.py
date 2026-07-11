@@ -27,6 +27,7 @@ from dating_boost.core.relationship_report import (
 )
 from dating_boost.core.runtime_scope import RuntimeScopeRepository
 from dating_boost.core.safety import SafetyRepository
+from dating_boost.core.storage import JsonStorage
 from dating_boost.core.support import SupportLogRepository
 from dating_boost.perception.observations import ProfileObservation
 
@@ -724,9 +725,10 @@ class HostLoopSupervisor:
                 "--input",
                 str(availability_path),
             )
-        if not (self.data_dir / "automation" / "goals.json").exists():
+        storage = JsonStorage(self.data_dir)
+        if not storage.exists(Path("automation") / "goals.json"):
             raise HostLoopError("missing goal; pass --goal or configure automation goal first")
-        if not (self.data_dir / "automation" / "availability.json").exists():
+        if not storage.exists(Path("automation") / "availability.json"):
             raise HostLoopError("missing availability; pass --availability or configure availability first")
 
     def _initial_surface(self) -> str:
@@ -1210,12 +1212,13 @@ class HostLoopSupervisor:
                 return _read_json(path)
             except HostLoopError:
                 return None
-        operator_path = self.data_dir / "operator" / "current_work_item.json"
-        if operator_path.exists():
-            try:
-                return _read_json(operator_path)
-            except HostLoopError:
-                return None
+        try:
+            return JsonStorage(self.data_dir).read_json(
+                Path("operator") / "current_work_item.json",
+                expected_schema_version=1,
+            )
+        except FileNotFoundError:
+            return None
         return None
 
     def _work_file(self, work_item: dict[str, Any], kind: str) -> Path:
@@ -1243,10 +1246,7 @@ class HostLoopSupervisor:
             "candidate_key": work_item.get("candidate_key") if isinstance(work_item, dict) else None,
             "payload": payload or {},
         }
-        path = self.data_dir / "host_loop" / "timeline.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        JsonStorage(self.data_dir).append_jsonl(Path("host_loop") / "timeline.jsonl", event)
         self._record_support_event(f"host_loop_{event_type}", event)
 
     def _record_support_event(self, event_type: str, payload: dict[str, Any]) -> None:
@@ -1263,12 +1263,12 @@ class HostLoopSupervisor:
             return
 
     def _operator_session_status(self) -> str | None:
-        session_path = self.data_dir / "operator" / "session.json"
-        if not session_path.exists():
-            return None
         try:
-            session = _read_json(session_path)
-        except HostLoopError:
+            session = JsonStorage(self.data_dir).read_json(
+                Path("operator") / "session.json",
+                expected_schema_version=1,
+            )
+        except FileNotFoundError:
             return None
         status = session.get("status")
         return str(status) if status is not None else None

@@ -12,6 +12,7 @@ import shutil
 
 from dating_boost.cli import main
 from dating_boost.core.operator import OperatorRepository
+from dating_boost.core.storage import JsonStorage
 from dating_boost.host_loop import (
     HostLoopCommandError, HostLoopError, HostLoopSupervisor, _target_binding_for_work_item,
     _thread_template, _validate_managed_sequence_visual_confirmation,
@@ -123,8 +124,6 @@ def _write_draft_review_audit(data_dir: Path, work_item: dict) -> None:
         return
     payload_messages = work_item.get("payload_messages")
     message_count = len(payload_messages) if isinstance(payload_messages, list) and payload_messages else 1
-    path = data_dir / "audit" / "draft_reviews.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "schema_version": 1,
         "review_id": review_id,
@@ -149,12 +148,11 @@ def _write_draft_review_audit(data_dir: Path, work_item: dict) -> None:
         "draft_topic_labels": [],
         "draft_character_count": len(str(work_item.get("payload_text") or "")),
     }
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    storage = JsonStorage(data_dir)
+    storage.append_jsonl(Path("audit/draft_reviews.jsonl"), record)
     generation_id = str(work_item.get("draft_generation_id") or "").strip()
     evidence_id = str(work_item.get("draft_evidence_id") or "").strip()
     if generation_id and evidence_id:
-        generation_path = data_dir / "audit" / "draft_generations.jsonl"
         generation_record = {
             "schema_version": 1,
             "generation_id": generation_id,
@@ -175,8 +173,7 @@ def _write_draft_review_audit(data_dir: Path, work_item: dict) -> None:
             ],
             "created_at": "2026-05-26T00:00:00Z",
         }
-        with generation_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(generation_record, ensure_ascii=False, sort_keys=True) + "\n")
+        storage.append_jsonl(Path("audit/draft_generations.jsonl"), generation_record)
 
 def _wechat_managed_work_item(payload_text: str, payload_hash: str) -> dict:
     return {

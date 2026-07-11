@@ -11,6 +11,7 @@ from dating_boost.cli import main
 from dating_boost.core import managed_session as managed_session_core
 from dating_boost.core.automation import AutomationRepository
 from dating_boost.core.managed_session import ManagedSessionRepository
+from dating_boost.core.storage import JsonStorage
 
 
 FIXTURE_DIR = Path("tests/fixtures/automation")
@@ -150,7 +151,7 @@ class ManagedSessionTests(unittest.TestCase):
         )
         self.assertIn("cycle_send_limit", payload["user_configurable_fields"])
         self.assertNotIn("max_pages_per_cycle", payload["user_configurable_fields"])
-        self.assertFalse((data_dir / "managed_session" / "session.json").exists())
+        self.assertFalse(JsonStorage(data_dir).exists(Path("managed_session") / "session.json"))
 
     def test_cli_start_rejects_user_supplied_max_pages_per_cycle(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -233,8 +234,9 @@ class ManagedSessionTests(unittest.TestCase):
                     start_args[:-1] + ["--config-confirm", confirm_payload["required_confirm_token"], "--json"]
                 )
 
-            session = json.loads((data_dir / "managed_session" / "session.json").read_text(encoding="utf-8"))
-            operator_session = json.loads((data_dir / "operator" / "session.json").read_text(encoding="utf-8"))
+            storage = JsonStorage(data_dir)
+            session = storage.read_json(Path("managed_session") / "session.json", expected_schema_version=1)
+            operator_session = storage.read_json(Path("operator") / "session.json", expected_schema_version=1)
 
         self.assertEqual(confirm_exit, 2)
         self.assertEqual(confirm_payload["reason"], "managed_session_config_confirmation_required")
@@ -411,8 +413,7 @@ class ManagedSessionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
             self._init_profile(data_dir)
-            (data_dir / "runtime").mkdir(parents=True, exist_ok=True)
-            _write_json(data_dir / "runtime" / "session_scope.json", {
+            JsonStorage(data_dir).write_json(Path("runtime") / "session_scope.json", {
                 "schema_version": 1,
                 "status": "selected",
                 "selected_app_id": "tashuo",
@@ -610,9 +611,8 @@ class ManagedSessionTests(unittest.TestCase):
             data_dir = Path(temp_dir) / "data"
             self._init_profile(data_dir)
             repo = self._started_repo(data_dir, scan_interval_seconds=3600)
-            states_path = data_dir / "automation" / "states.json"
-            _write_json(
-                states_path,
+            JsonStorage(data_dir).write_json(
+                Path("automation") / "states.json",
                 {
                     "schema_version": 1,
                     "states": [
@@ -673,10 +673,11 @@ class ManagedSessionTests(unittest.TestCase):
             self._init_profile(data_dir)
             repo = self._started_repo(data_dir, scan_interval_seconds=3600)
             AutomationRepository(data_dir).step(_json(FIXTURE_DIR / "scan_batch_nudge.json"))
-            states_path = data_dir / "automation" / "states.json"
-            states_payload = json.loads(states_path.read_text(encoding="utf-8"))
+            states_path = Path("automation") / "states.json"
+            storage = JsonStorage(data_dir)
+            states_payload = storage.read_json(states_path, expected_schema_version=1)
             states_payload["states"][0]["last_nudged_inbound_fingerprint"] = "gia:in:absurd-comedy"
-            states_path.write_text(json.dumps(states_payload, ensure_ascii=False), encoding="utf-8")
+            storage.write_json(states_path, states_payload)
             self._set_managed_last_scan(data_dir, "2026-05-26T11:00:00Z")
 
             with patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-05-26T11:31:00Z"}):
@@ -808,10 +809,11 @@ class ManagedSessionTests(unittest.TestCase):
         )
 
     def _set_managed_last_scan(self, data_dir, value):
-        path = data_dir / "managed_session" / "session.json"
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        path = Path("managed_session") / "session.json"
+        storage = JsonStorage(data_dir)
+        payload = storage.read_json(path, expected_schema_version=1)
         payload["last_scan_at"] = value
-        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        storage.write_json(path, payload)
 
     def _init_profile(self, data_dir):
         self._run_cli([

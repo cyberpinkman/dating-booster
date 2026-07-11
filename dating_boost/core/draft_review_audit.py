@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
 from dating_boost.core.production_store import payload_digest
+from dating_boost.core.storage import JsonStorage
 from dating_boost.core.support import classify_text_topics, context_source_manifest
 from dating_boost.policy.draft_review import DraftReviewDecision
 
@@ -19,6 +19,7 @@ DRAFT_REVIEW_AUDIT_PATH = Path("audit") / "draft_reviews.jsonl"
 class DraftReviewAuditRepository:
     def __init__(self, root: Path):
         self.root = root
+        self._storage = JsonStorage(root)
 
     def append_review(
         self,
@@ -29,8 +30,6 @@ class DraftReviewAuditRepository:
         mode: str,
         target_match_id: str | None = None,
     ) -> dict[str, Any]:
-        path = self.root / DRAFT_REVIEW_AUDIT_PATH
-        path.parent.mkdir(parents=True, exist_ok=True)
         text = str(draft_payload.get("best_reply") or "")
         record = {
             "schema_version": DRAFT_REVIEW_AUDIT_SCHEMA_VERSION,
@@ -56,23 +55,14 @@ class DraftReviewAuditRepository:
             "draft_topic_labels": classify_text_topics(text),
             "draft_character_count": len(text),
         }
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        self._storage.append_jsonl(DRAFT_REVIEW_AUDIT_PATH, record)
         return record
 
     def find_review(self, review_id: str) -> dict[str, Any] | None:
-        path = self.root / DRAFT_REVIEW_AUDIT_PATH
-        if not path.exists():
-            return None
         found: dict[str, Any] | None = None
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(record, dict) and record.get("review_id") == review_id:
-                    found = record
+        for record in self._storage.read_jsonl(DRAFT_REVIEW_AUDIT_PATH):
+            if record.get("review_id") == review_id:
+                found = record
         return found
 
     def managed_send_block_reason(

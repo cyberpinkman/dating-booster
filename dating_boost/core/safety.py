@@ -38,8 +38,9 @@ class SafetyRepository:
         return {"schema_version": SAFETY_SCHEMA_VERSION, "status": "active", **payload}
 
     def status(self) -> dict[str, Any]:
-        path = self.root / SAFETY_PATH
-        if not path.exists():
+        try:
+            return self._storage.read_json(SAFETY_PATH, expected_schema_version=SAFETY_SCHEMA_VERSION)
+        except FileNotFoundError:
             return {
                 "schema_version": SAFETY_SCHEMA_VERSION,
                 "paused": False,
@@ -47,7 +48,6 @@ class SafetyRepository:
                 "created_at": None,
                 "resumed_at": None,
             }
-        return self._storage.read_json(SAFETY_PATH, expected_schema_version=SAFETY_SCHEMA_VERSION)
 
     def is_paused(self) -> bool:
         return bool(self.status().get("paused"))

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
+from importlib import resources
 from typing import Any
 
 from dating_boost.apps.base import AppManifest
@@ -10,9 +10,6 @@ from dating_boost.apps.bumble import BumbleAdapter
 from dating_boost.apps.tashuo import TaShuoAdapter
 from dating_boost.apps.tinder import TinderAdapter
 from dating_boost.apps.wechat import WeChatAdapter
-
-
-PROFILE_DIR = Path(__file__).resolve().parents[2] / "app_profiles"
 
 
 _ADAPTER_CLASSES = {
@@ -25,8 +22,11 @@ _ADAPTER_CLASSES = {
 
 def _load_profiles() -> dict[str, dict[str, Any]]:
     profiles: dict[str, dict[str, Any]] = {}
-    for path in sorted(PROFILE_DIR.glob("*.json")):
-        profile = json.loads(path.read_text(encoding="utf-8"))
+    profile_root = resources.files("dating_boost").joinpath("resources", "app_profiles")
+    for resource in sorted(profile_root.iterdir(), key=lambda item: item.name):
+        if not resource.is_file() or not resource.name.endswith(".json"):
+            continue
+        profile = json.loads(resource.read_text(encoding="utf-8"))
         profiles[str(profile["app_id"])] = profile
     return profiles
 

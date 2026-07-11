@@ -1,7 +1,11 @@
 import json
+import sqlite3
 import tempfile
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 from dating_boost.core.storage import (
     InvalidStoragePathError,
@@ -13,6 +17,32 @@ from dating_boost.core.production_store import ProductionDataStore
 
 
 class StorageTests(unittest.TestCase):
+    def test_fresh_storage_uses_encrypted_sqlite_without_plaintext_document(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            (data_dir / "command-input.json").write_text('{"schema_version": 1}', encoding="utf-8")
+            relative_path = Path("matches/match_alex/observations.json")
+            storage = JsonStorage(data_dir)
+
+            storage.write_json(
+                relative_path,
+                {
+                    "schema_version": 1,
+                    "match_id": "match_alex",
+                    "raw_chat": "unique plaintext that must never reach a mirror",
+                },
+            )
+
+            self.assertTrue((data_dir / "dating_boost.sqlite3").exists())
+            self.assertFalse((data_dir / relative_path).exists())
+            self.assertEqual(storage.read_json(relative_path, expected_schema_version=1)["match_id"], "match_alex")
+            with sqlite3.connect(data_dir / "dating_boost.sqlite3") as connection:
+                stored = connection.execute(
+                    "SELECT payload_json FROM documents WHERE path = ?",
+                    (relative_path.as_posix(),),
+                ).fetchone()[0]
+            self.assertNotIn("unique plaintext", stored)
+
     def test_json_storage_writes_and_reads_document_atomically(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             storage = JsonStorage(Path(temp_dir))
@@ -29,10 +59,10 @@ class StorageTests(unittest.TestCase):
             storage.append_jsonl(Path("events/feedback.jsonl"), {"event_id": "fb_nested"})
 
             result = storage.read_json(Path("matches/local/user_profile.json"), expected_schema_version=1)
-            lines = (Path(temp_dir) / "events" / "feedback.jsonl").read_text(encoding="utf-8").splitlines()
+            events = storage.read_jsonl(Path("events/feedback.jsonl"))
 
             self.assertEqual(result["name"], "nested")
-            self.assertEqual(json.loads(lines[0])["event_id"], "fb_nested")
+            self.assertEqual(events[0]["event_id"], "fb_nested")
 
     def test_write_json_rejects_parent_escape_without_creating_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -118,15 +148,50 @@ class StorageTests(unittest.TestCase):
             with self.assertRaises(StorageCorruptionError):
                 storage.read_json(Path("not_an_object.json"), expected_schema_version=1)
 
-    def test_jsonl_append_writes_one_object_per_line(self):
+    def test_jsonl_append_preserves_append_order_independent_of_event_timestamps(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             storage = JsonStorage(Path(temp_dir))
-            storage.append_jsonl(Path("feedback_events.jsonl"), {"event_id": "fb_1"})
-            storage.append_jsonl(Path("feedback_events.jsonl"), {"event_id": "fb_2"})
+            storage.append_jsonl(
+                Path("feedback_events.jsonl"),
+                {"event_id": "fb_1", "created_at": "2026-07-11T00:00:01Z"},
+            )
+            storage.append_jsonl(
+                Path("feedback_events.jsonl"),
+                {"event_id": "fb_2", "created_at": "2026-07-11T00:00:00Z"},
+            )
 
-            lines = (Path(temp_dir) / "feedback_events.jsonl").read_text(encoding="utf-8").splitlines()
+            events = storage.read_jsonl(Path("feedback_events.jsonl"))
 
-            self.assertEqual([json.loads(line)["event_id"] for line in lines], ["fb_1", "fb_2"])
+            self.assertEqual([event["event_id"] for event in events], ["fb_1", "fb_2"])
+
+    def test_concurrent_legacy_jsonl_appends_do_not_lose_events(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            relative_path = Path("feedback_events.jsonl")
+            event_path = data_dir / relative_path
+            event_path.write_text("", encoding="utf-8")
+            storage = JsonStorage(data_dir)
+            original_read_text = Path.read_text
+
+            def delayed_read_text(path: Path, *args, **kwargs):
+                text = original_read_text(path, *args, **kwargs)
+                if path == event_path:
+                    time.sleep(0.05)
+                return text
+
+            with patch.object(Path, "read_text", delayed_read_text):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [
+                        executor.submit(storage.append_jsonl, relative_path, {"event_id": event_id})
+                        for event_id in ("fb_concurrent_1", "fb_concurrent_2")
+                    ]
+                    for future in futures:
+                        future.result()
+
+            self.assertEqual(
+                {event["event_id"] for event in storage.read_jsonl(relative_path)},
+                {"fb_concurrent_1", "fb_concurrent_2"},
+            )
 
     def test_jsonl_read_returns_objects_and_missing_file_returns_empty_list(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -5,7 +5,7 @@ from typing import Any
 
 from dating_boost.apps.base import AppManifest, unsupported_operation_payload
 from dating_boost.apps.native_gui_session import AppSpecificNativeGuiSessionMixin
-from dating_boost.core.gui_harness import NativeGuiHarness
+from dating_boost.harness.native_gui import NativeGuiHarness
 
 
 class AppNativeGuiSession(AppSpecificNativeGuiSessionMixin, NativeGuiHarness):

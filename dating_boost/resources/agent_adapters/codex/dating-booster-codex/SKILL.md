@@ -309,6 +309,9 @@ policy-checked draft into the current ordinary conversation and verify the
 staged input text without clicking Send. It must use `--data-dir` for real
 staging so safety pause can block it. If OCR evidence is insufficient, the
 host-loop must wait for staged verification instead of recording a send result.
+If the baseline Tinder composer appears occupied by non-payload text, the
+harness must block before reading the clipboard or pasting; never append a new
+draft onto existing input.
 
 If observe, navigation, or send returns `tinder_subscription_paywall`,
 `subscription_paywall_visible`, or `tinder_subscription_paywall_dismissed`, do
@@ -390,6 +393,9 @@ policy-checked draft into the current ordinary conversation and verify the
 staged input text without clicking Send. It must use `--data-dir` for real
 staging so safety pause can block it. Opening Move replies remain
 user-confirmation paths and are not autonomous stage/send work.
+If the baseline Bumble composer already shows an active Send button, the
+harness must block before reading the clipboard or pasting; never append a new
+draft onto existing input.
 
 For existing Bumble conversations, prefer
 `action open-conversation --options-json <path>` with `visible_name` or

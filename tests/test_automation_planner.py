@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from dating_boost.cli import main
 from dating_boost.core.draft_evidence import UserMemoryRepository
+from dating_boost.core.storage import JsonStorage
 
 
 FIXTURE_DIR = Path("tests/fixtures/automation")
@@ -551,10 +552,11 @@ class AutomationPlannerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
             self._init_profile(data_dir)
-            disclosure_path = data_dir / "user" / "disclosure_profile.json"
-            profile = json.loads(disclosure_path.read_text(encoding="utf-8"))
+            disclosure_path = Path("user") / "disclosure_profile.json"
+            storage = JsonStorage(data_dir)
+            profile = storage.read_json(disclosure_path, expected_schema_version=1)
             profile["simulation_policy"] = "material_only"
-            disclosure_path.write_text(json.dumps(profile, ensure_ascii=False), encoding="utf-8")
+            storage.write_json(disclosure_path, profile)
             self._run([
                 "automation",
                 "session",

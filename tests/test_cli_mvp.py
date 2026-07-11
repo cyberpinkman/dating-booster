@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from dating_boost.cli import main
+from dating_boost.core.storage import JsonStorage
 from dating_boost.core.draft_evidence import ConversationThreadRepository, LatestTurnRepository, UserMemoryRepository
 from dating_boost.core.memory.models import (
     EvidenceRef, IdentityTrustStatus, MatchMemoryProjection, MemoryFact,
@@ -70,7 +71,7 @@ class CliMvpTests(unittest.TestCase):
             self.assertIn("Sounds fun", output.getvalue())
             self.assertIn("What are you up to this weekend?", output.getvalue())
             self.assertIn("Ask about live music", output.getvalue())
-            self.assertTrue((data_dir / "user_profile.json").exists())
+            self.assertTrue(JsonStorage(data_dir).exists(Path("user_profile.json")))
             self.assertEqual(
                 ObservationRepository(data_dir).load_latest_observation(match_id).observation_id,
                 "obs_chat_001",
@@ -513,8 +514,7 @@ class CliMvpTests(unittest.TestCase):
                     "accepted",
                 ])
 
-            events_path = data_dir / "matches" / "match_alex" / "feedback_events.jsonl"
-            events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+            events = JsonStorage(data_dir).read_jsonl(Path("matches/match_alex/feedback_events.jsonl"))
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(events[0]["label"], "accepted")

@@ -11,9 +11,17 @@ from dating_boost.cli import main
 
 
 SKILL_DIR = Path("skills/dating-booster-codex")
+PACKAGED_SKILL_DIR = Path("dating_boost/resources/agent_adapters/codex/dating-booster-codex")
 
 
 class SkillPackageTests(unittest.TestCase):
+    def test_installable_codex_skill_tree_matches_source_tree(self):
+        source_files = _resource_files(SKILL_DIR)
+        packaged_files = _resource_files(PACKAGED_SKILL_DIR)
+
+        self.assertTrue(source_files)
+        self.assertEqual(packaged_files, source_files)
+
     def test_skill_package_metadata_is_compatible_with_capabilities(self):
         package_path = SKILL_DIR / "skill-package.json"
         metadata = json.loads(package_path.read_text(encoding="utf-8"))
@@ -488,6 +496,16 @@ def _version_tuple(version: str) -> tuple[int, ...]:
 
 def _expected_source_ref(version: str) -> str:
     return "main" if ".dev" in version else f"v{version}"
+
+
+def _resource_files(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+        and "__pycache__" not in path.relative_to(root).parts
+        and path.suffix not in {".pyc", ".pyo"}
+    }
 
 
 if __name__ == "__main__":

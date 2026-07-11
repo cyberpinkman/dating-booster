@@ -19,6 +19,7 @@ def release_manifest() -> dict[str, Any]:
     skill_package = ROOT / "skills" / "dating-booster-codex" / "skill-package.json"
     claude_code_adapter = ROOT / "agent_adapters" / "claude-code" / "adapter-package.json"
     openclaw_adapter = ROOT / "agent_adapters" / "openclaw" / "adapter-package.json"
+    packaged_codex_skill = ROOT / "dating_boost" / "resources" / "agent_adapters" / "codex" / "dating-booster-codex"
     pyproject = ROOT / "pyproject.toml"
     dist_version = __version__.replace("-rc.", "rc")
     return {
@@ -44,6 +45,7 @@ def release_manifest() -> dict[str, Any]:
             "skill-package.json": _file_sha256(skill_package),
             "claude-code/adapter-package.json": _file_sha256(claude_code_adapter),
             "openclaw/adapter-package.json": _file_sha256(openclaw_adapter),
+            "codex-packaged-resource-tree": _tree_sha256(packaged_codex_skill),
         },
         "schema_versions": dict(SCHEMA_VERSIONS),
         "release_capabilities": {
@@ -95,6 +97,7 @@ def release_doctor() -> dict[str, Any]:
         issue_prefix="openclaw_adapter_",
         expected_target_host="openclaw",
     )
+    issues.extend(_codex_skill_resource_parity_issues())
     if not _release_workflow_isolated():
         issues.append("release_workflow_artifact_isolation_missing")
     if _strict_release_mode():
@@ -138,6 +141,52 @@ def _file_sha256(path: Path) -> str:
     if not path.exists():
         return "missing"
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _tree_sha256(root: Path) -> str:
+    files = _tree_hashes(root)
+    if not files:
+        return "missing"
+    digest = hashlib.sha256()
+    for relative_path, file_hash in sorted(files.items()):
+        digest.update(relative_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(file_hash.encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _tree_hashes(root: Path) -> dict[str, str]:
+    if not root.is_dir():
+        return {}
+    return {
+        path.relative_to(root).as_posix(): _file_sha256(path)
+        for path in root.rglob("*")
+        if _is_release_resource(path, root=root)
+    }
+
+
+def _is_release_resource(path: Path, *, root: Path) -> bool:
+    if not path.is_file():
+        return False
+    relative = path.relative_to(root)
+    return "__pycache__" not in relative.parts and path.suffix not in {".pyc", ".pyo"}
+
+
+def _codex_skill_resource_parity_issues() -> list[str]:
+    source_root = ROOT / "skills" / "dating-booster-codex"
+    packaged_root = ROOT / "dating_boost" / "resources" / "agent_adapters" / "codex" / "dating-booster-codex"
+    source_files = _tree_hashes(source_root)
+    packaged_files = _tree_hashes(packaged_root)
+    issues: list[str] = []
+    for relative_path in sorted(source_files.keys() - packaged_files.keys()):
+        issues.append(f"codex_skill_resource_missing:{relative_path}")
+    for relative_path in sorted(packaged_files.keys() - source_files.keys()):
+        issues.append(f"codex_skill_resource_unexpected:{relative_path}")
+    for relative_path in sorted(source_files.keys() & packaged_files.keys()):
+        if source_files[relative_path] != packaged_files[relative_path]:
+            issues.append(f"codex_skill_resource_mismatch:{relative_path}")
+    return issues
 
 
 def _git_commit() -> str:

@@ -74,7 +74,8 @@ class ProductionDataCliTests(unittest.TestCase):
             self.assertEqual(migrate_payload["storage_backend"], "sqlite")
             self.assertTrue((data_dir / "dating_boost.sqlite3").exists())
             self.assertTrue(migrate_payload["backup_dir"].startswith(str((data_dir / "backups").resolve())))
-            self.assertTrue((match_dir / "match.json").exists())
+            self.assertFalse((match_dir / "match.json").exists())
+            self.assertTrue((Path(migrate_payload["backup_dir"]) / "dating_boost.sqlite3").exists())
             self.assertGreaterEqual(migrate_payload["migrated_documents"], 2)
             self.assertGreaterEqual(migrate_payload["migrated_events"], 1)
 
@@ -96,11 +97,57 @@ class ProductionDataCliTests(unittest.TestCase):
             self.assertNotIn("I studied overseas too", export_text)
             self.assertNotIn("blocked_draft_text", export_path.read_text(encoding="utf-8"))
 
+    def test_data_migrate_removes_plaintext_sources_and_keeps_only_encrypted_sqlite_backup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            source_path = data_dir / "matches" / "match_ada" / "observations.json"
+            self._write_json(
+                source_path,
+                {
+                    "schema_version": 1,
+                    "match_id": "match_ada",
+                    "raw_chat": "migration plaintext sentinel",
+                },
+            )
+
+            exit_code, payload, _ = self._run(["data", "migrate", "--data-dir", str(data_dir), "--json"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertFalse(source_path.exists())
+            backup_dir = Path(payload["backup_dir"])
+            self.assertTrue((backup_dir / "dating_boost.sqlite3").exists())
+            plaintext_files = [
+                path
+                for path in data_dir.rglob("*")
+                if path.is_file() and path.suffix in {".json", ".jsonl"}
+            ]
+            self.assertEqual(plaintext_files, [])
+            all_bytes = b"".join(path.read_bytes() for path in data_dir.rglob("*") if path.is_file())
+            self.assertNotIn(b"migration plaintext sentinel", all_bytes)
+
+    def test_data_doctor_blocks_plaintext_residue_after_migration(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._run(["data", "migrate", "--data-dir", str(data_dir), "--json"])
+            self._write_json(
+                data_dir / "matches" / "match_leak" / "observations.json",
+                {"schema_version": 1, "raw_chat": "unexpected plaintext residue"},
+            )
+
+            exit_code, payload, _ = self._run(["data", "doctor", "--data-dir", str(data_dir), "--json"])
+
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(payload["status"], "blocked")
+            self.assertEqual(payload["reason"], "plaintext_legacy_residue")
+            self.assertFalse(payload["checks"]["plaintext_legacy_files_absent"])
+
     def test_data_migrate_blocks_corrupt_json_after_backup_without_deleting_source(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
             data_dir.mkdir()
-            corrupt_path = data_dir / "corrupt.json"
+            corrupt_path = data_dir / "matches" / "match_bad" / "corrupt.json"
+            corrupt_path.parent.mkdir(parents=True)
             corrupt_path.write_text("{not json", encoding="utf-8")
 
             exit_code, payload, _ = self._run(["data", "migrate", "--data-dir", str(data_dir), "--json"])
@@ -249,16 +296,14 @@ class ProductionDataCliTests(unittest.TestCase):
                     "--json",
                 ]
             )
-            remaining_live_text = "\n".join(
-                path.read_text(encoding="utf-8")
-                for path in data_dir.rglob("*")
-                if path.is_file() and path.suffix in {".json", ".jsonl"} and "dating_boost.sqlite3" not in path.name
-            )
+            store = ProductionDataStore(data_dir)
+            remaining_events = store.list_audit_events(stream="audit/action_results.jsonl")
 
             self.assertEqual(delete_exit, 0)
             self.assertEqual(delete_payload["status"], "ok")
-            self.assertNotIn("match_ada", remaining_live_text)
-            self.assertIn("match_bea", remaining_live_text)
+            self.assertIsNone(store.get_document("matches/match_ada/match.json"))
+            self.assertIsNotNone(store.get_document("matches/match_bea/match.json"))
+            self.assertEqual([event["target_match_id"] for event in remaining_events], ["match_bea"])
 
     def test_data_delete_match_does_not_delete_prefix_collision(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -295,7 +340,7 @@ class ProductionDataCliTests(unittest.TestCase):
             self.assertEqual(delete_exit, 0)
             self.assertEqual(delete_payload["status"], "ok")
             self.assertFalse((data_dir / "matches" / "match_1").exists())
-            self.assertTrue((data_dir / "matches" / "match_10" / "match.json").exists())
+            self.assertFalse((data_dir / "matches" / "match_10" / "match.json").exists())
             self.assertNotIn("matches/match_1/match.json", exported_paths)
             self.assertIn("matches/match_10/match.json", exported_paths)
 
@@ -380,14 +425,15 @@ class ProductionDataCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
             data_dir.mkdir()
-            self._write_json(data_dir / "unknown.json", {"schema_version": 999, "value": "bad"})
+            unknown_path = data_dir / "user" / "unknown.json"
+            self._write_json(unknown_path, {"schema_version": 999, "value": "bad"})
 
             exit_code, payload, _ = self._run(["data", "migrate", "--data-dir", str(data_dir), "--json"])
 
             self.assertEqual(exit_code, 2)
             self.assertEqual(payload["status"], "blocked")
             self.assertEqual(payload["reason"], "unknown_schema_version")
-            self.assertTrue((data_dir / "unknown.json").exists())
+            self.assertTrue(unknown_path.exists())
 
     def test_json_storage_writes_are_mirrored_to_sqlite_after_migration(self):
         with tempfile.TemporaryDirectory() as temp_dir:

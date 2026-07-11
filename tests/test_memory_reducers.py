@@ -9,6 +9,7 @@ from dating_boost.core.memory.models import (
 )
 from dating_boost.core.memory.reducers import reduce_match_memory
 from dating_boost.core.memory.repositories import MemoryRepository
+from dating_boost.core.storage import JsonStorage
 
 
 NOW = "2026-06-06T00:00:00Z"
@@ -92,10 +93,7 @@ class MemoryRepositoryTests(unittest.TestCase):
             loaded = repo.load_events("match_ada")
 
             self.assertEqual([item.event_id for item in loaded], ["evt_1", "evt_2"])
-            self.assertEqual(
-                (Path(temp_dir) / "matches" / "match_ada" / "memory_events.jsonl").read_text(encoding="utf-8").count("\n"),
-                2,
-            )
+            self.assertEqual(len(JsonStorage(Path(temp_dir)).read_jsonl(Path("matches/match_ada/memory_events.jsonl"))), 2)
 
     def test_duplicate_event_ids_are_idempotent(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import base64
 import json
-import shutil
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -14,7 +14,7 @@ from dating_boost.core.production_store_common import (
     KNOWN_SCHEMA_VERSIONS, LockAcquireResult, MIGRATION_SCHEMA_VERSION, MigrationBlocked,
     PRODUCTION_DB_NAME, RELEASE_MANIFEST_SCHEMA_VERSION, _confirmation_blocked, _digest,
     _is_blocked_payload, _is_match_local_path, _now_iso, _parse_iso,
-    _redact_if_blocked, _redact_keys, _remove_empty_dirs, _remove_match_reference,
+    _is_managed_state_path, _redact_if_blocked, _redact_keys, _remove_empty_dirs, _remove_match_reference,
     _remove_path_if_exists, _schema_versions, _sqlite_integrity_ok, _validate_match_local_prefix,
     delete_confirm_token, payload_digest,
 )
@@ -80,6 +80,28 @@ class ProductionStoreSchemaMixin:
             self._set_metadata(conn, "encryption", "enabled")
             self._set_metadata(conn, "encryption_provider", self._cipher.provider.provider_name)
 
+    def initialize_empty(self) -> dict[str, Any]:
+        """Initialize a clean encrypted store without creating legacy JSON state."""
+        self.ensure_schema()
+        initialized_at = _now_iso()
+        with self._connect() as conn:
+            self._set_metadata(conn, "storage_backend", "sqlite")
+            self._set_metadata(conn, "migration_schema_version", str(MIGRATION_SCHEMA_VERSION))
+            self._set_metadata(conn, "migrated_at", initialized_at)
+            self._set_metadata(conn, "encryption", "enabled")
+            self._set_metadata(conn, "encryption_provider", self._cipher.status().provider)
+        return {
+            "schema_version": DATA_STORE_SCHEMA_VERSION,
+            "migration_schema_version": MIGRATION_SCHEMA_VERSION,
+            "status": "ok",
+            "storage_backend": "sqlite",
+            "encryption": self._encryption_payload(),
+            "db_path": str(self.db_path),
+            "backup_dir": None,
+            "migrated_documents": 0,
+            "migrated_events": 0,
+        }
+
     def doctor(self) -> dict[str, Any]:
         if not self.db_path.exists():
             return {
@@ -112,6 +134,8 @@ class ProductionStoreSchemaMixin:
         except sqlite3.DatabaseError:
             return self._blocked_doctor("sqlite_unreadable")
         migration_ok = metadata.get("migration_schema_version") == str(MIGRATION_SCHEMA_VERSION)
+        plaintext_legacy_files = self._iter_source_files()
+        plaintext_legacy_files_absent = not plaintext_legacy_files
         encryption = self._cipher.status_without_creating_key()
         encryption_ok = (
             metadata.get("encryption") == "enabled"
@@ -120,15 +144,22 @@ class ProductionStoreSchemaMixin:
             and verification["encrypted_idempotency"] == verification["idempotency_count"]
             and verification["encrypted_confirmations"] == verification["confirmation_count"]
         )
-        return {
+        status = "ok" if migration_ok else "needs_migration"
+        reason = None
+        if migration_ok and not plaintext_legacy_files_absent:
+            status = "blocked"
+            reason = "plaintext_legacy_residue"
+        payload = {
             "schema_version": DATA_STORE_SCHEMA_VERSION,
-            "status": "ok" if migration_ok else "needs_migration",
+            "status": status,
             "storage_backend": "sqlite",
             "db_path": str(self.db_path),
             "schema_versions": _schema_versions(),
             "document_count": document_count,
             "audit_event_count": audit_event_count,
             "encrypted_payload_count": verification["encrypted_documents"],
+            "plaintext_legacy_file_count": len(plaintext_legacy_files),
+            "plaintext_legacy_files": [path.relative_to(self.root).as_posix() for path in plaintext_legacy_files],
             "encryption": {
                 "status": "encrypted" if encryption_ok else "unknown",
                 "provider": encryption.provider,
@@ -141,16 +172,49 @@ class ProductionStoreSchemaMixin:
                 "schema_ok": metadata.get("data_store_schema_version") == str(DATA_STORE_SCHEMA_VERSION),
                 "migration_ok": migration_ok,
                 "encryption_ok": encryption_ok,
+                "plaintext_legacy_files_absent": plaintext_legacy_files_absent,
             },
         }
+        if reason is not None:
+            payload["reason"] = reason
+        return payload
 
     def migrate(self) -> dict[str, Any]:
         self.root.mkdir(parents=True, exist_ok=True)
-        backup_dir = self._backup_json_sources()
+        source_paths = self._iter_source_files()
+        if self.db_path.exists() and self._migration_status().get("status") == "ok":
+            if source_paths:
+                return {
+                    "schema_version": DATA_STORE_SCHEMA_VERSION,
+                    "migration_schema_version": MIGRATION_SCHEMA_VERSION,
+                    "status": "blocked",
+                    "reason": "plaintext_legacy_residue",
+                    "storage_backend": "sqlite",
+                    "db_path": str(self.db_path),
+                    "plaintext_legacy_files": [path.relative_to(self.root).as_posix() for path in source_paths],
+                }
+            doctor = self.doctor()
+            return {
+                "schema_version": DATA_STORE_SCHEMA_VERSION,
+                "migration_schema_version": MIGRATION_SCHEMA_VERSION,
+                "status": "ok",
+                "storage_backend": "sqlite",
+                "encryption": doctor["encryption"],
+                "db_path": str(self.db_path),
+                "backup_dir": self._metadata_value("backup_dir"),
+                "migrated_documents": int(doctor.get("document_count") or 0),
+                "migrated_events": int(doctor.get("audit_event_count") or 0),
+                "already_migrated": True,
+            }
+        if not source_paths:
+            return self.initialize_empty()
+
+        backup_dir = self._backup_json_sources(source_paths)
+        db_existed_before = self.db_path.exists()
         try:
             documents, audit_events = self._load_json_sources()
         except MigrationBlocked as exc:
-            if self.db_path.exists():
+            if not db_existed_before and self.db_path.exists():
                 self.db_path.unlink()
             return {
                 "schema_version": DATA_STORE_SCHEMA_VERSION,
@@ -209,6 +273,20 @@ class ProductionStoreSchemaMixin:
             self._set_metadata(conn, "backup_dir", str(backup_dir))
             self._set_metadata(conn, "encryption", "enabled")
             self._set_metadata(conn, "encryption_provider", self._cipher.status().provider)
+        self._backup_sqlite_snapshot(backup_dir)
+        try:
+            self._remove_source_files(source_paths)
+        except OSError as exc:
+            return {
+                "schema_version": DATA_STORE_SCHEMA_VERSION,
+                "migration_schema_version": MIGRATION_SCHEMA_VERSION,
+                "status": "blocked",
+                "reason": "plaintext_source_cleanup_failed",
+                "path": str(exc.filename or ""),
+                "storage_backend": "sqlite",
+                "backup_dir": str(backup_dir),
+                "db_path": str(self.db_path),
+            }
         return {
             "schema_version": DATA_STORE_SCHEMA_VERSION,
             "migration_schema_version": MIGRATION_SCHEMA_VERSION,
@@ -223,9 +301,10 @@ class ProductionStoreSchemaMixin:
 
     @contextmanager
     def _connect(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 30000")
         conn.execute("PRAGMA journal_mode = WAL")
         try:
             yield conn
@@ -239,7 +318,7 @@ class ProductionStoreSchemaMixin:
             (key, value),
         )
 
-    def _backup_json_sources(self) -> Path:
+    def _backup_json_sources(self, source_paths: list[Path]) -> Path:
         timestamp = _now_iso().replace(":", "").replace("-", "")
         backup_root = self.root / "backups"
         backup_dir = backup_root / timestamp
@@ -248,11 +327,50 @@ class ProductionStoreSchemaMixin:
             suffix += 1
             backup_dir = backup_root / f"{timestamp}_{suffix}"
         backup_dir.mkdir(parents=True, exist_ok=True)
-        for path in self._iter_source_files():
-            target = backup_dir / path.relative_to(self.root)
+        for path in source_paths:
+            relative = path.relative_to(self.root)
+            target = backup_dir / Path(f"{relative.as_posix()}.enc")
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, target)
+            encrypted = self._cipher.encrypt_json(
+                {
+                    "schema_version": 1,
+                    "relative_path": relative.as_posix(),
+                    "content_base64": base64.b64encode(path.read_bytes()).decode("ascii"),
+                },
+                associated_data=f"migration-source:{relative.as_posix()}",
+            )
+            descriptor = target.open("w", encoding="utf-8")
+            try:
+                descriptor.write(encrypted + "\n")
+                descriptor.flush()
+            finally:
+                descriptor.close()
+            try:
+                target.chmod(0o600)
+            except OSError:
+                pass
         return backup_dir
+
+    def _backup_sqlite_snapshot(self, backup_dir: Path) -> None:
+        backup_path = backup_dir / PRODUCTION_DB_NAME
+        with sqlite3.connect(self.db_path, timeout=30.0) as source:
+            with sqlite3.connect(backup_path, timeout=30.0) as destination:
+                source.backup(destination)
+        try:
+            backup_path.chmod(0o600)
+        except OSError:
+            pass
+
+    def _remove_source_files(self, source_paths: list[Path]) -> None:
+        for path in source_paths:
+            path.unlink()
+        _remove_empty_dirs(self.root)
+
+    def _metadata_value(self, key: str) -> str | None:
+        self.ensure_schema()
+        with self._connect() as conn:
+            row = conn.execute("SELECT value FROM metadata WHERE key = ?", (key,)).fetchone()
+        return str(row["value"]) if row is not None else None
 
     def _load_json_sources(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         documents: list[dict[str, Any]] = []
@@ -314,6 +432,8 @@ class ProductionStoreSchemaMixin:
             if not relative_parts:
                 continue
             if relative_parts[0] == "backups":
+                continue
+            if not _is_managed_state_path(path.relative_to(self.root)):
                 continue
             if path.name == PRODUCTION_DB_NAME or path.name.startswith(f"{PRODUCTION_DB_NAME}-"):
                 continue

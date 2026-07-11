@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from dating_boost.core.storage import JsonStorage
 
 from dating_boost.core.models import Divergence
 from dating_boost.perception.observations import AppObservation
@@ -414,7 +415,7 @@ class DraftReviewTests(unittest.TestCase):
                 )
 
             payload = json.loads(output.getvalue())
-            audit_exists = (data_dir / "audit" / "draft_reviews.jsonl").exists()
+            audit_exists = JsonStorage(data_dir).exists(Path("audit/draft_reviews.jsonl"))
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["schema_version"], 1)

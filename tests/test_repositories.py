@@ -4,6 +4,7 @@ from pathlib import Path
 
 from dating_boost.core.models import Confidence, MemoryItem, MemoryKind, ReplyMode, UserProfile
 from dating_boost.core.repositories import JsonMemoryRepository, MatchRepository, ObservationRepository
+from dating_boost.core.storage import JsonStorage
 from dating_boost.perception.fixture_loader import load_observation
 
 
@@ -81,10 +82,10 @@ class RepositoryTests(unittest.TestCase):
             )
 
             repo.save_user_profile(profile)
-            raw_profile = Path(temp_dir, "user_profile.json").read_text(encoding="utf-8")
+            raw_profile = JsonStorage(Path(temp_dir)).read_json(Path("user_profile.json"), expected_schema_version=1)
             loaded = repo.load_user_profile()
 
-            self.assertIn('"default_reply_mode": "self"', raw_profile)
+            self.assertEqual(raw_profile["default_reply_mode"], "self")
             self.assertEqual(loaded.default_reply_mode, ReplyMode.SELF)
             self.assertEqual(loaded.facts[0], fact)
 

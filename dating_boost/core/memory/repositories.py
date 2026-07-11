@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-import shutil
 from typing import Any
 
 from dating_boost.core.memory.extractors import events_from_observation
 from dating_boost.core.memory.models import MemoryEvent, MemoryEventType, MatchMemoryProjection
 from dating_boost.core.memory.reducers import reduce_match_memory
 from dating_boost.core.memory.review_queue import ReviewQueueRepository
+from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.storage import JsonStorage
 from dating_boost.perception.observations import AppObservation
 
@@ -91,15 +91,35 @@ class MemoryRepository:
 
     def delete_match_documents(self, match_id: str) -> int:
         _validate_match_id(match_id)
-        match_dir = self._storage.root / "matches" / match_id
-        if not match_dir.exists():
-            return 0
-        deleted_files = sum(1 for path in match_dir.rglob("*") if path.is_file())
-        shutil.rmtree(match_dir)
+        store = ProductionDataStore(self._storage.root)
+        if not store.db_path.exists():
+            match_dir = self._storage.root / "matches" / match_id
+            if not match_dir.exists():
+                return 0
+            deleted_files = sum(1 for path in match_dir.rglob("*") if path.is_file())
+            import shutil
+
+            shutil.rmtree(match_dir)
+        else:
+            prefix = f"matches/{match_id}/"
+            deleted_files = store.delete_documents_with_prefix(prefix) + store.delete_audit_events_with_stream_prefix(prefix)
         ReviewQueueRepository(self._storage.root).delete_items_for_match(match_id)
         return deleted_files
 
     def match_ids_with_observations(self) -> list[str]:
+        store = ProductionDataStore(self._storage.root)
+        if store.db_path.exists():
+            match_ids = {
+                parts[1]
+                for document in store.list_documents(prefix="matches/")
+                if (parts := Path(str(document["path"])).parts)
+                and len(parts) == 3
+                and parts[0] == "matches"
+                and parts[2] == "observations.json"
+            }
+            for match_id in match_ids:
+                _validate_match_id(match_id)
+            return sorted(match_ids)
         matches_dir = self._storage.root / "matches"
         if not matches_dir.exists():
             return []

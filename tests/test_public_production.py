@@ -430,6 +430,17 @@ class PublicProductionTests(unittest.TestCase):
         self.assertTrue(payload["release_capabilities"]["github_release"])
         self.assertTrue(payload["release_capabilities"]["skill_package"])
 
+    def test_release_doctor_blocks_codex_skill_resource_drift(self):
+        with patch.object(
+            release_core,
+            "_codex_skill_resource_parity_issues",
+            return_value=["codex_skill_resource_mismatch:SKILL.md"],
+        ):
+            payload = release_core.release_doctor()
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertIn("codex_skill_resource_mismatch:SKILL.md", payload["issues"])
+
     def test_repository_declares_mit_license(self):
         license_text = Path("LICENSE").read_text(encoding="utf-8")
         pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))

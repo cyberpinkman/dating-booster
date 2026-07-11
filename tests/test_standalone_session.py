@@ -8,6 +8,7 @@ from pathlib import Path
 from dating_boost.cli import main
 from dating_boost.core.capabilities import build_capabilities
 from dating_boost.core.standalone_session import StandaloneSessionRepository
+from dating_boost.core.storage import JsonStorage
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
@@ -31,12 +32,13 @@ class StandaloneSessionTests(unittest.TestCase):
             ticked = repo.record_tick({"status": "ok", "work_items_processed": 0})
             status = repo.status()
             stopped = repo.stop(reason="manual_stop")
-            session_path = data_dir / "standalone_session" / "session.json"
-            events_path = data_dir / "standalone_session" / "events.jsonl"
-            persisted = json.loads(session_path.read_text(encoding="utf-8"))
-            events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
-            session_path_exists = session_path.exists()
-            events_path_exists = events_path.exists()
+            storage = JsonStorage(data_dir)
+            session_path = Path("standalone_session/session.json")
+            events_path = Path("standalone_session/events.jsonl")
+            persisted = storage.read_json(session_path, expected_schema_version=1)
+            events = storage.read_jsonl(events_path)
+            session_path_exists = storage.exists(session_path)
+            events_path_exists = storage.exists(events_path)
 
         self.assertEqual(started["status"], "active")
         self.assertEqual(started["session"]["schema_version"], 1)

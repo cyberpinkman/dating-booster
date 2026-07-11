@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from dating_boost.core.tashuo_standalone_alpha_gate import evaluate_alpha_gate
+from dating_boost.apps.tashuo.standalone_alpha_gate import evaluate_alpha_gate
 
 
 ROOT = Path(__file__).resolve().parents[1]

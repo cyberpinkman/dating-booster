@@ -453,10 +453,10 @@ class ManagedSessionRepository:
         return _nudge_due(states, now) or _scan_later_pending(states)
 
     def _load_session(self) -> dict[str, Any] | None:
-        path = self.root / MANAGED_SESSION_PATH
-        if not path.exists():
+        try:
+            return self._storage.read_json(MANAGED_SESSION_PATH, expected_schema_version=MANAGED_SESSION_SCHEMA_VERSION)
+        except FileNotFoundError:
             return None
-        return self._storage.read_json(MANAGED_SESSION_PATH, expected_schema_version=MANAGED_SESSION_SCHEMA_VERSION)
 
     def _write_session(self, payload: dict[str, Any]) -> None:
         self._storage.write_json(MANAGED_SESSION_PATH, payload)
@@ -875,21 +875,12 @@ def _validate_app_id(app_id: str) -> str:
 
 
 def _wake_event_count(root: Path, *, app_id: str | None = None) -> int:
-    path = root / MANAGED_WAKE_EVENTS_PATH
-    if not path.exists():
-        return 0
     count = 0
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
+    for event in JsonStorage(root).read_jsonl(MANAGED_WAKE_EVENTS_PATH):
         if app_id is None:
             count += 1
             continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(event, dict) and event.get("app_id") == app_id:
+        if event.get("app_id") == app_id:
             count += 1
     return count
 

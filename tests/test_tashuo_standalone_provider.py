@@ -10,6 +10,7 @@ from dating_boost.apps.tashuo.standalone import (
     _correct_tashuo_message_list_tap_ratios,
 )
 from dating_boost.core.scan_authoring import validate_scan_batch
+from dating_boost.core.storage import JsonStorage
 from dating_boost.intelligence.vision_backends import ScriptedVisionBackend
 
 
@@ -1227,8 +1228,7 @@ class TaShuoStandaloneProviderTests(unittest.TestCase):
                 },
                 app_id="tashuo",
             )
-            record = (data_dir / "audit" / "stage_results.jsonl").read_text(encoding="utf-8")
-            event = json.loads(record)
+            event = JsonStorage(data_dir).read_jsonl(Path("audit/stage_results.jsonl"))[0]
 
         self.assertEqual(payload["status"], "stage_recorded")
         self.assertEqual(event["stage_attempt_status"], "completed")
@@ -1295,8 +1295,7 @@ class TaShuoStandaloneProviderTests(unittest.TestCase):
                 },
                 app_id="tashuo",
             )
-            record = (data_dir / "audit" / "stage_results.jsonl").read_text(encoding="utf-8")
-            event = json.loads(record)
+            event = JsonStorage(data_dir).read_jsonl(Path("audit/stage_results.jsonl"))[0]
 
         self.assertEqual(payload["status"], "stage_recorded")
         self.assertEqual(payload["target_verification"]["status"], "ok")

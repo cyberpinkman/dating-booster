@@ -394,14 +394,11 @@ class TaShuoStageBetaTests(unittest.TestCase):
                     "run_records": [],
                 },
             )
-            audit_path = data_dir / "audit" / "stage_results.jsonl"
-            audit_path.parent.mkdir(parents=True, exist_ok=True)
-
             def fake_run(cmd, cwd=None, check=False, capture_output=False, text=False, env=None, timeout=None):
                 self.assertEqual(cmd[1:5], ["-m", "dating_boost.cli", "release", "gate"])
                 self.assertIn("--support-session-id", cmd)
                 self.assertEqual(cmd[cmd.index("--support-session-id") + 1], "support_outer")
-                audit_path.write_text(json.dumps(_stage_result()) + "\n", encoding="utf-8")
+                JsonStorage(data_dir).write_jsonl(Path("audit") / "stage_results.jsonl", [_stage_result()])
                 return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_gate_payload()), stderr="")
 
             with patch.object(beta.subprocess, "run", side_effect=fake_run):
@@ -410,9 +407,10 @@ class TaShuoStageBetaTests(unittest.TestCase):
             self.assertEqual(payload["status"], "ok")
             self.assertEqual(payload["beta_report"]["audit_summary"]["complete"], True)
             self.assertEqual(payload["beta_report"]["live_send_execution_count"], 0)
-            self.assertTrue((data_dir / beta.BETA_REPORT_PATH).is_file())
+            storage = JsonStorage(data_dir)
+            self.assertTrue(storage.exists(beta.BETA_REPORT_PATH))
             self.assertTrue((root / "work" / "beta_report.json").is_file())
-            session = json.loads((data_dir / beta.BETA_SESSION_PATH).read_text(encoding="utf-8"))
+            session = storage.read_json(beta.BETA_SESSION_PATH, expected_schema_version=1)
             self.assertEqual(session["stage_result_cursor"], 1)
             self.assertEqual(session["run_records"][0]["stage_result_count"], 1)
 
@@ -438,11 +436,11 @@ class TaShuoStageBetaTests(unittest.TestCase):
                     "run_records": [],
                 },
             )
-            audit_path = data_dir / "audit" / "stage_results.jsonl"
-            audit_path.parent.mkdir(parents=True, exist_ok=True)
-
             def fake_run(cmd, cwd=None, check=False, capture_output=False, text=False, env=None, timeout=None):
-                audit_path.write_text(json.dumps(_stage_result(precondition_hash=None)) + "\n", encoding="utf-8")
+                JsonStorage(data_dir).write_jsonl(
+                    Path("audit") / "stage_results.jsonl",
+                    [_stage_result(precondition_hash=None)],
+                )
                 return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_gate_payload()), stderr="")
 
             with patch.object(beta.subprocess, "run", side_effect=fake_run):
@@ -451,7 +449,7 @@ class TaShuoStageBetaTests(unittest.TestCase):
             self.assertEqual(payload["status"], "blocked")
             self.assertEqual(payload["reason"], "beta_stage_audit_incomplete")
             self.assertIn("run[1].stage_result[1].precondition_hash", payload["beta_report"]["audit_summary"]["missing"])
-            self.assertTrue((data_dir / beta.BETA_REPORT_PATH).is_file())
+            self.assertTrue(JsonStorage(data_dir).exists(beta.BETA_REPORT_PATH))
 
     def test_beta_stop_report_preserves_run_audit_summary_without_smoke_payload(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -475,11 +473,8 @@ class TaShuoStageBetaTests(unittest.TestCase):
                     "run_records": [],
                 },
             )
-            audit_path = data_dir / "audit" / "stage_results.jsonl"
-            audit_path.parent.mkdir(parents=True, exist_ok=True)
-
             def fake_run(cmd, cwd=None, check=False, capture_output=False, text=False, env=None, timeout=None):
-                audit_path.write_text(json.dumps(_stage_result()) + "\n", encoding="utf-8")
+                JsonStorage(data_dir).write_jsonl(Path("audit") / "stage_results.jsonl", [_stage_result()])
                 return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_gate_payload()), stderr="")
 
             def fake_run_cli(steps, args, *, env, name, allow_failure=False):
@@ -534,8 +529,7 @@ class TaShuoStageBetaTests(unittest.TestCase):
 
             self.assertEqual(blocked["status"], "blocked")
             self.assertEqual(recorded["status"], "ok")
-            feedback_path = data_dir / beta.BETA_FEEDBACK_PATH
-            text = feedback_path.read_text(encoding="utf-8")
+            text = json.dumps(JsonStorage(data_dir).read_jsonl(beta.BETA_FEEDBACK_PATH), ensure_ascii=False)
             self.assertIn("accepted_as_is", text)
             self.assertNotIn("raw text must not be stored", text)
 

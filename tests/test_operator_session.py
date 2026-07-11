@@ -10,6 +10,7 @@ from unittest.mock import patch
 from dating_boost.cli import main
 from dating_boost.core.draft_evidence import UserMemoryRepository
 from dating_boost.core.operator import OperatorRepository
+from dating_boost.core.storage import JsonStorage
 
 
 FIXTURE_DIR = Path("tests/fixtures/automation")
@@ -108,7 +109,7 @@ class OperatorSessionTests(unittest.TestCase):
             payload["message_list_scan_boundary"],
             {"type": "first_historical_row", "history_cutoff_days": 7},
         )
-        self.assertFalse((data_dir / "operator" / "session.json").exists())
+        self.assertFalse(JsonStorage(data_dir).exists(Path("operator") / "session.json"))
 
     def test_operator_continues_message_list_scan_when_cursor_not_exhausted(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -535,13 +536,14 @@ class OperatorSessionTests(unittest.TestCase):
                 for state in states_payload["automation"]["states"]
             }
             self.assertEqual(state_by_candidate["row_ada"]["state"], "sent_waiting")
-            thread = json.loads(
-                (data_dir / "matches" / send_payload["work_item"]["match_id"] / "conversation_thread.json")
-                .read_text(encoding="utf-8")
+            storage = JsonStorage(data_dir)
+            thread = storage.read_json(
+                Path("matches") / send_payload["work_item"]["match_id"] / "conversation_thread.json",
+                expected_schema_version=1,
             )
-            latest_turn = json.loads(
-                (data_dir / "matches" / send_payload["work_item"]["match_id"] / "latest_turn.json")
-                .read_text(encoding="utf-8")
+            latest_turn = storage.read_json(
+                Path("matches") / send_payload["work_item"]["match_id"] / "latest_turn.json",
+                expected_schema_version=1,
             )
             outbound_texts = [
                 message["text"]
@@ -614,7 +616,7 @@ class OperatorSessionTests(unittest.TestCase):
             self.assertEqual(send_exit, 0)
             self.assertEqual(send_payload["work_item"]["work_item_type"], "send_message")
             self.assertEqual(send_payload["work_item"]["candidate_key"], "row_ada")
-            queued = json.loads((data_dir / "operator" / "work_queue.json").read_text(encoding="utf-8"))
+            queued = JsonStorage(data_dir).read_json(Path("operator") / "work_queue.json", expected_schema_version=1)
             queued_keys = [item.get("candidate_key") for item in queued["work_items"]]
             self.assertIn("row_bea", queued_keys)
 
@@ -654,7 +656,10 @@ class OperatorSessionTests(unittest.TestCase):
                 str(second_thread_path),
             ])
 
-            pending = json.loads((data_dir / "operator" / "pending_scan_batch.json").read_text(encoding="utf-8"))
+            pending = JsonStorage(data_dir).read_json(
+                Path("operator") / "pending_scan_batch.json",
+                expected_schema_version=1,
+            )
             entry_keys = [entry["candidate_key"] for entry in pending["message_list_snapshot"]["entries"]]
             thread_keys = [thread["candidate_key"] for thread in pending["thread_observations"]]
 
@@ -722,7 +727,10 @@ class OperatorSessionTests(unittest.TestCase):
             self.assertNotEqual(send_payload["work_item"].get("candidate_key"), "row_ada")
             self.assertEqual(repeat_exit, 0)
             self.assertEqual(repeat_payload["work_item"]["work_item_type"], "send_message")
-            scan_batch = json.loads((data_dir / "operator" / "pending_scan_batch.json").read_text(encoding="utf-8"))
+            scan_batch = JsonStorage(data_dir).read_json(
+                Path("operator") / "pending_scan_batch.json",
+                expected_schema_version=1,
+            )
             current_entry = scan_batch["message_list_snapshot"]["entries"][0]
             self.assertEqual(current_entry["timestamp_cue"], "current_thread")
             self.assertNotIn("position", current_entry)
@@ -736,6 +744,8 @@ class OperatorSessionTests(unittest.TestCase):
                     "target_match_id": work_item["match_id"],
                     "payload_hash": work_item["payload_hash"],
                     "pre_action_observation_id": work_item["pre_action_observation_id"],
+                    "precondition_hash": work_item["precondition_hash"],
+                    "autonomous_audit_binding": work_item["autonomous_audit_binding"],
                     "result_status": "succeeded",
                     "stage_attempt_status": "completed",
                     "staged_text_verification": {
@@ -763,8 +773,9 @@ class OperatorSessionTests(unittest.TestCase):
             self.assertEqual(stage_exit, 0)
             self.assertEqual(stage_payload["status"], "ok")
             self.assertEqual(stage_payload["path"], "audit/stage_results.jsonl")
-            self.assertTrue((data_dir / "audit" / "stage_results.jsonl").exists())
-            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
+            storage = JsonStorage(data_dir)
+            self.assertTrue(storage.exists(Path("audit") / "stage_results.jsonl"))
+            self.assertFalse(storage.exists(Path("audit") / "action_results.jsonl"))
             self.assertEqual(states_exit, 0)
             states = states_payload["automation"]["states"]
             self.assertEqual(states[0]["state"], "staged_pending_user")
@@ -821,8 +832,190 @@ class OperatorSessionTests(unittest.TestCase):
             self.assertEqual(stage_exit, 2)
             self.assertEqual(action_payload["reason"], "operator session has not been started")
             self.assertEqual(stage_payload["reason"], "operator session has not been started")
-            self.assertFalse((data_dir / "audit" / "action_results.jsonl").exists())
-            self.assertFalse((data_dir / "audit" / "stage_results.jsonl").exists())
+            storage = JsonStorage(data_dir)
+            self.assertFalse(storage.exists(Path("audit") / "action_results.jsonl"))
+            self.assertFalse(storage.exists(Path("audit") / "stage_results.jsonl"))
+
+    def test_operator_rejects_mismatched_action_result_before_any_mutation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            work_item = self._prepare_send_work_item(data_dir, Path(temp_dir))
+            repository = OperatorRepository(data_dir)
+            before = repository.get_state_payload()
+            result = dict(json.loads((FIXTURE_DIR / "action_result_ada.json").read_text(encoding="utf-8")))
+            result.update(
+                {
+                    "action_request_id": "action_request_for_another_work_item",
+                    "target_match_id": work_item["match_id"],
+                    "payload_hash": work_item["payload_hash"],
+                    "pre_action_observation_id": work_item["pre_action_observation_id"],
+                    "precondition_hash": work_item["precondition_hash"],
+                    "autonomous_audit_binding": work_item["autonomous_audit_binding"],
+                }
+            )
+            result_path = Path(temp_dir) / "mismatched_action_result.json"
+            self._write_json(result_path, result)
+
+            exit_code, payload, _ = self._run(
+                [
+                    "operator",
+                    "record-action-result",
+                    "--data-dir",
+                    str(data_dir),
+                    "--input",
+                    str(result_path),
+                ]
+            )
+            after = repository.get_state_payload()
+
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(payload["reason"], "result_binding_mismatch:action_request_id")
+            self.assertEqual(after["operator_session"]["current_work_item"], work_item)
+            self.assertEqual(after["operator_session"]["cycle_send_count"], before["operator_session"]["cycle_send_count"])
+            self.assertEqual(after["automation"]["states"], before["automation"]["states"])
+            self.assertEqual(JsonStorage(data_dir).read_jsonl(Path("audit/action_results.jsonl")), [])
+
+    def test_operator_rejects_every_action_result_binding_mismatch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            work_item = self._prepare_send_work_item(data_dir, Path(temp_dir))
+            base_result = dict(json.loads((FIXTURE_DIR / "action_result_ada.json").read_text(encoding="utf-8")))
+            base_result.update(
+                {
+                    "action_request_id": work_item["action_request_id"],
+                    "target_match_id": work_item["match_id"],
+                    "payload_hash": work_item["payload_hash"],
+                    "pre_action_observation_id": work_item["pre_action_observation_id"],
+                    "precondition_hash": work_item["precondition_hash"],
+                    "autonomous_audit_binding": work_item["autonomous_audit_binding"],
+                }
+            )
+            mutations = {
+                "target_match_id": "match_other",
+                "payload_hash": "payload_other",
+                "pre_action_observation_id": "observation_other",
+                "precondition_hash": "precondition_other",
+                "action": "like",
+                "autonomous_audit_binding": {"authorization_id": "other"},
+            }
+
+            for field, value in mutations.items():
+                with self.subTest(field=field):
+                    result = {**base_result, field: value}
+                    result_path = Path(temp_dir) / f"mismatched_{field}.json"
+                    self._write_json(result_path, result)
+                    exit_code, payload, _ = self._run(
+                        [
+                            "operator",
+                            "record-action-result",
+                            "--data-dir",
+                            str(data_dir),
+                            "--input",
+                            str(result_path),
+                        ]
+                    )
+                    self.assertEqual(exit_code, 2)
+                    self.assertEqual(payload["reason"], f"result_binding_mismatch:{field}")
+
+            state = OperatorRepository(data_dir).get_state_payload()
+            self.assertEqual(state["operator_session"]["current_work_item"], work_item)
+            self.assertEqual(state["operator_session"]["cycle_send_count"], 0)
+            self.assertEqual(JsonStorage(data_dir).read_jsonl(Path("audit/action_results.jsonl")), [])
+
+    def test_operator_rejects_mismatched_stage_result_before_any_mutation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            work_item = self._prepare_send_work_item(data_dir, Path(temp_dir))
+            repository = OperatorRepository(data_dir)
+            before = repository.get_state_payload()
+            result = {
+                "action_request_id": "stage_for_another_work_item",
+                "target_match_id": work_item["match_id"],
+                "payload_hash": work_item["payload_hash"],
+                "pre_action_observation_id": work_item["pre_action_observation_id"],
+                "result_status": "succeeded",
+                "stage_attempt_status": "completed",
+                "staged_text_verification": {"status": "verified"},
+                "evidence": {"stage_mode": True, "sent": False},
+            }
+            result_path = Path(temp_dir) / "mismatched_stage_result.json"
+            self._write_json(result_path, result)
+
+            exit_code, payload, _ = self._run(
+                [
+                    "operator",
+                    "record-stage-result",
+                    "--data-dir",
+                    str(data_dir),
+                    "--input",
+                    str(result_path),
+                ]
+            )
+            after = repository.get_state_payload()
+
+            self.assertEqual(exit_code, 2)
+            self.assertEqual(payload["reason"], "result_binding_mismatch:action_request_id")
+            self.assertEqual(after["operator_session"]["current_work_item"], work_item)
+            self.assertEqual(after["operator_session"]["cycle_send_count"], before["operator_session"]["cycle_send_count"])
+            self.assertEqual(after["automation"]["states"], before["automation"]["states"])
+            self.assertEqual(JsonStorage(data_dir).read_jsonl(Path("audit/stage_results.jsonl")), [])
+
+    def test_operator_rejects_results_when_no_send_work_item_is_current(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            self._init_profile(data_dir)
+            self._run(
+                [
+                    "operator",
+                    "session",
+                    "start",
+                    "--data-dir",
+                    str(data_dir),
+                    "--authorization",
+                    str(FIXTURE_DIR / "auth_send.json"),
+                ]
+            )
+            action_path = Path(temp_dir) / "unbound_action.json"
+            stage_path = Path(temp_dir) / "unbound_stage.json"
+            self._write_json(
+                action_path,
+                {
+                    "action_request_id": "unbound_action",
+                    "action": "send_message",
+                    "target_match_id": "match_unbound",
+                    "payload_hash": "payload_unbound",
+                    "pre_action_observation_id": "obs_before",
+                    "post_action_observation_id": None,
+                    "result_status": "failed",
+                    "evidence": {"verification": "fixture failure"},
+                },
+            )
+            self._write_json(
+                stage_path,
+                {
+                    "action_request_id": "unbound_stage",
+                    "target_match_id": "match_unbound",
+                    "payload_hash": "payload_unbound",
+                    "pre_action_observation_id": "obs_before",
+                    "result_status": "failed",
+                    "evidence": {"stage_mode": True},
+                },
+            )
+
+            action_exit, action_payload, _ = self._run(
+                ["operator", "record-action-result", "--data-dir", str(data_dir), "--input", str(action_path)]
+            )
+            stage_exit, stage_payload, _ = self._run(
+                ["operator", "record-stage-result", "--data-dir", str(data_dir), "--input", str(stage_path)]
+            )
+
+            self.assertEqual(action_exit, 2)
+            self.assertEqual(stage_exit, 2)
+            self.assertEqual(action_payload["reason"], "operator_current_send_work_item_required")
+            self.assertEqual(stage_payload["reason"], "operator_current_send_work_item_required")
+            storage = JsonStorage(data_dir)
+            self.assertEqual(storage.read_jsonl(Path("audit/action_results.jsonl")), [])
+            self.assertEqual(storage.read_jsonl(Path("audit/stage_results.jsonl")), [])
 
     def test_current_thread_target_profile_supplement_does_not_require_message_list(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1044,8 +1237,8 @@ class OperatorSessionTests(unittest.TestCase):
             ])
             operator_dir = data_dir / "operator"
             automation_dir = data_dir / "automation"
-            self._write_json(
-                operator_dir / "work_queue.json",
+            JsonStorage(data_dir).write_json(
+                Path("operator") / "work_queue.json",
                 {
                     "schema_version": 1,
                     "work_items": [
@@ -1060,8 +1253,8 @@ class OperatorSessionTests(unittest.TestCase):
                     ],
                 },
             )
-            self._write_json(
-                automation_dir / "states.json",
+            JsonStorage(data_dir).write_json(
+                Path("automation") / "states.json",
                 {
                     "schema_version": 1,
                     "states": [
@@ -1217,7 +1410,7 @@ class OperatorSessionTests(unittest.TestCase):
 
             self.assertEqual(stop_exit, 0)
             self.assertEqual(stop_payload["status"], "stopped")
-            self.assertTrue((data_dir / stop_payload["machine_report_path"]).exists())
+            self.assertTrue(JsonStorage(data_dir).exists(Path(stop_payload["machine_report_path"])))
             self.assertEqual(report_exit, 0)
             self.assertEqual(report_payload["status"], "ok")
             self.assertEqual(report_payload["operator_session"]["status"], "stopped")
@@ -1578,6 +1771,49 @@ class OperatorSessionTests(unittest.TestCase):
         ])
         self.assertEqual(result_exit, 0)
         self.assertEqual(result_payload["status"], "ok")
+
+    def _prepare_send_work_item(self, data_dir: Path, temp_dir: Path) -> dict:
+        self._init_profile(data_dir)
+        self._run(
+            [
+                "operator",
+                "session",
+                "start",
+                "--data-dir",
+                str(data_dir),
+                "--authorization",
+                str(FIXTURE_DIR / "auth_send.json"),
+            ]
+        )
+        self._run(["operator", "next", "--data-dir", str(data_dir)])
+        list_path = temp_dir / "binding_message_list.json"
+        self._write_json(list_path, _single_candidate_message_list_observation("row_ada"))
+        self._run(
+            [
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(list_path),
+            ]
+        )
+        self._run(["operator", "next", "--data-dir", str(data_dir)])
+        thread_path = temp_dir / "binding_thread.json"
+        self._write_json(thread_path, _thread_observation("row_ada"))
+        self._run(
+            [
+                "operator",
+                "ingest-observation",
+                "--data-dir",
+                str(data_dir),
+                "--input",
+                str(thread_path),
+            ]
+        )
+        _, payload, _ = self._run(["operator", "next", "--data-dir", str(data_dir)])
+        self.assertEqual(payload["work_item"]["work_item_type"], "send_message")
+        return payload["work_item"]
 
 
 def _message_list_observation():

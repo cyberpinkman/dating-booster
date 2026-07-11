@@ -6,6 +6,7 @@ from io import StringIO
 from pathlib import Path
 
 from dating_boost.cli import main
+from dating_boost.core.storage import JsonStorage
 
 
 FIXTURE_DIR = Path("tests/fixtures/agent_native")
@@ -99,11 +100,9 @@ class AgentNativeManualWorkflowTests(unittest.TestCase):
             self.assertEqual(feedback_exit, 0)
             self.assertEqual(feedback_payload["status"], "ok")
 
-            feedback_path = data_dir / "matches" / match_id / "feedback_events.jsonl"
-            feedback_events = [
-                json.loads(line)
-                for line in feedback_path.read_text(encoding="utf-8").splitlines()
-            ]
+            feedback_events = JsonStorage(data_dir).read_jsonl(
+                Path("matches") / match_id / "feedback_events.jsonl"
+            )
             self.assertEqual(feedback_events[0]["label"], "accepted")
             self.assertEqual(feedback_events[0]["draft_id"], "reward_delegation_draft_1")
 

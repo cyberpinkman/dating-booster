@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 
-from dating_boost.core import gui_harness as _platform
+from dating_boost.harness import native_gui as _platform
 
 
 for _name, _value in vars(_platform).items():

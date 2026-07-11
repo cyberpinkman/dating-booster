@@ -18,6 +18,7 @@ from tests.automation_session_support import (
     patch,
     tempfile,
 )
+from dating_boost.core.storage import JsonStorage
 
 class AutomationSessionLifecycleTests(AutomationSessionTestCase):
     def test_automation_context_uses_projection_plus_latest_observation(self):
@@ -167,8 +168,9 @@ class AutomationSessionLifecycleTests(AutomationSessionTestCase):
 
             self.assertEqual(stop_exit, 0)
             self.assertEqual(stop_payload["status"], "stopped")
-            self.assertTrue((data_dir / stop_payload["machine_report_path"]).exists())
-            self.assertTrue((data_dir / stop_payload["human_report_path"]).exists())
+            storage = JsonStorage(data_dir)
+            self.assertTrue(storage.exists(Path(stop_payload["machine_report_path"])))
+            self.assertTrue(storage.exists(Path(stop_payload["human_report_path"])))
             self.assertGreaterEqual(stop_payload["summary"]["new_match_count"], 3)
             self.assertEqual(stop_payload["summary"]["action_request_count"], 1)
             self.assertGreaterEqual(stop_payload["summary"]["handoff_count"], 2)

@@ -547,7 +547,7 @@ def _handle_release_doctor(args: argparse.Namespace) -> int:
 
 
 def _handle_release_gate_tashuo_stage_alpha(args: argparse.Namespace) -> int:
-    from dating_boost.core.tashuo_stage_alpha_release_gate import main as release_gate_main
+    from dating_boost.apps.tashuo.stage_alpha_release_gate import main as release_gate_main
 
     return int(release_gate_main(_release_gate_tashuo_stage_alpha_argv(args)))
 
@@ -595,7 +595,7 @@ def _release_gate_tashuo_stage_alpha_argv(args: argparse.Namespace) -> list[str]
 
 
 def _handle_beta_readiness(args: argparse.Namespace) -> int:
-    from dating_boost.core.tashuo_stage_beta import beta_readiness
+    from dating_boost.apps.tashuo.stage_beta import beta_readiness
 
     payload = beta_readiness(
         data_dir=args.data_dir,
@@ -609,7 +609,7 @@ def _handle_beta_readiness(args: argparse.Namespace) -> int:
 
 
 def _handle_beta_feedback_record(args: argparse.Namespace) -> int:
-    from dating_boost.core.tashuo_stage_beta import record_stage_beta_feedback
+    from dating_boost.apps.tashuo.stage_beta import record_stage_beta_feedback
 
     payload = record_stage_beta_feedback(data_dir=args.data_dir, feedback=_read_json_object(args.input))
     _print_json(payload)
@@ -617,7 +617,7 @@ def _handle_beta_feedback_record(args: argparse.Namespace) -> int:
 
 
 def _handle_beta_tashuo_stage_start(args: argparse.Namespace) -> int:
-    from dating_boost.core.tashuo_stage_beta import start_tashuo_stage_beta
+    from dating_boost.apps.tashuo.stage_beta import start_tashuo_stage_beta
 
     payload = start_tashuo_stage_beta(
         data_dir=args.data_dir,
@@ -632,7 +632,7 @@ def _handle_beta_tashuo_stage_start(args: argparse.Namespace) -> int:
 
 
 def _handle_beta_tashuo_stage_run(args: argparse.Namespace) -> int:
-    from dating_boost.core.tashuo_stage_beta import run_tashuo_stage_beta
+    from dating_boost.apps.tashuo.stage_beta import run_tashuo_stage_beta
 
     payload = run_tashuo_stage_beta(
         data_dir=args.data_dir,
@@ -660,7 +660,7 @@ def _handle_beta_tashuo_stage_run(args: argparse.Namespace) -> int:
 
 
 def _handle_beta_tashuo_stage_status(args: argparse.Namespace) -> int:
-    from dating_boost.core.tashuo_stage_beta import status_tashuo_stage_beta
+    from dating_boost.apps.tashuo.stage_beta import status_tashuo_stage_beta
 
     payload = status_tashuo_stage_beta(data_dir=args.data_dir)
     _print_json(payload)
@@ -668,7 +668,7 @@ def _handle_beta_tashuo_stage_status(args: argparse.Namespace) -> int:
 
 
 def _handle_beta_tashuo_stage_stop(args: argparse.Namespace) -> int:
-    from dating_boost.core.tashuo_stage_beta import stop_tashuo_stage_beta
+    from dating_boost.apps.tashuo.stage_beta import stop_tashuo_stage_beta
 
     payload = stop_tashuo_stage_beta(
         data_dir=args.data_dir,
@@ -681,7 +681,7 @@ def _handle_beta_tashuo_stage_stop(args: argparse.Namespace) -> int:
 
 
 def _handle_beta_tashuo_stage_report(args: argparse.Namespace) -> int:
-    from dating_boost.core.tashuo_stage_beta import report_tashuo_stage_beta
+    from dating_boost.apps.tashuo.stage_beta import report_tashuo_stage_beta
 
     payload = report_tashuo_stage_beta(data_dir=args.data_dir, format=args.format)
     if args.format == "md":

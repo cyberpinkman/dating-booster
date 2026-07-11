@@ -11,7 +11,7 @@ from dating_boost.core.production_store import (
     RELEASE_MANIFEST_SCHEMA_VERSION,
 )
 from dating_boost.core.production_store import ProductionDataStore
-from dating_boost.core.gui_harness import GUI_HARNESS_SCHEMA_VERSION
+from dating_boost.harness.native_gui import GUI_HARNESS_SCHEMA_VERSION
 from dating_boost.core.live_send_contract import managed_live_send_guidance
 from dating_boost.core.managed_session import MANAGED_SESSION_SCAN_BOUNDARY, MANAGED_SESSION_USER_CONFIGURABLE_FIELDS
 from dating_boost.core.support import SUPPORT_EVIDENCE_SCHEMA_VERSION, SUPPORT_LOG_SCHEMA_VERSION

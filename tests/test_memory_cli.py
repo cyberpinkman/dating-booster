@@ -4,6 +4,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from dating_boost.cli import main
 from dating_boost.core.memory.models import IdentityTrustStatus
@@ -14,6 +15,7 @@ from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.core.memory.review_queue import ReviewItem, ReviewQueueRepository
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.repositories import MatchRepository, ObservationRepository
+from dating_boost.core.storage import JsonStorage, StorageCorruptionError
 from dating_boost.perception.fixture_loader import load_observation
 
 
@@ -207,9 +209,17 @@ class MemoryObservationExtractionTests(unittest.TestCase):
             data_dir = Path(temp_dir)
             payload = store_observation_with_memory(data_dir, observation)
             match_id = payload["match_id"]
-            encoded_events = (data_dir / "matches" / match_id / "memory_events.jsonl").read_text(encoding="utf-8")
-            encoded_projection = (data_dir / "matches" / match_id / "match_memory_projection.json").read_text(encoding="utf-8")
-            encoded = encoded_events + encoded_projection
+            storage = JsonStorage(data_dir)
+            encoded = json.dumps(
+                {
+                    "events": storage.read_jsonl(Path("matches") / match_id / "memory_events.jsonl"),
+                    "projection": storage.read_json(
+                        Path("matches") / match_id / "match_memory_projection.json",
+                        expected_schema_version=1,
+                    ),
+                },
+                ensure_ascii=False,
+            )
 
             self.assertNotIn("It was. What are you up to this weekend?", encoded)
             self.assertNotIn("That concert photo looks fun.", encoded)
@@ -413,9 +423,9 @@ class MemoryRebuildTests(unittest.TestCase):
                 confidence="high",
                 requires_user_confirmation=False,
             )
-            bad_dir = data_dir / "matches" / "match_bad"
-            bad_dir.mkdir(parents=True)
-            (bad_dir / "observations.json").write_text("{broken", encoding="utf-8")
+            storage = JsonStorage(data_dir)
+            bad_observations_path = Path("matches/match_bad/observations.json")
+            storage.write_json(bad_observations_path, {"schema_version": 1, "observations": []})
             index = {
                 "schema_version": 1,
                 "matches": [
@@ -423,9 +433,21 @@ class MemoryRebuildTests(unittest.TestCase):
                     {"match_id": "match_bad", "display_name": "Bad", "observation_ids": ["bad"]},
                 ],
             }
-            (data_dir / "matches" / "index.json").write_text(json.dumps(index), encoding="utf-8")
+            storage.write_json(Path("matches/index.json"), index)
 
-            exit_code, payload, _ = self._run(["memory", "rebuild", "--data-dir", str(data_dir), "--all"])
+            original_read_json = JsonStorage.read_json
+
+            def read_with_corrupt_match(storage_self, relative_path, *, expected_schema_version):
+                if relative_path == bad_observations_path:
+                    raise StorageCorruptionError("corrupt JSON: matches/match_bad/observations.json")
+                return original_read_json(
+                    storage_self,
+                    relative_path,
+                    expected_schema_version=expected_schema_version,
+                )
+
+            with patch.object(JsonStorage, "read_json", read_with_corrupt_match):
+                exit_code, payload, _ = self._run(["memory", "rebuild", "--data-dir", str(data_dir), "--all"])
             results = {item["match_id"]: item for item in payload["matches"]}
             index_records = MatchRepository(data_dir).list_match_candidates()
 
@@ -437,7 +459,7 @@ class MemoryRebuildTests(unittest.TestCase):
             self.assertEqual(results["match_bad"]["status"], "error")
             self.assertIn("corrupt", results["match_bad"]["reason"])
             self.assertIsNotNone(MemoryRepository(data_dir).load_projection("match_good"))
-            self.assertFalse((bad_dir / "match_memory_projection.json").exists())
+            self.assertFalse(storage.exists(Path("matches/match_bad/match_memory_projection.json")))
             self.assertEqual([record["match_id"] for record in index_records], ["match_good", "match_bad"])
 
     def test_rebuild_all_reports_malformed_observation_without_aborting_batch(self):
@@ -452,11 +474,10 @@ class MemoryRebuildTests(unittest.TestCase):
                 confidence="high",
                 requires_user_confirmation=False,
             )
-            bad_dir = data_dir / "matches" / "match_bad"
-            bad_dir.mkdir(parents=True)
-            (bad_dir / "observations.json").write_text(
-                json.dumps({"schema_version": 1, "observations": [{}]}),
-                encoding="utf-8",
+            storage = JsonStorage(data_dir)
+            storage.write_json(
+                Path("matches/match_bad/observations.json"),
+                {"schema_version": 1, "observations": [{}]},
             )
 
             exit_code, payload, text = self._run(["memory", "rebuild", "--data-dir", str(data_dir), "--all"])
@@ -469,7 +490,7 @@ class MemoryRebuildTests(unittest.TestCase):
             self.assertIn("observation_id", results["match_bad"]["reason"])
             self.assertEqual(results["match_good"]["status"], "ok")
             self.assertIsNotNone(MemoryRepository(data_dir).load_projection("match_good"))
-            self.assertFalse((bad_dir / "match_memory_projection.json").exists())
+            self.assertFalse(storage.exists(Path("matches/match_bad/match_memory_projection.json")))
 
     def _run(self, argv: list[str]) -> tuple[int, dict, str]:
         output = StringIO()
@@ -1361,7 +1382,7 @@ class MemoryPrivacyCliTests(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertEqual(payload["status"], "error")
             self.assertIn("sqlite cleanup failed", payload["reason"])
-            self.assertTrue((data_dir / "matches" / match_id / "memory_events.jsonl").exists())
+            self.assertTrue(JsonStorage(data_dir).exists(Path("matches") / match_id / "memory_events.jsonl"))
 
     def _write_json(self, directory: Path, name: str, payload: dict) -> Path:
         path = directory / name

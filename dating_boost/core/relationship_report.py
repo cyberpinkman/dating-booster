@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.storage import JsonStorage
+
 
 RELATIONSHIP_PROGRESS_REPORT_SCHEMA_VERSION = 1
 RELATIONSHIP_PROGRESS_NEXT_ACTION = "present_relationship_progress_report"
@@ -17,11 +19,12 @@ def build_relationship_progress_report(
 ) -> dict[str, Any]:
     human_path = _resolve_report_path(data_dir, human_report_path)
     machine_path = _resolve_report_path(data_dir, machine_report_path) if machine_report_path is not None else None
+    markdown = _read_report_markdown(data_dir, human_path)
     return {
         "schema_version": RELATIONSHIP_PROGRESS_REPORT_SCHEMA_VERSION,
         "report_type": "relationship_progress",
         "format": "markdown",
-        "markdown": human_path.read_text(encoding="utf-8") if human_path.exists() else "",
+        "markdown": markdown,
         "human_report_path": str(human_path),
         "machine_report_path": str(machine_path) if machine_path is not None else None,
         "summary": dict(summary or {}),
@@ -34,3 +37,17 @@ def _resolve_report_path(data_dir: Path, path: Path | str) -> Path:
     if report_path.is_absolute():
         return report_path
     return (data_dir / report_path).resolve()
+
+
+def _read_report_markdown(data_dir: Path, human_path: Path) -> str:
+    if human_path.exists():
+        return human_path.read_text(encoding="utf-8")
+    try:
+        relative_path = human_path.relative_to(data_dir.resolve())
+    except ValueError:
+        return ""
+    try:
+        payload = JsonStorage(data_dir).read_json(relative_path, expected_schema_version=1)
+    except FileNotFoundError:
+        return ""
+    return str(payload.get("markdown") or "")

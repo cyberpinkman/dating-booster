@@ -183,6 +183,8 @@ class SupportLogRepository:
         return stopped
 
     def active_session(self) -> dict[str, Any] | None:
+        if not self.store.db_path.exists():
+            return None
         try:
             active = self.store.get_document(ACTIVE_SESSION_PATH)
         except Exception:  # noqa: BLE001 - support logging must never break primary commands.

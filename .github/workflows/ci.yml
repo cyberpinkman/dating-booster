@@ -27,8 +27,20 @@ jobs:
           pip install -e .[test]
       - name: Packaging smoke
         run: python -m build
+      - name: Installed wheel smoke
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/dating-booster-wheel-smoke"
+          "$RUNNER_TEMP/dating-booster-wheel-smoke/bin/python" -m pip install "$GITHUB_WORKSPACE"/dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/dating-booster-wheel-smoke/bin/dating-boost" capabilities --json --data-dir "$RUNNER_TEMP/wheel-smoke-data" > "$RUNNER_TEMP/wheel-capabilities.json"
+          "$RUNNER_TEMP/dating-booster-wheel-smoke/bin/python" -c 'import json, pathlib; payload=json.loads(pathlib.Path("wheel-capabilities.json").read_text()); assert set(payload["agent_native_capabilities"]["supported_app_profiles"]) == {"bumble", "tashuo", "tinder", "wechat"}'
+      - name: Static quality
+        run: |
+          python -m ruff check dating_boost tests scripts
+          python -m mypy
       - name: Pytest
-        run: python -m pytest
+        run: python -m pytest --cov=dating_boost --cov-report=term --cov-fail-under=60
       - name: Whitespace
         run: git diff --check
       - name: Agent-native smoke

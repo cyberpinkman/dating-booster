@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dating_boost.cli import main
 from dating_boost.core.planner import PlannerRepository
+from dating_boost.core.storage import JsonStorage
 from dating_boost.perception.observations import AppObservation
 
 
@@ -56,7 +57,7 @@ class PlannerCoreTests(unittest.TestCase):
             self.assertEqual(plan["scores"]["topic_saturation"], 76)
             self.assertEqual(plan["plan_revision"], 1)
             self.assertEqual(plan["last_observation_id"], "obs_cat_001")
-            self.assertTrue((data_dir / "matches" / "match_xiaoqing" / "goal_plan.json").exists())
+            self.assertTrue(JsonStorage(data_dir).exists(Path("matches/match_xiaoqing/goal_plan.json")))
 
             events = PlannerRepository(data_dir).event_log("match_xiaoqing")
             self.assertEqual(len(events), 1)

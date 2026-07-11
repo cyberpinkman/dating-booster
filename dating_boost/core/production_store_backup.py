@@ -288,6 +288,10 @@ class ProductionStoreBackupMixin:
         except Exception:
             self._cipher.provider.store_key(old_key)
             raise
+        with self._connect() as conn:
+            checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if checkpoint is not None and int(checkpoint[0]) != 0:
+            raise RuntimeError("rekey_wal_checkpoint_busy")
         return {
             "schema_version": DATA_STORE_SCHEMA_VERSION,
             "status": "ok",

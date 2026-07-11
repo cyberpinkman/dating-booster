@@ -436,13 +436,10 @@ class AutomationRepository:
 
     def _latest_machine_report_path(self) -> Path | None:
         path = Path("automation") / "reports" / "machine_latest.json"
-        absolute = (self._storage.root / path).resolve()
-        return path if absolute.exists() else None
+        return path if self._storage.exists(path) else None
 
     def _write_text(self, relative_path: Path, text: str) -> None:
-        path = (self._storage.root / relative_path).resolve()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        self._storage.write_json(relative_path, {"schema_version": 1, "markdown": text})
 
     def _store_observation(self, observation: AppObservation) -> dict[str, Any]:
         return store_observation_with_memory(self.root, observation)

@@ -11,10 +11,22 @@ classifiers = [
 
 [project.optional-dependencies]
 models = ["openai>=2,<3"]
-test = ["pytest>=8", "jsonschema>=4,<5"]
+test = [
+    "jsonschema>=4,<5",
+    "mypy>=1.13,<2",
+    "pytest>=8",
+    "pytest-cov>=5,<8",
+    "ruff>=0.9,<1",
+]
 
 [dependency-groups]
-dev = ["pytest>=8", "jsonschema>=4,<5"]
+dev = [
+    "jsonschema>=4,<5",
+    "mypy>=1.13,<2",
+    "pytest>=8",
+    "pytest-cov>=5,<8",
+    "ruff>=0.9,<1",
+]
 
 [project.scripts]
 dating-boost = "dating_boost.cli:main"
@@ -29,6 +41,8 @@ license-files = ["LICENSE"]
 
 [tool.setuptools.package-data]
 dating_boost = [
+    "resources/app_profiles/*.json",
+    "resources/schemas/*.json",
     "resources/agent_adapters/claude-code/adapter-package.json",
     "resources/agent_adapters/claude-code/README.md",
     "resources/agent_adapters/claude-code/INSTALL.md",
@@ -51,3 +65,23 @@ dating_boost = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 140
+extend-exclude = ["dating_boost/resources"]
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.mypy]
+python_version = "3.11"
+files = [
+    "dating_boost/apps/registry.py",
+    "dating_boost/core/operator.py",
+    "dating_boost/core/storage.py",
+]
+check_untyped_defs = true
+no_implicit_optional = true
+warn_unused_configs = true
+follow_imports = "skip"

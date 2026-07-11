@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from dating_boost.core.storage import JsonStorage
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -47,8 +49,12 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
             self.assertTrue(Path(payload["artifacts"]["data_export"]).exists())
             self.assertTrue(Path(payload["artifacts"]["host_loop_stage_support_bundle"]).exists())
             self.assertTrue(Path(payload["host_loop_fixture_stage"]["staged_verification"]).exists())
-            self.assertTrue((data_dir / "audit" / "action_results.jsonl").exists())
-            self.assertTrue((data_dir / "matches" / payload["match_id"] / "feedback_events.jsonl").exists())
+            self.assertTrue(JsonStorage(data_dir).exists(Path("audit/action_results.jsonl")))
+            self.assertTrue(
+                JsonStorage(data_dir).exists(
+                    Path("matches") / payload["match_id"] / "feedback_events.jsonl"
+                )
+            )
 
     def test_smoke_script_default_data_dir_keeps_artifacts_after_exit(self):
         data_dir = ROOT / ".local" / "dating-boost-smoke"
@@ -68,7 +74,7 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
             self.assertTrue(payload["production_smoke"])
             self.assertEqual(payload["data_dir"], str(data_dir.resolve()))
             self.assertTrue(Path(payload["artifacts"]["context"]).exists())
-            self.assertTrue(Path(payload["artifacts"]["action_audit"]).exists())
+            self.assertTrue(JsonStorage(data_dir).exists(Path("audit/action_results.jsonl")))
             self.assertTrue(Path(payload["artifacts"]["host_loop_stage_export"]).exists())
             self.assertTrue(Path(payload["artifacts"]["host_loop_stage_support_bundle"]).exists())
         finally:

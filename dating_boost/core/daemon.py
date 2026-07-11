@@ -103,18 +103,15 @@ class DaemonRepository:
             raise
 
     def status(self) -> dict[str, Any]:
-        path = self.root / DAEMON_STATE_PATH
-        state = (
-            self._storage.read_json(DAEMON_STATE_PATH, expected_schema_version=DAEMON_STATE_SCHEMA_VERSION)
-            if path.exists()
-            else {
+        state = self._read_state()
+        if state is None:
+            state = {
                 "schema_version": DAEMON_STATE_SCHEMA_VERSION,
                 "status": "not_installed",
                 "owner": None,
                 "heartbeat_at": None,
                 "stop_reason": None,
             }
-        )
         return {"schema_version": DAEMON_STATE_SCHEMA_VERSION, "status": "ok", "state": state}
 
     def stop(self, *, now: str, wait_timeout_seconds: float | None = None) -> dict[str, Any]:
@@ -240,18 +237,16 @@ class DaemonRepository:
         )
 
     def _stop_requested(self) -> bool:
-        return (self.root / DAEMON_STOP_PATH).exists()
+        return self._storage.exists(DAEMON_STOP_PATH)
 
     def _clear_stop_request(self) -> None:
-        path = self.root / DAEMON_STOP_PATH
-        if path.exists():
-            path.unlink()
+        self._storage.delete_json(DAEMON_STOP_PATH)
 
     def _read_state(self) -> dict[str, Any] | None:
-        path = self.root / DAEMON_STATE_PATH
-        if not path.exists():
+        try:
+            return self._storage.read_json(DAEMON_STATE_PATH, expected_schema_version=DAEMON_STATE_SCHEMA_VERSION)
+        except FileNotFoundError:
             return None
-        return self._storage.read_json(DAEMON_STATE_PATH, expected_schema_version=DAEMON_STATE_SCHEMA_VERSION)
 
     def _wait_for_stop_ack(
         self,
