@@ -641,6 +641,46 @@ class GuiHarnessSharedTests(GuiHarnessTestCase):
         self.assertEqual(result["step_index"], 1)
         self.assertEqual(result["step"], "not-a-step")
 
+    def test_execute_planned_steps_reports_tinder_paywall_recovery_after_action(self):
+        harness = create_adapter(app_id="tinder", platform="darwin", runner=FakeRunner(ocr_text="Tinder\nMessages\n"))
+        session = harness.session
+        payload = {
+            **harness._base_payload("ok"),
+            "action": "read-profile",
+            "mode": "execute",
+            "planned_steps": [],
+            "blocked_actions": [],
+        }
+        doctor = {
+            "status": "ok",
+            "screen": {"state": "tinder_messages"},
+            "window": {
+                "frontmost": True,
+                "x": 0,
+                "y": 0,
+                "width": 300,
+                "height": 600,
+                "name": "iPhone Mirroring",
+            },
+        }
+        paywall_screen = {"status": "ok", "state": "tinder_subscription_paywall", "text": ""}
+        recovery = {"status": "ok", "verification": {"state": "tinder_messages"}}
+
+        with (
+            patch.object(session, "doctor", return_value=doctor),
+            patch.object(session, "capture_window", return_value=paywall_screen),
+            patch.object(session, "_dismiss_tinder_subscription_paywall", return_value=recovery),
+        ):
+            try:
+                result = session._execute_planned_steps(payload)
+            except NameError as exc:
+                self.fail(f"after-action paywall recovery raised NameError: {exc}")
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["reason"], "tinder_subscription_paywall_dismissed")
+        self.assertEqual(result["subscription_paywall_recovery"], recovery)
+        self.assertEqual(result["next_host_action"], "navigate_to_verified_tinder_conversation_and_retry_send")
+
     def test_profile_read_workflow_reports_redacted_field_coverage_from_step_captures(self):
         runner = FakeRunner(
             ocr_text=[

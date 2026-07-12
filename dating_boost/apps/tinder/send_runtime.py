@@ -48,6 +48,9 @@ from dating_boost.apps.iphone_targeting import (
     _iphone_already_sent_idempotency_allowed, _iphone_stage_needs_user_verification, _iphone_stage_draft_payload_update, _iphone_pre_stage_input_guard,
     _verify_outbound_message, _screen_region_stats,
 )
+from dating_boost.apps.tinder_paywall_recovery import (
+    apply_tinder_paywall_recovery_result as _apply_tinder_paywall_recovery_result,
+)
 
 def stage_tinder_draft(
     self,
@@ -1076,16 +1079,3 @@ def _tinder_send_button_visual_visible(screen: dict[str, Any]) -> bool:
         return False
     stats = _region_stats_for_send_button(pixels, 0.87, 0.90, 0.96, 0.98)
     return stats["color_ratio"] > 0.08 and stats["mid_ratio"] > 0.08
-
-def _apply_tinder_paywall_recovery_result(payload: dict[str, Any], recovery: dict[str, Any]) -> None:
-    payload["subscription_paywall_recovery"] = recovery
-    payload["next_host_action"] = "navigate_to_verified_tinder_conversation_and_retry_send"
-    if recovery.get("status") == "ok":
-        payload.update({"status": "blocked", "reason": "tinder_subscription_paywall_dismissed"})
-    else:
-        payload.update(
-            {
-                "status": "blocked",
-                "reason": recovery.get("reason") or "tinder_subscription_paywall_recovery_failed",
-            }
-        )

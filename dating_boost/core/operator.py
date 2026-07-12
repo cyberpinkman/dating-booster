@@ -186,15 +186,15 @@ class OperatorRepository:
         else:
             work_items = new_work_items
         self._write_work_queue(work_items)
-        work_item = self._pop_next_work_item(session)
-        if work_item is None:
-            work_item = {
+        next_work_item = self._pop_next_work_item(session)
+        if next_work_item is None:
+            next_work_item = {
                 "schema_version": 1,
                 "work_item_id": f"work_wait_{session['session_id']}",
                 "work_item_type": "wait",
                 "reason": "no_eligible_operator_work",
             }
-        payload = self._work_payload(work_item, decision=decision)
+        payload = self._work_payload(next_work_item, decision=decision)
         return payload
 
     def ingest_observation(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -246,23 +246,27 @@ class OperatorRepository:
 
         if observation_type == "thread":
             candidate_key = _candidate_key_from_thread_payload(payload)
-            scan_batch = self._load_pending_scan_batch()
-            if scan_batch is None:
-                scan_batch = _scan_batch_from_current_thread_payload(payload, session_id=session["session_id"], candidate_key=candidate_key)
+            thread_scan_batch = self._load_pending_scan_batch()
+            if thread_scan_batch is None:
+                thread_scan_batch = _scan_batch_from_current_thread_payload(
+                    payload,
+                    session_id=session["session_id"],
+                    candidate_key=candidate_key,
+                )
             thread = {key: value for key, value in payload.items() if key not in {"schema_version", "observation_type"}}
             thread["candidate_key"] = candidate_key
             existing = [
                 item
-                for item in scan_batch.get("thread_observations", [])
+                for item in thread_scan_batch.get("thread_observations", [])
                 if item.get("candidate_key") != candidate_key
             ]
             existing.append(thread)
-            scan_batch["thread_observations"] = existing
-            entries = scan_batch.setdefault("message_list_snapshot", {}).setdefault("entries", [])
+            thread_scan_batch["thread_observations"] = existing
+            entries = thread_scan_batch.setdefault("message_list_snapshot", {}).setdefault("entries", [])
             if not any(isinstance(entry, dict) and entry.get("candidate_key") == candidate_key for entry in entries):
                 entries.append(_message_list_entry_from_thread_payload(payload, candidate_key=candidate_key))
-            _validate_or_raise(scan_batch)
-            self._write_pending_scan_batch(scan_batch)
+            _validate_or_raise(thread_scan_batch)
+            self._write_pending_scan_batch(thread_scan_batch)
             self._clear_work_queue_file()
             self._clear_current_work_item(
                 session,
@@ -739,7 +743,7 @@ def _confirmed_outbound_payload_messages(event: dict[str, Any], work_item: dict[
             confirmed.append(message)
         return confirmed
 
-    evidence = event.get("evidence") if isinstance(event.get("evidence"), dict) else {}
+    evidence = _dict_or_empty(event.get("evidence"))
     expected_text = "\n".join(str(message.get("text") or "") for message in payload_messages)
     observed_text = str(
         evidence.get("post_send_visible_text")
@@ -895,13 +899,17 @@ def _normalize_scan_cursor(value: Any) -> dict[str, Any]:
     return {"current": value, "next": None, "exhausted": False}
 
 
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _candidate_key_from_thread_payload(payload: dict[str, Any]) -> str:
     value = payload.get("candidate_key")
     if isinstance(value, str) and value.strip():
         return value.strip()
-    observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
-    hints = observation.get("match_identity_hints") if isinstance(observation.get("match_identity_hints"), dict) else {}
-    assessment = payload.get("assessment") if isinstance(payload.get("assessment"), dict) else {}
+    observation = _dict_or_empty(payload.get("observation"))
+    hints = _dict_or_empty(observation.get("match_identity_hints"))
+    assessment = _dict_or_empty(payload.get("assessment"))
     visible_name = str(hints.get("visible_name") or "current_thread").strip() or "current_thread"
     fingerprint = str(
         assessment.get("latest_inbound_fingerprint")
@@ -915,9 +923,9 @@ def _candidate_key_from_thread_payload(payload: dict[str, Any]) -> str:
 
 
 def _message_list_entry_from_thread_payload(payload: dict[str, Any], *, candidate_key: str) -> dict[str, Any]:
-    observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
-    hints = observation.get("match_identity_hints") if isinstance(observation.get("match_identity_hints"), dict) else {}
-    assessment = payload.get("assessment") if isinstance(payload.get("assessment"), dict) else {}
+    observation = _dict_or_empty(payload.get("observation"))
+    hints = _dict_or_empty(observation.get("match_identity_hints"))
+    assessment = _dict_or_empty(payload.get("assessment"))
     visible_name = str(hints.get("visible_name") or candidate_key)
     latest_preview = str(assessment.get("latest_match_message") or assessment.get("latest_user_message") or "")
     return {
@@ -944,7 +952,7 @@ def _scan_batch_from_current_thread_payload(
     session_id: str,
     candidate_key: str,
 ) -> dict[str, Any]:
-    observation = payload.get("observation") if isinstance(payload.get("observation"), dict) else {}
+    observation = _dict_or_empty(payload.get("observation"))
     scan_batch = {
         "schema_version": 1,
         "session_id": payload.get("session_id") or session_id,

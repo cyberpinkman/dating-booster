@@ -272,11 +272,31 @@ class TaShuoStageBetaTests(unittest.TestCase):
         self.assertEqual(payload["runtime_scope"]["selected_runtime"], "mac-ios-app")
         self.assertEqual(payload["run_summary"]["runs_passed"], 20)
 
+    def test_beta_readiness_returns_blocked_payload_when_user_profile_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            env_file = root / ".env"
+            env_file.write_text("MINIMAX_API_KEY=test\n", encoding="utf-8")
+            with (
+                patch.object(beta.UserDisclosureRepository, "readiness", return_value={"ready": False, "reason": "needs_user_profile"}),
+                patch.object(beta.RuntimeScopeRepository, "read", return_value=None),
+                patch.object(beta.SafetyRepository, "status", return_value={"paused": False, "reason": None}),
+                patch.object(beta.ProductionDataStore, "doctor", return_value={"status": "ok", "schema_version": 2}),
+            ):
+                try:
+                    payload = beta.beta_readiness(data_dir=root / "data", env_file=env_file)
+                except NameError as exc:
+                    self.fail(f"beta_readiness raised NameError: {exc}")
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "needs_user_profile")
+        self.assertFalse(payload["ready"])
+
     def test_beta_start_blocks_live_send_authorization_before_preflight(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             auth = _write_json(root / "auth.json", _stage_beta_auth(live_send=True))
-            with patch.object(beta.subprocess, "run") as mocked_run:
+            with patch.object(beta, "_subprocess_run") as mocked_run:
                 payload = beta.start_tashuo_stage_beta(
                     data_dir=root / "data",
                     authorization_path=auth,
@@ -401,7 +421,7 @@ class TaShuoStageBetaTests(unittest.TestCase):
                 JsonStorage(data_dir).write_jsonl(Path("audit") / "stage_results.jsonl", [_stage_result()])
                 return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_gate_payload()), stderr="")
 
-            with patch.object(beta.subprocess, "run", side_effect=fake_run):
+            with patch.object(beta, "_subprocess_run", side_effect=fake_run):
                 payload = beta.run_tashuo_stage_beta(data_dir=data_dir, env_file=env_file)
 
             self.assertEqual(payload["status"], "ok")
@@ -443,7 +463,7 @@ class TaShuoStageBetaTests(unittest.TestCase):
                 )
                 return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_gate_payload()), stderr="")
 
-            with patch.object(beta.subprocess, "run", side_effect=fake_run):
+            with patch.object(beta, "_subprocess_run", side_effect=fake_run):
                 payload = beta.run_tashuo_stage_beta(data_dir=data_dir, env_file=env_file)
 
             self.assertEqual(payload["status"], "blocked")
@@ -487,7 +507,7 @@ class TaShuoStageBetaTests(unittest.TestCase):
                     return {"status": "ok", "output": str(output), "redaction": "strict"}
                 return {"status": "ok"}
 
-            with patch.object(beta.subprocess, "run", side_effect=fake_run):
+            with patch.object(beta, "_subprocess_run", side_effect=fake_run):
                 run_payload = beta.run_tashuo_stage_beta(data_dir=data_dir, env_file=env_file)
             with patch.object(beta, "_run_cli", side_effect=fake_run_cli):
                 stop_payload = beta.stop_tashuo_stage_beta(data_dir=data_dir, env_file=env_file)

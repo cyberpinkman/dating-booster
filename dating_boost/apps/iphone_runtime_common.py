@@ -37,6 +37,9 @@ from dating_boost.apps.iphone_targeting_common import (
     DEFAULT_POST_ACTION_OBSERVATION_DELAY_SECONDS, IPHONE_MESSAGE_LIST_BOTTOM_NAV_TOP_RATIO, IPHONE_MESSAGE_LIST_BOTTOM_ROW_SAFE_TAP_Y, IPHONE_CURRENT_THREAD_VISUAL_ANCHOR_REGION,
     IPHONE_CURRENT_THREAD_VISUAL_ANCHOR_MAX_DISTANCE, IPHONE_TARGET_RELOCATION_MAX_ATTEMPTS,
 )
+from dating_boost.apps.tinder_paywall_recovery import (
+    apply_tinder_paywall_recovery_result as _apply_tinder_paywall_recovery_result,
+)
 
 def capture_window(
     self,

@@ -3,11 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from subprocess import TimeoutExpired, run as _subprocess_run
 from typing import Any
 
 from dating_boost import __version__
@@ -128,9 +128,6 @@ def beta_readiness(
         and model_backend["api_key_present"] is True
         and data_doctor.get("status") == "ok"
     )
-    run_blocked_count = len(failed_runs) + (0 if audit_summary["complete"] else 1)
-    if run_payload.get("status") == "blocked" and not failed_runs and audit_summary["complete"]:
-        run_blocked_count += 1
     return {
         "schema_version": BETA_SCHEMA_VERSION,
         "status": "ok" if ready else "blocked",
@@ -832,7 +829,7 @@ def _run_cli(
 
 def _run_system_json(cmd: list[str], *, env: dict[str, str], timeout: float) -> dict[str, Any]:
     try:
-        result = subprocess.run(
+        result = _subprocess_run(
             cmd,
             cwd=ROOT,
             check=False,
@@ -841,7 +838,7 @@ def _run_system_json(cmd: list[str], *, env: dict[str, str], timeout: float) -> 
             env=env,
             timeout=timeout,
         )
-    except subprocess.TimeoutExpired as exc:
+    except TimeoutExpired as exc:
         return {
             "returncode": 124,
             "payload": {
