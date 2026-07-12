@@ -95,6 +95,9 @@ def _append_send_action_request(
     )
     if isinstance(target_binding, dict):
         action_request["target_binding"] = dict(target_binding)
+    provider_identity = raw_draft.get("provider_response_identity")
+    if isinstance(provider_identity, dict):
+        action_request["provider_response_identity"] = dict(provider_identity)
     action_requests.append(action_request)
     _apply_send_request_state(
         state,

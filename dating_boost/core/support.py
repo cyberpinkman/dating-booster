@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -91,6 +92,7 @@ SAFE_STRING_KEYS = {
     "mode",
     "next_host_action",
     "page",
+    "phase",
     "reason",
     "redaction",
     "risk",
@@ -134,9 +136,19 @@ class SupportLogRepository:
         self.root = root.resolve()
         self.store = ProductionDataStore(self.root)
 
-    def start_session(self, *, host: str, app_id: str) -> dict[str, Any]:
+    def start_session(
+        self,
+        *,
+        host: str,
+        app_id: str,
+        owner: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         if host not in HOSTS:
             return _blocked("unsupported_host_agent", supported_hosts=sorted(HOSTS))
+        try:
+            support_owner = _normalize_support_owner(owner)
+        except ValueError:
+            return _blocked("support_session_owner_invalid")
         ready = self._ensure_ready()
         if ready.get("status") != "ok":
             return ready
@@ -152,9 +164,21 @@ class SupportLogRepository:
             "stopped_at": None,
             "sensitive_evidence_vault": "encrypted_sqlite",
             "default_bundle_redaction": "strict",
+            "support_owner": support_owner,
         }
-        self.store.upsert_document(_session_path(session_id), session)
-        self.store.upsert_document(ACTIVE_SESSION_PATH, session)
+        with self.store._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            active = _tx_read_document(conn, self.store, ACTIVE_SESSION_PATH)
+            if active and active.get("status") == "active":
+                if (
+                    active.get("support_owner") == support_owner
+                    and active.get("host_agent") == host
+                    and active.get("app_id") == app_id
+                ):
+                    return {**active, "status": "active", "reused": True}
+                return _blocked("support_session_owner_conflict")
+            _tx_write_document(conn, self.store, _session_path(session_id), session)
+            _tx_write_document(conn, self.store, ACTIVE_SESSION_PATH, session)
         self._append_event(
             session_id,
             event_type="support_session_started",
@@ -162,23 +186,42 @@ class SupportLogRepository:
                 "host_agent": host,
                 "app_id": app_id,
                 "sensitive_evidence_vault": "encrypted_sqlite",
+                "support_owner": support_owner,
             },
         )
         return {**session, "status": "active"}
 
-    def stop_session(self, *, session_id: str) -> dict[str, Any]:
+    def stop_session(
+        self,
+        *,
+        session_id: str,
+        owner: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         ready = self._ensure_ready()
         if ready.get("status") != "ok":
             return ready
-        session = self.store.get_document(_session_path(session_id))
-        if not session:
-            return _blocked("support_session_not_found", session_id=session_id)
-        now = _now_iso()
-        stopped = {**session, "status": "stopped", "stopped_at": now}
-        self.store.upsert_document(_session_path(session_id), stopped)
-        active = self.store.get_document(ACTIVE_SESSION_PATH)
-        if active and active.get("session_id") == session_id:
-            self.store.upsert_document(ACTIVE_SESSION_PATH, stopped)
+        try:
+            requested_owner = _normalize_support_owner(owner)
+        except ValueError:
+            return _blocked("support_session_owner_invalid")
+        with self.store._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            session = _tx_read_document(conn, self.store, _session_path(session_id))
+            if not session:
+                return _blocked("support_session_not_found", session_id=session_id)
+            stored_owner = session.get("support_owner")
+            if stored_owner is not None and requested_owner is None:
+                return _blocked("support_session_owner_required")
+            if stored_owner != requested_owner:
+                return _blocked("support_session_owner_mismatch")
+            active = _tx_read_document(conn, self.store, ACTIVE_SESSION_PATH)
+            if active and active.get("status") == "active" and active.get("session_id") != session_id:
+                return _blocked("support_session_owner_conflict")
+            now = _now_iso()
+            stopped = {**session, "status": "stopped", "stopped_at": now}
+            _tx_write_document(conn, self.store, _session_path(session_id), stopped)
+            if active and active.get("session_id") == session_id:
+                _tx_write_document(conn, self.store, ACTIVE_SESSION_PATH, stopped)
         self._append_event(session_id, event_type="support_session_stopped", payload={"stopped_at": now})
         return stopped
 
@@ -192,6 +235,15 @@ class SupportLogRepository:
         if not active or active.get("status") != "active":
             return None
         return active
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        if not isinstance(session_id, str) or not session_id.strip():
+            return None
+        try:
+            session = self.store.get_document(_session_path(session_id))
+        except Exception:  # noqa: BLE001 - support reads must fail closed at the caller.
+            return None
+        return dict(session) if isinstance(session, dict) else None
 
     def record_event(
         self,
@@ -320,16 +372,23 @@ class SupportLogRepository:
             "contains_sensitive_text": manifest["contains_sensitive_text"],
         }
 
-    def record_command_started(self, argv: list[str]) -> SupportCommandEvent | None:
-        active = self.active_session()
+    def record_command_started(
+        self,
+        argv: list[str],
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> SupportCommandEvent | None:
+        active = self._session_for_command_context(context)
         if not active:
             return None
+        context_payload = _command_context_payload(context)
         event = self._append_event(
             str(active["session_id"]),
             event_type="command_started",
             payload={
                 "argv_redacted": redact_argv(argv),
                 "command": _command_name(argv),
+                **context_payload,
             },
         )
         return SupportCommandEvent(session_id=str(active["session_id"]), event_id=str(event["event_id"]))
@@ -358,6 +417,132 @@ class SupportLogRepository:
             )
         except Exception:
             return
+
+    def record_command_interrupted(
+        self,
+        command_event: SupportCommandEvent | None,
+        *,
+        argv: list[str],
+        reason: str,
+    ) -> None:
+        if command_event is None:
+            return
+        try:
+            self._append_event(
+                command_event.session_id,
+                event_type="command_interrupted",
+                payload={
+                    "argv_redacted": redact_argv(argv),
+                    "command": _command_name(argv),
+                    "started_event_id": command_event.event_id,
+                    "reason": reason,
+                },
+            )
+        except Exception:
+            return
+
+    def validate_command_coverage(
+        self,
+        *,
+        session_id: str,
+        required_context_ids: list[str],
+    ) -> dict[str, Any]:
+        events = [
+            item["payload"]
+            for item in self.store.list_audit_events(stream=_events_stream(session_id))
+            if isinstance(item.get("payload"), dict)
+        ]
+        starts: dict[str, list[str]] = {}
+        terminals: dict[str, int] = {}
+        for event in events:
+            if event.get("event_type") == "command_started":
+                payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                context_id = str(payload.get("attempt_id") or payload.get("probe_id") or "")
+                if context_id:
+                    starts.setdefault(context_id, []).append(str(event.get("event_id") or ""))
+            elif event.get("event_type") in {"command_finished", "command_interrupted"}:
+                payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                started_event_id = str(payload.get("started_event_id") or "")
+                if started_event_id:
+                    terminals[started_event_id] = terminals.get(started_event_id, 0) + 1
+        missing: list[str] = []
+        for context_id in sorted(set(required_context_ids) | set(starts)):
+            event_ids = starts.get(context_id, [])
+            if len(event_ids) != 1 or terminals.get(event_ids[0], 0) != 1:
+                missing.append(context_id)
+        return {
+            "schema_version": SUPPORT_LOG_SCHEMA_VERSION,
+            "valid": not missing,
+            "reason": None if not missing else "support_command_coverage_incomplete",
+            "missing_context_ids": missing,
+        }
+
+    def reconcile_interrupted_context(
+        self,
+        *,
+        session_id: str,
+        context_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        events = [
+            item["payload"]
+            for item in self.store.list_audit_events(stream=_events_stream(session_id))
+            if isinstance(item.get("payload"), dict)
+        ]
+        starts: list[dict[str, Any]] = []
+        terminal_started_ids: set[str] = set()
+        for event in events:
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            if event.get("event_type") == "command_started":
+                current_id = str(payload.get("attempt_id") or payload.get("probe_id") or "")
+                if current_id == context_id:
+                    starts.append(event)
+            elif event.get("event_type") in {"command_finished", "command_interrupted"}:
+                started_event_id = str(payload.get("started_event_id") or "")
+                if started_event_id:
+                    terminal_started_ids.add(started_event_id)
+        unresolved = [event for event in starts if str(event.get("event_id") or "") not in terminal_started_ids]
+        if len(unresolved) > 1:
+            return _blocked("support_command_coverage_ambiguous", context_id=context_id)
+        if not unresolved:
+            return {"schema_version": SUPPORT_LOG_SCHEMA_VERSION, "status": "ok", "reconciled": False}
+        started = unresolved[0]
+        self._append_event(
+            session_id,
+            event_type="command_interrupted",
+            payload={
+                "argv_redacted": ["qualification", "recovery"],
+                "command": "qualification",
+                "started_event_id": started.get("event_id"),
+                "reason": reason,
+            },
+        )
+        return {
+            "schema_version": SUPPORT_LOG_SCHEMA_VERSION,
+            "status": "ok",
+            "reconciled": True,
+            "started_event_id": started.get("event_id"),
+        }
+
+    def _session_for_command_context(self, context: dict[str, Any] | None) -> dict[str, Any] | None:
+        if context is None:
+            return self.active_session()
+        session_id = context.get("support_session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return None
+        session = self.store.get_document(_session_path(session_id))
+        if not session or session.get("status") != "active":
+            return None
+        owner = session.get("support_owner")
+        if not isinstance(owner, dict):
+            return None
+        if owner.get("qualification_id") != context.get("qualification_id") or owner.get("phase") != context.get("phase"):
+            return None
+        attempt_id = context.get("attempt_id")
+        probe_id = context.get("probe_id")
+        if bool(attempt_id) == bool(probe_id):
+            return None
+        return session
 
     def _ensure_ready(self) -> dict[str, Any]:
         doctor = self.store.doctor()
@@ -656,3 +841,61 @@ def _command_name(argv: list[str]) -> str:
         if len(command) >= 3:
             break
     return " ".join(command)
+
+
+def _normalize_support_owner(owner: dict[str, str] | None) -> dict[str, str] | None:
+    if owner is None:
+        return None
+    if not isinstance(owner, dict):
+        raise ValueError("support owner must be an object")
+    qualification_id = owner.get("qualification_id")
+    phase = owner.get("phase")
+    if not isinstance(qualification_id, str) or not qualification_id.strip() or phase not in {"canary", "soak"}:
+        raise ValueError("support owner invalid")
+    return {"qualification_id": qualification_id, "phase": phase}
+
+
+def _command_context_payload(context: dict[str, Any] | None) -> dict[str, Any]:
+    if context is None:
+        return {}
+    return {
+        key: context[key]
+        for key in ("qualification_id", "phase", "attempt_id", "probe_id")
+        if key in context
+    }
+
+
+def _tx_read_document(
+    conn: sqlite3.Connection,
+    store: ProductionDataStore,
+    path: str,
+) -> dict[str, Any] | None:
+    row = conn.execute("SELECT payload_json FROM documents WHERE path = ?", (path,)).fetchone()
+    if row is None:
+        return None
+    payload = store._decode_document(path, row["payload_json"])
+    return payload if isinstance(payload, dict) else None
+
+
+def _tx_write_document(
+    conn: sqlite3.Connection,
+    store: ProductionDataStore,
+    path: str,
+    payload: dict[str, Any],
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO documents (path, schema_version, payload_json, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET
+            schema_version = excluded.schema_version,
+            payload_json = excluded.payload_json,
+            updated_at = excluded.updated_at
+        """,
+        (
+            path,
+            payload.get("schema_version"),
+            store._encode_document(path, payload),
+            _now_iso(),
+        ),
+    )

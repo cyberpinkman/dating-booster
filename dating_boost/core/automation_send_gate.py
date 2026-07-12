@@ -263,6 +263,7 @@ def _queue_send_request_for_repository(
     )
     if prepared is None:
         return
+    before_count = len(action_requests)
     _append_send_action_request(
         action_requests=action_requests,
         warnings=warnings,
@@ -277,6 +278,13 @@ def _queue_send_request_for_repository(
         target_binding=target_binding,
         prepared=prepared,
     )
+    if len(action_requests) == before_count:
+        return
+    session = repository._load_session()
+    qualification_binding = session.get("qualification_binding")
+    if isinstance(qualification_binding, dict):
+        action_requests[-1]["qualification_binding"] = dict(qualification_binding)
+        state["qualification_binding"] = dict(qualification_binding)
 
 
 __all__ = [

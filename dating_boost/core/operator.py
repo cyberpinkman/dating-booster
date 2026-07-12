@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.qualification_binding import normalize_qualification_binding
 from dating_boost.core.action_audit import ActionAuditRepository
 from dating_boost.core.draft_evidence import ConversationThreadRepository, LatestTurnRepository
 from dating_boost.core.automation import (
@@ -43,6 +44,7 @@ class OperatorRepository:
         max_pages_per_cycle: int = DEFAULT_MAX_PAGES_PER_CYCLE,
         cycle_send_limit: int = DEFAULT_CYCLE_SEND_LIMIT,
         message_list_scan_boundary: dict[str, Any] | None = None,
+        qualification_binding: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if initial_surface not in INITIAL_SURFACES:
             raise ValueError("initial_surface must be message-list or current-thread")
@@ -53,7 +55,16 @@ class OperatorRepository:
             cycle_send_limit=cycle_send_limit,
             message_list_scan_boundary=message_list_scan_boundary,
         )
-        automation_session = self._automation.start_session(authorization, session_config=session_config)
+        normalized_qualification_binding = (
+            normalize_qualification_binding(qualification_binding)
+            if qualification_binding is not None
+            else None
+        )
+        automation_session = self._automation.start_session(
+            authorization,
+            session_config=session_config,
+            qualification_binding=normalized_qualification_binding,
+        )
         if automation_session.get("status") != "active":
             return {
                 "schema_version": 1,
@@ -81,6 +92,8 @@ class OperatorRepository:
             "next_scan_cursor": {"current": None, "next": None, "exhausted": False},
             "cycle_send_count": 0,
         }
+        if normalized_qualification_binding is not None:
+            session["qualification_binding"] = normalized_qualification_binding
         self._write_session(session)
         self._clear_current_work_file()
         self._clear_work_queue_file()
@@ -92,6 +105,11 @@ class OperatorRepository:
             "authorization_id": session["authorization_id"],
             "initial_surface": initial_surface,
             **session_config,
+            **(
+                {"qualification_binding": normalized_qualification_binding}
+                if normalized_qualification_binding is not None
+                else {}
+            ),
             "resumed_from_report": automation_session.get("resumed_from_report"),
             "memory_review": automation_session.get("memory_review"),
             "warnings": automation_session.get("warnings", []),
@@ -161,7 +179,11 @@ class OperatorRepository:
             }
             self._write_work_queue([])
             return self._work_payload(work_item, decision=decision)
-        new_work_items = _work_items_from_decision(decision, session["session_id"])
+        new_work_items = _work_items_from_decision(
+            decision,
+            session["session_id"],
+            qualification_binding=session.get("qualification_binding"),
+        )
         if _should_continue_scan_before_work(session, decision):
             accumulated = self._load_work_queue() + _non_wait_work_items(new_work_items)
             self._write_work_queue(accumulated)
@@ -646,9 +668,19 @@ class OperatorRepository:
         return payload
 
 
-def _work_items_from_decision(decision: dict[str, Any], session_id: str) -> list[dict[str, Any]]:
+def _work_items_from_decision(
+    decision: dict[str, Any],
+    session_id: str,
+    *,
+    qualification_binding: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    normalized_binding = (
+        normalize_qualification_binding(qualification_binding)
+        if qualification_binding is not None
+        else None
+    )
     if decision.get("status") == "blocked":
-        return [
+        return _bind_work_items([
             {
                 "schema_version": 1,
                 "work_item_id": f"work_blocked_{session_id}",
@@ -656,7 +688,7 @@ def _work_items_from_decision(decision: dict[str, Any], session_id: str) -> list
                 "reason": decision.get("reason") or "automation_blocked",
                 "warnings": decision.get("warnings", []),
             }
-        ]
+        ], normalized_binding)
     work_items: list[dict[str, Any]] = []
     action_requests = list(decision.get("action_requests", []))
     for action_request in action_requests:
@@ -686,10 +718,10 @@ def _work_items_from_decision(decision: dict[str, Any], session_id: str) -> list
         scheduled["work_item_id"] = f"work_scheduled_{scheduled.get('type')}_{scheduled.get('candidate_key') or scheduled.get('match_id')}"
         work_items.append(scheduled)
     if work_items:
-        return work_items
+        return _bind_work_items(work_items, normalized_binding)
     warnings = [str(item) for item in decision.get("warnings", [])]
     if "target_profile_required" in warnings:
-        return [
+        return _bind_work_items([
             {
                 "schema_version": 1,
                 "work_item_id": f"work_blocked_target_profile_required_{session_id}",
@@ -697,8 +729,8 @@ def _work_items_from_decision(decision: dict[str, Any], session_id: str) -> list
                 "reason": "target_profile_required",
                 "warnings": warnings,
             }
-        ]
-    return [
+        ], normalized_binding)
+    return _bind_work_items([
         {
             "schema_version": 1,
             "work_item_id": f"work_wait_{session_id}",
@@ -706,7 +738,16 @@ def _work_items_from_decision(decision: dict[str, Any], session_id: str) -> list
             "reason": "no_eligible_operator_work",
             "next_priority_queue": decision.get("next_priority_queue", []),
         }
-    ]
+    ], normalized_binding)
+
+
+def _bind_work_items(
+    work_items: list[dict[str, Any]],
+    qualification_binding: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if qualification_binding is None:
+        return work_items
+    return [{**item, "qualification_binding": dict(qualification_binding)} for item in work_items]
 
 
 def _confirmed_outbound_payload_messages(event: dict[str, Any], work_item: dict[str, Any]) -> list[dict[str, Any]]:

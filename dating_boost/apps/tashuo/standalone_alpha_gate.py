@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
+
+from dating_boost.core.production_store_common import PRODUCTION_DB_NAME
+from dating_boost.core.storage import JsonStorage
 
 
 STAGE_RESULTS_PATH = Path("audit") / "stage_results.jsonl"
 EXPECTED_SMOKE_REASON = "tashuo_standalone_stage_smoke_complete"
+ENCRYPTED_STORAGE_BACKEND = "encrypted_sqlite"
 
 
 def evaluate_alpha_gate(smoke_payload: dict[str, Any], *, data_dir: Path) -> dict[str, Any]:
@@ -25,16 +28,36 @@ def evaluate_alpha_gate(smoke_payload: dict[str, Any], *, data_dir: Path) -> dic
     if binding is None:
         return _blocked("alpha_gate_final_tick_stage_binding_missing")
 
-    stage_results = _stage_results(data_dir)
+    audit_stream = STAGE_RESULTS_PATH.as_posix()
+    storage_backend = _storage_backend(data_dir)
+    try:
+        stage_results = _stage_results(data_dir)
+    except Exception:
+        return _blocked(
+            "alpha_gate_stage_result_storage_unavailable",
+            audit_stream=audit_stream,
+            storage_backend=storage_backend,
+        )
     if not stage_results:
-        return _blocked("alpha_gate_stage_result_missing", data_dir=data_dir)
+        return _blocked(
+            "alpha_gate_stage_result_missing",
+            audit_stream=audit_stream,
+            storage_backend=storage_backend,
+        )
+    if storage_backend != ENCRYPTED_STORAGE_BACKEND:
+        return _blocked(
+            "alpha_gate_stage_result_storage_not_encrypted",
+            audit_stream=audit_stream,
+            storage_backend=storage_backend,
+        )
     stage_result = _find_bound_stage_result(stage_results, binding)
     if stage_result is None:
         return _blocked(
             "alpha_gate_stage_result_not_bound_to_final_tick",
             expected_stage_binding=binding,
             latest_stage_result=_stage_result_summary(stage_results[-1]),
-            audit_path=str(data_dir / STAGE_RESULTS_PATH),
+            audit_stream=audit_stream,
+            storage_backend=storage_backend,
         )
 
     stage_check = _stage_result_check(stage_result)
@@ -59,7 +82,8 @@ def evaluate_alpha_gate(smoke_payload: dict[str, Any], *, data_dir: Path) -> dic
         },
         "stage_binding": binding,
         "stage_result": _stage_result_summary(stage_result),
-        "audit_path": str(data_dir / STAGE_RESULTS_PATH),
+        "audit_stream": audit_stream,
+        "storage_backend": storage_backend,
     }
 
 
@@ -166,20 +190,13 @@ def _final_input_check(smoke_payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _stage_results(data_dir: Path) -> list[dict[str, Any]]:
-    path = data_dir / STAGE_RESULTS_PATH
-    if not path.is_file():
-        return []
-    results: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            parsed = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            results.append(parsed)
-    return results
+    return JsonStorage(data_dir).read_jsonl(STAGE_RESULTS_PATH)
+
+
+def _storage_backend(data_dir: Path) -> str:
+    if (data_dir.resolve() / PRODUCTION_DB_NAME).is_file():
+        return ENCRYPTED_STORAGE_BACKEND
+    return "uninitialized_or_legacy_plaintext"
 
 
 def _find_bound_stage_result(stage_results: list[dict[str, Any]], binding: dict[str, str]) -> dict[str, Any] | None:

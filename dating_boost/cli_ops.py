@@ -25,6 +25,7 @@ from dating_boost.core.diagnostics import DiagnosticsRepository
 from dating_boost.core.draft_evidence import DraftEvidencePack, build_draft_evidence
 from dating_boost.core.draft_review_audit import DraftReviewAuditRepository
 from dating_boost.core.feedback import create_feedback_event
+from dating_boost.core.gui_runtime_lock import GuiRuntimeLock, RuntimeSafetyPaused
 from dating_boost.core.live_send_contract import (
     live_send_action_request_block_reason, live_send_authorization_block_reason, live_send_next_host_action, managed_live_send_guidance,
     validate_live_send_contract,
@@ -309,21 +310,86 @@ def _recovery_passphrase(args: argparse.Namespace) -> str | None:
 
 
 def _handle_safety_pause(args: argparse.Namespace) -> int:
+    runtime_lock, scope_error = _runtime_safety_lock(args)
+    if scope_error is not None:
+        _print_json(scope_error)
+        return 2
+    if runtime_lock is not None:
+        payload = runtime_lock.pause(reason=args.reason)
+        _print_json(payload)
+        return 0
+    if args.data_dir is None:
+        payload = {"schema_version": 1, "status": "blocked", "reason": "safety_scope_required"}
+        _print_json(payload)
+        return 2
     payload = SafetyRepository(args.data_dir).pause(reason=args.reason, created_at=_now_iso())
     _print_json(payload)
     return 0
 
 
 def _handle_safety_resume(args: argparse.Namespace) -> int:
+    runtime_lock, scope_error = _runtime_safety_lock(args)
+    if scope_error is not None:
+        _print_json(scope_error)
+        return 2
+    if runtime_lock is not None:
+        if not args.pause_id:
+            payload = {"schema_version": 1, "status": "blocked", "reason": "runtime_pause_id_required"}
+            _print_json(payload)
+            return 2
+        try:
+            payload = runtime_lock.resume(pause_id=args.pause_id)
+        except RuntimeSafetyPaused as exc:
+            payload = {"schema_version": 1, "status": "blocked", "reason": str(exc)}
+            _print_json(payload)
+            return 2
+        _print_json(payload)
+        return 0
+    if args.data_dir is None:
+        payload = {"schema_version": 1, "status": "blocked", "reason": "safety_scope_required"}
+        _print_json(payload)
+        return 2
     payload = SafetyRepository(args.data_dir).resume(created_at=_now_iso())
     _print_json(payload)
     return 0
 
 
 def _handle_safety_status(args: argparse.Namespace) -> int:
+    runtime_lock, scope_error = _runtime_safety_lock(args)
+    if scope_error is not None:
+        _print_json(scope_error)
+        return 2
+    if runtime_lock is not None:
+        _print_json(runtime_lock.status())
+        return 0
+    if args.data_dir is None:
+        payload = {"schema_version": 1, "status": "blocked", "reason": "safety_scope_required"}
+        _print_json(payload)
+        return 2
     payload = SafetyRepository(args.data_dir).status()
     _print_json(payload)
     return 0
+
+
+def _runtime_safety_lock(args: argparse.Namespace) -> tuple[GuiRuntimeLock | None, dict[str, Any] | None]:
+    app_id = getattr(args, "app_id", None)
+    runtime = getattr(args, "runtime", None)
+    if app_id is None and runtime is None:
+        return None, None
+    if app_id != "tashuo" or str(runtime or "").replace("_", "-") != "mac-ios-app":
+        return None, {
+            "schema_version": 1,
+            "status": "blocked",
+            "reason": "runtime_safety_scope_unsupported",
+        }
+    if getattr(args, "data_dir", None) is not None:
+        return None, {
+            "schema_version": 1,
+            "status": "blocked",
+            "reason": "safety_scope_ambiguous",
+        }
+    state_root = os.environ.get("DATING_BOOST_RUNTIME_LOCK_ROOT")
+    return GuiRuntimeLock(state_root=Path(state_root) if state_root else None), None
 
 
 def _handle_daemon_run(args: argparse.Namespace) -> int:

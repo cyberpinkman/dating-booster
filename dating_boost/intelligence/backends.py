@@ -46,6 +46,7 @@ class ScriptedBackend:
         else:
             self._payloads = [deepcopy(dict(payload))]
         self._cursor = 0
+        self.last_response_identity = {"response_model_identifier": "scripted", "revision_identifier": "scripted"}
 
     @property
     def capabilities(self) -> Collection[BackendCapability]:
@@ -86,6 +87,7 @@ class OpenAIBackend:
 
         self._client = OpenAI(**client_kwargs)
         self._model = model
+        self.last_response_identity: dict[str, str | None] | None = None
 
     @property
     def capabilities(self) -> Collection[BackendCapability]:
@@ -107,6 +109,7 @@ class OpenAIBackend:
                 }
             },
         )
+        self.last_response_identity = response_identity(response)
 
         parsed = _extract_parsed_response(response)
         if not isinstance(parsed, dict):
@@ -137,6 +140,7 @@ class MiniMaxBackend:
         self._base_url = base_url or MINIMAX_DEFAULT_BASE_URL
         self._api_key_env = api_key_env or MINIMAX_DEFAULT_API_KEY_ENV
         self._timeout_seconds = _request_timeout_seconds(timeout_seconds)
+        self.last_response_identity: dict[str, str | None] | None = None
         if client is not None:
             self._client = client
             return
@@ -182,6 +186,7 @@ class MiniMaxBackend:
             tool_choice={"type": "function", "function": {"name": MINIMAX_STRUCTURED_TOOL_NAME}},
             extra_body=_minimax_extra_body(self._model),
         )
+        self.last_response_identity = response_identity(response)
         return _extract_minimax_tool_payload(response)
 
     def _extra_body(self) -> dict[str, object]:
@@ -193,6 +198,17 @@ def _minimax_extra_body(model: str) -> dict[str, object]:
     if str(model or "").strip().lower() in {"minimax-m3", "minimax/minimax-m3"}:
         extra_body["reasoning_split"] = True
     return extra_body
+
+
+def response_identity(response: Any) -> dict[str, str | None]:
+    response_model = str(getattr(response, "model", "") or "").strip() or None
+    revision = str(getattr(response, "system_fingerprint", "") or "").strip() or None
+    deployment = str(getattr(response, "deployment_id", "") or "").strip() or None
+    return {
+        "response_model_identifier": response_model,
+        "revision_identifier": revision,
+        "stable_provider_identifier": deployment or revision,
+    }
 
 
 def _request_timeout_seconds(value: float | None) -> float:

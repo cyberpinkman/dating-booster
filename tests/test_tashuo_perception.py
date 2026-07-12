@@ -4,6 +4,7 @@ import unittest
 
 from dating_boost.apps.tashuo.perception import (
     analyze_tashuo_conversation,
+    analyze_tashuo_conversation_evidence_v2,
     analyze_tashuo_message_list,
 )
 from dating_boost.intelligence.vision_backends import ScriptedVisionBackend
@@ -42,6 +43,67 @@ class AlwaysFailingVisionBackend:
 
 
 class TaShuoPerceptionTests(unittest.TestCase):
+    def test_conversation_evidence_v2_requires_geometry_and_emits_no_raw_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screen = Path(temp_dir) / "thread.png"
+            screen.write_bytes(b"png")
+            backend = ScriptedVisionBackend(
+                {
+                    "status": "ok",
+                    "bubbles": [
+                        {
+                            "direction": "inbound",
+                            "text": "private hello",
+                            "bounds": {"x1": 0.1, "y1": 0.2, "x2": 0.7, "y2": 0.3},
+                            "confidence": 0.99,
+                        },
+                        {
+                            "direction": "outbound",
+                            "text": "private reply",
+                            "bounds": {"x1": 0.3, "y1": 0.4, "x2": 0.9, "y2": 0.5},
+                            "confidence": 0.98,
+                        },
+                    ],
+                }
+            )
+            payload = analyze_tashuo_conversation_evidence_v2(
+                {"status": "ok", "screen": {"path": str(screen)}},
+                backend=backend,
+                qualification_salt="salt",
+                target_binding={"target_match_id": "match_private"},
+                viewport_identity="viewport_1",
+                capture_id="capture_1",
+                observation_id="observation_1",
+                captured_monotonic_ns=100,
+            )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["evidence_type"], "conversation_tail_v2")
+        self.assertEqual([item["direction"] for item in payload["bubbles"]], ["inbound", "outbound"])
+        self.assertNotIn("private hello", str(payload))
+        self.assertNotIn("private reply", str(payload))
+        self.assertNotIn("match_private", str(payload))
+
+    def test_conversation_evidence_v2_rejects_missing_geometry(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screen = Path(temp_dir) / "thread.png"
+            screen.write_bytes(b"png")
+            backend = ScriptedVisionBackend(
+                {"status": "ok", "bubbles": [{"direction": "inbound", "text": "hello", "confidence": 0.99}]}
+            )
+            payload = analyze_tashuo_conversation_evidence_v2(
+                {"status": "ok", "screen": {"path": str(screen)}},
+                backend=backend,
+                qualification_salt="salt",
+                target_binding={"target_match_id": "match_private"},
+                viewport_identity="viewport_1",
+                capture_id="capture_1",
+                observation_id="observation_1",
+                captured_monotonic_ns=100,
+            )
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "tail_v2_bubble_bounds_invalid")
+
     def test_message_list_requires_screen_path(self):
         backend = ScriptedVisionBackend({"status": "ok", "rows": []})
         payload = analyze_tashuo_message_list({"status": "ok", "screen": {}}, backend=backend)

@@ -554,6 +554,10 @@ class StandaloneDraftPlanner:
 
         if generation is None or review is None:
             raise RuntimeError("standalone draft planner did not produce a generation")
+        final_draft = _draft_payload_with_generation_contract(generation.draft_payload, generation)
+        provider_identity = getattr(backend, "last_response_identity", None)
+        if isinstance(provider_identity, dict):
+            final_draft["provider_response_identity"] = dict(provider_identity)
         return {
             "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
             "status": "ok" if review.allowed_for_managed_send else "blocked",
@@ -561,7 +565,7 @@ class StandaloneDraftPlanner:
             "match_id": match_id,
             "mode": reply_mode.value,
             "draft_evidence": evidence.public_dict(),
-            "draft": _draft_payload_with_generation_contract(generation.draft_payload, generation),
+            "draft": final_draft,
             "draft_generation_summary": generation.summary(),
             "draft_review": review.to_dict(),
         }

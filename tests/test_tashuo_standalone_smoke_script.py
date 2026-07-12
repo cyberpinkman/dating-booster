@@ -1,11 +1,15 @@
 import importlib.util
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
+
+from dating_boost.core.storage import JsonStorage
 
 
 def _load_smoke_module():
@@ -74,15 +78,23 @@ def _clear_input_payload() -> dict:
 
 def _write_alpha_gate_stage_result_for_cmd(cmd: list[str]) -> None:
     data_dir = Path(cmd[cmd.index("--data-dir") + 1])
-    audit_dir = data_dir / "audit"
-    audit_dir.mkdir(parents=True, exist_ok=True)
-    (audit_dir / "stage_results.jsonl").write_text(
-        json.dumps(_alpha_gate_stage_result()) + "\n",
-        encoding="utf-8",
+    JsonStorage(data_dir).append_jsonl(
+        Path("audit") / "stage_results.jsonl",
+        _alpha_gate_stage_result(),
     )
 
 
 class TaShuoStandaloneSmokeScriptTests(unittest.TestCase):
+    def setUp(self):
+        self._key_environment = patch.dict(
+            os.environ,
+            {"DATING_BOOST_KEY_PROVIDER": "local", "DATING_BOOST_TEST_KEY": "unit-test-key"},
+        )
+        self._key_environment.start()
+
+    def tearDown(self):
+        self._key_environment.stop()
+
     def test_smoke_runs_stage_only_standalone_commands(self):
         module = _load_smoke_module()
         calls = []

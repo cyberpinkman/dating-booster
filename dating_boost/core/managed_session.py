@@ -74,6 +74,7 @@ class ManagedSessionRepository:
         cycle_send_limit: int | None = None,
         harness_runtime: str | None = None,
         initial_surface: str = "message-list",
+        qualification_binding: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         app_id = _validate_app_id(app_id)
         normalized_runtime = _normalize_runtime(harness_runtime)
@@ -106,7 +107,12 @@ class ManagedSessionRepository:
         if runtime_scope.get("status") == "blocked":
             return runtime_scope
         app_check = self._app_precheck(app_id, runtime=normalized_runtime)
-        operator_start = self._operator.start_session(authorization, initial_surface=initial_surface, **session_config)
+        operator_start = self._operator.start_session(
+            authorization,
+            initial_surface=initial_surface,
+            qualification_binding=qualification_binding,
+            **session_config,
+        )
         if operator_start.get("status") != "active":
             return _payload(
                 str(operator_start.get("status") or "blocked"),
@@ -157,6 +163,8 @@ class ManagedSessionRepository:
             "wake_event_cursor_app_id": app_id,
             "runtime_scope": runtime_scope,
         }
+        if qualification_binding is not None:
+            session["qualification_binding"] = dict(qualification_binding)
         self._write_session(session)
         stopped_operator = None
         if initial_status == "stopped":

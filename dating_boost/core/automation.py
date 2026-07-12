@@ -100,7 +100,13 @@ class AutomationRepository:
         except FileNotFoundError:
             return None
 
-    def start_session(self, authorization: dict[str, Any], *, session_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    def start_session(
+        self,
+        authorization: dict[str, Any],
+        *,
+        session_config: dict[str, Any] | None = None,
+        qualification_binding: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         memory_review = self.needs_memory_review()
         auth_result = self.save_authorization(authorization)
         readiness = UserDisclosureRepository(self.root).readiness(mode="autonomous")
@@ -130,8 +136,10 @@ class AutomationRepository:
             "resumed_from_report": str(latest_report_path) if latest_report_path else None,
             "user_profile_readiness": readiness,
         }
+        if qualification_binding is not None:
+            session["qualification_binding"] = dict(qualification_binding)
         self._storage.write_json(Path("automation") / "session.json", session)
-        return {
+        result = {
             "schema_version": 1,
             "status": "active",
             "session_id": session_id,
@@ -142,6 +150,9 @@ class AutomationRepository:
             if memory_review.get("needs_memory_review")
             else [],
         }
+        if qualification_binding is not None:
+            result["qualification_binding"] = dict(qualification_binding)
+        return result
 
     def stop_session(self) -> dict[str, Any]:
         session = self._load_session()

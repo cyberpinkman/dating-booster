@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -447,8 +448,44 @@ class PublicProductionTests(unittest.TestCase):
 
         self.assertTrue(license_text.startswith("MIT License"))
         self.assertIn("Permission is hereby granted, free of charge", license_text)
-        self.assertEqual(pyproject["project"]["license"]["text"], "MIT")
-        self.assertIn("License :: OSI Approved :: MIT License", pyproject["project"]["classifiers"])
+        self.assertEqual(pyproject["project"]["license"], "MIT")
+        self.assertEqual(pyproject["project"]["license-files"], ["LICENSE"])
+        self.assertNotIn("classifiers", pyproject["project"])
+        self.assertEqual(pyproject["build-system"]["requires"], ["setuptools>=77"])
+
+    def test_release_doctor_validates_installed_distribution_resources(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_root = root / "dating_boost"
+            shutil.copytree(Path("dating_boost/resources"), package_root / "resources")
+            with (
+                patch.object(release_core, "ROOT", root / "site-packages"),
+                patch.object(release_core, "PACKAGE_ROOT", package_root),
+                patch.object(release_core, "_installed_distribution_version", return_value=__version__),
+                patch.object(release_core, "_distribution_metadata_sha256", return_value="a" * 64),
+            ):
+                payload = release_core.release_doctor()
+
+        self.assertEqual(payload["status"], "ok", payload)
+        self.assertEqual(payload["execution_layout"], "installed_distribution")
+
+    def test_release_doctor_blocks_incomplete_installed_skill_resources(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_root = root / "dating_boost"
+            shutil.copytree(Path("dating_boost/resources"), package_root / "resources")
+            packaged_skill = package_root / "resources/agent_adapters/codex/dating-booster-codex"
+            (packaged_skill / "SKILL.md").unlink()
+            with (
+                patch.object(release_core, "ROOT", root / "site-packages"),
+                patch.object(release_core, "PACKAGE_ROOT", package_root),
+                patch.object(release_core, "_installed_distribution_version", return_value=__version__),
+                patch.object(release_core, "_distribution_metadata_sha256", return_value="a" * 64),
+            ):
+                payload = release_core.release_doctor()
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertIn("codex_skill_resource_missing:SKILL.md", payload["issues"])
 
     def test_model_backends_use_models_extra_name(self):
         pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))

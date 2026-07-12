@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.qualification_binding import normalize_qualification_binding
 from dating_boost.core.storage import JsonStorage
 from dating_boost.policy import Action
 
@@ -65,6 +66,7 @@ class ActionAuditRepository:
                 and existing.get("target_match_id") == event.get("target_match_id")
                 and existing.get("payload_hash") == event.get("payload_hash")
                 and existing.get("result_status") == event.get("result_status")
+                and existing.get("qualification_binding") == event.get("qualification_binding")
             ):
                 return existing
         return None
@@ -76,6 +78,7 @@ class ActionAuditRepository:
                 and existing.get("target_match_id") == event.get("target_match_id")
                 and existing.get("payload_hash") == event.get("payload_hash")
                 and existing.get("result_status") == event.get("result_status")
+                and existing.get("qualification_binding") == event.get("qualification_binding")
             ):
                 return existing
         return None
@@ -135,6 +138,7 @@ def validate_action_result(payload: dict[str, Any], *, created_at: str) -> dict[
     for optional_field in ("confirmation_id", "precondition_hash", "autonomous_audit_binding"):
         if optional_field in payload:
             base_event[optional_field] = payload[optional_field]
+    _append_qualification_binding(base_event, payload)
     return {
         "event_id": f"action_result_{_event_digest(base_event)}",
         **base_event,
@@ -185,6 +189,7 @@ def validate_stage_result(payload: dict[str, Any], *, created_at: str) -> dict[s
     ):
         if optional_field in payload:
             base_event[optional_field] = payload[optional_field]
+    _append_qualification_binding(base_event, payload)
     return {
         "event_id": f"stage_result_{_event_digest(base_event)}",
         **base_event,
@@ -276,3 +281,12 @@ def _require_evidence(value: Any) -> Any:
 def _event_digest(event: dict[str, Any]) -> str:
     canonical = json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _append_qualification_binding(event: dict[str, Any], payload: dict[str, Any]) -> None:
+    if "qualification_binding" not in payload:
+        return
+    raw = payload.get("qualification_binding")
+    if not isinstance(raw, dict):
+        raise ValueError("qualification_binding must be an object")
+    event["qualification_binding"] = normalize_qualification_binding(raw)

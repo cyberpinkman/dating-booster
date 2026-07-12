@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.qualification_binding import normalize_qualification_binding
 from dating_boost.apps.registry import supported_app_ids
 from dating_boost.core.storage import JsonStorage
 
@@ -36,6 +37,7 @@ class StandaloneSessionRepository:
         managed_gui_send: bool = False,
         vision_backend: dict[str, Any] | None = None,
         initial_surface: str = "message-list",
+        qualification_binding: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if app_id not in set(supported_app_ids()):
             return _payload("blocked", reason=f"unsupported_app:{app_id}")
@@ -43,6 +45,12 @@ class StandaloneSessionRepository:
             return _payload("blocked", reason="unsupported_send_mode")
         if send_mode == "live" and not managed_gui_send:
             return _payload("blocked", reason="managed_gui_send_required_for_live_mode")
+        normalized_qualification_binding = None
+        if qualification_binding is not None:
+            try:
+                normalized_qualification_binding = normalize_qualification_binding(qualification_binding)
+            except ValueError:
+                return _payload("blocked", reason="qualification_binding_invalid")
 
         current = self.status()
         if current.get("status") == "active":
@@ -68,8 +76,13 @@ class StandaloneSessionRepository:
             "stop_reason": None,
             "last_tick": None,
         }
+        if normalized_qualification_binding is not None:
+            session["qualification_binding"] = normalized_qualification_binding
         self._storage.write_json(STANDALONE_SESSION_PATH, session)
-        self._append_event("start", {"session_id": session["session_id"], "app_id": app_id})
+        start_event = {"session_id": session["session_id"], "app_id": app_id}
+        if normalized_qualification_binding is not None:
+            start_event["qualification_binding"] = normalized_qualification_binding
+        self._append_event("start", start_event)
         return _payload("active", session=session)
 
     def status(self) -> dict[str, Any]:
@@ -94,7 +107,10 @@ class StandaloneSessionRepository:
         session["updated_at"] = stopped_at
         session["stop_reason"] = reason
         self._storage.write_json(STANDALONE_SESSION_PATH, session)
-        self._append_event("stop", {"session_id": session["session_id"], "reason": reason})
+        stop_event = {"session_id": session["session_id"], "reason": reason}
+        if session.get("qualification_binding") is not None:
+            stop_event["qualification_binding"] = session["qualification_binding"]
+        self._append_event("stop", stop_event)
         last_tick = session.get("last_tick") if isinstance(session.get("last_tick"), dict) else {}
         return _payload(
             "stopped",
@@ -116,7 +132,10 @@ class StandaloneSessionRepository:
         session["last_tick"] = dict(tick)
         session["updated_at"] = _now_iso()
         self._storage.write_json(STANDALONE_SESSION_PATH, session)
-        self._append_event("tick", {"session_id": session["session_id"], "tick": tick})
+        tick_event = {"session_id": session["session_id"], "tick": tick}
+        if session.get("qualification_binding") is not None:
+            tick_event["qualification_binding"] = session["qualification_binding"]
+        self._append_event("tick", tick_event)
         return _payload("ok", session=session)
 
     def _append_event(self, event_type: str, payload: dict[str, Any]) -> None:

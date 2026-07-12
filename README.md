@@ -140,7 +140,7 @@ For stage-only acceptance, `auth.json` must allow the operator to create a manag
 }
 ```
 
-MiniMax Coding Plan is the default standalone TaShuo smoke backend and vision backend. It uses the OpenAI-compatible MiniMax China endpoint, matching the local Hermes `minimax-cn` route. Store the key in `.env` or an environment variable; session state records only the env var name, not the secret value. The standalone smoke wrapper runs the alpha release gate before reporting success. A successful smoke returns `status=ok`, `reason=tashuo_standalone_stage_smoke_complete`, with `alpha_release_gate.status=ok`, the final tick `stage_recorded`, and durable proof in `.local/dating-boost/audit/stage_results.jsonl`: `stage_attempt_status=completed`, `staged_text_verified=true`, `staged_text_verification.status=verified`, `target_verification.status=ok`, `evidence.stage_mode=true`, and `evidence.live_send_executed=false`.
+MiniMax Coding Plan is the default standalone TaShuo smoke backend and vision backend. It uses the OpenAI-compatible MiniMax China endpoint, matching the local Hermes `minimax-cn` route. Store the key in `.env` or an environment variable; session state records only the env var name, not the secret value. The standalone smoke wrapper runs the alpha release gate before reporting success. A successful smoke returns `status=ok`, `reason=tashuo_standalone_stage_smoke_complete`, with `alpha_release_gate.status=ok`, the final tick `stage_recorded`, and durable proof in the logical `audit/stage_results.jsonl` stream backed by encrypted SQLite: `stage_attempt_status=completed`, `staged_text_verified=true`, `staged_text_verification.status=verified`, `target_verification.status=ok`, `evidence.stage_mode=true`, and `evidence.live_send_executed=false`.
 
 If you save the smoke output, the same acceptance gate can be rerun without opening the app:
 
@@ -155,6 +155,42 @@ DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session status --data-dir .local/dating-boost --json
 ```
+
+### TaShuo standalone production qualification
+
+The production qualification gate is stage-only and pinned to `tashuo/mac-ios-app`. It never qualifies live send. Run it only after the automated suite, release doctor, wheel smoke, and clean-environment checks pass.
+
+Canary creates a dedicated encrypted qualification root, imports only the allowlisted user model, performs 10 first-attempt cycles, and returns an acceptance token if every cycle passes:
+
+```bash
+export MINIMAX_API_KEY="<coding-plan-subscription-key>"
+python3 scripts/tashuo_mac_ios_standalone_production_gate.py canary \
+  --root-dir .local/tashuo-production-qualifications \
+  --user-model-source-data-dir .local/dating-boost \
+  --authorization auth.json \
+  --json
+```
+
+`canary_passed` means only: `canary passed for the pinned environment; soak not run; qualification not passed`. Inspect the returned manifest fields, then explicitly start Soak within 24 hours using the exact returned token. Soak performs 100 committed cycles over at least 8 monotonic hours:
+
+```bash
+python3 scripts/tashuo_mac_ios_standalone_production_gate.py soak \
+  --root-dir .local/tashuo-production-qualifications \
+  --qualification-id <qualification_id> \
+  --accept-canary <canary_accept_token> \
+  --authorization auth.json \
+  --json
+```
+
+Operational commands are fixed: `canary`, `soak`, `status`, `resume`, `finalize`, and `validate`. `status` is read-only; mutating commands run the root janitor. `resume` never changes phase or bypasses recovery. Offline validation is:
+
+```bash
+python3 scripts/tashuo_mac_ios_standalone_production_gate.py validate \
+  --bundle .local/tashuo-production-qualifications/<qualification_id>/output/qualification_bundle.zip \
+  --json
+```
+
+Source mode requires a clean Git checkout. `--built-artifact <wheel>` is accepted only when the currently loaded `dating_boost` package is outside the source checkout and its Python-file digest exactly matches that wheel; pinning an unused wheel does not bypass the clean-source gate.
 
 ### Fixture and cross-app development
 

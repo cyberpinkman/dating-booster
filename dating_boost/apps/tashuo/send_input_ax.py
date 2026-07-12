@@ -230,6 +230,136 @@ end tell
     return {"status": "ok", "input_backend": "macos_accessibility"}
 
 
+def _guarded_set_tashuo_ax_text_area_if_empty(session: Any, text: str) -> dict[str, Any]:
+    script = r'''
+-- DATING_BOOST_AX_GUARDED_SET_IF_EMPTY
+on guardedSetTextAreaValue(e, depth, newValue)
+  tell application "System Events"
+    try
+      if role of e is "AXTextArea" then
+        set currentValue to value of e
+        if currentValue is missing value then set currentValue to ""
+        if currentValue is not "" then return "occupied"
+        set value of e to newValue
+        set observedValue to value of e
+        if observedValue is missing value then set observedValue to ""
+        if observedValue is not newValue then return "compare_failed"
+        return "set"
+      end if
+      if depth < 24 then
+        repeat with child in UI elements of e
+          set resultValue to my guardedSetTextAreaValue(child, depth + 1, newValue)
+          if resultValue is not "not_found" then return resultValue
+        end repeat
+      end if
+    end try
+  end tell
+  return "not_found"
+end guardedSetTextAreaValue
+
+on run argv
+  if (count of argv) is not 1 then return "argument_error"
+  set newValue to item 1 of argv
+  tell application "System Events"
+    tell process "她说"
+      return my guardedSetTextAreaValue(window 1, 0, newValue)
+    end tell
+  end tell
+end run
+'''
+    result = session.runner.run(["osascript", "-e", script, text])
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "tashuo_guarded_ax_set_failed",
+            "input_backend": "guarded_macos_accessibility",
+        }
+    outcome = str(result.stdout or "").strip()
+    if outcome == "set":
+        return {
+            "status": "ok",
+            "input_backend": "guarded_macos_accessibility",
+            "expected_composer_text_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "expected_character_count": len(text),
+        }
+    reasons = {
+        "occupied": "candidate_composer_occupied",
+        "compare_failed": "tashuo_guarded_ax_set_compare_failed",
+        "not_found": "tashuo_ax_text_area_not_found",
+        "argument_error": "tashuo_guarded_ax_argument_invalid",
+    }
+    return {
+        "status": "blocked",
+        "reason": reasons.get(outcome, "tashuo_guarded_ax_set_unknown_result"),
+        "input_backend": "guarded_macos_accessibility",
+    }
+
+
+def _guarded_clear_tashuo_ax_text_area_if_exact(session: Any, expected_text: str) -> dict[str, Any]:
+    script = r'''
+-- DATING_BOOST_AX_GUARDED_CLEAR_IF_EXACT
+on guardedClearTextAreaValue(e, depth, expectedValue)
+  tell application "System Events"
+    try
+      if role of e is "AXTextArea" then
+        set currentValue to value of e
+        if currentValue is missing value then set currentValue to ""
+        if currentValue is not expectedValue then return "mismatch"
+        set value of e to ""
+        set observedValue to value of e
+        if observedValue is missing value then set observedValue to ""
+        if observedValue is not "" then return "compare_failed"
+        return "cleared"
+      end if
+      if depth < 24 then
+        repeat with child in UI elements of e
+          set resultValue to my guardedClearTextAreaValue(child, depth + 1, expectedValue)
+          if resultValue is not "not_found" then return resultValue
+        end repeat
+      end if
+    end try
+  end tell
+  return "not_found"
+end guardedClearTextAreaValue
+
+on run argv
+  if (count of argv) is not 1 then return "argument_error"
+  set expectedValue to item 1 of argv
+  tell application "System Events"
+    tell process "她说"
+      return my guardedClearTextAreaValue(window 1, 0, expectedValue)
+    end tell
+  end tell
+end run
+'''
+    result = session.runner.run(["osascript", "-e", script, expected_text])
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "tashuo_guarded_ax_clear_failed",
+            "input_backend": "guarded_macos_accessibility",
+        }
+    outcome = str(result.stdout or "").strip()
+    if outcome == "cleared":
+        return {
+            "status": "ok",
+            "input_backend": "guarded_macos_accessibility",
+            "cleared_exact_text_hash": hashlib.sha256(expected_text.encode("utf-8")).hexdigest(),
+            "cleared_character_count": len(expected_text),
+        }
+    reasons = {
+        "mismatch": "composer_exact_mismatch",
+        "compare_failed": "tashuo_guarded_ax_clear_compare_failed",
+        "not_found": "tashuo_ax_text_area_not_found",
+        "argument_error": "tashuo_guarded_ax_argument_invalid",
+    }
+    return {
+        "status": "blocked",
+        "reason": reasons.get(outcome, "tashuo_guarded_ax_clear_unknown_result"),
+        "input_backend": "guarded_macos_accessibility",
+    }
+
+
 __all__ = [
     'annotations', 'copy', 'hashlib', 'json',
     'Path', 're', 'Any', 'uuid4',
@@ -252,5 +382,6 @@ __all__ = [
     'tashuo_guardrails_payload', '_is_mac_ios_app_session', '_tashuo_capture_prefix', '_copy_tap_ratio',
     '_applescript_literal', '_tashuo_window_missing_payload', '_tashuo_message_input_tap_ratio', '_tashuo_input_coordinate_model',
     '_tashuo_ax_text_area_value', '_tashuo_ax_static_text_values', '_tashuo_ax_text_value_is_useful', '_set_tashuo_ax_text_area_value',
-    '_clear_tashuo_ax_text_area',
+    '_clear_tashuo_ax_text_area', '_guarded_set_tashuo_ax_text_area_if_empty',
+    '_guarded_clear_tashuo_ax_text_area_if_exact',
 ]

@@ -12,6 +12,7 @@ from dating_boost.intelligence.backends import (
     MiniMaxBackend,
     _extract_minimax_tool_payload,
     _extract_parsed_response,
+    response_identity,
 )
 
 
@@ -39,6 +40,7 @@ class ScriptedVisionBackend:
         else:
             self._payloads = [deepcopy(dict(payload))]
         self._cursor = 0
+        self.last_response_identity = {"response_model_identifier": "scripted", "revision_identifier": "scripted"}
 
     def analyze_image_structured(
         self,
@@ -69,6 +71,7 @@ class OpenAIVisionBackend:
 
         self._client = OpenAI(**client_kwargs)
         self._model = model
+        self.last_response_identity: dict[str, str | None] | None = None
 
     def analyze_image_structured(
         self,
@@ -99,6 +102,7 @@ class OpenAIVisionBackend:
                 }
             },
         )
+        self.last_response_identity = response_identity(response)
         return _extract_parsed_response(response)
 
 
@@ -144,6 +148,7 @@ class MiniMaxVisionBackend(MiniMaxBackend):
             tool_choice={"type": "function", "function": {"name": MINIMAX_STRUCTURED_TOOL_NAME}},
             extra_body=self._extra_body(),
         )
+        self.last_response_identity = response_identity(response)
         return _extract_minimax_tool_payload(response)
 
 

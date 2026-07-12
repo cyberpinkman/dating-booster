@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from importlib import metadata as importlib_metadata
 import json
 import os
 from pathlib import Path
@@ -13,20 +14,24 @@ from dating_boost.core.production_store import RELEASE_MANIFEST_SCHEMA_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[2]
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
 def release_manifest() -> dict[str, Any]:
-    skill_package = ROOT / "skills" / "dating-booster-codex" / "skill-package.json"
-    claude_code_adapter = ROOT / "agent_adapters" / "claude-code" / "adapter-package.json"
-    openclaw_adapter = ROOT / "agent_adapters" / "openclaw" / "adapter-package.json"
-    packaged_codex_skill = ROOT / "dating_boost" / "resources" / "agent_adapters" / "codex" / "dating-booster-codex"
-    pyproject = ROOT / "pyproject.toml"
+    paths = _release_paths()
+    skill_package = paths["skill_package"]
+    claude_code_adapter = paths["claude_code_adapter"]
+    openclaw_adapter = paths["openclaw_adapter"]
+    packaged_codex_skill = paths["packaged_codex_skill"]
+    pyproject = paths["pyproject"]
+    source_checkout = paths["layout"] == "source_checkout"
     dist_version = __version__.replace("-rc.", "rc")
     return {
         "schema_version": RELEASE_MANIFEST_SCHEMA_VERSION,
         "status": "ok",
         "tool_version": __version__,
         "git_commit": _git_commit(),
+        "execution_layout": paths["layout"],
         "artifacts": {
             "wheel": f"dating_booster-{dist_version}-py3-none-any.whl",
             "sdist": f"dating_booster-{dist_version}.tar.gz",
@@ -35,13 +40,17 @@ def release_manifest() -> dict[str, Any]:
             "openclaw_adapter": f"dating-booster-openclaw-{__version__}.tar.gz",
         },
         "artifact_sources": {
-            "pyproject": str(pyproject),
+            "pyproject": str(pyproject) if pyproject is not None else "installed-distribution:dating-booster",
             "skill_package": str(skill_package),
-            "claude_code_adapter": str(claude_code_adapter.relative_to(ROOT)),
-            "openclaw_adapter": str(openclaw_adapter.relative_to(ROOT)),
+            "claude_code_adapter": (
+                str(claude_code_adapter.relative_to(ROOT)) if source_checkout else str(claude_code_adapter)
+            ),
+            "openclaw_adapter": (
+                str(openclaw_adapter.relative_to(ROOT)) if source_checkout else str(openclaw_adapter)
+            ),
         },
         "source_hashes": {
-            "pyproject.toml": _file_sha256(pyproject),
+            "pyproject.toml": _file_sha256(pyproject) if pyproject is not None else _distribution_metadata_sha256(),
             "skill-package.json": _file_sha256(skill_package),
             "claude-code/adapter-package.json": _file_sha256(claude_code_adapter),
             "openclaw/adapter-package.json": _file_sha256(openclaw_adapter),
@@ -65,17 +74,26 @@ def release_manifest() -> dict[str, Any]:
 def release_doctor() -> dict[str, Any]:
     manifest = release_manifest()
     issues: list[str] = []
-    pyproject_path = ROOT / "pyproject.toml"
-    skill_package_path = ROOT / "skills" / "dating-booster-codex" / "skill-package.json"
-    claude_code_adapter_path = ROOT / "agent_adapters" / "claude-code" / "adapter-package.json"
-    openclaw_adapter_path = ROOT / "agent_adapters" / "openclaw" / "adapter-package.json"
-    try:
-        pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        pyproject = {}
-        issues.append("pyproject_unreadable")
-    if pyproject.get("project", {}).get("version") != __version__:
-        issues.append("pyproject_version_mismatch")
+    paths = _release_paths()
+    source_checkout = paths["layout"] == "source_checkout"
+    pyproject_path = paths["pyproject"]
+    skill_package_path = paths["skill_package"]
+    claude_code_adapter_path = paths["claude_code_adapter"]
+    openclaw_adapter_path = paths["openclaw_adapter"]
+    if source_checkout:
+        try:
+            pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            pyproject = {}
+            issues.append("pyproject_unreadable")
+        if pyproject.get("project", {}).get("version") != __version__:
+            issues.append("pyproject_version_mismatch")
+    else:
+        installed_version = _installed_distribution_version()
+        if installed_version is None:
+            issues.append("distribution_metadata_unreadable")
+        elif _normalized_distribution_version(installed_version) != _normalized_distribution_version(__version__):
+            issues.append("distribution_version_mismatch")
     _validate_release_package(
         skill_package_path,
         issues,
@@ -97,10 +115,18 @@ def release_doctor() -> dict[str, Any]:
         issue_prefix="openclaw_adapter_",
         expected_target_host="openclaw",
     )
-    issues.extend(_codex_skill_resource_parity_issues())
-    if not _release_workflow_isolated():
-        issues.append("release_workflow_artifact_isolation_missing")
-    if _strict_release_mode():
+    if source_checkout:
+        issues.extend(
+            _codex_skill_resource_parity_issues(
+                source_root=skill_package_path.parent,
+                packaged_root=paths["packaged_codex_skill"],
+            )
+        )
+        if not _release_workflow_isolated():
+            issues.append("release_workflow_artifact_isolation_missing")
+    else:
+        issues.extend(_installed_codex_skill_resource_issues(skill_package_path.parent))
+    if source_checkout and _strict_release_mode():
         expected_ref = f"v{__version__}"
         actual_ref = os.environ.get("GITHUB_REF_NAME")
         if actual_ref and actual_ref != expected_ref:
@@ -111,6 +137,32 @@ def release_doctor() -> dict[str, Any]:
         **manifest,
         "status": "ok" if not issues else "blocked",
         "issues": issues,
+    }
+
+
+def _release_paths() -> dict[str, Any]:
+    pyproject = ROOT / "pyproject.toml"
+    source_skill = ROOT / "skills" / "dating-booster-codex"
+    source_layout = pyproject.is_file() and source_skill.is_dir()
+    if source_layout:
+        packaged_adapters = ROOT / "dating_boost" / "resources" / "agent_adapters"
+        return {
+            "layout": "source_checkout",
+            "pyproject": pyproject,
+            "skill_package": source_skill / "skill-package.json",
+            "claude_code_adapter": ROOT / "agent_adapters" / "claude-code" / "adapter-package.json",
+            "openclaw_adapter": ROOT / "agent_adapters" / "openclaw" / "adapter-package.json",
+            "packaged_codex_skill": packaged_adapters / "codex" / "dating-booster-codex",
+        }
+    packaged_adapters = PACKAGE_ROOT / "resources" / "agent_adapters"
+    packaged_skill = packaged_adapters / "codex" / "dating-booster-codex"
+    return {
+        "layout": "installed_distribution",
+        "pyproject": None,
+        "skill_package": packaged_skill / "skill-package.json",
+        "claude_code_adapter": packaged_adapters / "claude-code" / "adapter-package.json",
+        "openclaw_adapter": packaged_adapters / "openclaw" / "adapter-package.json",
+        "packaged_codex_skill": packaged_skill,
     }
 
 
@@ -143,6 +195,27 @@ def _file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _installed_distribution_version() -> str | None:
+    try:
+        return importlib_metadata.version("dating-booster")
+    except importlib_metadata.PackageNotFoundError:
+        return None
+
+
+def _distribution_metadata_sha256() -> str:
+    try:
+        metadata_text = importlib_metadata.distribution("dating-booster").read_text("METADATA")
+    except importlib_metadata.PackageNotFoundError:
+        return "missing"
+    if metadata_text is None:
+        return "missing"
+    return hashlib.sha256(metadata_text.encode("utf-8")).hexdigest()
+
+
+def _normalized_distribution_version(value: str) -> str:
+    return value.replace("-rc.", "rc")
+
+
 def _tree_sha256(root: Path) -> str:
     files = _tree_hashes(root)
     if not files:
@@ -173,9 +246,15 @@ def _is_release_resource(path: Path, *, root: Path) -> bool:
     return "__pycache__" not in relative.parts and path.suffix not in {".pyc", ".pyo"}
 
 
-def _codex_skill_resource_parity_issues() -> list[str]:
-    source_root = ROOT / "skills" / "dating-booster-codex"
-    packaged_root = ROOT / "dating_boost" / "resources" / "agent_adapters" / "codex" / "dating-booster-codex"
+def _codex_skill_resource_parity_issues(
+    *,
+    source_root: Path | None = None,
+    packaged_root: Path | None = None,
+) -> list[str]:
+    source_root = source_root or ROOT / "skills" / "dating-booster-codex"
+    packaged_root = packaged_root or (
+        ROOT / "dating_boost" / "resources" / "agent_adapters" / "codex" / "dating-booster-codex"
+    )
     source_files = _tree_hashes(source_root)
     packaged_files = _tree_hashes(packaged_root)
     issues: list[str] = []
@@ -186,6 +265,31 @@ def _codex_skill_resource_parity_issues() -> list[str]:
     for relative_path in sorted(source_files.keys() & packaged_files.keys()):
         if source_files[relative_path] != packaged_files[relative_path]:
             issues.append(f"codex_skill_resource_mismatch:{relative_path}")
+    return issues
+
+
+def _installed_codex_skill_resource_issues(skill_root: Path) -> list[str]:
+    package_path = skill_root / "skill-package.json"
+    try:
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return []
+    required_paths = {
+        "INSTALL.md",
+        "SKILL.md",
+        "skill-package.json",
+        str(package.get("bootstrap_script") or ""),
+        str(package.get("doctor_script") or ""),
+        *(str(item) for item in package.get("references") or []),
+    }
+    issues: list[str] = []
+    resolved_root = skill_root.resolve()
+    for relative_path in sorted(path for path in required_paths if path):
+        candidate = (skill_root / relative_path).resolve()
+        if not candidate.is_relative_to(resolved_root):
+            issues.append(f"codex_skill_resource_invalid_path:{relative_path}")
+        elif not candidate.is_file():
+            issues.append(f"codex_skill_resource_missing:{relative_path}")
     return issues
 
 

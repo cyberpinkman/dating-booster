@@ -301,13 +301,29 @@ Stage-only `auth.json` must allow managed stage work item creation while disabli
 }
 ```
 
-MiniMax Coding Plan is the default standalone TaShuo smoke backend and vision backend through the MiniMax China OpenAI-compatible endpoint, matching the local Hermes `minimax-cn` route. Put the Coding Plan subscription key in `.env` or an environment variable; standalone session state stores only the env var name. The standalone smoke wrapper runs the alpha release gate before reporting success. A successful smoke returns `status=ok`, `reason=tashuo_standalone_stage_smoke_complete`, with `alpha_release_gate.status=ok`, final tick `stage_recorded`, and durable proof in `audit/stage_results.jsonl`: `stage_attempt_status=completed`, `staged_text_verified=true`, `staged_text_verification.status=verified`, `target_verification.status=ok`, `evidence.stage_mode=true`, and `evidence.live_send_executed=false`.
+MiniMax Coding Plan is the default standalone TaShuo smoke backend and vision backend through the MiniMax China OpenAI-compatible endpoint, matching the local Hermes `minimax-cn` route. Put the Coding Plan subscription key in `.env` or an environment variable; standalone session state stores only the env var name. The standalone smoke wrapper runs the alpha release gate before reporting success. A successful smoke returns `status=ok`, `reason=tashuo_standalone_stage_smoke_complete`, with `alpha_release_gate.status=ok`, final tick `stage_recorded`, and durable proof in the logical `audit/stage_results.jsonl` stream backed by encrypted SQLite: `stage_attempt_status=completed`, `staged_text_verified=true`, `staged_text_verification.status=verified`, `target_verification.status=ok`, `evidence.stage_mode=true`, and `evidence.live_send_executed=false`.
 
 If the smoke JSON is saved, rerun the same acceptance gate without opening the app:
 
 ```bash
 python3 scripts/tashuo_mac_ios_standalone_alpha_gate.py --data-dir .local/dating-boost --smoke-json tashuo-standalone-smoke.json --json
 ```
+
+TaShuo standalone production qualification is a separate, stage-only protocol pinned to `tashuo/mac-ios-app`; it does not qualify live send. Do not open the App for a real qualification until the automated suite, release doctor, wheel smoke, and clean-environment fingerprint all pass. A real Canary requires the user's explicit instruction:
+
+```bash
+python3 scripts/tashuo_mac_ios_standalone_production_gate.py canary \
+  --root-dir .local/tashuo-production-qualifications \
+  --user-model-source-data-dir .local/dating-boost \
+  --authorization auth.json \
+  --json
+```
+
+`canary_passed` means only `canary passed for the pinned environment; soak not run; qualification not passed`. Never start Soak automatically. Show the qualification id, config hash, certificate digest, acceptance token, and 24-hour expiry; only after the user inspects and explicitly accepts them may the agent run the returned 100-cycle, at-least-8-hour Soak command.
+
+The Gate exposes exactly `canary`, `soak`, `status`, `resume`, `finalize`, and `validate`. `status` is read-only. Mutating commands run the root janitor. `resume` must preserve the active phase, reconcile worker/support/attempt state, and never repeat staging after a committed boundary. Unknown target/composer state requires the shared runtime safety pause and retained encrypted recovery state.
+
+Source mode requires a clean checkout. `--built-artifact <wheel>` is valid only when the actually loaded package is outside the source checkout and its Python-file digest matches the wheel. Passing an unused wheel is not an override. Final success is valid only when offline `validate` returns `artifact_valid=true`, `qualification_passed=true`, and `claim_code=PROTOCOL_PASSED_PINNED_ENVIRONMENT`.
 
 Manual standalone start, if not using the smoke wrapper:
 

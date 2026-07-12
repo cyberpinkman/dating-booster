@@ -56,6 +56,7 @@ class AgentNativeCliTests(unittest.TestCase):
             self.assertEqual(payload["schema_versions"]["automation_lock"], 1)
             self.assertEqual(payload["schema_versions"]["confirmation"], 1)
             self.assertEqual(payload["schema_versions"]["production_smoke"], 1)
+            self.assertEqual(payload["schema_versions"]["standalone_production_qualification"], 1)
             self.assertEqual(payload["schema_versions"]["backup_recovery_key"], 1)
             self.assertEqual(payload["schema_versions"]["support_log"], 1)
             self.assertEqual(payload["schema_versions"]["support_evidence"], 1)
@@ -92,6 +93,20 @@ class AgentNativeCliTests(unittest.TestCase):
             self.assertTrue(payload["policy_capabilities"]["confirmation_contract"])
             self.assertTrue(payload["agent_native_capabilities"]["production_smoke"])
             self.assertTrue(payload["agent_native_capabilities"]["real_stage_smoke_required"])
+            self.assertTrue(
+                payload["agent_native_capabilities"]["tashuo_standalone_production_qualification"]
+            )
+            self.assertEqual(
+                payload["agent_native_capabilities"][
+                    "tashuo_standalone_production_qualification_commands"
+                ],
+                ["canary", "soak", "status", "resume", "finalize", "validate"],
+            )
+            self.assertFalse(
+                payload["agent_native_capabilities"][
+                    "tashuo_standalone_production_qualification_live_send_qualified"
+                ]
+            )
             self.assertTrue(payload["agent_native_capabilities"]["goal_oriented_planning"])
             self.assertTrue(payload["agent_native_capabilities"]["conversation_scores"])
             self.assertTrue(payload["agent_native_capabilities"]["topic_lifecycle"])

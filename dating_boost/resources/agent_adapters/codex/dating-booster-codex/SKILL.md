@@ -50,6 +50,7 @@ Load this package's `skill-package.json` and compare it with the capabilities JS
 - `agent_native_capabilities.ci_tested_version` should match the installed tool version.
 - `agent_native_capabilities.local_daemon` should be true for public production workflows. This means the local CLI/launchd support exists; it does not mean Dating Booster should run a persistent dating listener or add a repo-level Computer Use backend.
 - `agent_native_capabilities.managed_session_global_background` should be false unless the product explicitly ships a separate always-on background agent. Do not treat false as a missing capability for bounded managed sessions.
+- `agent_native_capabilities.tashuo_standalone_production_qualification` must be true before using the TaShuo production Gate; its runtime must be `mac-ios-app`, send mode must be `stage`, and `tashuo_standalone_production_qualification_live_send_qualified` must remain false.
 - `diagnostic_capabilities.local_redacted_bundle` should be true.
 - `diagnostic_capabilities.support_log`, `encrypted_evidence_vault`, `topic_provenance`, and `clipboard_fingerprint` should be true for private-beta support.
 - If `source_spec_commit` differs from the local repo commit, report a warning. Continue only if version, schema, and command checks pass.
@@ -135,6 +136,24 @@ host-loop/managed-session calls. Do not invoke unrelated apps or runtimes during
 the selected session. If a command returns `runtime_scope_mismatch`, stop and
 rerun with the selected app/runtime, or clear/reselect only after the user
 explicitly changes the target.
+
+## TaShuo Standalone Production Qualification
+
+Use the production Gate only when the user explicitly asks to qualify the local TaShuo `mac-ios-app` standalone stage path. Before any real Canary, require the automated suite, release doctor, wheel smoke, and clean-environment checks to pass. The Gate is stage-only and never grants live-send qualification.
+
+```bash
+python3 scripts/tashuo_mac_ios_standalone_production_gate.py canary \
+  --root-dir .local/tashuo-production-qualifications \
+  --user-model-source-data-dir .local/dating-boost \
+  --authorization auth.json \
+  --json
+```
+
+Treat `canary_passed` only as `canary passed for the pinned environment; soak not run; qualification not passed`. Show the returned qualification id, config hash, certificate digest, acceptance token, and expiry. Never start Soak automatically; it requires a separate user instruction with the exact token and performs 100 cycles over at least 8 monotonic hours.
+
+The command surface is fixed to `canary`, `soak`, `status`, `resume`, `finalize`, and `validate`. `status` is read-only. `resume` must preserve the phase and reconcile pending worker, support, attempt, stage, and cycle state without repeated staging. Unknown target/composer state requires the shared runtime pause and retained encrypted recovery record. Source mode requires a clean checkout; `--built-artifact` is valid only when that wheel matches the actually loaded package outside the source checkout.
+
+Do not report success unless offline `validate` returns `artifact_valid=true`. Only `qualification_passed=true` with `claim_code=PROTOCOL_PASSED_PINNED_ENVIRONMENT` supports the pinned-environment protocol claim; it does not support general production, SLA, reliability, or live-send claims.
 
 ## Default Draft Output
 

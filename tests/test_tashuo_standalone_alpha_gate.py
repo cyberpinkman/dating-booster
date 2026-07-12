@@ -5,8 +5,10 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from dating_boost.core.tashuo_standalone_alpha_gate import evaluate_alpha_gate
+from dating_boost.core.storage import JsonStorage, StorageCorruptionError
 
 
 def _load_gate_script():
@@ -81,9 +83,7 @@ def _stage_result(**overrides) -> dict:
 
 
 def _write_stage_result(data_dir: Path, event: dict) -> None:
-    audit_dir = data_dir / "audit"
-    audit_dir.mkdir(parents=True, exist_ok=True)
-    (audit_dir / "stage_results.jsonl").write_text(json.dumps(event) + "\n", encoding="utf-8")
+    JsonStorage(data_dir).append_jsonl(Path("audit") / "stage_results.jsonl", event)
 
 
 class TaShuoStandaloneAlphaGateTests(unittest.TestCase):
@@ -96,10 +96,41 @@ class TaShuoStandaloneAlphaGateTests(unittest.TestCase):
 
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["reason"], "tashuo_standalone_alpha_gate_passed")
+        self.assertEqual(payload["audit_stream"], "audit/stage_results.jsonl")
+        self.assertEqual(payload["storage_backend"], "encrypted_sqlite")
+        self.assertNotIn("audit_path", payload)
         self.assertEqual(payload["stage_result"]["event_id"], "stage_result_abc")
         self.assertTrue(payload["checks"]["stage_only"])
         self.assertTrue(payload["checks"]["staged_text_verified"])
         self.assertTrue(payload["checks"]["target_verified"])
+
+    def test_gate_reads_encrypted_only_stage_stream_without_plaintext_mirror(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _write_stage_result(data_dir, _stage_result())
+
+            self.assertFalse((data_dir / "audit" / "stage_results.jsonl").exists())
+            payload = evaluate_alpha_gate(_smoke_payload(), data_dir=data_dir)
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["storage_backend"], "encrypted_sqlite")
+
+    def test_gate_returns_structured_block_when_storage_cannot_be_decrypted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "data"
+            _write_stage_result(data_dir, _stage_result())
+            with patch(
+                "dating_boost.apps.tashuo.standalone_alpha_gate.JsonStorage.read_jsonl",
+                side_effect=StorageCorruptionError("sentinel secret must not leak"),
+            ):
+                payload = evaluate_alpha_gate(_smoke_payload(), data_dir=data_dir)
+
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(payload["reason"], "alpha_gate_stage_result_storage_unavailable")
+        self.assertEqual(payload["audit_stream"], "audit/stage_results.jsonl")
+        self.assertEqual(payload["storage_backend"], "encrypted_sqlite")
+        self.assertNotIn("sentinel", json.dumps(payload))
+        self.assertNotIn("audit_path", payload)
 
     def test_gate_rejects_status_only_success_without_durable_stage_audit(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -129,6 +160,9 @@ class TaShuoStandaloneAlphaGateTests(unittest.TestCase):
 
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["reason"], "alpha_gate_stage_result_not_bound_to_final_tick")
+        self.assertEqual(payload["audit_stream"], "audit/stage_results.jsonl")
+        self.assertEqual(payload["storage_backend"], "encrypted_sqlite")
+        self.assertNotIn("audit_path", payload)
 
     def test_gate_rejects_stage_result_without_exact_staged_text_verification(self):
         with tempfile.TemporaryDirectory() as temp_dir:

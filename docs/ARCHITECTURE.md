@@ -41,10 +41,12 @@ DATING_BOOST_KEY_PROVIDER=local python3 scripts/tashuo_mac_ios_standalone_smoke.
 ```
 
 The smoke wrapper includes the alpha release gate. It returns success only when
-the smoke JSON and durable `audit/stage_results.jsonl` evidence show a completed
+the smoke JSON and durable logical `audit/stage_results.jsonl` stream in encrypted SQLite show a completed
 stage-only attempt, exact staged text verification, verified target, and no live
 send. Saved smoke output can be rechecked with
 `python3 scripts/tashuo_mac_ios_standalone_alpha_gate.py --data-dir .local/dating-boost --smoke-json tashuo-standalone-smoke.json --json`.
+
+The TaShuo standalone production Gate is an app-specific orchestration layer over those same neutral contracts. `standalone_production_contract.py` owns fixed thresholds and state machines; `standalone_production_ledger.py` owns encrypted CAS records and the event hash chain; `standalone_production_lock.py` and `core/gui_runtime_lock.py` own local/shared fencing; `standalone_production_attempt.py` owns mutation and cleanup transitions; `standalone_production_runtime.py` owns isolated workers and the existing standalone/operator execution path; `standalone_production_artifacts.py` owns evidence sealing, validation, retention, and purge; and `standalone_production_runner.py` composes Canary, Soak, resume, finalization, and janitor behavior. This Gate remains stage-only and does not change live-send policy.
 
 Migration order:
 

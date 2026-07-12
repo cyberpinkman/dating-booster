@@ -9,6 +9,12 @@ from dating_boost.apps.tashuo.native import (
     TASHUO_CURRENT_THREAD_VISUAL_ANCHOR_REGION,
     _tashuo_visual_anchor_hash_for_path,
 )
+from dating_boost.apps.tashuo.standalone_production_contract import canonical_digest
+from dating_boost.apps.tashuo.standalone_production_evidence import (
+    EvidenceViolation,
+    build_conversation_tail_v2,
+    normalized_text_hash,
+)
 from dating_boost.intelligence.vision_backends import VisionBackend
 
 
@@ -72,6 +78,40 @@ CONVERSATION_SCHEMA = {
                     "direction": {"type": "string", "enum": ["inbound", "outbound", "system", "unknown"]},
                     "text": {"type": "string"},
                     "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                },
+            },
+        },
+    },
+}
+
+CONVERSATION_EVIDENCE_V2_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["status", "bubbles"],
+    "properties": {
+        "status": {"type": "string", "enum": ["ok", "blocked"]},
+        "reason": {"type": "string"},
+        "bubbles": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["direction", "text", "bounds", "confidence"],
+                "properties": {
+                    "direction": {"type": "string", "enum": ["inbound", "outbound"]},
+                    "text": {"type": "string"},
+                    "bounds": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["x1", "y1", "x2", "y2"],
+                        "properties": {
+                            "x1": {"type": "number"},
+                            "y1": {"type": "number"},
+                            "x2": {"type": "number"},
+                            "y2": {"type": "number"},
+                        },
+                    },
+                    "confidence": {"type": "number"},
                 },
             },
         },
@@ -150,6 +190,85 @@ def analyze_tashuo_conversation(observation: dict[str, Any], *, backend: VisionB
         },
         "visible_messages": messages,
     }
+
+
+def analyze_tashuo_conversation_evidence_v2(
+    observation: dict[str, Any],
+    *,
+    backend: VisionBackend,
+    qualification_salt: str,
+    target_binding: Mapping[str, Any],
+    viewport_identity: str,
+    capture_id: str,
+    observation_id: str,
+    captured_monotonic_ns: int,
+) -> dict[str, Any]:
+    screen_path = _screen_path(observation)
+    if screen_path is None:
+        return _blocked("screen_path_required_for_tashuo_conversation_evidence_v2")
+    result = _analyze_image_structured_with_retry(
+        backend=backend,
+        system_prompt=(
+            "Analyze only visible ordinary TaShuo conversation bubbles for safety evidence. "
+            "Return every visible bubble in top-to-bottom order with inbound/outbound direction, exact visible text, "
+            "normalized bounds, and numeric confidence. Do not include composer, system UI, hidden messages, or inferred text."
+        ),
+        user_prompt=(
+            "Return evidence-only bubble observations. Bounds must be normalized x1/y1/x2/y2 coordinates. "
+            "If direction, text, order, or geometry is ambiguous, return blocked instead of guessing."
+        ),
+        screen_path=screen_path,
+        schema=CONVERSATION_EVIDENCE_V2_SCHEMA,
+        failure_reason="tashuo_conversation_evidence_v2_structured_json_invalid",
+    )
+    if result.get("status") != "ok":
+        return _blocked(str(result.get("reason") or "tashuo_conversation_evidence_v2_blocked"))
+    bubbles: list[dict[str, Any]] = []
+    for order, raw in enumerate(result.get("bubbles") or [], start=1):
+        if not isinstance(raw, dict):
+            return _blocked("tail_v2_bubble_invalid")
+        region = _normalize_visual_anchor_region(raw.get("bounds"))
+        if region is None:
+            return _blocked("tail_v2_bubble_bounds_invalid")
+        text = raw.get("text")
+        if not isinstance(text, str):
+            return _blocked("tail_v2_bubble_text_invalid")
+        bounds = {
+            "x": region["x1"],
+            "y": region["y1"],
+            "width": round(region["x2"] - region["x1"], 4),
+            "height": round(region["y2"] - region["y1"], 4),
+        }
+        bubbles.append(
+            {
+                "direction": raw.get("direction"),
+                "text": text,
+                "bounds": bounds,
+                "anchor": canonical_digest(
+                    {
+                        "direction": raw.get("direction"),
+                        "text_hash": normalized_text_hash(text),
+                        "bounds": bounds,
+                        "order": order,
+                    }
+                ),
+                "order": order,
+                "confidence": raw.get("confidence"),
+            }
+        )
+    try:
+        certificate = build_conversation_tail_v2(
+            qualification_salt=qualification_salt,
+            target_binding=target_binding,
+            viewport_identity=viewport_identity,
+            capture_id=capture_id,
+            observation_id=observation_id,
+            captured_monotonic_ns=captured_monotonic_ns,
+            bubbles=bubbles,
+        )
+    except EvidenceViolation as exc:
+        return _blocked(str(exc))
+    return {"status": "ok", **certificate}
 
 
 def _conversation_visual_anchor(screen_path: Path, *, model_anchor: str) -> dict[str, Any]:

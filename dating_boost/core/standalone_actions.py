@@ -131,7 +131,7 @@ def _stage_payload(work_item: dict[str, Any], *, app_id: str) -> dict[str, Any]:
             "live_send_executed": False,
         },
     }
-    for optional_field in ("precondition_hash", "autonomous_audit_binding"):
+    for optional_field in ("precondition_hash", "autonomous_audit_binding", "qualification_binding"):
         if work_item.get(optional_field):
             payload[optional_field] = work_item[optional_field]
     return payload
