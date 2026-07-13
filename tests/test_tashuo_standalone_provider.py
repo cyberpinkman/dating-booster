@@ -67,6 +67,48 @@ class TimeoutOnceVisionBackend:
 
 
 class TaShuoStandaloneProviderTests(unittest.TestCase):
+    def test_message_list_skips_all_messages_section_header(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            screen = Path(temp_dir) / "screen.png"
+            screen.write_bytes(b"png")
+            provider = TaShuoMacIosStandaloneObservationProvider(
+                root=Path(temp_dir) / "data",
+                output_dir=Path(temp_dir) / "harness",
+                vision_backend=ScriptedVisionBackend(
+                    {
+                        "status": "ok",
+                        "rows": [
+                            {
+                                "tap_ratio": {"x": 0.12, "y": 0.49},
+                                "visible_name": "全部消息",
+                                "latest_preview": "全部消息",
+                                "visual_anchor_hash": "all_messages_header",
+                                "visual_anchor_region": {"x1": 0.05, "y1": 0.45, "x2": 0.95, "y2": 0.54},
+                                "confidence": "high",
+                            },
+                            {
+                                "tap_ratio": {"x": 0.5, "y": 0.635},
+                                "visible_name": "Ada",
+                                "latest_preview": "你好",
+                                "visual_anchor_hash": "ada_row",
+                                "visual_anchor_region": {"x1": 0.06, "y1": 0.58, "x2": 0.94, "y2": 0.69},
+                                "confidence": "high",
+                            },
+                        ],
+                    }
+                ),
+                adapter_factory=lambda: FakeTaShuoAdapter(str(screen)),
+            )
+
+            payload = provider.observe_message_list(app_id="tashuo", scan_cursor={})
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(
+            [entry["candidate_key"] for entry in payload["message_list_snapshot"]["entries"]],
+            ["tashuo_visual_ada_row"],
+        )
+        self.assertEqual(payload["skipped_candidates"][0]["reason"], "non_chat_gate")
+
     def test_corrected_tap_ratios_keep_visual_anchor_region_on_same_row(self):
         rows = [
             {

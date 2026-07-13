@@ -1358,7 +1358,8 @@ class TaShuoProductionGui:
             return _blocked("qualification_slot_mode_invalid")
         listing = self.provider.observe_message_list(app_id="tashuo", scan_cursor={})
         if listing.get("status") != "ok":
-            return _blocked(str(listing.get("reason") or "prepare_message_page_transient"))
+            reason = str(listing.get("reason") or "prepare_message_page_transient")
+            return _blocked(reason if reason in REGISTERED_REASONS else "prepare_message_page_transient")
         if not self._provider_identity_valid():
             return _blocked("provider_identity_drift")
         candidates = [item for item in listing.get("candidates") or [] if isinstance(item, Mapping)]

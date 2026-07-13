@@ -352,6 +352,27 @@ def test_message_list_selection_reports_inconclusive_when_all_candidates_wait():
     assert gui.provider.observed_candidates == ["candidate_1", "candidate_2"]
 
 
+def test_message_list_selection_normalizes_unregistered_provider_reason():
+    gui = _selection_gui([])
+    gui.provider.observe_message_list = lambda **_kwargs: {
+        "status": "blocked",
+        "reason": "Partially visible bubble cannot be read safely.",
+    }
+
+    result = gui.select_target(
+        {
+            "slot": {"mode": "message-list"},
+            "excluded_target_hashes": [],
+        }
+    )
+
+    assert result == {
+        "schema_version": 1,
+        "status": "blocked",
+        "reason": "prepare_message_page_transient",
+    }
+
+
 def test_current_thread_selection_reports_inconclusive_when_predecessor_now_waits():
     gui = _selection_gui(["wait"])
     target_binding = {

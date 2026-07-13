@@ -194,6 +194,8 @@ def _looks_like_tashuo_non_chat_gate(combined: str, *, visible_name: str, latest
     if _looks_like_tashuo_action_artifact({"visible_name": visible_name, "latest_preview": latest_preview}):
         return True
     visible_name_lower = visible_name.strip().lower()
+    if visible_name_lower in {"全部消息", "all messages"}:
+        return True
     if visible_name_lower.startswith("tab header"):
         return True
     if "消息" in visible_name and "动态" in visible_name and len(visible_name.strip()) <= 24:
