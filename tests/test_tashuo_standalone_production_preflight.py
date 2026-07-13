@@ -212,6 +212,36 @@ def test_action_recheck_detects_credential_hmac_drift_without_second_provider_ca
     assert calls["provider"] == 1
 
 
+def test_action_recheck_preserves_endpoint_pin_when_provider_revision_is_unavailable(
+    tmp_path,
+    monkeypatch,
+):
+    _patch_host_checks(monkeypatch)
+    paths = _paths(tmp_path, suffix="revision-unavailable")
+    preflight = DefaultProductionPreflight(
+        source_checkout=Path.cwd(),
+        provider_probe=lambda _config, _credential: {
+            "status": "ok",
+            "response_model_identifier": "MiniMax-M3",
+            "revision_identifier": None,
+            "stable_provider_identifier": None,
+        },
+        ui_environment_probe=_ui_environment,
+    )
+    initial = _run(preflight, paths)
+
+    result = preflight.recheck_action(
+        snapshot_digest="snapshot-digest",
+        authorization_digest="authorization-digest",
+        qualification_salt="qualification-salt",
+        expected_environment_fingerprint=initial["environment_fingerprint"],
+    )
+
+    assert initial["environment_fingerprint"]["model_pin_level"] == "endpoint_identifier_only"
+    assert result["status"] == "ok", result
+    assert result["environment_fingerprint"]["model_pin_level"] == "endpoint_identifier_only"
+
+
 @pytest.mark.parametrize(
     ("capabilities", "reason"),
     [

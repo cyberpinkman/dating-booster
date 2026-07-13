@@ -456,7 +456,7 @@ def build_environment_fingerprint(
         raise ContractViolation("environment_model_invalid")
     model_payload = dict(model)
     provider_identifier = model_payload.get("provider_identifier")
-    if not _identifier(provider_identifier):
+    if not _identifier(provider_identifier) or provider_identifier == "revision_unavailable":
         model_payload["provider_identifier"] = "revision_unavailable"
         model_pin_level = "endpoint_identifier_only"
     else:
