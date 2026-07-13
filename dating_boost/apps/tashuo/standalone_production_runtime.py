@@ -1353,6 +1353,12 @@ class TaShuoProductionGui:
             if not _thread_has_immediate_stage_recommendation(thread):
                 return {"status": "inconclusive", "reason": "no_eligible_empty_composer"}
             target_binding = dict(thread["target_binding"])
+            confirmation = self._confirm_immediate_reply_target(candidate_key, target_binding)
+            if confirmation.get("status") == "blocked":
+                return confirmation
+            if confirmation.get("status") != "ok":
+                return {"status": "inconclusive", "reason": "no_eligible_empty_composer"}
+            target_binding = dict(confirmation["target_binding"])
             return self._eligible_target(candidate_key, target_binding)
         if mode != "message-list":
             return _blocked("qualification_slot_mode_invalid")
@@ -1380,6 +1386,12 @@ class TaShuoProductionGui:
             if not _thread_has_immediate_stage_recommendation(thread):
                 continue
             target_binding = dict(thread["target_binding"])
+            confirmation = self._confirm_immediate_reply_target(candidate_key, target_binding)
+            if confirmation.get("status") == "blocked":
+                return confirmation
+            if confirmation.get("status") != "ok":
+                continue
+            target_binding = dict(confirmation["target_binding"])
             target_hash = qualification_target_hash(self.qualification_salt, _stable_target_binding(target_binding))
             if target_hash in excluded:
                 continue
@@ -1394,6 +1406,28 @@ class TaShuoProductionGui:
         if last_occupied_hash is not None:
             result["excluded_target_hash"] = last_occupied_hash
         return result
+
+    def _confirm_immediate_reply_target(
+        self,
+        candidate_key: str,
+        target_binding: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        cached = self.provider.targets.get(candidate_key)
+        confirmation = self.provider.observe_current_thread(
+            app_id="tashuo",
+            candidate_key=candidate_key,
+            cached_target=cached,
+        )
+        if confirmation.get("status") != "ok" or not isinstance(confirmation.get("target_binding"), Mapping):
+            return {"status": "inconclusive", "reason": "no_eligible_empty_composer"}
+        if not self._provider_identity_valid():
+            return _blocked("provider_identity_drift")
+        confirmed_binding = dict(confirmation["target_binding"])
+        if not _thread_has_immediate_stage_recommendation(confirmation):
+            return {"status": "inconclusive", "reason": "no_eligible_empty_composer"}
+        if _stable_target_digest(confirmed_binding) != _stable_target_digest(target_binding):
+            return {"status": "inconclusive", "reason": "no_eligible_empty_composer"}
+        return {"schema_version": 1, "status": "ok", "target_binding": confirmed_binding}
 
     def _eligible_target(self, candidate_key: str, target_binding: Mapping[str, Any]) -> dict[str, Any]:
         from dating_boost.apps.tashuo.standalone_production_evidence import qualification_target_hash

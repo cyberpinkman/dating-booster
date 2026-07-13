@@ -262,9 +262,16 @@ class FakeWorkItems:
 
 
 class FakeSelectionProvider:
-    def __init__(self, recommendations):
+    def __init__(self, recommendations, *, confirmation_recommendations=None, confirmation_binding_suffixes=None):
         self.recommendations = list(recommendations)
+        self.confirmation_recommendations = list(confirmation_recommendations or recommendations)
+        self.confirmation_binding_suffixes = list(confirmation_binding_suffixes or [None] * len(recommendations))
         self.observed_candidates = []
+        self.confirmed_candidates = []
+        self.targets = {
+            f"candidate_{index}": {"candidate_key": f"candidate_{index}"}
+            for index in range(1, len(self.recommendations) + 1)
+        }
 
     def observe_message_list(self, *, app_id, scan_cursor):
         return {
@@ -281,23 +288,42 @@ class FakeSelectionProvider:
     def observe_thread(self, *, app_id, candidate_key):
         self.observed_candidates.append(candidate_key)
         index = int(candidate_key.rsplit("_", 1)[1]) - 1
+        return self._thread_payload(candidate_key, index=index, recommendation=self.recommendations[index])
+
+    def observe_current_thread(self, *, app_id, candidate_key, cached_target):
+        self.confirmed_candidates.append(candidate_key)
+        index = int(candidate_key.rsplit("_", 1)[1]) - 1
+        return self._thread_payload(
+            candidate_key,
+            index=index,
+            recommendation=self.confirmation_recommendations[index],
+            binding_suffix=self.confirmation_binding_suffixes[index],
+        )
+
+    @staticmethod
+    def _thread_payload(candidate_key, *, index, recommendation, binding_suffix=None):
+        suffix = f"_{binding_suffix}" if binding_suffix else ""
         return {
             "status": "ok",
-            "assessment": {"recommended_next": self.recommendations[index]},
+            "assessment": {"recommended_next": recommendation},
             "target_binding": {
                 "schema_version": 1,
                 "binding_type": "current_thread_visual_identity",
                 "candidate_key": candidate_key,
-                "thread_evidence": {"visual_anchor_hash": f"thread_{index}"},
+                "thread_evidence": {"visual_anchor_hash": f"thread_{index}{suffix}"},
                 "message_list_evidence": {"visual_anchor_hash": f"list_{index}"},
             },
         }
 
 
-def _selection_gui(recommendations):
+def _selection_gui(recommendations, *, confirmation_recommendations=None, confirmation_binding_suffixes=None):
     gui = TaShuoProductionGui.__new__(TaShuoProductionGui)
     gui.qualification_salt = "selection_test_salt"
-    gui.provider = FakeSelectionProvider(recommendations)
+    gui.provider = FakeSelectionProvider(
+        recommendations,
+        confirmation_recommendations=confirmation_recommendations,
+        confirmation_binding_suffixes=confirmation_binding_suffixes,
+    )
     gui._provider_identity_valid = lambda: True
     gui.read_composer = lambda: {"status": "ok", "value": ""}
     gui._eligible_target = lambda candidate_key, target_binding: {
@@ -336,6 +362,41 @@ def test_message_list_selection_skips_deferred_nudge_candidate():
     assert result["status"] == "eligible"
     assert result["candidate_key"] == "candidate_2"
     assert gui.provider.observed_candidates == ["candidate_1", "candidate_2"]
+
+
+def test_message_list_selection_requires_reply_on_consecutive_observations():
+    gui = _selection_gui(
+        ["reply", "reply"],
+        confirmation_recommendations=["wait", "reply"],
+    )
+
+    result = gui.select_target(
+        {
+            "slot": {"mode": "message-list"},
+            "excluded_target_hashes": [],
+        }
+    )
+
+    assert result["status"] == "eligible"
+    assert result["candidate_key"] == "candidate_2"
+    assert gui.provider.confirmed_candidates == ["candidate_1", "candidate_2"]
+
+
+def test_message_list_selection_rejects_reply_confirmation_with_changed_binding():
+    gui = _selection_gui(
+        ["reply"],
+        confirmation_recommendations=["reply"],
+        confirmation_binding_suffixes=["changed"],
+    )
+
+    result = gui.select_target(
+        {
+            "slot": {"mode": "message-list"},
+            "excluded_target_hashes": [],
+        }
+    )
+
+    assert result == {"status": "inconclusive", "reason": "no_eligible_empty_composer"}
 
 
 def test_message_list_selection_reports_inconclusive_when_all_candidates_wait():
