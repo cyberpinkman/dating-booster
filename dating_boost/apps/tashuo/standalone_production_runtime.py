@@ -1350,6 +1350,8 @@ class TaShuoProductionGui:
                 return _blocked("provider_identity_drift")
             if _stable_target_digest(thread.get("target_binding")) != _stable_target_digest(target_binding):
                 return _blocked("target_mismatch")
+            if not _thread_has_immediate_stage_recommendation(thread):
+                return {"status": "inconclusive", "reason": "no_eligible_empty_composer"}
             target_binding = dict(thread["target_binding"])
             return self._eligible_target(candidate_key, target_binding)
         if mode != "message-list":
@@ -1374,6 +1376,8 @@ class TaShuoProductionGui:
                 continue
             if not self._provider_identity_valid():
                 return _blocked("provider_identity_drift")
+            if not _thread_has_immediate_stage_recommendation(thread):
+                continue
             target_binding = dict(thread["target_binding"])
             target_hash = qualification_target_hash(self.qualification_salt, _stable_target_binding(target_binding))
             if target_hash in excluded:
@@ -1576,6 +1580,11 @@ class BoundProductionObservationProvider:
         return result
 
 
+def _thread_has_immediate_stage_recommendation(payload: Mapping[str, Any]) -> bool:
+    assessment = payload.get("assessment")
+    return isinstance(assessment, Mapping) and assessment.get("recommended_next") == "reply"
+
+
 class ExistingStandaloneWorkItems:
     def __init__(self, *, paths: QualificationPaths, gui: TaShuoProductionGui):
         self.paths = paths
@@ -1689,9 +1698,13 @@ class ExistingStandaloneWorkItems:
                     "work_item": tick["work_item"],
                     "provider_identity": provider_identity,
                 }
-            if tick.get("status") in {"blocked", "error", "no_work"}:
+            if tick.get("status") == "no_work" or tick.get("reason") == (
+                "qualification_bound_provider_requires_current_thread"
+            ):
+                return _blocked("precondition_mismatch")
+            if tick.get("status") in {"blocked", "error"}:
                 return _blocked(str(tick.get("reason") or "worker_exception"))
-        return _blocked("worker_exception")
+        return _blocked("precondition_mismatch")
 
     def record_stage(
         self,

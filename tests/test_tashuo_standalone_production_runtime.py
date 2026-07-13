@@ -20,7 +20,9 @@ from dating_boost.apps.tashuo.standalone_production_evidence import (
 )
 from dating_boost.apps.tashuo.standalone_production_ledger import ProductionQualificationLedger
 from dating_boost.apps.tashuo.standalone_production_runtime import (
+    ExistingStandaloneWorkItems,
     ProductionAttemptEngine,
+    TaShuoProductionGui,
     TaShuoStandaloneProductionRuntime,
     _stable_target_binding,
     _tail_content_digest,
@@ -257,6 +259,224 @@ class FakeWorkItems:
 
     def close(self):
         self.closed = True
+
+
+class FakeSelectionProvider:
+    def __init__(self, recommendations):
+        self.recommendations = list(recommendations)
+        self.observed_candidates = []
+
+    def observe_message_list(self, *, app_id, scan_cursor):
+        return {
+            "status": "ok",
+            "candidates": [
+                {"candidate_key": f"candidate_{index}"}
+                for index in range(1, len(self.recommendations) + 1)
+            ],
+        }
+
+    def precheck_payload(self, *, app_id):
+        return {"status": "ok"}
+
+    def observe_thread(self, *, app_id, candidate_key):
+        self.observed_candidates.append(candidate_key)
+        index = int(candidate_key.rsplit("_", 1)[1]) - 1
+        return {
+            "status": "ok",
+            "assessment": {"recommended_next": self.recommendations[index]},
+            "target_binding": {
+                "schema_version": 1,
+                "binding_type": "current_thread_visual_identity",
+                "candidate_key": candidate_key,
+                "thread_evidence": {"visual_anchor_hash": f"thread_{index}"},
+                "message_list_evidence": {"visual_anchor_hash": f"list_{index}"},
+            },
+        }
+
+
+def _selection_gui(recommendations):
+    gui = TaShuoProductionGui.__new__(TaShuoProductionGui)
+    gui.qualification_salt = "selection_test_salt"
+    gui.provider = FakeSelectionProvider(recommendations)
+    gui._provider_identity_valid = lambda: True
+    gui.read_composer = lambda: {"status": "ok", "value": ""}
+    gui._eligible_target = lambda candidate_key, target_binding: {
+        "status": "eligible",
+        "candidate_key": candidate_key,
+        "probe_target_binding": dict(target_binding),
+    }
+    return gui
+
+
+def test_message_list_selection_skips_planner_wait_candidate():
+    gui = _selection_gui(["wait", "reply"])
+
+    result = gui.select_target(
+        {
+            "slot": {"mode": "message-list"},
+            "excluded_target_hashes": [],
+        }
+    )
+
+    assert result["status"] == "eligible"
+    assert result["candidate_key"] == "candidate_2"
+    assert gui.provider.observed_candidates == ["candidate_1", "candidate_2"]
+
+
+def test_message_list_selection_skips_deferred_nudge_candidate():
+    gui = _selection_gui(["nudge_later", "reply"])
+
+    result = gui.select_target(
+        {
+            "slot": {"mode": "message-list"},
+            "excluded_target_hashes": [],
+        }
+    )
+
+    assert result["status"] == "eligible"
+    assert result["candidate_key"] == "candidate_2"
+    assert gui.provider.observed_candidates == ["candidate_1", "candidate_2"]
+
+
+def test_message_list_selection_reports_inconclusive_when_all_candidates_wait():
+    gui = _selection_gui(["wait", "wait"])
+
+    result = gui.select_target(
+        {
+            "slot": {"mode": "message-list"},
+            "excluded_target_hashes": [],
+        }
+    )
+
+    assert result == {"status": "inconclusive", "reason": "no_eligible_empty_composer"}
+    assert gui.provider.observed_candidates == ["candidate_1", "candidate_2"]
+
+
+def test_current_thread_selection_reports_inconclusive_when_predecessor_now_waits():
+    gui = _selection_gui(["wait"])
+    target_binding = {
+        "schema_version": 1,
+        "binding_type": "current_thread_visual_identity",
+        "candidate_key": "candidate_1",
+        "thread_evidence": {"visual_anchor_hash": "thread_0"},
+        "message_list_evidence": {"visual_anchor_hash": "list_0"},
+    }
+
+    result = gui.select_target(
+        {
+            "slot": {"mode": "current-thread"},
+            "predecessor_binding": {
+                "candidate_key": "candidate_1",
+                "target_binding": target_binding,
+            },
+        }
+    )
+
+    assert result == {"status": "inconclusive", "reason": "no_eligible_empty_composer"}
+
+
+@pytest.mark.parametrize(
+    "tick_result",
+    [
+        {"status": "no_work", "reason": "no_wake_condition"},
+        {
+            "status": "blocked",
+            "reason": "qualification_bound_provider_requires_current_thread",
+        },
+        {"status": "work_consumed"},
+    ],
+)
+def test_existing_work_items_classifies_missing_stage_work_as_precondition_mismatch(
+    tmp_path,
+    monkeypatch,
+    tick_result,
+):
+    paths = _paths(tmp_path)
+    ledger = ProductionQualificationLedger(paths.data_dir)
+    ledger.insert_if_absent(
+        "standalone_production/config/authorization_1.json",
+        {"schema_version": 1, "authorization": {"authorization_id": "auth_1"}},
+    )
+    ledger.insert_if_absent(
+        "standalone_production/qualifications/qual_runtime.json",
+        {
+            "schema_version": 1,
+            "qualification_id": "qual_runtime",
+            "environment_fingerprint": {
+                "model": {
+                    "backend": "minimax",
+                    "model_identifier": "MiniMax-M3",
+                    "vision_backend": "minimax",
+                    "vision_model_identifier": "MiniMax-M3",
+                }
+            },
+        },
+    )
+
+    class FakeManagedSessionRepository:
+        def __init__(self, root, harness_factory=None):
+            pass
+
+        def status(self):
+            return {"status": "not_found"}
+
+        def start(self, **kwargs):
+            return {"status": "active"}
+
+    class FakeStandaloneSessionRepository:
+        def __init__(self, root):
+            pass
+
+        def status(self):
+            return {"status": "not_found"}
+
+        def start(self, **kwargs):
+            return {"status": "active"}
+
+        def record_tick(self, payload):
+            return {"status": "ok"}
+
+    class FakeStandaloneAgentRuntime:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def tick(self):
+            return dict(tick_result)
+
+    class FakeStandaloneDraftPlanner:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(
+        "dating_boost.core.managed_session.ManagedSessionRepository",
+        FakeManagedSessionRepository,
+    )
+    monkeypatch.setattr(
+        "dating_boost.core.standalone_session.StandaloneSessionRepository",
+        FakeStandaloneSessionRepository,
+    )
+    monkeypatch.setattr(
+        "dating_boost.core.standalone_runtime.StandaloneAgentRuntime",
+        FakeStandaloneAgentRuntime,
+    )
+    monkeypatch.setattr(
+        "dating_boost.core.standalone_runtime.StandaloneDraftPlanner",
+        FakeStandaloneDraftPlanner,
+    )
+    gui = type("DiagnosticGui", (), {"provider": object()})()
+
+    result = ExistingStandaloneWorkItems(paths=paths, gui=gui).prepare(
+        binding=_binding(),
+        target=_target(),
+        slot={"mode": "message-list"},
+        authorization_record_id="authorization_1",
+    )
+
+    assert result == {
+        "schema_version": 1,
+        "status": "blocked",
+        "reason": "precondition_mismatch",
+    }
 
 
 def _engine(
