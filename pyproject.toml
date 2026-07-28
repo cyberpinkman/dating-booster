@@ -5,7 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dating-booster"
 version = "1.0.0-rc.2.dev0"
-description = "Local-first dating workflow copilot experiments."
+description = "Local-first memory, drafting, safety, and GUI workflow tools for dating assistants."
+readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]

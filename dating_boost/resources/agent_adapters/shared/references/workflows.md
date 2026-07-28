@@ -6,12 +6,14 @@ logic.
 
 ## Preflight
 
-1. Run capabilities.
-2. Confirm the requested app id is supported.
-3. Confirm host-loop or native harness support before touching app UI.
-4. Start a local support session for the host, app id, and exact data dir that
+1. Run the installed adapter/skill doctor and release doctor.
+2. Run data doctor; migrate and rerun it before support-session start if needed.
+3. Run capabilities and confirm the requested app id/runtime is supported.
+4. Confirm host-loop or native harness support before touching app UI.
+5. Start a local support session for the host, app id, and exact data dir that
    subsequent CLI, harness, or host-loop commands will use.
-5. Stop on unsupported app ids.
+6. Select the app/runtime for that data dir and stop on any mismatch or
+   unsupported app id.
 
 ## Observe And Draft
 
@@ -74,8 +76,12 @@ keep all harness, host-loop, and managed-session work inside that selected
 scope. For TaShuo local Mac iOS app sessions, pass `--harness-runtime
 mac-ios-app`; if that flag is omitted under a mac-ios-app scope, the run must
 block with `runtime_scope_mismatch` instead of falling back to iPhone Mirroring.
-For real TaShuo mac-ios-app stage-only smoke, use
-`python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`.
+The TaShuo mac-ios-app helper
+`python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`
+is stage-only, but currently stops at
+`managed_session_config_confirmation_required` and cannot accept the returned
+config. Use it only for preflight/config proposal, then continue through the
+generic two-phase managed-session flow after user confirmation.
 `managed-session run/tick` returns `relationship_progress_snapshot` for
 all-object state, waiting reasons, next wake, and next priority queue while the
 session remains active. Stop/final responses should present
@@ -92,12 +98,13 @@ flow with hashes. Do not handcraft action requests.
 
 ## Conversation Targeting
 
-For existing Tinder conversations, prefer visible-name or target-binding
-navigation. Raw row coordinates are compatibility fallbacks only after the
-visible message-list target is clearly stable.
+For existing Tinder/Bumble conversations, a visible name may assist
+navigation, but managed live send requires one of the app capability's
+structural row-to-thread or current-thread visual identity bindings. Raw row
+coordinates are compatibility navigation fallbacks, not send identity.
 
 ## Unsupported App
 
-Unsupported apps are roadmap candidates only. Do not create runtime app profile
-files or expose them in capabilities until fixtures, profile contract, and
-native or host-loop behavior are testable.
+Unsupported apps remain unavailable. Do not create runtime app profile files or
+expose them in capabilities until fixtures, profile contract, and native or
+host-loop behavior are testable.

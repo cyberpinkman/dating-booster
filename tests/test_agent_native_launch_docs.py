@@ -121,7 +121,31 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
         self.assertIn(".DS_Store", gitignore)
         self.assertIn("uv.lock", gitignore)
 
-    def test_architecture_docs_cover_future_expansion_axes(self):
+    def test_public_readme_is_user_facing_not_an_internal_protocol_dump(self):
+        readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        self.assertLessEqual(len(readme_text.splitlines()), 220)
+        for heading in (
+            "## 它能做什么",
+            "## 当前支持范围",
+            "## 给人类的快速开始",
+            "## 安全与隐私",
+            "## 文档导航",
+        ):
+            self.assertIn(heading, readme_text)
+        for internal_detail in (
+            "visual_anchor_hash",
+            "canary_accept_token",
+            "standalone_production_runner",
+            "100 committed cycles",
+            "8 monotonic hours",
+            "event hash chain",
+        ):
+            self.assertNotIn(internal_detail, readme_text)
+        self.assertIn("docs/superpowers/", readme_text)
+        self.assertIn("不是用户操作手册", readme_text)
+
+    def test_architecture_docs_cover_current_extension_axes_without_roadmap_dump(self):
         architecture_text = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8").lower()
         docs_readme = (ROOT / "docs" / "README.md").read_text(encoding="utf-8").lower()
         root_readme = (ROOT / "README.md").read_text(encoding="utf-8").lower()
@@ -135,7 +159,6 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
             "wechat",
             "bumble",
             "tashuo",
-            "hinge",
             "meet_in_person",
             "goal type registry",
             "memory evolution",
@@ -144,6 +167,13 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
             "no duplicated domain logic",
         ):
             self.assertIn(phrase, architecture_text)
+        for internal_planning_term in (
+            "extension priorities",
+            "roadmap candidate",
+            "future mcp",
+            "p3 is not",
+        ):
+            self.assertNotIn(internal_planning_term, architecture_text)
         self.assertIn("docs/architecture.md", docs_readme)
         self.assertIn("docs/architecture.md", root_readme)
 
@@ -156,11 +186,14 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
         standalone_message_list = standalone_fixture / "message_list.json"
 
         self.assertIn("standalone-session", readme)
-        self.assertIn("DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start", readme)
-        self.assertIn("--authorization tests/fixtures/standalone/auth_tinder_stage.json", readme)
+        self.assertIn("Host-native 是默认路径", readme)
+        self.assertIn("standalone GUI executor 只支持 stage", readme)
+        self.assertIn("standalone live send 未启用", readme)
+        self.assertNotIn("--authorization tests/fixtures/standalone/auth_tinder_stage.json", readme)
         self.assertIn("host-native remains the default", agents)
         self.assertIn("DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start", agents)
         self.assertIn("--authorization tests/fixtures/standalone/auth_tinder_stage.json", agents)
+        self.assertIn("managed_session_config_confirmation_required", agents)
         self.assertIn("Standalone Agent Runtime", architecture)
         self.assertTrue(standalone_auth.exists())
         self.assertTrue(standalone_message_list.exists())

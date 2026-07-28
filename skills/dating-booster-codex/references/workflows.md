@@ -1,16 +1,17 @@
 # Dating Booster Agent-Native Workflows
 
 These workflows are for host agents using Dating Booster as local memory, context,
-policy, and audit tools. They do not replace the repository specs.
+policy, and audit tools. They do not replace current CLI capabilities, app
+profiles, shared contracts, core code, or tests.
 
 ## Startup
 
 1. Choose a data directory, usually `.local/dating-boost`.
 2. Run `dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json`.
 3. If doctor returns `needs_bootstrap` and you are running from the installed skill directory, run the package-relative `python3 scripts/bootstrap_cli.py`, then run doctor again.
-4. Run the same `dating-boost skill doctor` command when debugging package compatibility from the CLI.
+4. Run `dating-boost release doctor --json`.
 5. Run `dating-boost data doctor --data-dir .local/dating-boost --json`.
-6. If the data doctor reports `needs_migration`, run `dating-boost data migrate --data-dir .local/dating-boost --json`.
+6. If data doctor reports `needs_migration`, run `dating-boost data migrate --data-dir .local/dating-boost --json`, then rerun data doctor.
 7. Run `dating-boost capabilities --json --data-dir .local/dating-boost`.
 8. Load `skill-package.json` and compare `dating_boost_min_version`,
    `required_schema_versions`, and `required_commands`.
@@ -18,12 +19,12 @@ policy, and audit tools. They do not replace the repository specs.
 10. Warn, but do not automatically stop, if `source_spec_commit` differs while
    version, schema, and command checks pass.
 11. After the target app id is known, run `dating-boost support session start --data-dir .local/dating-boost --host codex --app-id <app-id> --json` and keep `session_id`. If host-loop runs with a different `--data-dir`, start a separate support session for that host-loop data dir before `dating-boost-host-loop run`.
-12. For real iPhone Mirroring work, run `dating-boost runtime select --data-dir .local/dating-boost --app-id tinder --runtime default --json`, then `dating-boost harness doctor --app-id tinder --data-dir .local/dating-boost --json`.
-13. Use `dating-boost harness tinder launch --dry-run --data-dir .local/dating-boost --json`,
+12. Select exactly one target app/runtime for the data dir, then run its harness doctor. For example, real Tinder uses `dating-boost runtime select --data-dir .local/dating-boost --app-id tinder --runtime default --json`, followed by `dating-boost harness doctor --app-id tinder --data-dir .local/dating-boost --json`.
+13. For Tinder, use `dating-boost harness tinder launch --dry-run --data-dir .local/dating-boost --json`,
     `dating-boost harness tinder open-profile --dry-run --data-dir .local/dating-boost --json`, and the
     relevant `harness tinder action/workflow --dry-run --json` before executing
     Tinder navigation.
-14. Before real GUI work, select the target app/runtime with `dating-boost runtime select --data-dir .local/dating-boost --app-id <app_id> --runtime <runtime> --json`. After selection, every harness command must use the same `--data-dir` and matching app/runtime. For real macOS WeChat work, select `--app-id wechat --runtime default`, then run the WeChat harness commands with `--data-dir .local/dating-boost` before staging any draft.
+14. After runtime selection, every harness, host-loop, and managed-session command must use the same `--data-dir` and matching app/runtime. For real macOS WeChat work, select `--app-id wechat --runtime default`, then run the WeChat harness commands with `--data-dir .local/dating-boost` before staging any draft.
 15. Before ending, run `dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json`.
 
 For manual diagnostics, write a redacted payload JSON and optional sensitive
@@ -517,8 +518,17 @@ production default.
 Before starting, select the app/runtime with `runtime select`; during the
 session, harness/host-loop/managed-session work must stay inside that scope.
 
+Run `start` once and stop at the configuration proposal:
+
 ```bash
 dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --json
+```
+
+After the user confirms `proposed_config`, rerun with the returned token and
+only then enter the wait loop:
+
+```bash
+dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --config-confirm managed-session-config:<hash> --json
 dating-boost managed-session run --data-dir .local/dating-boost --wait --json
 ```
 
@@ -527,8 +537,12 @@ For TaShuo local Mac iOS app managed sessions, add
 `--harness-runtime mac-ios-app`. If the current scope selected mac-ios-app and
 the flag is omitted, the run blocks with `runtime_scope_mismatch` before any
 default-runtime GUI adapter is created.
-Real TaShuo mac-ios-app smoke check, stage-only:
-`python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`.
+The TaShuo mac-ios-app helper
+`python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`
+is stage-only, but currently stops at
+`managed_session_config_confirmation_required` and cannot accept the returned
+config. Use it only for preflight/config proposal, then continue through the
+generic two-phase managed-session flow after user confirmation.
 Tinder/Bumble iPhone Mirroring smoke check, stage-only:
 `python3 scripts/iphone_mirroring_managed_smoke.py --app-id tinder --data-dir .local/dating-boost --work-dir .local/dating-boost-iphone-smoke --authorization auth.json --goal goal.json --availability availability.json --json`
 or the same command with `--app-id bumble`. The wrapper runs skill doctor,

@@ -2,8 +2,8 @@
 
 Dating Booster is a host-agent native capability layer for dating workflows.
 The durable product value is not tied to one agent, one app, one goal, or one
-memory shape. The architecture must keep those four axes separate so future
-work does not become patches stacked on top of Codex-only or Tinder-only code.
+memory shape. The architecture keeps those four axes separate so each
+integration can reuse the same product contracts.
 
 Dating Booster 是面向 host agent 的 dating workflow 能力层。核心价值不能绑死在
 某一个 agent、某一个 app、某一个目标或某一种记忆结构上。后续扩展必须沿清晰的
@@ -13,7 +13,7 @@ Dating Booster 是面向 host agent 的 dating workflow 能力层。核心价值
 
 ```text
 host agent adapter
-  -> CLI / future MCP tools
+  -> CLI and host adapter tools
   -> app support profile contract
   -> native GUI harness, only when testable
   -> observation / memory / context / planner / policy / audit core
@@ -46,34 +46,32 @@ stage-only attempt, exact staged text verification, verified target, and no live
 send. Saved smoke output can be rechecked with
 `python3 scripts/tashuo_mac_ios_standalone_alpha_gate.py --data-dir .local/dating-boost --smoke-json tashuo-standalone-smoke.json --json`.
 
-The TaShuo standalone production Gate is an app-specific orchestration layer over those same neutral contracts. `standalone_production_contract.py` owns fixed thresholds and state machines; `standalone_production_ledger.py` owns encrypted CAS records and the event hash chain; `standalone_production_lock.py` and `core/gui_runtime_lock.py` own local/shared fencing; `standalone_production_attempt.py` owns mutation and cleanup transitions; `standalone_production_runtime.py` owns isolated workers and the existing standalone/operator execution path; `standalone_production_artifacts.py` owns evidence sealing, validation, retention, and purge; and `standalone_production_runner.py` composes Canary, Soak, resume, finalization, and janitor behavior. This Gate remains stage-only and does not change live-send policy.
+The TaShuo standalone production Gate composes those same neutral contracts and
+remains stage-only. Its implementation lives under
+`dating_boost/apps/tashuo/standalone_production_*`; operational acceptance rules
+belong in `AGENTS.md` and the agent runbook. Having the Gate in source is not a
+qualification certificate for any machine and does not change live-send policy.
 
-Migration order:
+Current rollout status:
 
-1. TaShuo mac-ios-app live GUI stage mode.
-2. fixture and cross-app development paths.
-3. local `ModelBackend` draft planning.
-4. daemon-supervised run-once ticks.
-5. live GUI send only through existing verification contracts.
-
-## Extension Priorities
-
-| Priority | Axis | Immediate shape | Long-term shape |
-| --- | --- | --- | --- |
-| P1 | More host agents | Codex and Claude Code installable adapters | Codex, Claude Code, Hermes, OpenClaw, and MCP-compatible hosts |
-| P1 | More dating apps | App support profiles for Tinder, WeChat, managed-send Bumble, and managed-send TaShuo; roadmap candidates include Hinge and other mainstream apps | New apps graduate into runtime profiles only after fixtures, preflight, and harness or host-loop tests exist |
-| P2 | More user goals | `meet_in_person` remains the first supported goal | Goal type registry with goal-specific milestones, policy rules, handoff rules, and context requirements |
-| P3 | Smarter workflows and memory | Planner, topic lifecycle, feedback, and match-local goal plans | Memory evolution with stronger provenance, learned preferences, scenario-specific workflows, and self-improving summaries |
+1. Host-native workflows remain the default production route.
+2. TaShuo `mac-ios-app` is the primary standalone runtime and remains
+   stage-first.
+3. Scripted fixtures support deterministic cross-app development; standalone
+   production providers for Tinder, Bumble, and WeChat have not graduated.
+4. TaShuo production qualification is environment-specific and stage-only; it
+   does not change or certify live-send policy.
 
 ## Host Agent Adapter Axis
 
-Codex is the first adapter, not the architecture. Claude Code now has its own
-installable adapter package. Future Hermes, OpenClaw, and other host agents
-should use the same local CLI contracts and future MCP tools.
+Codex is the first adapter, not the architecture. Claude Code and OpenClaw now
+have installable adapter packages, and Hermes uses the verified
+OpenClaw-compatible contract. Additional hosts must reuse the same local CLI
+contracts.
 
-Codex 是第一个 adapter，不是架构本体。Claude Code 已有独立可安装 adapter
-package。Hermes、OpenClaw 等后续 host agent 必须复用相同本地 CLI contract 和未来
-MCP tools。
+Codex 是第一个 adapter，不是架构本体。Claude Code 和 OpenClaw 已有可安装
+adapter package，Hermes 使用经过验证的 OpenClaw-compatible contract。新增
+host 必须复用相同本地 CLI contract。
 
 Rules:
 
@@ -98,13 +96,13 @@ Runtime app profiles are only for apps Dating Booster can actually support.
 Bumble has graduated to iPhone Mirroring navigation plus opt-in managed
 ordinary chat send. TaShuo supports the iPhone Mirroring path and, on Apple
 Silicon Macs, the optional mac-ios-app runtime for launch/observe/stage plus
-managed ordinary chat send. Roadmap candidates such as Hinge and other
-mainstream dating apps stay in planning docs until the path is testable.
+managed ordinary chat send. Unsupported apps stay outside runtime discovery
+until their path is testable.
 
 runtime app profile 只用于已经可支持的 app。Bumble 已进入 iPhone Mirroring
 导航和授权托管普通聊天发送支持；她说支持 iPhone Mirroring 路径，并在 Apple
 Silicon Mac 上支持可选 mac-ios-app runtime 的 launch/observe/stage 和托管普通聊天发送；
-Hinge 以及其他主流 dating app 在测试路径明确前只作为 roadmap candidate，不进入 capabilities。
+未支持的 app 在测试路径明确前不进入 capabilities。
 
 Support levels:
 
@@ -133,21 +131,27 @@ Implementation rules:
   `tests/test_app_profiles.py` keeps profile files aligned.
 - `dating_boost/core/capabilities.py`, managed sessions, host loop, and CLI
   harness commands derive supported apps from the registry.
-- `dating_boost/core/gui_harness.py` owns native GUI mechanics only: window
+- `dating_boost/harness/native_gui.py` owns native GUI mechanics: window
   location, screenshot/OCR, click/swipe/wheel, clipboard/paste, IME commit, and
-  platform backend execution.
+  platform backend execution. `dating_boost/core/gui_harness.py` is only a
+  compatibility import surface.
 - Unsupported apps must be absent from `app_profiles/`, capabilities, native
   harness commands, and host-loop execution.
 
 ## Goal Type Axis
 
-The first goal is `meet_in_person`, but the planner should not remain hardcoded
-to one romantic progression. P2 requires a goal type registry.
+`dating_boost/core/goals.py` defines the current goal type registry.
+`meet_in_person` is the default, alongside `build_rapport`,
+`screen_compatibility`, `revive_stalled_chat`, and `maintain_connection`.
+Planner behavior must come from the selected definition instead of assuming
+every conversation should progress toward a meeting.
 
-当前第一目标是 `meet_in_person`，但 planner 不能长期硬编码成“推进约见”。P2 需要
-goal type registry。
+`dating_boost/core/goals.py` 已实现 goal type registry。`meet_in_person` 是默认
+目标，同时支持 `build_rapport`、`screen_compatibility`、
+`revive_stalled_chat` 和 `maintain_connection`。Planner 必须读取所选目标定义，
+不能假设每段对话都要推进约见。
 
-Goal type registry requirements:
+Each goal definition contains:
 
 - `goal_type`: stable id such as `meet_in_person`, `build_rapport`,
   `screen_compatibility`, `revive_stalled_chat`, or `maintain_connection`.
@@ -164,10 +168,6 @@ from the goal.
 
 ## Workflow And Memory Axis
 
-P3 is not a single feature. It is a memory evolution path.
-
-P3 不是单个功能，而是一条 memory evolution 路线。
-
 Current memory surfaces:
 
 - user profile and disclosure readiness.
@@ -179,7 +179,7 @@ Current memory surfaces:
   low-investment repair signals.
 - action audit and replay.
 
-Future memory evolution should follow these rules:
+Memory evolution follows these rules:
 
 - Facts require provenance. Inferences must stay marked as inferences.
 - Memory summaries must be versioned and reversible from raw local event logs
@@ -199,7 +199,7 @@ Future memory evolution should follow these rules:
 - Do not add a new host agent by copying the Codex skill and editing wording
   only. Extract shared references or clearly mark what is host-specific.
 - Do not add a new dating app by adding coordinates first. Add fixtures,
-  preflight, and a support-level decision before adding a runtime app profile.
+  preflight, and support-contract evidence before adding a runtime app profile.
 - Do not add a new goal by branching on strings in prompts only. Add or extend
   the goal type registry and planner contract.
 - Do not add memory by appending free-form text to one file. Define the event,
@@ -220,7 +220,7 @@ For a new host agent adapter:
 
 For a new app:
 
-1. Keep it as a roadmap candidate until fixtures and preflight are testable.
+1. Keep it outside runtime discovery until fixtures and preflight are testable.
 2. Add `app_profiles/<app_id>.json` using schema v2 only when the app is
    runtime-supported.
 3. Add `dating_boost/apps/<app_id>/adapter.py` and register it in

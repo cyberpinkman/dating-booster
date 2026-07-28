@@ -263,9 +263,22 @@ For Tinder, Bumble, TaShuo, and WeChat, the agent-facing managed live-send path 
 `managed-session` or `dating-boost-host-loop`; do not handcraft
 `action_request.json`.
 
+For the managed-session route, obtain and present the configuration proposal:
+
 ```bash
 dating-boost managed-session start --app-id <app_id> --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode live --managed-gui-send --json
+```
+
+Only after the user confirms it, rerun with the returned token and then wait:
+
+```bash
+dating-boost managed-session start --app-id <app_id> --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode live --managed-gui-send --config-confirm managed-session-config:<hash> --json
 dating-boost managed-session run --data-dir .local/dating-boost --wait --json
+```
+
+The host-loop route is an alternative managed executor:
+
+```bash
 dating-boost-host-loop run --adapter-package agent_adapters/openclaw/adapter-package.json --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id <app_id> --send-mode live --managed-gui-send --work-dir .local/dating-boost-host-loop --json
 ```
 
@@ -313,14 +326,26 @@ For TaShuo local Mac iOS app managed sessions, pass
 `--harness-runtime mac-ios-app`. If the current scope selected mac-ios-app and
 that flag is omitted, block with `runtime_scope_mismatch` instead of falling
 back to iPhone Mirroring.
-For real TaShuo mac-ios-app stage-only smoke, use
-`python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`.
+The TaShuo mac-ios-app helper
+`python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`
+is stage-only, but currently stops at
+`managed_session_config_confirmation_required` and cannot accept the returned
+config. Use it only for preflight/config proposal, then continue through the
+generic two-phase managed-session flow after user confirmation.
 `managed-session run/tick` includes `relationship_progress_snapshot` for
 all-object state, waiting reasons, next wake, and next priority queue while the
 session remains active.
 
+First obtain the configuration proposal:
+
 ```bash
 dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --json
+```
+
+After the user confirms `proposed_config`:
+
+```bash
+dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --config-confirm managed-session-config:<hash> --json
 dating-boost managed-session run --data-dir .local/dating-boost --wait --json
 dating-boost managed-session notify --data-dir .local/dating-boost --source manual --app-id tinder --json
 dating-boost managed-session status --data-dir .local/dating-boost --json

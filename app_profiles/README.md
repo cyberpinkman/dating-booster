@@ -36,6 +36,8 @@ every `app_profiles/*.json` file against the same required contract shape.
 - `message_list_observation`: rules for visible conversation-list scanning.
 - `thread_observation`: rules for thread-level observation and turn boundaries.
 - `stage_send_verification`: rules for staged draft verification.
+- `native_gui_harness`: legacy-compatible runtime backend, selectors, supported
+  actions, staging behavior, blocked actions, and live-send evidence.
 - `adapter`: runtime adapter backend/module/class/default-window-title.
 - `cli_aliases`: optional compatibility CLI commands generated from profile
   metadata, such as Tinder's `open-profile` alias for `open_profile`.
@@ -48,9 +50,10 @@ every `app_profiles/*.json` file against the same required contract shape.
   boundary.
 - `live_send_requirements`: exact evidence required before/after live send.
 - `managed_session`: profile-owned precheck failure status and recovery action.
-  It also declares default/high-throughput per-cycle thread/page budgets,
+  It also declares default/high-throughput per-cycle thread budgets,
   `cycle_send_limit`, whether message-list pagination is supported, and
-  optional runtime-specific precheck recovery actions.
+  optional runtime-specific precheck recovery actions. Page depth is
+  framework-controlled, not a profile or user-configurable budget.
 - `special_policies`: app-specific social rules such as Bumble Opening Move or
   TaShuo question gate.
 - `post_send_verification`: rules for recording a send result.
@@ -105,8 +108,8 @@ goal-type, or memory-evolution changes unless the same product increment truly
 requires it.
 
 1. Create `app_profiles/<app_id>.json` with schema v2 fields above.
-2. Do not create a placeholder profile for an unsupported app. Keep roadmap
-   candidates in `docs/ARCHITECTURE.md` until the runtime path is testable.
+2. Do not create a placeholder profile for an unsupported app. Keep it outside
+   runtime discovery until the runtime path is testable.
 3. Add `dating_boost/apps/<app_id>/adapter.py` implementing the standard
    adapter methods: `doctor`, `launch`, `observe`, `run_action`, `run_workflow`,
    `stage_draft`, `send_message`, `target_binding_policy`, and

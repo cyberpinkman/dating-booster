@@ -1,16 +1,24 @@
 # Dating Booster Codex References
 
-The source of truth remains the repository specs under `docs/superpowers/specs/`.
-Files in this directory are short operational references for host agents and
-must stay compatible with `skill-package.json`.
+The operational source of truth is the current CLI capabilities, schemas, app
+profiles, core code, and tests. Files under `docs/superpowers/` are historical
+design provenance, not current operating instructions. Files in this directory
+are short host-agent references and must stay compatible with
+`skill-package.json`.
 
-Required startup command:
+Required startup sequence:
 
 ```bash
+dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json
+dating-boost release doctor --json
+dating-boost data doctor --data-dir .local/dating-boost --json
 dating-boost capabilities --json --data-dir .local/dating-boost
 ```
 
-Stop before viewing dating-app content if the capability check fails.
+Migrate before the support session if data doctor returns `needs_migration`.
+After the target app is known, start a support session and select its
+app/runtime. Stop before viewing dating-app content if any compatibility check
+fails.
 
 Reference files:
 

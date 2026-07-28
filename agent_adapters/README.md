@@ -7,7 +7,8 @@ installation and operating notes.
 ## Layout
 
 - `shared/`: host-agnostic workflow, privacy, CLI, capabilities, and app-profile
-  contracts. Future adapters should reuse this before adding host-specific text.
+  contracts. Additional adapters should reuse this before adding host-specific
+  text.
 - `codex/`: notes for the current Codex adapter. The installable package remains
   under `skills/dating-booster-codex/` for Codex discovery compatibility.
 - `claude-code/`: installable Claude Code adapter package. It writes
@@ -24,9 +25,8 @@ installation and operating notes.
 - Do not fork memory, policy, planner, or app-profile domain logic.
 - If a host differs only in tool invocation wording, keep the core contract in
   `shared/` and document the host-specific invocation in that adapter.
-- Future MCP-oriented adapters should follow the same structure. Hermes should
-  remain an OpenClaw-compatible wrapper unless a separate Hermes-native package
-  is implemented and verified.
+- Additional adapters should follow the same structure and be listed as
+  supported only after their install and doctor paths are verified.
 
 ## Adapter Install Checks
 

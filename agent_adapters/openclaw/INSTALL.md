@@ -49,3 +49,9 @@ dating-boost data doctor --data-dir .local/dating-boost --json
 dating-boost capabilities --json --data-dir .local/dating-boost
 dating-boost-host-loop doctor --adapter-package agent_adapters/openclaw/adapter-package.json --data-dir .local/dating-boost --app-id tinder --json
 ```
+
+If data doctor returns `needs_migration`, migrate before any support session,
+then rerun data doctor and capabilities. Once the target app is known, start a
+support session with `--host openclaw` or `--host hermes`, select the matching
+app/runtime in the same data dir, and stop the support session when the task
+ends.

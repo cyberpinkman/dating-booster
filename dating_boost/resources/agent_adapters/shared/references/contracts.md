@@ -1,17 +1,22 @@
 # Shared Contracts
 
 These contracts are host-agent neutral. Codex, Claude Code, Hermes, OpenClaw,
-and future MCP hosts should call the same local CLI surfaces instead of copying
-dating-specific logic.
+and any additional supported host should call the same local CLI surfaces
+instead of copying dating-specific logic.
 
 ## Startup
 
-1. Run `dating-boost capabilities --json --data-dir <data-dir>`.
-2. Read `agent_native_capabilities.supported_app_profiles`.
-3. Treat absent app ids as unsupported, not partially supported.
-4. Use app profile files only for ids returned by capabilities.
-5. After the target app id is known, run `dating-boost support session start --data-dir <data-dir> --host <codex|claude-code|openclaw|hermes> --app-id <app-id> --json` and keep `session_id`.
-6. Before ending the workflow, run `dating-boost support session stop --data-dir <data-dir> --session-id <session_id> --json`.
+1. Run the installed host's adapter or skill doctor.
+2. Run `dating-boost release doctor --json`.
+3. Run `dating-boost data doctor --data-dir <data-dir> --json`. If it reports
+   `needs_migration`, migrate before starting a support session, then rerun data
+   doctor.
+4. Run `dating-boost capabilities --json --data-dir <data-dir>`.
+5. Read `agent_native_capabilities.supported_app_profiles`; treat absent app ids
+   as unsupported, not partially supported.
+6. Use app profile files only for ids returned by capabilities.
+7. After the target app id is known, run `dating-boost support session start --data-dir <data-dir> --host <codex|claude-code|openclaw|hermes> --app-id <app-id> --json` and keep `session_id`.
+8. Before ending the workflow, run `dating-boost support session stop --data-dir <data-dir> --session-id <session_id> --json`.
 
 ## Support Bundle
 
@@ -68,6 +73,11 @@ investment.
 Conservative mode is the production default. High-throughput mode is only for
 explicit link testing and must not bypass authorization, target binding, staged
 text verification, or post-send verification.
+The first `managed-session start` is a configuration proposal. If it returns
+`managed_session_config_confirmation_required`, present `proposed_config` to
+the user and rerun the same start command with the returned
+`--config-confirm managed-session-config:<hash>` only after the user confirms.
+Do not enter `run` before confirmation.
 Do not ask the user to configure page depth. Message-list scanning is
 framework-controlled and stops at the first row with no progress for 7 days.
 Before real GUI work, select the target app/runtime in the data dir with
@@ -124,7 +134,16 @@ handcraft action requests; consume the request returned by `operator next`,
   later.
 - `match_id` or `target_match_id`: target match identity.
 - `target_binding.target_match_id`: must equal the target match identity.
-- `target_binding.required_visible_text` or `target_binding.visible_name`: visible marker required on the current conversation page.
+- `target_binding` evidence must satisfy the selected app/runtime capability.
+  For managed Tinder/Bumble sends, a visible name may help navigation but does
+  not replace a supported structural row-to-thread or current-thread visual
+  identity binding. TaShuo `mac-ios-app` uses current-thread visual identity.
+- Either a confirmed `confirmation_id` plus `confirmation_payload_hash` and
+  `confirmation_precondition_hash`, or an `autonomous_audit_binding` whose
+  `authorization_id`, `target_match_id`, `payload_hash`, and
+  `precondition_hash` match the action request.
+
+If any evidence is missing, block or return `needs_verification`.
 
 ## Relationship Progress Report
 
@@ -140,6 +159,3 @@ Every bounded managed workflow stop/final response should include
 
 `operator report latest` or `automation report latest` is a fallback when an
 older response lacks the inline report; it is not the primary end-of-run UX.
-- Either a confirmed `confirmation_id` plus `confirmation_payload_hash` and `confirmation_precondition_hash`, or an `autonomous_audit_binding` whose `authorization_id`, `target_match_id`, `payload_hash`, and `precondition_hash` match the action request.
-
-If any evidence is missing, block or return `needs_verification`.

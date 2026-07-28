@@ -73,6 +73,7 @@ Stop before observing dating app content if compatibility fails.
 Run the complete local fixture workflow:
 
 ```bash
+DATING_BOOST_KEY_PROVIDER=local \
 python3 scripts/agent_native_smoke.py --data-dir .local/dating-boost-smoke
 ```
 
@@ -112,12 +113,21 @@ verification artifacts.
 ## First Real Manual Workflow
 
 1. Run the startup check.
-2. Ask the user to confirm that Codex may process visible dating app content.
-3. Convert visible profile/chat content into the observation contract in
+2. Ask the user to confirm the target app and that Codex may process its visible
+   content.
+3. Start a support session for Codex and that app, then select the app/runtime
+   in the same data dir.
+4. Convert visible profile/chat content into the observation contract in
    `references/observation-authoring.md`.
-4. Run `dating-boost memory ingest-observation --data-dir .local/dating-boost --input observation.json`.
-5. Run `dating-boost context build --data-dir .local/dating-boost --match-id MATCH_ID --mode adaptive` and save the context JSON.
-6. Draft in the host agent and save the draft JSON.
-7. Run `dating-boost policy check-draft --input draft.json --context context.json`.
-8. Paste or send only according to the user's chosen experiment mode.
-9. Record stage-only evidence with `dating-boost operator record-stage-result`, or live-send post-action evidence with `dating-boost action record-result`.
+5. Run `dating-boost memory ingest-observation --data-dir .local/dating-boost --input observation.json`.
+6. Run `dating-boost context build --data-dir .local/dating-boost --match-id MATCH_ID --mode adaptive` and save the context JSON.
+7. Draft in the host agent and save the draft JSON.
+8. Run `dating-boost policy check-draft --input draft.json --context context.json`.
+9. Default to stage-only. Agent-facing live send must use managed-session or
+   host-loop; direct harness send is executor-internal and action requests must
+   not be handcrafted.
+10. Record stage-only evidence with `dating-boost operator record-stage-result`,
+    or record a verified managed live-send result with
+    `dating-boost action record-result`.
+11. Stop the support session and export a strict support bundle only when
+    diagnostics are needed.

@@ -62,14 +62,26 @@ Codex skill 的细节在 `skills/dating-booster-codex/INSTALL.md`。
 
 ## Startup check
 
-每次开始处理可见 app 内容前运行：
+每次开始处理可见 app 内容前，先运行当前 host 的 adapter doctor，再检查 release、数据和 capabilities：
 
 ```bash
+python3 -m dating_boost.cli adapter codex doctor --data-dir .local/dating-boost --json
+python3 -m dating_boost.cli release doctor --json
+python3 -m dating_boost.cli data doctor --data-dir .local/dating-boost --json
 python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 ```
 
+示例使用 Codex；其他 host 把 `codex` 替换为 `claude-code`、`openclaw` 或
+`hermes`。
+
+如果 data doctor 返回 `needs_migration`，在 support session 启动前运行
+`python3 -m dating_boost.cli data migrate --data-dir .local/dating-boost --json`，
+然后重新运行 data doctor 和 capabilities。迁移失败或检查不兼容时，不得观察
+app 内容。
+
 检查：
 
+- adapter/skill doctor、release doctor 和 data doctor 均通过。
 - CLI 版本和 skill/adapter 要求兼容。
 - `supported_app_profiles` 包含目标 app。
 - `schema_versions` 覆盖当前 workflow 需要的 contract。
@@ -81,7 +93,18 @@ python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 dating-boost support session start --data-dir .local/dating-boost --host codex --app-id tinder --json
 ```
 
-把返回的 `session_id` 用于后续 support bundle。严格 bundle 默认不含 raw chat、raw profile、截图、剪贴板内容或完整草稿。
+示例使用 Codex/Tinder；按当前 host 和已确认的目标 app 替换这两个值。
+
+把返回的 `session_id` 用于后续 support bundle。任务结束时先停止 session；需要诊断时再导出 strict bundle：
+
+```bash
+dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json
+dating-boost support bundle --data-dir .local/dating-boost --session-id <session_id> --output dating-boost-support.zip --redaction strict --json
+```
+
+严格 bundle 默认不含 raw chat、raw profile、截图、剪贴板内容或完整草稿。不要在
+support session start 和 bundle export 之间对同一个 data dir 运行 `data migrate`
+或 `data delete`。
 
 启动托管或真实 GUI 操作前，必须在同一个 `data-dir` 里选择目标 app/runtime：
 
@@ -182,6 +205,13 @@ Opening Move 是 role-sensitive：女性用户场景下 agent 不决定是否启
 
 ## TaShuo quick path
 
+TaShuo 的 iPhone Mirroring `default` runtime 和本地 `mac-ios-app` runtime 是
+互斥分支，不是顺序步骤。为当前 data dir 选择其中一个后，只能继续使用该分支；
+只有用户明确切换目标时，才先运行 `dating-boost runtime clear` 再选择另一个
+runtime。
+
+### iPhone Mirroring (`default`)
+
 ```bash
 dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime default --json
 dating-boost harness doctor --app-id tashuo --data-dir .local/dating-boost --json
@@ -193,6 +223,8 @@ dating-boost harness tashuo workflow question-gate-open --data-dir .local/dating
 ```
 
 Apple Silicon Mac 上如果用户已经安装并登录 Mac App Store 的她说 iOS app，可优先试验本地 `mac-ios-app` runtime。该 runtime 不占用真实手机，当前支持 launch/observe/prepare-message-page/stage-draft，以及受托管 live-send gate 保护的普通聊天 `send-message`。`send-message --runtime mac-ios-app` 仍是 executor-internal 路径，只能消费系统生成的 action request 或确认流结果；发送前必须有结构化目标绑定、exact staged-text verification，发送后必须有 input-cleared 和 outbound exact-text verification。question-gate staging/sending 仍不支持。
+
+### 本地 iOS app (`mac-ios-app`)
 
 ```bash
 dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
@@ -209,7 +241,11 @@ TaShuo mac-ios-app 托管 live send 支持普通聊天消息，但只能走 host
 dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tashuo --send-mode live --managed-gui-send --harness-runtime mac-ios-app --work-dir .local/dating-boost-host-loop --json
 ```
 
-TaShuo mac-ios-app 真实托管 smoke 使用独立脚本，默认 stage mode，不真实发送：
+TaShuo mac-ios-app 的辅助脚本默认 stage mode，不真实发送。当前脚本只跑到
+managed-session 配置提案，并应以
+`managed_session_config_confirmation_required` 停止；它没有接受配置的参数，
+不能作为完整托管 smoke 成功证明。用户确认配置后，使用下方通用
+`managed-session start` 两阶段流程继续：
 
 ```bash
 python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json
@@ -233,10 +269,25 @@ dating-boost harness wechat stage-draft --text-file wechat-draft.txt --data-dir 
 
 `managed-session` 只在用户显式启动后的当前托管窗口内运行。Session 外不监听、不扫描、不自动回复。全对象自动管理是全局 `managed-session`/`operator` 能力：runner 按机会窗口优先级串行处理多个对象，runtime 只执行当前 work item，不决定全局优先级。
 
+启动前先运行
+`dating-boost user readiness --data-dir .local/dating-boost --mode autonomous --json`。
+如果返回 `needs_user_profile`，先完成“用户自我模型”步骤，不得启动
+managed-session。
+
 启动前先选择目标 app/runtime；`managed-session start` 会校验并写入同一个 runtime scope。运行中不能从 TaShuo mac-ios-app 自动漂移到默认 iPhone Mirroring，也不能切到微信等其他 app。
 
 ```bash
 dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --json
+```
+
+第一次 `managed-session start` 可能返回
+`managed_session_config_confirmation_required`。向用户展示并核对
+`proposed_config`；只有用户确认后，才使用返回的
+`--config-confirm managed-session-config:<hash>` 以其余参数完全相同的命令重跑。
+未确认前不要进入 `run`。
+
+```bash
+dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --config-confirm managed-session-config:<hash> --json
 dating-boost managed-session run --wait --data-dir .local/dating-boost --json
 dating-boost managed-session notify --data-dir .local/dating-boost --source manual --app-id tinder --json
 dating-boost managed-session status --data-dir .local/dating-boost --json
@@ -329,6 +380,15 @@ Manual standalone start, if not using the smoke wrapper:
 
 ```bash
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization auth.json --app-id tashuo --runtime mac-ios-app --send-mode stage --observation-source live-gui --vision-backend minimax --backend minimax --model MiniMax-M3 --vision-model MiniMax-M3 --minimax-api-key-env MINIMAX_API_KEY --json
+```
+
+第一次 `standalone-session start` 只返回配置提案。若返回
+`managed_session_config_confirmation_required`，先向用户展示
+`proposed_config`；用户确认后，以相同参数加返回的
+`--config-confirm managed-session-config:<hash>` 重跑 start，成功后才能 tick。
+
+```bash
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization auth.json --app-id tashuo --runtime mac-ios-app --send-mode stage --observation-source live-gui --vision-backend minimax --backend minimax --model MiniMax-M3 --vision-model MiniMax-M3 --minimax-api-key-env MINIMAX_API_KEY --config-confirm managed-session-config:<hash> --json
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session status --data-dir .local/dating-boost --json
 ```
@@ -337,13 +397,28 @@ Fixture and cross-app development can still use the Tinder scripted path:
 
 ```bash
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization tests/fixtures/standalone/auth_tinder_stage.json --app-id tinder --send-mode stage --observation-source fixture --observation-fixture-dir tests/fixtures/standalone --backend scripted --scripted-backend-output tests/fixtures/intelligence/scripted_reply.json --json
+```
+
+The fixture path uses the same two-phase confirmation contract. After the user
+confirms the returned proposal:
+
+```bash
+DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start --data-dir .local/dating-boost --authorization tests/fixtures/standalone/auth_tinder_stage.json --app-id tinder --send-mode stage --observation-source fixture --observation-fixture-dir tests/fixtures/standalone --backend scripted --scripted-backend-output tests/fixtures/intelligence/scripted_reply.json --config-confirm managed-session-config:<hash> --json
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session tick --data-dir .local/dating-boost --json
 DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session stop --data-dir .local/dating-boost --json
 ```
 
-Do not use standalone mode to bypass host-loop live-send rules. Live send still requires the same operator-generated action request, user authorization, runtime scope, target binding, exact staged-text verification, and post-action evidence.
+The current standalone GUI executor is stage-only and returns
+`standalone_live_gui_send_not_enabled` for live send. Ordinary-chat live send
+must remain host-native through managed-session/host-loop and still requires
+the operator-generated action request, user authorization, runtime scope,
+target binding, exact staged-text verification, and post-action evidence.
 
 ## Host loop
+
+Before `run`, require
+`dating-boost user readiness --data-dir .local/dating-boost --mode autonomous --json`
+to pass. If it returns `needs_user_profile`, do not start host-loop.
 
 ```bash
 dating-boost-host-loop doctor --data-dir .local/dating-boost --app-id tinder --json
@@ -376,11 +451,15 @@ dating-boost user readiness --data-dir .local/dating-boost --mode autonomous --j
 
 ```bash
 dating-boost data migrate --data-dir .local/dating-boost --json
-dating-boost data backup --data-dir .local/dating-boost --output dating-boost-backup.zip --json
+dating-boost data backup --data-dir .local/dating-boost --output dating-boost-backup.zip --recovery-passphrase-file /secure/path/recovery-passphrase.txt --json
 dating-boost data export --data-dir .local/dating-boost --output dating-boost-export.zip --json
 dating-boost diagnostics bundle --data-dir .local/dating-boost --output diagnostics.zip --json
 dating-boost support bundle --data-dir .local/dating-boost --session-id <session_id> --output dating-boost-support.zip --redaction strict --json
 ```
+
+Backup requires a recovery passphrase from an environment variable or file;
+prefer a user-readable-only file and never place the passphrase value directly
+in argv.
 
 不要在 support session start 和 support bundle export 之间对同一个 data dir 运行 `data migrate` 或 `data delete`。
 

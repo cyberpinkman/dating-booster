@@ -36,8 +36,12 @@ consuming the OpenClaw-compatible skill package.
 - Do not fork memory, policy, planner, app-profile, harness, or audit logic.
 - Run adapter doctor, release doctor, data doctor, and capabilities before
   observing dating app content.
-- Use managed live-send only through Dating Booster harness commands with
-  authorization, target binding, staged text verification, and post-action
-  verification.
+- After the target app is known, start a `--host openclaw` or `--host hermes`
+  support session and select the matching app/runtime in the same data dir.
+  Stop the support session when the task ends.
+- Use managed live-send only through `managed-session` or
+  `dating-boost-host-loop` with explicit authorization, target binding, staged
+  text verification, and post-action verification. Direct harness send is
+  executor-internal; do not handcraft action requests.
 - Keep private screenshots, OCR text, drafts, and app content local to the
   active task.

@@ -1,188 +1,97 @@
-# Dating Booster Project Map / 项目地图
+# Dating Booster 文档地图
 
-Dating Booster 是本地优先的 dating workflow 工具层：host agent 负责观察可见
-App UI，Dating Booster 负责本地记忆、策略、规划、审计和安全 staging 契约。
+这个目录索引区分了三类内容：用户入口、agent 运行手册和维护者资料。不要把历史设计文档当成当前产品说明；当前能力以代码、app profile、CLI capabilities 和测试为准。
 
-Dating Booster is a local-first dating workflow tool layer: the host agent
-observes visible app UI, while Dating Booster owns local memory, policy,
-planning, audit, and safe staging contracts.
+## 从哪里开始
 
-The repository is open-sourced under the MIT License. See `LICENSE`.
+| 读者 / 目标 | 入口 |
+| --- | --- |
+| 第一次了解或安装 | [`README.md`](../README.md) |
+| Host agent 执行真实任务 | [`AGENTS.md`](../AGENTS.md) |
+| Codex 安装与 startup check | [`skills/dating-booster-codex/INSTALL.md`](../skills/dating-booster-codex/INSTALL.md) |
+| Claude Code 安装 | [`agent_adapters/claude-code/INSTALL.md`](../agent_adapters/claude-code/INSTALL.md) |
+| OpenClaw / Hermes 安装 | [`agent_adapters/openclaw/INSTALL.md`](../agent_adapters/openclaw/INSTALL.md) |
+| 查看 app contract | [`app_profiles/README.md`](../app_profiles/README.md) |
+| 理解扩展边界 | [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) |
 
-本仓库使用 MIT License 开源，见 `LICENSE`。
+真实 dating-app 内容只能在 startup check、support session 和目标 app/runtime 确定后观察。默认只 stage 草稿；普通聊天 live send 也必须经过明确授权、目标验证、输入文本验证和发送后验证。
 
-For test users, send the repository URL to their host agent and let the agent
-clone, inspect, and install from source:
+## 当前产品事实
+
+### 支持的 host
+
+- Codex：安装 `skills/dating-booster-codex/`。
+- Claude Code：安装独立 adapter package。
+- OpenClaw：安装 OpenClaw-compatible adapter package。
+- Hermes：通过兼容命令使用同一份 OpenClaw-compatible skill contract。
+
+新增 host 接入应继续复用同一组 CLI、capabilities、app profile、policy 和
+audit contract，不复制 dating-specific 逻辑。
+
+### 支持的 app/runtime
+
+| App | Runtime | 主要能力 |
+| --- | --- | --- |
+| Tinder | macOS iPhone Mirroring | 观察、只读导航、stage、可选普通聊天托管发送 |
+| Bumble | macOS iPhone Mirroring | 观察、只读导航、Opening Move 辅助、stage、可选普通聊天托管发送 |
+| TaShuo / 她说 | macOS iPhone Mirroring；Apple Silicon `mac-ios-app` | 观察、只读导航、question-gate 辅助、stage、可选普通聊天托管发送；`mac-ios-app` 是 standalone 主路径 |
+| WeChat / 微信 | macOS 桌面微信 | continuation-channel 观察、stage、可选普通聊天托管发送 |
+
+不要从静态文档推断本机能力。使用机器可读命令确认：
 
 ```bash
-git clone https://github.com/cyberpinkman/dating-booster.git
-cd dating-booster
-python3 -m pip install --user -e .
-python3 -m dating_boost.cli adapter claude-code install --scope user --json
+dating-boost capabilities --json --data-dir .local/dating-boost
 ```
 
-Codex uses `python3 -m dating_boost.cli adapter codex install --scope user --json`
-instead of the Claude Code adapter command.
+`supported_app_profiles` 中不存在的 app 视为未支持；不要创建 placeholder profile，也不要用固定坐标或通用 UI marker 临时绕过。
 
-稳定测试入口是仓库链接。Agent 应该自己 clone、读文档、安装 CLI，再调用对应
-host adapter。新增 host 时新增自己的 adapter，不修改已有 Claude Code 或 Codex
-安装语义。
+## Agent 运行资料
 
-## Top-Level Layout / 顶层结构
+- [`agent_adapters/shared/references/contracts.md`](../agent_adapters/shared/references/contracts.md)：跨 host 的 JSON、隐私和执行契约。
+- [`agent_adapters/shared/references/workflows.md`](../agent_adapters/shared/references/workflows.md)：跨 host 的可复用 workflow。
+- [`skills/dating-booster-codex/SKILL.md`](../skills/dating-booster-codex/SKILL.md)：Codex 运行契约。
+- [`skills/dating-booster-codex/references/`](../skills/dating-booster-codex/references/)：observation、planner、drafting、host-loop 和生产 stage runbook。
+- [`app_profiles/README.md`](../app_profiles/README.md)：app profile schema 与支持等级。
 
-- `dating_boost/`: Python package and CLI entrypoints。核心 Python 包和 CLI 入口。
-- `dating_boost/core/`: storage, policy, planning, diagnostics, production data,
-  daemon/safety state, and native GUI harness adapters。本地存储、策略、规划、
-  诊断、生产数据、daemon/safety 状态和原生 GUI harness。
-- `dating_boost/harness/`: shared native harness building blocks, including
-  window parsing, screen-state classification, and input backends。原生 harness
-  共享模块，包括窗口解析、屏幕状态识别和输入后端。
-- `dating_boost/host_loop.py`: supervised host-loop runner for app-specific work
-  items。面向具体 App work item 的 host-loop supervisor。
-- `dating_boost/intelligence/`: reply generation backends and prompt wiring。
-  草稿生成 backend 与 prompt wiring。
-- `dating_boost/perception/`: screenshot and observation contract helpers。截图
-  与 observation contract 辅助。
-- `dating_boost/policy/`: action and content safety rules。动作与内容安全规则。
-- `dating_boost/evals/`: conversation and reply quality evaluation helpers。对话
-  与回复质量评估。
-- `app_profiles/`: app-specific product contracts。具体 App 契约，见
-  `app_profiles/README.md`。
-- `schemas/`: formal JSON contracts such as `app_profile.schema.json`。正式
-  JSON contract。
-- `agent_adapters/`: shared and host-specific adapter packages/docs for Codex,
-  Claude Code, and future hosts。面向 Codex、Claude Code 和后续 host 的 adapter
-  包与文档。
-- `docs/ARCHITECTURE.md`: expansion architecture for host agents, dating apps,
-  goals, workflows, and memory。面向更多 agent、更多 app、更多目标和更智能
-  workflow/memory 的扩展架构。
-- `skills/dating-booster-codex/`: installable Codex skill, scripts, examples,
-  and operational references。Codex skill、脚本、示例和运行手册。
-- `agent_adapters/claude-code/`: installable Claude Code adapter package and
-  skill content。Claude Code adapter package 与 skill 内容。
-- `scripts/`: local smoke and host-loop helper scripts。本地 smoke 与 host-loop
-  辅助脚本。
-- `tests/`: contract, policy, storage, host-loop, skill, and harness tests。契约、
-  策略、存储、host-loop、skill 和 harness 测试。
-- `docs/superpowers/specs/`: product/architecture specs used while building the
-  project。项目构建阶段的产品/架构规格。
-- `.github/workflows/`: CI and release workflows。CI 与发布流程。
+`dating_boost/resources/agent_adapters/` 下的文件是构建 wheel 时使用的打包镜像，不是文档编辑入口。权威源文件位于 `skills/` 和 `agent_adapters/`；发布检查会验证源文件与打包镜像一致。
 
-## Current App Targets / 当前 App 支持
+## 代码与架构
 
-| App | Current support / 当前支持 | Native harness | Send ownership / 发送归属 |
-| --- | --- | --- | --- |
-| Tinder | Host-loop, profile/chat navigation, observation, draft workflow, opt-in managed live send | iPhone Mirroring on macOS | Stage by default; managed send only with explicit authorization and verification |
-| WeChat / 微信 | App profile, host-loop app id, desktop observation, draft staging, opt-in managed live send | macOS WeChat desktop window | Stage by default; managed send only with explicit authorization and verification |
-| Bumble | Host-loop, iPhone Mirroring launch/observation, profile/chat navigation, role-sensitive Opening Move observation/drafting policy, opt-in managed live send | iPhone Mirroring on macOS | Stage by default; managed ordinary chat send only with explicit authorization, target-specific binding, exact OCR verification, and post-send evidence |
-| TaShuo / 她说 | Host-loop, iPhone Mirroring launch/observation, profile/chat navigation, role-sensitive question-gate observation/drafting policy, mac-ios-app launch/observe/stage, opt-in managed live send | iPhone Mirroring on macOS; optional mac-ios-app on Apple Silicon Mac | Stage by default; managed ordinary chat send only with explicit authorization, target-specific binding, runtime-supported exact staged-text verification, and post-send evidence |
+- `dating_boost/cli.py`：CLI 总入口。
+- `dating_boost/core/`：存储、memory、planner、policy、operator、managed session、safety、diagnostics。
+- `dating_boost/apps/`：各 app 的页面语义、runtime、target binding 和发送验证。
+- `dating_boost/harness/`：跨 app 的 GUI 基础能力。
+- `dating_boost/intelligence/`：模型 backend 与回复生成 wiring。
+- `dating_boost/host_loop.py`：host-loop supervisor。
+- `app_profiles/` 与 `schemas/`：app 产品契约及 JSON schema。
+- `agent_adapters/` 与 `skills/`：host-specific 安装包和操作文档。
+- `scripts/`：fixture、managed 和 standalone smoke/qualification 入口。
+- `tests/`：contract、storage、policy、adapter、host-loop、GUI 和 production qualification 回归。
 
-`supported_app_profiles` 只列 runtime-supported app。未支持 app 不创建 placeholder
-profile，也不进入 capabilities。
+扩展 host agent、app、goal 或 memory/workflow 前，先读 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)。架构按 host agent adapter、app support profile、goal type registry 和 memory evolution 四条轴拆分，避免把一个 app 或 host 的特殊逻辑写进全局 contract。
 
-`supported_app_profiles` only lists runtime-supported apps. Unsupported apps do
-not get placeholder profiles and do not appear in capabilities.
+## 历史设计记录
 
-## Expansion Architecture / 扩展架构
+`docs/superpowers/specs/` 和 `docs/superpowers/plans/` 保存开发阶段的设计、评审和实施记录，适合维护者追溯“为什么曾经这样设计”。
 
-Use `docs/ARCHITECTURE.md` as the source map for future expansion. It separates
-four axes that should not be mixed in one-off patches:
+这些文件：
 
-- host agent adapters: Codex and Claude Code are installable now; Hermes,
-  OpenClaw, and MCP-compatible hosts should reuse the same adapter contract.
-- app support profiles: Tinder, WeChat, Bumble, and TaShuo at runtime; Hinge
-  and other mainstream apps stay as roadmap candidates until testable.
-- goal type registry: `meet_in_person` first, then additional goals with their
-  own milestones, policy constraints, and handoff rules.
-- workflow and memory evolution: smarter scenario workflows, provenance-backed
-  memory, feedback events, and eval-driven improvement.
+- 不是用户安装或运行入口；
+- 不保证描述当前 CLI 或成熟度；
+- 不应从根 README 作为主要产品能力展示；
+- 与当前实现冲突时，以代码、capabilities、app profile、agent contract 和测试为准。
 
-后续扩展应先查 `docs/ARCHITECTURE.md`。新增 agent、app、goal 或 memory/workflow
-能力时，先确认它属于哪条轴，再同步 core contract、capabilities、docs 和 tests。
-
-## Runtime Surfaces / 运行面
-
-- CLI: `dating_boost/cli.py` exposes data, policy, workflow, diagnostics,
-  release, daemon/safety, confirmation, and harness commands。所有本地命令入口。
-- Host loop: `dating-boost-host-loop` supervises work directories,
-  authorization, recovery, and staged/live send mode checks。监督 work dir、授权、
-  恢复和 send mode 检查。
-- Standalone session: `dating-boost standalone-session` consumes
-  managed-session/operator work without a host agent. Primary mode is TaShuo
-  mac-ios-app live GUI observation with MiniMax-backed stage-only output:
-  ```bash
-  export MINIMAX_API_KEY="<coding-plan-subscription-key>"
-  dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
-  python3 scripts/tashuo_mac_ios_standalone_doctor.py --data-dir .local/dating-boost --json
-  DATING_BOOST_KEY_PROVIDER=local python3 scripts/tashuo_mac_ios_standalone_smoke.py --data-dir .local/dating-boost --authorization auth.json --json
-  ```
-  The smoke wrapper runs the alpha release gate and requires durable
-  `audit/stage_results.jsonl` evidence: completed stage attempt, exact staged
-  text verification, verified target, stage-only mode, and no live send. Saved
-  smoke JSON can be rechecked with
-  `python3 scripts/tashuo_mac_ios_standalone_alpha_gate.py --data-dir .local/dating-boost --smoke-json tashuo-standalone-smoke.json --json`.
-  Tinder/Bumble/WeChat and scripted fixtures remain cross-app development
-  paths until their standalone providers graduate.
-- GUI platform harness: `dating_boost/core/gui_harness.py` owns native
-  app-window mechanics such as screenshots, OCR, gestures, clipboard, paste,
-  and IME commit。平台自动化能力只应在这里。
-- App adapters: `dating_boost/apps/<app_id>/adapter.py` owns app page semantics,
-  actions, workflows, target binding, send verification, and special policies。
-  App 语义和流程归 adapter/profile。
-- Capabilities: `dating_boost/core/capabilities.py` is the machine-readable
-  startup contract for agents and skill installers。agent/skill 的机器可读启动契约。
-- Host adapters: `skills/dating-booster-codex/SKILL.md` and
-  `agent_adapters/claude-code/skills/dating-booster/SKILL.md` are host-specific
-  operating contracts。Codex 与 Claude Code 的运行契约必须和 CLI capabilities
-  保持一致。
-
-## App Expansion Path / App 扩展路径
-
-1. Add or update schema-v2 `app_profiles/<app_id>.json`。新增或更新 v2 App
-   profile。
-2. Add a runtime profile only after fixtures and preflight can prove the app is
-   supported。不为未支持 app 创建 placeholder profile。
-3. Add `dating_boost/apps/<app_id>/adapter.py` and register it in
-   `dating_boost/apps/registry.py`。新增 app adapter 并注册。
-4. Let capabilities, CLI harness commands, managed session, and host loop derive
-   support from registry/profile。全局能力面从 registry/profile 派生。
-5. Use `harness <app_id> action|workflow --options-json <path>` for
-   app-specific parameters。新增 app 不再给 argparse 加专属参数。
-6. Add deterministic fixtures and focused tests for classifier, actions,
-   workflows, target binding, and send evidence。补 fixtures 和 focused tests。
-7. Update `AGENTS.md`, `app_profiles/README.md`, and relevant host adapter docs;
-   update `README.md` only when the human-facing summary changes。同步 agent
-   引导文档、profile 文档和相关 host adapter 文档；只有人类摘要变化时才同步顶层
-   README。
-8. Run targeted unit tests plus `dating-boost capabilities --json` before
-   publishing。发布前跑 targeted tests 和 capabilities。
-
-## Non-Negotiable Boundaries / 不可放松的边界
-
-- Do not add private APIs, scraping bypasses, anti-detection logic, or account
-  scale-out automation。不要加入私有 API、绕过、反检测或账号规模化能力。
-- Do not let a harness send messages, likes, reports, payments, calls, or
-  profile edits unless policy, confirmation, staged-text verification, and
-  post-action verification explicitly support that action。Managed Tinder/WeChat/Bumble/TaShuo send
-  also needs policy-checked action requests, target-chat binding, and outbound
-  bubble verification。除非策略、确认、staged-text verification 和 post-action
-  verification 明确支持，否则 harness 不得执行高风险动作；Tinder/WeChat/Bumble/TaShuo 全托管发送还必须有
-  policy-checked action request、目标聊天绑定和 outbound bubble 校验。
-- Prefer paste-based draft staging for Chinese text。中文草稿优先 paste staging，
-  避免直接输入导致文本损坏。
-- Treat raw OCR/screenshot content as sensitive。原始 OCR/截图内容视为敏感数据，
-  public logs 和 diagnostics 只能暴露 redacted layout hints。
-- Safety pause must block real staging/paste/send paths。安全暂停必须阻断真实
-  staging、paste 和 send 路径。
-- Managed live send must stay opt-in and must not remove `send` from the
-  default blocked-action list。全托管发送必须显式开启，不能把默认 blocked
-  actions 里的 `send` 直接删除。
-
-## Useful Verification / 常用验证
+## 验证文档与实现
 
 ```bash
-python3 -m unittest tests.test_gui_harness tests.test_skill_package
-python3 -m unittest tests.test_claude_code_adapter
-python3 -m unittest tests.test_operator_host_loop.OperatorHostLoopTests.test_wechat_host_loop_init_writes_wechat_authorization_template
-python3 -m py_compile dating_boost/core/gui_harness.py dating_boost/cli.py dating_boost/core/capabilities.py dating_boost/host_loop.py
+python3 -m dating_boost.cli release doctor --json
+python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
+python3 -m pytest -q
+```
+
+无 GUI 的完整 fixture workflow：
+
+```bash
+DATING_BOOST_KEY_PROVIDER=local \
+python3 scripts/agent_native_smoke.py --data-dir .local/dating-boost-smoke
 ```

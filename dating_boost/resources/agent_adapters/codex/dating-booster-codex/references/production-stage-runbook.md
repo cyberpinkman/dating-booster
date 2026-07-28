@@ -42,8 +42,8 @@ supported send surfaces. Bumble supports managed ordinary chat send, but
 Opening Move autonomous send remains unsupported. TaShuo supports managed
 ordinary chat send, but current harness question-gate staging/sending is not
 supported.
-Hinge and other apps remain roadmap candidates until runtime profiles,
-fixtures, and harness or host-loop tests prove support.
+Unsupported apps remain unavailable until runtime profiles, fixtures, and
+harness or host-loop tests prove support.
 WeChat has a macOS desktop harness for launch, redacted observation, and draft
 staging, but no WeChat-specific profile navigation chain.
 

@@ -50,6 +50,10 @@ the target path and files before writing.
 
 - Run `dating-boost adapter claude-code doctor --data-dir <data-dir> --json`
   before observing visible dating app content.
+- Run release doctor and data doctor/migration before capabilities. After the
+  target app is known, start a `--host claude-code` support session and select
+  the matching app/runtime in the same data dir; stop the session when the task
+  ends.
 - Read `agent_adapters/shared/references/contracts.md` and
   `agent_adapters/shared/references/workflows.md`.
 - Use `dating-boost capabilities --json --data-dir <data-dir>` as the

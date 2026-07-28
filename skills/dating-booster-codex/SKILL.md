@@ -700,8 +700,22 @@ fresh `dating-boost-host-loop run`, because a fresh run starts a new operator
 session. After resume or equivalent manual operator processing, return to
 `managed-session run --wait`.
 
+Run `start` once to obtain the configuration proposal:
+
 ```bash
 dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --json
+```
+
+Only after the user confirms `proposed_config`, rerun the same command with the
+returned token:
+
+```bash
+dating-boost managed-session start --app-id tinder --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --send-mode stage --scan-interval 120 --nudge-delay-minutes 30 --management-mode conservative --config-confirm managed-session-config:<hash> --json
+```
+
+After the confirmed start succeeds:
+
+```bash
 dating-boost managed-session run --data-dir .local/dating-boost --wait --json
 dating-boost managed-session notify --data-dir .local/dating-boost --source manual --app-id tinder --json
 dating-boost managed-session status --data-dir .local/dating-boost --json
@@ -714,8 +728,13 @@ For TaShuo local Mac iOS app managed sessions, add
 `--harness-runtime mac-ios-app`. If the runtime scope is already selected for
 mac-ios-app and this flag is omitted, the run must block with
 `runtime_scope_mismatch` before any default-runtime GUI adapter is created.
-For a real TaShuo mac-ios-app managed smoke check without sending messages, use
-`python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`.
+The TaShuo mac-ios-app helper
+`python3 scripts/tashuo_mac_ios_managed_smoke.py --data-dir .local/dating-boost --work-dir .local/dating-boost-tashuo-mac-ios-smoke --authorization auth.json --goal goal.json --availability availability.json --json`
+does not send messages, but it currently stops at
+`managed_session_config_confirmation_required` and has no config-accept flag.
+Treat it as a preflight/config-proposal check, not a completed managed smoke;
+after user confirmation, continue through the generic two-phase
+`managed-session start` flow.
 For Tinder/Bumble iPhone Mirroring managed stage smoke, use
 `python3 scripts/iphone_mirroring_managed_smoke.py --app-id tinder --data-dir .local/dating-boost --work-dir .local/dating-boost-iphone-smoke --authorization auth.json --goal goal.json --availability availability.json --json`
 or the same command with `--app-id bumble`. The wrapper does not auto-confirm
@@ -825,7 +844,7 @@ If the step output contains `handoffs`, appointment details, contact exchange,
 or high-risk content, stop automation for that match and ask the user to take
 over.
 
-Use `references/workflows.md` for reusable workflow details and lower-level command fallbacks, `references/contracts.md` for JSON input/output contract examples, and the drafting/naturalness references for Chinese reply quality. This package is the Codex host agent adapter; future Claude Code, Hermes, OpenClaw, or MCP-oriented adapters should reuse the same CLI/capabilities/app-profile contracts instead of copying Codex-only assumptions. For cross-agent, cross-app, goal, workflow, and memory expansion rules, read `docs/ARCHITECTURE.md` in the source repository. These reference files are summaries; core code and committed specs remain the source of truth.
+Use `references/workflows.md` for reusable workflow details and lower-level command fallbacks, `references/contracts.md` for JSON input/output contract examples, and the drafting/naturalness references for Chinese reply quality. This package is the Codex host agent adapter. The current Claude Code and OpenClaw-compatible adapters, including the Hermes compatibility wrapper, reuse the same CLI/capabilities/app-profile contracts; additional adapters should do the same instead of copying Codex-only assumptions. For cross-agent, cross-app, goal, workflow, and memory expansion rules, read `docs/ARCHITECTURE.md` in the source repository. These reference files are summaries; current capabilities, schemas, app profiles, core code, and tests remain the operational source of truth.
 
 ## Post-Action Verification
 
