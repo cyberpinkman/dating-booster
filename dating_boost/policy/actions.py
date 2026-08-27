@@ -12,10 +12,16 @@ class Action(str, Enum):
     SEND_MESSAGE = "send_message"
     LIKE_PROFILE = "like_profile"
     SUPER_LIKE_PROFILE = "super_like_profile"
+    PASS_PROFILE = "pass_profile"
     UNMATCH = "unmatch"
     REPORT_PROFILE = "report_profile"
     EDIT_PROFILE = "edit_profile"
+    PREMIUM_PURCHASE = "premium_purchase"
+    CALL = "call"
+    VIDEO_CALL = "video_call"
+    PAYMENT = "payment"
     PROPOSE_MEETING = "propose_meeting"
+    CONTACT_EXCHANGE = "contact_exchange"
 
 
 ASSISTIVE_ACTIONS = {
@@ -25,14 +31,23 @@ ASSISTIVE_ACTIONS = {
     Action.PASTE_DRAFT,
 }
 
-HIGH_RISK_ACTIONS = {
+AUTONOMOUS_ACTIONS = {
     Action.SEND_MESSAGE,
+}
+
+PROHIBITED_ACTIONS = {
     Action.LIKE_PROFILE,
     Action.SUPER_LIKE_PROFILE,
+    Action.PASS_PROFILE,
     Action.UNMATCH,
     Action.REPORT_PROFILE,
     Action.EDIT_PROFILE,
+    Action.PREMIUM_PURCHASE,
+    Action.CALL,
+    Action.VIDEO_CALL,
+    Action.PAYMENT,
     Action.PROPOSE_MEETING,
+    Action.CONTACT_EXCHANGE,
 }
 
 
@@ -52,14 +67,14 @@ def authorize_action(action: Action, *, autonomous: bool = False) -> Decision:
             reason="assistive action allowed without autonomous mode",
         )
 
-    if action not in HIGH_RISK_ACTIONS:
+    if action in PROHIBITED_ACTIONS:
         return Decision(
             allowed=False,
             action=action,
-            reason=f"unknown action: {action.value}",
+            reason=f"{action.value} is outside the agent execution scope",
         )
 
-    if not autonomous:
+    if action in AUTONOMOUS_ACTIONS and not autonomous:
         return Decision(
             allowed=False,
             action=action,
@@ -69,9 +84,16 @@ def authorize_action(action: Action, *, autonomous: bool = False) -> Decision:
             ),
         )
 
+    if action in AUTONOMOUS_ACTIONS:
+        return Decision(
+            allowed=True,
+            action=action,
+            reason="ordinary message send allowed by explicit autonomous switch",
+            autonomous=True,
+        )
+
     return Decision(
-        allowed=True,
+        allowed=False,
         action=action,
-        reason="high-risk autonomous action allowed by explicit switch",
-        autonomous=True,
+        reason=f"unknown action: {action.value}",
     )

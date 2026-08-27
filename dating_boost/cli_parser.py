@@ -39,6 +39,7 @@ def build_parser(handler_namespace: object) -> argparse.ArgumentParser:
         _add_action_feedback_eval_replay_commands,
         _add_planner_commands,
         _add_automation_commands,
+        _add_manage_commands,
         _add_managed_session_commands,
         _add_standalone_session_commands,
         _add_operator_commands,
@@ -896,6 +897,117 @@ def _add_managed_session_commands(subparsers: argparse._SubParsersAction, handle
     managed_stop_parser.add_argument("--reason", default="manual_stop")
     managed_stop_parser.add_argument("--json", action="store_true")
     managed_stop_parser.set_defaults(handler=_handler(handler_namespace, "_handle_managed_session_stop"))
+
+
+def _add_manage_commands(subparsers: argparse._SubParsersAction, handler_namespace: object) -> None:
+    manage_parser = subparsers.add_parser(
+        "manage",
+        help="Run the experimental bounded managed workflow from scan through verified action.",
+    )
+    manage_subparsers = manage_parser.add_subparsers(dest="manage_command", required=True)
+
+    manage_start_parser = manage_subparsers.add_parser(
+        "start",
+        help="Start a durable managed run from one confirmed authorization window.",
+    )
+    manage_start_parser.add_argument("--data-dir", required=True, type=Path)
+    manage_start_parser.add_argument(
+        "--app-id",
+        choices=["tashuo"],
+        default="tashuo",
+        help="Flagship managed app (default: tashuo).",
+    )
+    manage_start_parser.add_argument(
+        "--runtime",
+        choices=["mac-ios-app"],
+        default="mac-ios-app",
+        help="Flagship managed runtime (default: mac-ios-app).",
+    )
+    manage_start_parser.add_argument("--duration-minutes", type=int, default=120)
+    manage_start_parser.add_argument("--send-budget", type=int, default=5)
+    manage_start_parser.add_argument(
+        "--quiet-hours",
+        default="23:00-08:00",
+        help="Local quiet window as HH:MM-HH:MM; use 'off' to disable.",
+    )
+    manage_start_parser.add_argument(
+        "--nudge",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Allow a bounded follow-up only when the user explicitly included it in this run.",
+    )
+    manage_start_parser.add_argument(
+        "--management-mode",
+        choices=["conservative"],
+        default="conservative",
+        help=argparse.SUPPRESS,
+    )
+    manage_start_parser.add_argument(
+        "--authorization",
+        type=Path,
+        help=argparse.SUPPRESS,
+    )
+    manage_start_parser.add_argument(
+        "--config",
+        type=Path,
+        help=argparse.SUPPRESS,
+    )
+    manage_start_parser.add_argument("--run-id")
+    manage_start_parser.add_argument("--json", action="store_true")
+    manage_start_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_start"))
+
+    manage_tick_parser = manage_subparsers.add_parser(
+        "tick",
+        help="Advance the current managed run by one bounded cycle.",
+    )
+    _add_manage_run_selector(manage_tick_parser)
+    manage_tick_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_tick"))
+
+    manage_run_parser = manage_subparsers.add_parser(
+        "run",
+        help="Advance to a wait point, or keep polling the same run with --wait.",
+    )
+    _add_manage_run_selector(manage_run_parser)
+    manage_run_parser.add_argument("--max-steps", type=int, default=100)
+    manage_run_parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="Keep polling the same durable run after an idle scan.",
+    )
+    manage_run_parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=30.0,
+        help="Seconds between idle scans when --wait is enabled.",
+    )
+    manage_run_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_run"))
+
+    manage_status_parser = manage_subparsers.add_parser("status", help="Show the current managed run.")
+    _add_manage_run_selector(manage_status_parser)
+    manage_status_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_status"))
+
+    manage_pause_parser = manage_subparsers.add_parser("pause", help="Pause before the next managed mutation.")
+    _add_manage_run_selector(manage_pause_parser)
+    manage_pause_parser.add_argument("--reason", default="manual_pause")
+    manage_pause_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_pause"))
+
+    manage_resume_parser = manage_subparsers.add_parser("resume", help="Resume the same durable managed run.")
+    _add_manage_run_selector(manage_resume_parser)
+    manage_resume_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_resume"))
+
+    manage_stop_parser = manage_subparsers.add_parser("stop", help="Stop the current managed run.")
+    _add_manage_run_selector(manage_stop_parser)
+    manage_stop_parser.add_argument("--reason", default="manual_stop")
+    manage_stop_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_stop"))
+
+
+def _add_manage_run_selector(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--data-dir", required=True, type=Path)
+    parser.add_argument(
+        "--run-id",
+        help="Run to operate on. Omit to use the current run in this data directory.",
+    )
+    parser.add_argument("--json", action="store_true")
 
 
 

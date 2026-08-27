@@ -93,6 +93,19 @@ class FakeRunner:
             return _result(stdout=f"{self.ax_text_area_value}\n")
         if command and command[0] == "osascript" and any("DATING_BOOST_AX_STATIC_TEXT_VALUES" in item for item in command):
             return _result(stdout=json.dumps(self.ax_static_text_values, ensure_ascii=False))
+        if command and command[0] == "osascript" and any(
+            "DATING_BOOST_AX_CONVERSATION_SNAPSHOT" in item for item in command
+        ):
+            return _result(
+                stdout=json.dumps(
+                    {
+                        "values": self.ax_static_text_values,
+                        "composer_found": self.ax_text_area_value is not None,
+                        "composer_value": self.ax_text_area_value or "",
+                    },
+                    ensure_ascii=False,
+                )
+            )
         if command and command[0] == "osascript" and any("DATING_BOOST_AX_SET_TEXT_AREA_VALUE" in item for item in command):
             if self.ax_text_area_value is None:
                 return _result(stdout="not_found\n")

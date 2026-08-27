@@ -7,11 +7,13 @@ Dating Booster 是本地优先的 dating workflow 工具层。Host agent 负责�
 ## 必读边界
 
 - 不使用私有 API，不做风控绕过，不做批量运营。
-- 默认只 stage 草稿，不发送。
-- Live send 只允许用户明确授权的普通聊天消息。
+- 未开启 bounded live workflow 时默认只 stage 草稿，不发送。
+- 用户明确开启 ManagedRun 或既有 managed executor 后，Live send 只允许授权窗口内的普通聊天消息。
 - `harness <app> send-message --authorization --action-request` 是 executor-internal 路径，只能消费系统生成的 work item 或确认流结果；do not handcraft action requests。
 - 不得执行 like、super-like、pass、unmatch、report、profile edit、premium purchase、call、payment、自动邀约或自动交换联系方式。
-- 观察 dating app 或微信可见内容前，必须完成 startup check 和 support session。
+- 首次安装、更新、迁移或权限变化后，观察可见 app 内容前先完成对应兼容性检查；
+  日常 ManagedRun 复用已经验证的环境。Support session 只用于 real-GUI Canary、
+  明确诊断或导出 support bundle。
 
 ## 克隆和安装
 
@@ -60,9 +62,10 @@ python3 -m dating_boost.cli adapter hermes doctor --data-dir .local/dating-boost
 
 Codex skill 的细节在 `skills/dating-booster-codex/INSTALL.md`。
 
-## Startup check
+## 安装/更新检查与日常快启
 
-每次开始处理可见 app 内容前，先运行当前 host 的 adapter doctor，再检查 release、数据和 capabilities：
+完整 doctor 用于首次安装、源码或 adapter 更新、数据迁移、macOS 权限变化，以及
+明确的故障诊断；它不再是每次 ManagedRun 日常启动的同步热路径。需要完整检查时运行：
 
 ```bash
 python3 -m dating_boost.cli adapter codex doctor --data-dir .local/dating-boost --json
@@ -74,7 +77,7 @@ python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 示例使用 Codex；其他 host 把 `codex` 替换为 `claude-code`、`openclaw` 或
 `hermes`。
 
-如果 data doctor 返回 `needs_migration`，在 support session 启动前运行
+如果 data doctor 返回 `needs_migration`，运行
 `python3 -m dating_boost.cli data migrate --data-dir .local/dating-boost --json`，
 然后重新运行 data doctor 和 capabilities。迁移失败或检查不兼容时，不得观察
 app 内容。
@@ -87,7 +90,13 @@ app 内容。
 - `schema_versions` 覆盖当前 workflow 需要的 contract。
 - `managed_live_send_guidance.direct_harness_scope` 仍为 executor-internal only。
 
-目标 app 确定后，开启 support session：
+日常启动同一个已经安装、迁移并验证过的 TaShuo ManagedRun 时，直接执行
+`manage start`。该入口同步检查用户 readiness、授权范围和持久化 run；provider 在
+触碰 GUI 前检查 runtime scope、模型配置和全局 pause。若返回一个具体阻断原因，
+只执行对应恢复动作后重试；不要无条件串行重跑四个 deep doctor。
+
+Support session 用于首次 real-GUI Canary、用户明确的诊断或需要导出 support bundle
+的任务，不是每次日常 run 的启动条件。需要诊断时开启：
 
 ```bash
 dating-boost support session start --data-dir .local/dating-boost --host codex --app-id tinder --json
@@ -106,14 +115,18 @@ dating-boost support bundle --data-dir .local/dating-boost --session-id <session
 support session start 和 bundle export 之间对同一个 data dir 运行 `data migrate`
 或 `data delete`。
 
-启动托管或真实 GUI 操作前，必须在同一个 `data-dir` 里选择目标 app/runtime：
+首次选择或用户明确切换目标时，在同一个 `data-dir` 里选择 app/runtime：
 
 ```bash
 dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
 dating-boost runtime status --data-dir .local/dating-boost --json
 ```
 
-选择后，本次 session 的 harness、host-loop、managed-session 只能使用同一个 app/runtime。所有真实 GUI harness 命令都传同一个 `--data-dir`；如果命令请求了其他 app，或 TaShuo 漏传 `--runtime mac-ios-app` 导致请求 default runtime，CLI 必须返回 `runtime_scope_mismatch`，不得创建 adapter、不得唤起 iPhone Mirroring、微信或其他无关 app。只有用户明确切换目标时，才运行 `dating-boost runtime clear --data-dir .local/dating-boost --json` 后重新 select。
+选择会持久化；相同 data-dir 和相同目标的日常 run 不需要重复 select。所有真实 GUI
+harness 命令仍传同一个 `--data-dir`；如果命令请求其他 app/runtime，CLI 必须返回
+`runtime_scope_mismatch`，不得创建错误 adapter 或唤起无关 app。只有用户明确切换
+目标时，才运行 `dating-boost runtime clear --data-dir .local/dating-boost --json` 后
+重新 select。
 
 ## 当前 app 语义
 
@@ -235,7 +248,7 @@ dating-boost harness tashuo stage-draft --data-dir .local/dating-boost --runtime
 
 `prepare-message-page` 会打开 TaShuo Mac iOS app，用底部 tab 的视觉高亮判断当前一级页；如果不在 `消息` 页，只点击底部 `消息` tab。进入消息页后停止固定坐标流程，返回 `next_host_action=visual_plan_message_list`，后续由 host agent 进行视觉分析和规划，不要先跑 OCR 再回退视觉，也不要用固定 row 坐标直接进入聊天线程。
 
-TaShuo mac-ios-app 托管 live send 支持普通聊天消息，但只能走 host-loop/managed-session 的受控执行路径；不要手工拼 action request，也不要绕过结构绑定、staged-text、post-send verification：
+TaShuo mac-ios-app 的既有兼容 executor 支持通过 host-loop/managed-session 发送普通聊天；下方命令属于兼容路径。新的旗舰 ManagedRun 使用本文件后述的四段 action seam，不消费手工或 operator 生成的 action request。两条路径都不得绕过结构绑定、staged-text 和 post-send verification：
 
 ```bash
 dating-boost-host-loop run --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id tashuo --send-mode live --managed-gui-send --harness-runtime mac-ios-app --work-dir .local/dating-boost-host-loop --json
@@ -265,7 +278,54 @@ dating-boost harness wechat stage-draft --text-file wechat-draft.txt --data-dir 
 
 微信 stage 使用剪贴板把已通过 policy check 的草稿放入当前输入框；stage mode 不按 Enter、不点击 Send。真实 staging 必须传 `--data-dir`，让全局 safety pause 能阻断 paste。
 
-## Managed session
+## ManagedRun
+
+新的实验性旗舰入口是 `ManagedRun`。`managed-session`/`host-loop` 保留为兼容路径；
+不要因为新入口仍处于实验阶段，就把用户明确要求的全托管降级成只起草一句回复。
+
+### Experimental ManagedRun（TaShuo mac-ios-app）
+
+当前唯一重点纵切面是 TaShuo `mac-ios-app`。用户只确认一次 app/runtime、时长、
+普通聊天范围、quiet hours、nudge 和发送预算；窗口内合格普通消息不逐条确认。
+Like/pass/question-gate/具体邀约/联系方式/资料编辑/通话/支付等仍永久 handoff。
+
+首次安装、更新、迁移或权限变化后，先完成上文的兼容性检查；日常启动只同步检查
+用户 readiness、授权和已经持久化的同一 data-dir runtime scope。Support session
+只在 real-GUI Canary、明确诊断或需要 bundle 时开启。默认模型和视觉 backend 复用
+TaShuo standalone 的 MiniMax 配置；
+安装 `.[models]` 并设置 `MINIMAX_API_KEY`。用户不需要准备 authorization、goal、
+availability 或 provider JSON。
+
+```bash
+dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
+dating-boost manage start --data-dir .local/dating-boost --duration-minutes 120 --send-budget 5 --nudge --quiet-hours 23:00-08:00 --json
+```
+
+`start` 只创建并绑定 durable run，不扫描、不打开 GUI，也不启动后台 worker。
+Host 随后立即持有一个前台阻塞的 wait loop，不把第二条命令暴露成用户步骤；
+host/task/进程退出后不会继续运行：
+
+```bash
+dating-boost manage run --data-dir .local/dating-boost --wait --poll-interval 30 --json
+```
+
+对用户只展示 `manage start/status/pause/resume/stop`。Pause 在下一次 GUI mutation
+前生效并让当前 wait loop 退出；Resume 只恢复 durable 状态，host 还必须用同一
+data-dir 为同一 run 重新启动 `run --wait`，不能新建 run。Stop 返回
+`relationship_progress_report`。`run/tick` 是公开 CLI 子命令，“内部”只是产品交互
+分层，不是访问控制边界。
+
+ManagedRun live action 只能通过四段 adapter seam：composer observe、exact stage、
+Return-only click、fresh post-send observe。它不调用一体化 `send_message`。任何
+`unknown_after_click` 都暂停整个 run，禁止自动重发。真实 GUI Canary 尚未在代码
+实现过程中自动执行；只有用户明确授权并完成本节所有前置检查后才能做小预算实发。
+
+高级开发环境可通过 `DATING_BOOST_MANAGED_RUN_TASHUO_CONFIG` 覆盖默认模型配置；
+fixture 只在同时设置 `DATING_BOOST_MANAGED_RUN_FIXTURE_DIR` 和
+`DATING_BOOST_MANAGED_RUN_SCRIPTED_BACKEND_OUTPUT` 时启用，不能把 fixture send
+称为真实 GUI send。
+
+## Managed session（兼容路径）
 
 `managed-session` 只在用户显式启动后的当前托管窗口内运行。Session 外不监听、不扫描、不自动回复。全对象自动管理是全局 `managed-session`/`operator` 能力：runner 按机会窗口优先级串行处理多个对象，runtime 只执行当前 work item，不决定全局优先级。
 
@@ -410,9 +470,11 @@ DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session stop --data-dir 
 
 The current standalone GUI executor is stage-only and returns
 `standalone_live_gui_send_not_enabled` for live send. Ordinary-chat live send
-must remain host-native through managed-session/host-loop and still requires
-the operator-generated action request, user authorization, runtime scope,
-target binding, exact staged-text verification, and post-action evidence.
+must remain host-native through ManagedRun or the managed-session/host-loop
+compatibility path. Both require user authorization, runtime scope, target
+binding, exact staged-text verification, and post-action evidence. Only the
+compatibility executor consumes an operator-generated action request;
+ManagedRun uses its durable decision and send-attempt checkpoint instead.
 
 ## Host loop
 

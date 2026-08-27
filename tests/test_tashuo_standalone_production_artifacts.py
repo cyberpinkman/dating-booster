@@ -8,6 +8,9 @@ from pathlib import Path
 
 import pytest
 
+
+pytestmark = pytest.mark.nightly_lab
+
 from dating_boost.apps.tashuo.standalone_production_artifacts import (
     ArtifactViolation,
     build_child_environment,

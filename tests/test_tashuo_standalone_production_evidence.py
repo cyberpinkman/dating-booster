@@ -4,6 +4,9 @@ import copy
 
 import pytest
 
+
+pytestmark = pytest.mark.nightly_lab
+
 from dating_boost.apps.tashuo.standalone_production_evidence import (
     EvidenceViolation,
     build_conversation_tail_v2,

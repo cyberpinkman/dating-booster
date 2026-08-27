@@ -467,43 +467,37 @@ class StandaloneDraftPlanner:
             for item in (supplemental_prompts or [])
             if str(item).strip()
         ]
+        # Product hot path: one model generation and, only for a retryable
+        # deterministic policy finding, one rewrite. Model self-review used to
+        # double every attempt without improving the final policy boundary.
+        generation_errors: list[dict[str, Any]] = []
         generation = None
         review = None
         max_policy_attempts = 1 if self.allow_stage_soft_accept else 2
-        max_generation_attempts = 1 if self.allow_stage_soft_accept else 2
-        max_refinement_attempts = 3
         for policy_attempt in range(1, max_policy_attempts + 1):
-            generation_errors: list[dict[str, Any]] = []
-            generation = None
-            for generation_attempt in range(1, max_generation_attempts + 1):
-                try:
-                    generation = generate_reply_with_refinement(
-                        evidence,
-                        backend=backend,
-                        audit_root=self.root,
-                        supplemental_prompts=policy_supplements,
-                        soft_accept_after_exhaustion=self.allow_stage_soft_accept,
-                        soft_accept_after_attempts=1 if self.allow_stage_soft_accept else None,
-                        soft_accept_threshold=65 if self.allow_stage_soft_accept else 60,
-                        max_attempts=max_refinement_attempts,
-                    )
-                    break
-                except Exception as exc:  # noqa: BLE001 - standalone planner must stop with a structured wait point.
-                    generation_errors.append(
-                        {
-                            "attempt": generation_attempt,
-                            "error_type": type(exc).__name__,
-                            "error": str(exc),
-                        }
-                    )
-            if generation is None:
-                last_error = generation_errors[-1] if generation_errors else {}
+            try:
+                generation = generate_reply_with_refinement(
+                    evidence,
+                    backend=backend,
+                    audit_root=self.root,
+                    supplemental_prompts=policy_supplements,
+                    max_attempts=1,
+                    model_self_review=False,
+                )
+            except Exception as exc:  # noqa: BLE001 - standalone planner must stop with a structured wait point.
+                generation_errors.append(
+                    {
+                        "attempt": policy_attempt,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
                 return {
                     "schema_version": STANDALONE_RUNTIME_SCHEMA_VERSION,
                     "status": "blocked",
                     "reason": "draft_generation_failed",
-                    "error_type": last_error.get("error_type"),
-                    "error": last_error.get("error"),
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
                     "generation_error_attempts": generation_errors,
                     "draft_evidence": evidence.public_dict(),
                 }
@@ -545,16 +539,20 @@ class StandaloneDraftPlanner:
             )
             if (
                 review.allowed_for_managed_send
-                or (self.allow_stage_soft_accept and review.allowed_for_stage)
                 or policy_attempt == max_policy_attempts
                 or not _standalone_policy_retryable(review)
             ):
                 break
-            policy_supplements = _policy_revision_prompts(review)
+            policy_supplements.extend(_policy_revision_prompts(review))
 
         if generation is None or review is None:
             raise RuntimeError("standalone draft planner did not produce a generation")
-        final_draft = _draft_payload_with_generation_contract(generation.draft_payload, generation)
+
+        final_draft = _draft_payload_with_generation_contract(
+            generation.draft_payload,
+            generation,
+            deterministic_review=review,
+        )
         provider_identity = getattr(backend, "last_response_identity", None)
         if isinstance(provider_identity, dict):
             final_draft["provider_response_identity"] = dict(provider_identity)
@@ -603,20 +601,42 @@ def _policy_revision_prompts(review: Any) -> list[str]:
     ]
 
 
-def _draft_payload_with_generation_contract(draft_payload: dict[str, Any], generation: Any) -> dict[str, Any]:
+def _draft_payload_with_generation_contract(
+    draft_payload: dict[str, Any],
+    generation: Any,
+    *,
+    deterministic_review: Any | None = None,
+) -> dict[str, Any]:
     payload = dict(draft_payload)
     summary = generation.summary()
     attempts = list(getattr(generation, "self_review_attempts", []) or [])
     last_attempt = dict(attempts[-1]) if attempts else {}
-    probability = int(last_attempt.get("ai_or_weird_probability") or 0)
+    model_self_review_ran = bool(attempts)
+    if model_self_review_ran:
+        probability = int(last_attempt.get("ai_or_weird_probability") or 0)
+        review_status = "ok" if probability <= 40 else "needs_revision"
+        review_source = "standalone_draft_generation"
+        review_reason = str(last_attempt.get("reason") or "")
+    elif deterministic_review is not None:
+        allowed = bool(getattr(deterministic_review, "allowed_for_managed_send", False))
+        probability = 0 if allowed else 100
+        review_status = "ok" if allowed else "needs_revision"
+        review_source = "deterministic_draft_review"
+        review_reason = str(getattr(deterministic_review, "primary_reason", "") or "")
+    else:
+        probability = 100
+        review_status = "not_run"
+        review_source = "model_self_review_disabled"
+        review_reason = "Awaiting deterministic draft review."
     payload["draft_generation_id"] = generation.generation_id
     payload["draft_prompt_id"] = summary.get("prompt_id")
     payload["draft_prompt_hash"] = summary.get("prompt_hash")
     payload["draft_self_review_summary"] = {
         "schema_version": 1,
         "ai_or_weird_probability": probability,
-        "status": "ok" if probability <= 40 else "needs_revision",
-        "source": "standalone_draft_generation",
-        "reason": str(last_attempt.get("reason") or ""),
+        "status": review_status,
+        "source": review_source,
+        "reason": review_reason,
+        "model_self_review_ran": model_self_review_ran,
     }
     return payload

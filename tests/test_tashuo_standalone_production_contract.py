@@ -4,6 +4,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+
+pytestmark = pytest.mark.nightly_lab
+
 from dating_boost.apps.tashuo.standalone_production_contract import (
     ATTEMPT_TIMEOUT_SECONDS,
     CANARY_CYCLE_COUNT,

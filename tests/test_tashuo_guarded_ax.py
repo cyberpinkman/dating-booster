@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from types import SimpleNamespace
 
 from dating_boost.apps.tashuo.send_input_ax import (
     _guarded_clear_tashuo_ax_text_area_if_exact,
     _guarded_set_tashuo_ax_text_area_if_empty,
+    _tashuo_ax_conversation_snapshot,
 )
 
 
@@ -109,3 +111,26 @@ def test_guarded_clear_never_clears_other_or_unknown_text():
     assert missing["reason"] == "tashuo_ax_text_area_not_found"
     assert failed["reason"] == "tashuo_guarded_ax_clear_failed"
     assert "private text" not in str(failed)
+
+
+def test_conversation_snapshot_reads_revision_and_composer_in_one_ax_script():
+    session = _session(
+        Result(
+            stdout=json.dumps(
+                {
+                    "values": ["旧消息", "新消息"],
+                    "composer_found": True,
+                    "composer_value": "准备发送",
+                },
+                ensure_ascii=False,
+            )
+        )
+    )
+
+    result = _tashuo_ax_conversation_snapshot(session)
+
+    assert result["status"] == "ok"
+    assert result["values"] == ["旧消息", "新消息"]
+    assert result["composer_value"] == "准备发送"
+    assert len(session.runner.commands) == 1
+    assert "DATING_BOOST_AX_CONVERSATION_SNAPSHOT" in _script(session)

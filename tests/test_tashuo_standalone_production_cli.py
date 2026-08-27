@@ -6,6 +6,9 @@ from pathlib import Path
 import pytest
 
 
+pytestmark = pytest.mark.nightly_lab
+
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "tashuo_mac_ios_standalone_production_gate.py"
 
 

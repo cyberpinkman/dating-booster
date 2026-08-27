@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -169,6 +170,9 @@ def live_send_authorization_block_reason(
     app_id: str,
     now: str | None = None,
 ) -> str | None:
+    quiet_hours_reason = live_send_authorization_quiet_hours_block_reason(authorization.get("quiet_hours"))
+    if quiet_hours_reason is not None:
+        return quiet_hours_reason
     if authorization.get("scope") != "send_chat_messages":
         return "authorization_scope_not_send_chat_messages"
     if authorization.get("app_id") != app_id:
@@ -194,6 +198,28 @@ def live_send_authorization_block_reason(
         return "authorization_action_not_allowed"
     if authorization.get("requires_post_action_verification") is not True:
         return "authorization_requires_post_action_verification"
+    return None
+
+
+def live_send_authorization_quiet_hours_block_reason(value: Any) -> str | None:
+    """Validate every configured quiet-hours window without silently skipping bad input."""
+
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)):
+        return "authorization_quiet_hours_invalid"
+    for item in value:
+        if isinstance(item, Mapping):
+            start_value = item.get("start") if "start" in item else item.get("start_time")
+            end_value = item.get("end") if "end" in item else item.get("end_time")
+        elif isinstance(item, str) and item.count("-") == 1:
+            start_value, end_value = item.split("-", 1)
+        else:
+            return "authorization_quiet_hours_invalid"
+        start = _strict_clock_minutes(start_value)
+        end = _strict_clock_minutes(end_value)
+        if start is None or end is None or start == end:
+            return "authorization_quiet_hours_invalid"
     return None
 
 
@@ -280,6 +306,20 @@ def live_send_target_match_id(action_request: dict[str, Any]) -> tuple[str, str 
     if target is None:
         return "", "action_request_target_match_id_required"
     return target, None
+
+
+def _strict_clock_minutes(value: Any) -> int | None:
+    if not isinstance(value, str):
+        return None
+    parts = value.strip().split(":")
+    if len(parts) != 2 or len(parts[0]) != 2 or len(parts[1]) != 2:
+        return None
+    if not parts[0].isdigit() or not parts[1].isdigit():
+        return None
+    hour, minute = int(parts[0]), int(parts[1])
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        return None
+    return hour * 60 + minute
 
 
 def _planner_evidence_block_reason(action_request: dict[str, Any]) -> str | None:

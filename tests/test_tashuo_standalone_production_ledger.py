@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+
+pytestmark = pytest.mark.nightly_lab
+
 from dating_boost.apps.tashuo.standalone_production_contract import QualificationBinding
 from dating_boost.apps.tashuo.standalone_production_ledger import (
     LedgerConflict,

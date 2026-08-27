@@ -309,6 +309,239 @@ def _handle_managed_session_stop(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_manage_start(args: argparse.Namespace) -> int:
+    try:
+        from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason
+        from dating_boost.core.managed_run import ManagedRunConfig
+        from dating_boost.core.managed_run_provider import managed_run_start_readiness
+
+        config = ManagedRunConfig.from_dict(_managed_run_config_payload(args))
+        quiet_hours_reason = live_send_authorization_quiet_hours_block_reason(config.authorization.quiet_hours)
+        if quiet_hours_reason is not None:
+            payload = _managed_run_blocked(quiet_hours_reason)
+        else:
+            readiness_block = managed_run_start_readiness(args.data_dir)
+            if readiness_block is not None:
+                payload = readiness_block
+            else:
+                runtime = _build_managed_run_runtime(args.data_dir, require_ports=True, config=config)
+                if runtime is None:
+                    return _print_managed_run_runtime_not_configured()
+                payload = runtime.start(config, run_id=args.run_id)
+    except (TypeError, ValueError) as exc:
+        payload = _managed_run_blocked(str(exc))
+    _print_json(payload)
+    return _managed_run_exit_code(payload)
+
+
+def _handle_manage_tick(args: argparse.Namespace) -> int:
+    return _handle_managed_run_operation(args, "tick")
+
+
+def _handle_manage_run(args: argparse.Namespace) -> int:
+    if args.max_steps < 1:
+        payload = _managed_run_blocked("max_steps_must_be_positive")
+        _print_json(payload)
+        return 2
+    if args.wait and args.poll_interval <= 0:
+        payload = _managed_run_blocked("poll_interval_must_be_positive")
+        _print_json(payload)
+        return 2
+    run_options: dict[str, Any] = {"max_steps": args.max_steps}
+    if args.wait:
+        run_options.update(
+            {
+                "wait": True,
+                "poll_interval_seconds": args.poll_interval,
+            }
+        )
+    return _handle_managed_run_operation(args, "run", **run_options)
+
+
+def _handle_manage_status(args: argparse.Namespace) -> int:
+    return _handle_managed_run_operation(args, "status")
+
+
+def _handle_manage_pause(args: argparse.Namespace) -> int:
+    return _handle_managed_run_operation(args, "pause", reason=args.reason)
+
+
+def _handle_manage_resume(args: argparse.Namespace) -> int:
+    return _handle_managed_run_operation(args, "resume")
+
+
+def _handle_manage_stop(args: argparse.Namespace) -> int:
+    return _handle_managed_run_operation(args, "stop", reason=args.reason)
+
+
+def _managed_run_config_payload(args: argparse.Namespace) -> dict[str, Any]:
+    if args.config is not None:
+        return _read_json_object(args.config)
+    if not args.app_id:
+        raise ValueError("app_id_required")
+    if args.duration_minutes < 1:
+        raise ValueError("duration_minutes_must_be_positive")
+    if args.send_budget < 1:
+        raise ValueError("send_budget_must_be_positive")
+    authorization = _managed_run_authorization(args)
+    return {
+        "app_id": args.app_id,
+        "runtime": args.runtime,
+        "authorization": authorization,
+        "duration_minutes": args.duration_minutes,
+        "max_sends_per_run": args.send_budget,
+        "nudge_enabled": bool(args.nudge and authorization.get("autonomous_nudge") is True),
+        "management_mode": args.management_mode,
+    }
+
+
+def _managed_run_authorization(args: argparse.Namespace) -> dict[str, Any]:
+    if args.authorization is not None:
+        authorization = dict(_read_json_object(args.authorization))
+        configured_runtime = str(authorization.get("runtime") or "").strip()
+        if configured_runtime and configured_runtime != args.runtime:
+            raise ValueError("authorization_runtime_mismatch")
+        authorization.setdefault("runtime", args.runtime)
+        reason = live_send_authorization_block_reason(authorization, app_id=args.app_id, now=_now_iso())
+        if reason is not None:
+            raise ValueError(reason)
+        allowed_targets = authorization.get("allowed_target_ids", authorization.get("allowed_match_ids"))
+        if not allowed_targets and authorization.get("allow_all_targets") is not True:
+            raise ValueError("authorization_has_no_targets")
+        return authorization
+    created_at = _now_iso()
+    created_at_datetime = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    expires_at = datetime.fromtimestamp(
+        created_at_datetime.timestamp() + args.duration_minutes * 60,
+        timezone.utc,
+    ).isoformat().replace("+00:00", "Z")
+    binding = {
+        "app_id": args.app_id,
+        "runtime": args.runtime,
+        "duration_minutes": args.duration_minutes,
+        "send_budget": args.send_budget,
+        "nudge_enabled": bool(args.nudge),
+        "management_mode": args.management_mode,
+        "quiet_hours": _manage_quiet_hours(getattr(args, "quiet_hours", "23:00-08:00")),
+        "created_at": created_at,
+    }
+    return {
+        "schema_version": 1,
+        "authorization_id": f"managed_auth_{_digest(binding)[:16]}",
+        "scope": "send_chat_messages",
+        "app_id": args.app_id,
+        "runtime": args.runtime,
+        "allowed_actions": ["send_message"],
+        "allowed_match_ids": [],
+        "allowed_target_ids": [],
+        "allow_all_targets": True,
+        "autonomous_send": True,
+        "autonomous_nudge": bool(args.nudge),
+        "live_send": True,
+        "requires_post_action_verification": True,
+        "quiet_hours": binding["quiet_hours"],
+        "revoked": False,
+        "created_at": created_at,
+        "expires_at": expires_at,
+        "revoked_at": None,
+    }
+
+
+def _manage_quiet_hours(value: Any) -> list[dict[str, str]]:
+    normalized = str(value or "").strip()
+    if not normalized or normalized.lower() in {"off", "none", "disabled"}:
+        return []
+    windows: list[dict[str, str]] = []
+    for raw_window in normalized.split(","):
+        if "-" not in raw_window:
+            raise ValueError("quiet_hours_invalid")
+        start, end = (part.strip() for part in raw_window.split("-", 1))
+        for clock in (start, end):
+            try:
+                hour_text, minute_text = clock.split(":", 1)
+                hour, minute = int(hour_text), int(minute_text)
+            except (TypeError, ValueError):
+                raise ValueError("quiet_hours_invalid") from None
+            if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+                raise ValueError("quiet_hours_invalid")
+        windows.append({"start": start, "end": end})
+    return windows
+
+
+def _handle_managed_run_operation(args: argparse.Namespace, operation: str, **kwargs: Any) -> int:
+    runtime = _build_managed_run_runtime(args.data_dir, require_ports=operation in {"run", "tick"})
+    if runtime is None:
+        return _print_managed_run_runtime_not_configured()
+    try:
+        run_id = args.run_id
+        if not run_id:
+            run_id = runtime.current_run_id() if hasattr(runtime, "current_run_id") else runtime.store.current_run_id()
+        if not run_id:
+            payload = {
+                "schema_version": 1,
+                "status": "not_found",
+                "reason": "managed_run_not_started",
+            }
+        else:
+            payload = getattr(runtime, operation)(run_id, **kwargs)
+    except (TypeError, ValueError) as exc:
+        payload = _managed_run_blocked(str(exc))
+    _print_json(payload)
+    return _managed_run_exit_code(payload)
+
+
+def _build_managed_run_runtime(
+    data_dir: Path,
+    *,
+    require_ports: bool = True,
+    config: Any | None = None,
+) -> Any | None:
+    """Load the configured port-backed runtime without coupling CLI import time to it."""
+    try:
+        from dating_boost.core.managed_run_provider import build_managed_run_runtime
+    except ImportError:
+        if require_ports:
+            return None
+        from dating_boost.core.managed_run import JsonManagedRunStore, ManagedRun
+
+        unconfigured_port: Any = object()
+        return ManagedRun(
+            JsonManagedRunStore(data_dir),
+            unconfigured_port,
+            unconfigured_port,
+            unconfigured_port,
+        )
+    else:
+        try:
+            return build_managed_run_runtime(
+                data_dir,
+                requested_config=config,
+                require_ports=require_ports,
+            )
+        except (FileNotFoundError, RuntimeError, ValueError):
+            return None
+
+
+def _print_managed_run_runtime_not_configured() -> int:
+    _print_json(
+        {
+            "schema_version": 1,
+            "status": "blocked",
+            "reason": "managed_run_runtime_not_configured",
+            "next_host_action": "register_managed_run_ports",
+        }
+    )
+    return 2
+
+
+def _managed_run_blocked(reason: str) -> dict[str, Any]:
+    return {"schema_version": 1, "status": "blocked", "reason": reason}
+
+
+def _managed_run_exit_code(payload: dict[str, Any]) -> int:
+    return 2 if payload.get("status") in {"blocked", "error", "needs_user_profile", "not_found"} else 0
+
+
 def _handle_standalone_session_start(args: argparse.Namespace) -> int:
     from dating_boost.core.standalone_provider_factory import build_standalone_runtime_ports
     from dating_boost.core.standalone_session import StandaloneSessionRepository
@@ -911,7 +1144,12 @@ __all__ = [
     '_handle_automation_report_latest', '_handle_automation_scan_template', '_handle_automation_scan_validate', '_handle_automation_scan_normalize',
     '_handle_automation_scan_assemble', '_handle_automation_get_state', '_handle_automation_pause', '_handle_automation_resume',
     '_handle_managed_session_start', '_handle_managed_session_tick', '_handle_managed_session_run', '_handle_managed_session_notify',
-    '_handle_managed_session_status', '_handle_managed_session_stop', '_handle_standalone_session_start', '_handle_standalone_session_tick',
+    '_handle_managed_session_status', '_handle_managed_session_stop', '_handle_manage_start', '_handle_manage_tick',
+    '_handle_manage_run', '_handle_manage_status', '_handle_manage_pause', '_handle_manage_resume', '_handle_manage_stop',
+    '_managed_run_config_payload', '_managed_run_authorization', '_handle_managed_run_operation',
+    '_manage_quiet_hours',
+    '_build_managed_run_runtime', '_print_managed_run_runtime_not_configured',
+    '_managed_run_blocked', '_managed_run_exit_code', '_handle_standalone_session_start', '_handle_standalone_session_tick',
     '_handle_standalone_session_status', '_handle_standalone_session_stop', '_standalone_observation_source_payload', '_standalone_backend_payload',
     '_standalone_minimax_request_timeout', '_handle_operator_session_start', '_handle_operator_next', '_handle_operator_ingest_observation',
     '_handle_operator_record_action_result', '_handle_operator_record_stage_result', '_handle_operator_stop', '_handle_operator_report_latest',

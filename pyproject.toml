@@ -65,6 +65,10 @@ dating_boost = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "managed_critical: fast tests for the full-managed product's critical invariants and vertical paths",
+    "nightly_lab: slow qualification, crash, and compatibility protocols excluded from the PR feedback path",
+]
 
 [tool.ruff]
 target-version = "py311"

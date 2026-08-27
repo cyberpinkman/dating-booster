@@ -128,6 +128,118 @@ end tell
     }
 
 
+def _tashuo_ax_conversation_snapshot(session: Any) -> dict[str, Any]:
+    """Read static conversation text and the composer in one AX traversal."""
+
+    script = r'''
+-- DATING_BOOST_AX_CONVERSATION_SNAPSHOT
+on replaceText(sourceText, searchText, replacementText)
+  set previousDelimiters to AppleScript's text item delimiters
+  set AppleScript's text item delimiters to searchText
+  set sourceItems to every text item of sourceText
+  set AppleScript's text item delimiters to replacementText
+  set replacedText to sourceItems as text
+  set AppleScript's text item delimiters to previousDelimiters
+  return replacedText
+end replaceText
+
+on jsonString(valueText)
+  set slash to ASCII character 92
+  set escapedText to my replaceText(valueText as text, slash, slash & slash)
+  set escapedText to my replaceText(escapedText, quote, slash & quote)
+  set escapedText to my replaceText(escapedText, return, slash & "r")
+  set escapedText to my replaceText(escapedText, linefeed, slash & "n")
+  set escapedText to my replaceText(escapedText, tab, slash & "t")
+  return quote & escapedText & quote
+end jsonString
+
+on jsonArray(valuesList)
+  set encodedItems to {}
+  repeat with itemValue in valuesList
+    set end of encodedItems to my jsonString(itemValue as text)
+  end repeat
+  set previousDelimiters to AppleScript's text item delimiters
+  set AppleScript's text item delimiters to ","
+  set encodedText to encodedItems as text
+  set AppleScript's text item delimiters to previousDelimiters
+  return "[" & encodedText & "]"
+end jsonArray
+
+on collectConversation(e, depth)
+  set foundValues to {}
+  set foundComposer to missing value
+  tell application "System Events"
+    try
+      set currentRole to role of e
+      if currentRole is "AXStaticText" then
+        try
+          set currentValue to value of e as text
+          if currentValue is not "" then set end of foundValues to currentValue
+        end try
+      else if currentRole is "AXTextArea" then
+        try
+          set currentValue to value of e
+          if currentValue is missing value then set currentValue to ""
+          set foundComposer to currentValue as text
+        end try
+      end if
+      if depth < 24 then
+        repeat with child in UI elements of e
+          set childResult to my collectConversation(child, depth + 1)
+          repeat with itemValue in item 1 of childResult
+            set end of foundValues to itemValue as text
+          end repeat
+          if foundComposer is missing value and item 2 of childResult is not missing value then
+            set foundComposer to item 2 of childResult
+          end if
+        end repeat
+      end if
+    end try
+  end tell
+  return {foundValues, foundComposer}
+end collectConversation
+
+tell application "System Events"
+  tell process "她说"
+    set snapshot to my collectConversation(window 1, 0)
+    set valuesList to item 1 of snapshot
+    set composerValue to item 2 of snapshot
+    if composerValue is missing value then
+      return "{\"values\":" & my jsonArray(valuesList) & ",\"composer_found\":false,\"composer_value\":\"\"}"
+    end if
+    return "{\"values\":" & my jsonArray(valuesList) & ",\"composer_found\":true,\"composer_value\":" & my jsonString(composerValue) & "}"
+  end tell
+end tell
+'''
+    result = session.runner.run(["osascript", "-e", script])
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "tashuo_ax_conversation_snapshot_failed",
+            "stderr": platform._short(result.stderr),
+        }
+    try:
+        payload = json.loads(str(result.stdout or "").strip())
+    except (json.JSONDecodeError, TypeError):
+        payload = None
+    if not isinstance(payload, dict) or not isinstance(payload.get("values"), list):
+        return {"status": "blocked", "reason": "tashuo_ax_conversation_snapshot_invalid"}
+    values = [
+        str(item).strip()
+        for item in payload["values"]
+        if _tashuo_ax_text_value_is_useful(str(item))
+    ]
+    composer_found = payload.get("composer_found") is True
+    return {
+        "status": "ok",
+        "value_count": len(values),
+        "values": values,
+        "composer_found": composer_found,
+        "composer_value": str(payload.get("composer_value") or "") if composer_found else "",
+        "input_backend": "macos_accessibility",
+    }
+
+
 def _tashuo_ax_text_value_is_useful(value: str) -> bool:
     stripped = str(value).strip()
     return bool(stripped) and stripped != "missing value"
@@ -381,7 +493,7 @@ __all__ = [
     'TASHUO_PROFILE_BOTTOM_MAX_SCROLLS', '_capture_tashuo_window', '_tashuo_post_action_observation_delay_seconds', '_sleep_for_tashuo_post_action_observation',
     'tashuo_guardrails_payload', '_is_mac_ios_app_session', '_tashuo_capture_prefix', '_copy_tap_ratio',
     '_applescript_literal', '_tashuo_window_missing_payload', '_tashuo_message_input_tap_ratio', '_tashuo_input_coordinate_model',
-    '_tashuo_ax_text_area_value', '_tashuo_ax_static_text_values', '_tashuo_ax_text_value_is_useful', '_set_tashuo_ax_text_area_value',
+    '_tashuo_ax_text_area_value', '_tashuo_ax_static_text_values', '_tashuo_ax_conversation_snapshot', '_tashuo_ax_text_value_is_useful', '_set_tashuo_ax_text_area_value',
     '_clear_tashuo_ax_text_area', '_guarded_set_tashuo_ax_text_area_if_empty',
     '_guarded_clear_tashuo_ax_text_area_if_exact',
 ]

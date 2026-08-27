@@ -27,6 +27,43 @@ core, but they must not fork domain rules.
 核心模块保持 host-agnostic、尽量 app-agnostic，并且不绑定模型供应商。Host-specific
 包和 app-specific harness 只能编排核心能力，不能复制或分叉领域规则。
 
+## ManagedRun Flagship
+
+`ManagedRun` is the product-first full-management vertical slice. It replaces
+the old public mental model of chaining automation, operator, managed-session,
+and host-loop state machines, while those entry points remain available as
+compatibility paths during migration.
+
+The current user-facing lifecycle is deliberately small:
+
+```text
+start → status / pause / resume → stop
+```
+
+`run --wait` and `tick` are host-runner commands, not additional concepts the
+user should have to orchestrate. Today the host starts the foreground
+continuous runner immediately after `start`; `start` does not yet spawn or
+supervise a background process. Both commands operate on the same durable run.
+
+The core owns one `managed_run` record, per-thread state, and minimal
+send-attempt checkpoints. Observation, decision, and GUI action are typed
+ports. The irreversible ordinary-chat send boundary is owned by one
+`SendTransaction`: observe an empty composer, stage and verify exact text,
+persist `prepared_to_click` and `click_started`, perform a click-only action,
+then verify a fresh exact outbound occurrence. `unknown_after_click` pauses the
+whole run and is never retried automatically.
+
+Current rollout status:
+
+1. A deterministic fixture covers the complete managed vertical slice.
+2. TaShuo `mac-ios-app` has a split real-GUI action seam for ordinary chat.
+3. The foreground wait loop, durable pause/resume, send budget, and progress
+   report are implemented.
+4. A real-GUI live Canary has not been run for this build, so the seam is an
+   experimental candidate rather than an environment-qualified capability.
+5. Other apps and the legacy managed-session/host-loop path are not presented
+   as equivalent ManagedRun flagship implementations.
+
 ## Standalone Agent Runtime
 
 The standalone runtime is a new consumer of existing managed-session and operator contracts. It does not fork policy, planner, memory, app adapter, runtime scope, or managed-send rules.

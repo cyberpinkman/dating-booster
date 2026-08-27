@@ -4,6 +4,9 @@ from pathlib import Path
 
 import pytest
 
+
+pytestmark = pytest.mark.nightly_lab
+
 from dating_boost.apps.tashuo.standalone_production_attempt import (
     AttemptProtocolViolation,
     ProductionAttemptProtocol,

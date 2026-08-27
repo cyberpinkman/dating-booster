@@ -8,6 +8,9 @@ import time
 
 import pytest
 
+
+pytestmark = pytest.mark.nightly_lab
+
 from dating_boost.apps.tashuo.standalone_production_artifacts import create_qualification_paths
 from dating_boost.apps.tashuo.standalone_production_ledger import ProductionQualificationLedger
 from dating_boost.apps.tashuo.standalone_production_lock import (

@@ -7,9 +7,12 @@ description: Codex-first workflow for using Dating Booster as local memory, cont
 
 Use this skill when the user asks Codex to assist with dating-app workflows through Dating Booster local tools.
 
-## Mandatory Startup Check
+## Installation and Update Compatibility Check
 
-Before observing any dating app screen, screenshots, profile text, or conversation text, choose a local data directory for this workflow. Prefer `.local/dating-boost` unless the user gives another path. Then run this package's doctor:
+Before the first visible-app workflow after installation, source/adapter update,
+data migration, or macOS permission change, choose a local data directory.
+Prefer `.local/dating-boost` unless the user gives another path. Run this
+package's doctor:
 
 ```bash
 dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json
@@ -57,7 +60,14 @@ Load this package's `skill-package.json` and compare it with the capabilities JS
 
 If doctor, bootstrap, data doctor, migration, or capabilities fails; returns invalid JSON; has an incompatible `schema_version`; is too old; lacks a required schema version; or does not list the required commands, stop before observing dating app content and tell the user the local Dating Booster tool is incompatible.
 
-After compatibility checks pass and the target app id is known, start a local support session before observing dating-app content:
+Once this full check passes and the installation/data schema has not changed,
+do not repeat all four deep-doctor commands before every daily ManagedRun.
+Start with `manage start`; follow its one concrete recovery action if readiness,
+runtime scope, model configuration, or another precondition is blocked.
+
+Start a local support session for a first real-GUI Canary, an explicit
+diagnostic request, or a task that may need a support bundle. It is not a daily
+ManagedRun startup requirement:
 
 ```bash
 dating-boost support session start --data-dir .local/dating-boost --host codex --app-id tinder --json
@@ -96,22 +106,26 @@ Allowed by default:
 - Check drafts with `dating-boost policy check-draft`.
 - Paste a draft only when the user requested it.
 
-High-risk actions require explicit user confirmation and the local policy switch:
-
-- Sending a message.
-- Liking, super-liking, unmatching, reporting, or editing profile data.
-- Proposing a meeting or exchanging contact details.
+An ordinary chat message may be sent autonomously only inside a user-started,
+bounded live ManagedRun or an existing explicitly authorized managed executor.
+The following actions are outside agent execution scope even when autonomous
+mode is enabled: like, super-like, pass, unmatch, report, profile edit,
+premium purchase, payment, call/video call, concrete meeting commitment, and
+contact exchange. Handoff to the user instead of trying to confirm and execute
+one of these actions.
 
 Do not treat autonomous mode as permission to bypass app rules, rate limits, verification, account restrictions, or user judgment.
 
 For public production, treat the local safety switch as authoritative. If
 `dating-boost safety status --data-dir .local/dating-boost --json` reports
 paused, do not send, paste, stage, or continue a live host loop until the user
-explicitly resumes it. Live sends require `--send-mode live`, authorization with
-`live_send: true`, exact staged-text verification, and post-action verification.
-For Tinder, Bumble ordinary chat, TaShuo ordinary chat, or macOS WeChat fully
-managed sending, use `managed-session` or `dating-boost-host-loop` with
-`--managed-gui-send`. Direct `harness <app> send-message --authorization
+explicitly resumes it. ManagedRun binds live authorization through `manage
+start`; the managed-session/host-loop compatibility executor instead requires
+`--send-mode live`, authorization with `live_send: true`, and
+`--managed-gui-send`. Both paths require exact staged-text and post-action
+verification. Use the flagship ManagedRun only for TaShuo `mac-ios-app`; use
+managed-session/host-loop for the existing Tinder, Bumble, WeChat, or TaShuo
+compatibility paths. Direct `harness <app> send-message --authorization
 --action-request` is executor-internal only; do not handcraft action requests.
 Codex or Computer Use "request approval" prompts authorize tool execution only;
 they are not Dating Booster send authorization and cannot replace the managed
@@ -136,6 +150,58 @@ host-loop/managed-session calls. Do not invoke unrelated apps or runtimes during
 the selected session. If a command returns `runtime_scope_mismatch`, stop and
 rerun with the selected app/runtime, or clear/reselect only after the user
 explicitly changes the target.
+
+## Experimental Full-Managed TaShuo Path
+
+When the user explicitly asks for full management, prefer the single flagship
+path: TaShuo `mac-ios-app` through `ManagedRun`. Do not silently reduce the
+request to drafting or stage-only. The user confirms the bounded product scope
+once; ordinary chat messages do not require per-message confirmation.
+
+Before starting, run the install/update checks above only when their trigger
+applies, require autonomous user readiness, select `tashuo/mac-ios-app` on first
+use or an explicit target change, confirm the app is installed/logged in, and
+ensure the configured MiniMax key is available. Then translate the user's
+natural-language scope into the product flags:
+
+```bash
+dating-boost manage start \
+  --data-dir .local/dating-boost \
+  --duration-minutes 120 \
+  --send-budget 5 \
+  --nudge \
+  --quiet-hours 23:00-08:00 \
+  --json
+```
+
+After a successful start, immediately run the host-owned foreground wait loop;
+do not ask the user to issue a second command. `start` only creates durable
+state: it does not scan, open the GUI, spawn a worker, or supervise a daemon.
+The run stops progressing when the host task/process exits:
+
+```bash
+dating-boost manage run --data-dir .local/dating-boost --wait --poll-interval 30 --json
+```
+
+Use `manage status`, `manage pause`, `manage resume`, and `manage stop` as the
+only user-facing lifecycle. Pause exits the current wait loop before the next
+GUI mutation. Resume only restores durable state; restart `manage run --wait`
+for the same run. Stop returns `relationship_progress_report`. `run` and `tick`
+are public CLI subcommands; treating them as host-internal is a product UX
+convention, not an access-control boundary.
+
+The live action port is limited to ordinary TaShuo chat and is split into
+composer observation, exact staging, Return-only click, and fresh post-send
+observation. Question gate, concrete invitation details, contact exchange,
+target uncertainty, occupied composer, stale inbound revision, or any
+`unknown_after_click` result must hand off/pause. Never auto-retry an unknown
+click result.
+
+This release has not recorded a ManagedRun live-send GUI qualification. A
+manually reviewed, small-budget real send is only experiment evidence and does
+not automatically update capabilities. The current
+`managed_run_real_gui_canary_passed` value is a static release claim, not a
+per-machine qualification check.
 
 ## TaShuo Standalone Production Qualification
 
@@ -233,21 +299,27 @@ current mood, current availability, "摸鱼", or what is happening right now,
 do not continue it as if it is still current; bridge to present evidence or
 choose a new handle.
 
-When one reply naturally has two jobs, such as acknowledging the previous topic
-and opening a new hook, prefer `message_sequence` with several short messages
-instead of one dense paragraph. Split near commas or sentence boundaries. Each
-message should stand alone as a normal chat bubble. Do not mechanically split
-punctuation; each bubble needs a job, and the final bubble should carry the
-conversational push or landing. The operator/host-loop will bind the whole
-sequence with one payload hash and send each ordinary chat message through the
-managed GUI path; do not handcraft per-message action requests.
-For managed live send, a multi-bubble `message_sequence` must complete inside a
+ManagedRun currently stages and sends one `DraftDecision.text` per transaction;
+do not claim that it sends a multi-bubble sequence. In the operator/host-loop
+compatibility path, when one reply naturally has two jobs, a
+`message_sequence` may use several short messages instead of one dense
+paragraph. Split near commas or sentence boundaries. Each message should stand
+alone as a normal chat bubble. Do not mechanically split punctuation; each
+bubble needs a job, and the final bubble should carry the conversational push
+or landing. The compatibility executor binds the whole sequence with one
+payload hash; do not handcraft per-message action requests.
+For compatibility-path live send, a multi-bubble `message_sequence` must complete inside a
 continuous window of 20 seconds per message, starting before the first message
 send attempt. If the window expires after a partial send, stop, observe the
 current thread, and replan; do not resume-send the remaining bubbles as if they
 were still part of the same sequence.
 
 ## Workflow
+
+If the user asked for full management, follow **Experimental Full-Managed
+TaShuo Path** above. The drafting workflow below is for assistive requests,
+debugging, stage fallback, or an explicit request to draft only; do not use it
+to downgrade a full-management request.
 
 1. Run `dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json`; bootstrap with the package-relative `python3 scripts/bootstrap_cli.py` only if doctor says `needs_bootstrap`.
 2. Run `dating-boost capabilities --json --data-dir .local/dating-boost` and verify compatibility against `skill-package.json`.
@@ -466,7 +538,7 @@ dating-boost harness tashuo action prepare-message-page --data-dir .local/dating
 dating-boost harness tashuo stage-draft --data-dir .local/dating-boost --runtime mac-ios-app --text-file tashuo-draft.txt --dry-run --json
 ```
 
-If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. For each intended visible row, record `message_list_evidence` with a row visual anchor hash, its visual anchor region, and the tap ratio chosen from visual analysis. If the list reorders between visual planning and click, the harness can return to the message page, scan the current list for that row visual anchor, reopen the target, and verify the thread again before staging. If already in a thread, bind that thread with `current_thread_visual_identity` and a fresh visual anchor hash from the conversation screenshot; do not use message-list row position or header OCR as target-binding evidence. The mac-ios-app runtime supports launch/observe/prepare-message-page/stage-draft and ordinary-chat managed live send. Live send must be executed by host-loop with `--managed-gui-send --harness-runtime mac-ios-app` or by a managed-session wait point resumed through that host-loop runtime, with `current_thread_visual_identity` target binding, exact staged-text verification, and post-send exact-text/input-cleared verification. Direct harness live send remains executor-internal and must not be used as an agent workaround.
+If the user has installed and logged into the TaShuo iOS app on an Apple Silicon Mac, use `action prepare-message-page --runtime mac-ios-app` at task startup. It opens the local app, verifies the top-level page from the visual bottom-tab highlight, taps the messages tab when needed, then stops with `next_host_action=visual_plan_message_list`. After that point, plan from visual analysis; do not OCR-first and do not use fixed row coordinates to enter a chat thread. For each intended visible row, record `message_list_evidence` with a row visual anchor hash, its visual anchor region, and the tap ratio chosen from visual analysis. If the list reorders between visual planning and click, the harness can return to the message page, scan the current list for that row visual anchor, reopen the target, and verify the thread again before staging. If already in a thread, bind that thread with `current_thread_visual_identity` and a fresh visual anchor hash from the conversation screenshot; do not use message-list row position or header OCR as target-binding evidence. The mac-ios-app runtime supports launch/observe/prepare-message-page/stage-draft and has an experimental ordinary-chat ManagedRun action seam. The flagship path uses the four split ManagedRun actions. The compatibility path uses host-loop with `--managed-gui-send --harness-runtime mac-ios-app` or a managed-session wait point resumed through that host-loop runtime. Both paths require current-thread target binding, exact staged-text verification, and post-send exact-text/input-cleared verification. Direct harness live send remains executor-internal and must not be used as an agent workaround.
 
 If `harness doctor` or `prepare-message-page` returns
 `host_appleevents_unavailable`, stop and diagnose the host macOS Automation /
@@ -492,11 +564,12 @@ male reply; observe or summarize the visible prompt/reply, then ask the user to
 decide. For a male user's account, you may draft a question-gate reply for user
 review, but the current harness does not stage or send question-gate replies;
 the user must handle that path manually. Do not use a generic autonomous
-authorization to bypass this rule. Ordinary chat send is allowed only through
-managed-session/host-loop live execution; the direct harness send command is
-executor-internal only and must consume a system-generated work item, not a
-handcrafted action request. It requires target-specific binding, exact staged-text
-verification, a fresh post-send observation, input-cleared evidence, and outbound
+authorization to bypass this rule. Ordinary chat send uses either the TaShuo
+mac-ios-app ManagedRun candidate path or managed-session/host-loop compatibility
+execution. Only the compatibility executor consumes a system-generated work
+item; never handcraft one or call direct harness live send. Both paths require
+target-specific binding, exact staged-text verification, a fresh post-send
+observation, input-cleared evidence, and outbound
 exact-text verification. For mac-ios-app, exact verification may use
 Accessibility text evidence plus visual state; do not require header OCR or
 message-list row position. For iPhone Mirroring, OCR/text evidence remains the
@@ -664,10 +737,11 @@ debt, self-disclosure debt, reciprocity balance, low-investment streak, match
 curiosity about the user, and last user turn type. The naturalness checklist is
 internal QA; do not show it by default.
 
-## Session-scoped Managed Runner
+## Session-scoped Managed Runner (Compatibility)
 
-Use `managed-session` when the user explicitly asks for a bounded auto-managed
-window. It is not a global background agent. Tinder stops when iPhone Mirroring
+Use this section for existing managed-session/host-loop workflows; prefer the
+ManagedRun section for the TaShuo flagship experiment. `managed-session` is not
+a global background agent. Tinder stops when iPhone Mirroring
 is unavailable; WeChat runs until the user stops it and pauses while unreadable.
 If capabilities report `managed_session_global_background=false`, treat that as
 the intended safety boundary for this workflow, not as a request to implement a
@@ -676,7 +750,8 @@ execution backend: Computer Use is a host-agent capability when a host exposes
 it, while managed live send remains the `managed-session`/`host-loop`
 contract with target binding, staged-text verification, and post-action
 verification.
-Full-object management lives in the global managed-session/operator layer:
+Compatibility-path full-object management lives in the global
+managed-session/operator layer:
 the runner serially processes multiple candidates by opportunity priority, while
 each app runtime only executes the current work item. Use conservative mode for
 production and high-throughput mode only when the user explicitly wants link

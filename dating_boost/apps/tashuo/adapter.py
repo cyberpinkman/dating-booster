@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from dating_boost.apps.legacy import LegacyHarnessAdapter
+from dating_boost.apps.tashuo import managed_live_action as tashuo_managed_live_action
 from dating_boost.apps.tashuo import native as tashuo_native
 from dating_boost.core.gui_runtime_lock import GuiRuntimeLock, RuntimeLockError
 
@@ -103,6 +104,92 @@ class TaShuoAdapter(LegacyHarnessAdapter):
                 output_dir=output_dir,
             ),
             dry_run=dry_run,
+        )
+
+    def observe_managed_composer(
+        self,
+        *,
+        target_binding: dict[str, Any],
+        inbound_revision: str,
+        output_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        return self._with_runtime_guard(
+            lambda: tashuo_managed_live_action.observe_tashuo_managed_composer(
+                self.session,
+                target_binding=target_binding,
+                inbound_revision=inbound_revision,
+                output_dir=output_dir,
+            )
+        )
+
+    def observe_managed_inbound_revision(
+        self,
+        *,
+        target_binding: dict[str, Any],
+        output_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        return self._with_runtime_guard(
+            lambda: tashuo_managed_live_action.observe_tashuo_managed_inbound_revision(
+                self.session,
+                target_binding=target_binding,
+                output_dir=output_dir,
+            )
+        )
+
+    def stage_managed_text(
+        self,
+        draft_text: str,
+        *,
+        target_binding: dict[str, Any],
+        inbound_revision: str,
+        output_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        return self._with_runtime_guard(
+            lambda: tashuo_managed_live_action.stage_tashuo_managed_text(
+                self.session,
+                draft_text,
+                target_binding=target_binding,
+                inbound_revision=inbound_revision,
+                output_dir=output_dir,
+            )
+        )
+
+    def click_managed_send_only(
+        self,
+        expected_text: str,
+        *,
+        target_binding: dict[str, Any],
+        inbound_revision: str,
+        output_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        return self._with_runtime_guard(
+            lambda: tashuo_managed_live_action.click_tashuo_managed_send_only(
+                self.session,
+                expected_text,
+                target_binding=target_binding,
+                inbound_revision=inbound_revision,
+                output_dir=output_dir,
+            )
+        )
+
+    def observe_managed_post_send(
+        self,
+        expected_text: str,
+        *,
+        target_binding: dict[str, Any],
+        inbound_revision: str,
+        click_receipt: dict[str, Any],
+        output_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        return self._with_runtime_guard(
+            lambda: tashuo_managed_live_action.observe_tashuo_managed_post_send(
+                self.session,
+                expected_text,
+                target_binding=target_binding,
+                inbound_revision=inbound_revision,
+                click_receipt=click_receipt,
+                output_dir=output_dir,
+            )
         )
 
     def _with_runtime_guard(

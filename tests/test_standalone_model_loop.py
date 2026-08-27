@@ -129,6 +129,11 @@ class StandaloneDraftPlannerTests(unittest.TestCase):
             self.assertIn("draft_generation_id", payload["draft"])
             self.assertIn("draft_self_review_summary", payload["draft"])
             self.assertEqual(payload["draft"]["draft_self_review_summary"]["status"], "ok")
+            self.assertFalse(payload["draft"]["draft_self_review_summary"]["model_self_review_ran"])
+            self.assertEqual(
+                payload["draft"]["draft_self_review_summary"]["source"],
+                "deterministic_draft_review",
+            )
         else:
             self.assertIn("reason", payload)
 
@@ -145,7 +150,7 @@ class StandaloneDraftPlannerTests(unittest.TestCase):
         self.assertEqual(payload["error_type"], "ValueError")
         self.assertIn("draft_evidence", payload)
 
-    def test_draft_generation_runtime_error_retries_before_blocking(self):
+    def test_draft_generation_runtime_error_stops_without_replaying_model_chain(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
             _import_exit, match_id = self._prepare_planner_data(data_dir)
@@ -163,11 +168,11 @@ class StandaloneDraftPlannerTests(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked")
         self.assertEqual(payload["reason"], "draft_generation_failed")
         self.assertEqual(payload["error_type"], "RuntimeError")
-        self.assertEqual(len(payload["generation_error_attempts"]), 2)
-        self.assertEqual(generate.call_count, 2)
+        self.assertEqual(len(payload["generation_error_attempts"]), 1)
+        self.assertEqual(generate.call_count, 1)
         self.assertIn("draft_evidence", payload)
 
-    def test_stage_soft_accept_keeps_refinement_budget_without_retrying_policy(self):
+    def test_stage_soft_accept_uses_one_model_call_without_model_self_review(self):
         class FakeGeneration:
             status = "ok"
             primary_reason = None
@@ -236,9 +241,8 @@ class StandaloneDraftPlannerTests(unittest.TestCase):
         self.assertEqual(payload["draft_review"]["allowed_for_stage"], True)
         self.assertEqual(generate.call_count, 1)
         self.assertEqual(review_draft.call_count, 1)
-        self.assertEqual(generate.call_args.kwargs["max_attempts"], 3)
-        self.assertEqual(generate.call_args.kwargs["soft_accept_after_attempts"], 1)
-        self.assertEqual(generate.call_args.kwargs["soft_accept_threshold"], 65)
+        self.assertEqual(generate.call_args.kwargs["max_attempts"], 1)
+        self.assertIs(generate.call_args.kwargs["model_self_review"], False)
 
     def _prepare_planner_data(self, data_dir: Path) -> tuple[int, str]:
         self._run_cli(

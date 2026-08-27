@@ -5,6 +5,9 @@ from pathlib import Path
 
 import pytest
 
+
+pytestmark = pytest.mark.nightly_lab
+
 import dating_boost.apps.tashuo.standalone_production_runner as runner_module
 from dating_boost.apps.tashuo.standalone_production_artifacts import create_qualification_paths
 from dating_boost.apps.tashuo.standalone_production_runner import (

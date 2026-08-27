@@ -79,6 +79,7 @@ def generate_reply_with_refinement(
     soft_accept_after_attempts: int | None = None,
     soft_accept_threshold: int = 60,
     max_attempts: int = 3,
+    model_self_review: bool = True,
 ) -> DraftGenerationResult:
     if evidence_pack.status != "ok":
         prompt = build_draft_generation_prompt(evidence_pack, supplemental_prompts=supplemental_prompts)
@@ -117,6 +118,17 @@ def generate_reply_with_refinement(
             attempts.append(_synthetic_retry_attempt(reason=f"draft_generation_schema_invalid: {exc}", supplemental=supplemental))
             active_supplemental_prompts.append(supplemental)
             continue
+        if not model_self_review:
+            return _result(
+                evidence_pack=evidence_pack,
+                prompt=last_prompt,
+                status="ok",
+                reason=None,
+                draft=last_draft,
+                draft_payload=dict(last_payload),
+                attempts=attempts,
+                audit_root=audit_root,
+            )
         try:
             self_review = _parse_self_review(
                 backend.generate_structured(
