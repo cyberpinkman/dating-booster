@@ -95,7 +95,7 @@ class FixtureObservation(ManagedObservationPort):
         return ThreadObservation(
             target_id=candidate.target_id,
             target_binding=candidate.target_binding,
-            inbound_revision=self.thread_revision or candidate.inbound_revision,
+            inbound_revision=self.thread_revision or candidate.discovery_revision,
             captured_at=self.clock.tick(),
             context=dict(self.thread_context),
         )
@@ -124,6 +124,20 @@ class BlockingOnceObservation(FixtureObservation):
             runtime=runtime,
             cursor=cursor,
         )
+
+
+class FailingScanObservation(FixtureObservation):
+    def scan_message_list(
+        self,
+        *,
+        run_id: str,
+        app_id: str,
+        runtime: str,
+        cursor: dict[str, Any],
+    ) -> MessageListSnapshot:
+        del run_id, app_id, runtime, cursor
+        self.calls.append("scan")
+        raise RuntimeError("fixture scan failure")
 
 
 class SequencedObservation(FixtureObservation):
@@ -195,6 +209,17 @@ class MaturingNudgeDecision(FixtureDecision):
                 reason_codes=("managed_nudge_not_due",),
             )
         return super().decide(observation, config=config)
+
+
+class FailingPrioritizationDecision(FixtureDecision):
+    def prioritize(
+        self,
+        candidates: Sequence[ThreadCandidate],
+        *,
+        thread_states: Mapping[str, dict[str, Any]],
+    ) -> ThreadCandidate | None:
+        del candidates, thread_states
+        raise RuntimeError("fixture prioritization failure")
 
 
 class FixtureAction(ManagedActionPort):
@@ -354,6 +379,12 @@ class BlockingCreateStore(InMemoryManagedRunStore):
             raise TimeoutError("test did not release start lease")
 
 
+class FailingEventStore(InMemoryManagedRunStore):
+    def append_event(self, event: dict[str, Any]) -> None:
+        del event
+        raise RuntimeError("fixture diagnostic event failure")
+
+
 class SimulatedProcessCrash(RuntimeError):
     pass
 
@@ -367,7 +398,7 @@ def _candidate() -> ThreadCandidate:
         candidate_key="row_1",
         target_id="match_alice",
         target_binding="visual-anchor:alice-v1",
-        inbound_revision="inbound_7",
+        discovery_revision="inbound_7",
         priority=1,
     )
 
@@ -645,7 +676,7 @@ def test_unknown_click_uses_budget_and_blocks_clicking_a_second_target_after_res
         candidate_key="row_2",
         target_id="match_bob",
         target_binding="visual-anchor:bob-v1",
-        inbound_revision="inbound_3",
+        discovery_revision="inbound_3",
         priority=2,
     )
     store = InMemoryManagedRunStore()
@@ -1224,6 +1255,116 @@ def test_wait_run_exits_paused_without_sleeping_again_and_resume_continues_same_
     assert resumed["reason"] == "send_budget_exhausted"
     assert action.click_count == 1
     assert runtime.current_run_id() == "run_wait_pause"
+
+
+def test_wait_run_persists_a_pause_when_a_port_failure_ends_the_runner() -> None:
+    clock = Clock()
+    candidate = _candidate()
+    store = InMemoryManagedRunStore()
+    observation = FailingScanObservation(clock, [candidate])
+    sleep_calls: list[float] = []
+    runtime = ManagedRun(
+        store,
+        observation,
+        FixtureDecision(),
+        FixtureAction(clock, candidate),
+        now=clock,
+        sleeper=sleep_calls.append,
+    )
+    runtime.start(_config(), run_id="run_wait_port_failure")
+
+    result = runtime.run(wait=True, poll_interval_seconds=3.0)
+
+    assert result["status"] == "paused"
+    assert result["reason"] == "message_list_observation_failed"
+    assert result["error_type"] == "RuntimeError"
+    assert sleep_calls == []
+    durable = store.load("run_wait_port_failure")
+    assert durable is not None
+    assert durable.status == "paused"
+    assert durable.pause_reason == "message_list_observation_failed"
+    assert durable.last_result == {
+        "schema_version": 1,
+        "status": "paused",
+        "reason": "message_list_observation_failed",
+        "run_id": "run_wait_port_failure",
+        "error_type": "RuntimeError",
+    }
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_reason"),
+    (
+        (RuntimeError("fixture sleeper failure"), "managed_run_wait_sleep_failed"),
+        (KeyboardInterrupt(), "managed_run_interrupted"),
+    ),
+)
+def test_wait_run_pauses_when_polling_is_interrupted(
+    failure: BaseException,
+    expected_reason: str,
+) -> None:
+    clock = Clock()
+    candidate = _candidate()
+    store = InMemoryManagedRunStore()
+
+    def interrupted_sleep(seconds: float) -> None:
+        del seconds
+        raise failure
+
+    runtime = ManagedRun(
+        store,
+        FixtureObservation(clock, []),
+        FixtureDecision(),
+        FixtureAction(clock, candidate),
+        now=clock,
+        sleeper=interrupted_sleep,
+    )
+    runtime.start(_config(), run_id="run_wait_interrupted")
+
+    result = runtime.run(wait=True, poll_interval_seconds=3.0)
+
+    assert result["status"] == "paused"
+    assert result["reason"] == expected_reason
+    assert runtime.status()["status"] == "paused"
+
+
+def test_prioritization_failure_pauses_instead_of_leaving_an_active_run() -> None:
+    clock = Clock()
+    candidate = _candidate()
+    store = InMemoryManagedRunStore()
+    runtime = ManagedRun(
+        store,
+        FixtureObservation(clock, [candidate]),
+        FailingPrioritizationDecision(),
+        FixtureAction(clock, candidate),
+        now=clock,
+    )
+    runtime.start(_config(), run_id="run_prioritization_failure")
+
+    result = runtime.tick()
+
+    assert result["status"] == "paused"
+    assert result["reason"] == "candidate_prioritization_failed"
+    assert runtime.status()["status"] == "paused"
+
+
+def test_diagnostic_event_failure_does_not_interrupt_managed_send() -> None:
+    clock = Clock()
+    candidate = _candidate()
+    store = FailingEventStore()
+    runtime = ManagedRun(
+        store,
+        FixtureObservation(clock, [candidate]),
+        FixtureDecision(),
+        FixtureAction(clock, candidate),
+        now=clock,
+    )
+
+    assert runtime.start(_config(), run_id="run_event_failure")["status"] == "active"
+    result = runtime.tick()
+
+    assert result["status"] == "confirmed"
+    assert runtime.status()["status"] == "active"
 
 
 def test_wait_run_uses_injected_sleep_to_reach_duration_stop() -> None:

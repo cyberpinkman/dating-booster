@@ -9,7 +9,7 @@ import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterator, Mapping, Protocol, Sequence
@@ -214,10 +214,13 @@ class ManagedRunConfig:
 
 @dataclass(frozen=True)
 class ThreadCandidate:
+    """A list-row hint, promoted with an authoritative revision after open."""
+
     candidate_key: str
     target_id: str
     target_binding: str
-    inbound_revision: str
+    discovery_revision: str
+    inbound_revision: str | None = None
     priority: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -814,6 +817,11 @@ class ManagedRun:
         for _ in range(max(1, int(max_steps))):
             result = self.tick(normalized_run_id)
             results.append(result)
+            if (
+                result.get("status") == "no_work"
+                and result.get("reason") == "inbound_revision_already_processed"
+            ):
+                continue
             if result.get("status") in {
                 "no_work",
                 "wait",
@@ -858,12 +866,29 @@ class ManagedRun:
             if status == "no_work":
                 if reason == "send_budget_exhausted":
                     break
+                if reason == "inbound_revision_already_processed":
+                    # The latest discovery hint was just consumed and stored;
+                    # immediately rescan so another visible candidate is not
+                    # delayed by the normal idle poll interval.
+                    continue
                 poll_count += 1
-                self._sleep(poll_interval_seconds)
+                interrupted = self._wait_sleep_result(
+                    normalized_run_id,
+                    poll_interval_seconds,
+                )
+                if interrupted is not None:
+                    results.append(interrupted)
+                    break
                 continue
             if status == "wait":
                 poll_count += 1
-                self._sleep(poll_interval_seconds)
+                interrupted = self._wait_sleep_result(
+                    normalized_run_id,
+                    poll_interval_seconds,
+                )
+                if interrupted is not None:
+                    results.append(interrupted)
+                    break
                 continue
             if status in TERMINAL_SEND_STATUSES:
                 processed_count += 1
@@ -878,6 +903,22 @@ class ManagedRun:
             "poll_interval_seconds": poll_interval_seconds,
             "steps": list(results),
         }
+
+    def _wait_sleep_result(
+        self,
+        run_id: str | None,
+        poll_interval_seconds: float,
+    ) -> dict[str, Any] | None:
+        try:
+            self._sleep(poll_interval_seconds)
+        except KeyboardInterrupt:
+            return self.pause(run_id, reason="managed_run_interrupted")
+        except Exception as exc:  # noqa: BLE001 - an unusable wait loop must not remain active.
+            return {
+                **self.pause(run_id, reason="managed_run_wait_sleep_failed"),
+                "error_type": type(exc).__name__,
+            }
+        return None
 
     def tick(self, run_id: str | None = None) -> dict[str, Any]:
         normalized_run_id = run_id or self.store.current_run_id()
@@ -946,7 +987,15 @@ class ManagedRun:
             return self._finish_tick(record, "blocked", reason="message_list_observation_failed", error_type=type(exc).__name__)
 
         eligible = self._eligible_candidates(record, snapshot.candidates)
-        candidate = self.decision.prioritize(eligible, thread_states=record.thread_states)
+        try:
+            candidate = self.decision.prioritize(eligible, thread_states=record.thread_states)
+        except Exception as exc:  # noqa: BLE001 - a decision-port failure ends this runner.
+            return self._finish_tick(
+                record,
+                "blocked",
+                reason="candidate_prioritization_failed",
+                error_type=type(exc).__name__,
+            )
         if candidate is None:
             return self._finish_tick(record, "no_work", reason="no_eligible_thread")
         if candidate not in eligible:
@@ -977,8 +1026,13 @@ class ManagedRun:
         target_reason = _target_evidence_block_reason(candidate, thread.target_id, thread.target_binding)
         if target_reason is not None:
             return self._finish_candidate_tick(record, candidate, reason=target_reason)
-        if thread.inbound_revision != candidate.inbound_revision:
-            return self._finish_candidate_tick(record, candidate, reason="inbound_revision_changed")
+        # Message-list text is commonly truncated.  Its hash is only a hint that
+        # tells us which row may deserve inspection; the fresh thread
+        # observation owns the authoritative inbound revision used by every
+        # decision, action and durable deduplication key below this boundary.
+        candidate = replace(candidate, inbound_revision=thread.inbound_revision)
+        if candidate not in self._eligible_candidates(record, (candidate,)):
+            return self._finish_authoritative_duplicate(record, candidate)
 
         transaction = SendTransaction(
             store=self.store,
@@ -1055,12 +1109,20 @@ class ManagedRun:
     def _finish_tick(self, record: ManagedRunRecord, status: str, *, reason: str, **extra: Any) -> dict[str, Any]:
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
-            effective_status = latest.status if latest.status != "active" else status
-            effective_reason = (
-                latest.pause_reason or latest.stop_reason or reason
-                if latest.status != "active"
-                else reason
-            )
+            if latest.status != "active":
+                effective_status = latest.status
+                effective_reason = latest.pause_reason or latest.stop_reason or reason
+            elif status == "blocked":
+                # A blocked tick terminates the foreground wait loop. Persist a
+                # matching lifecycle state so status cannot claim the run is
+                # still actively managed after its runner has exited.
+                latest.status = "paused"
+                latest.pause_reason = reason
+                effective_status = "paused"
+                effective_reason = reason
+            else:
+                effective_status = status
+                effective_reason = reason
             result = _result(effective_status, reason=effective_reason, run_id=latest.run_id, **extra)
             latest.last_result = dict(result)
             latest.updated_at = _iso(self._now())
@@ -1092,17 +1154,75 @@ class ManagedRun:
                 **({"decision_id": decision_id} if decision_id else {}),
             )
             latest.updated_at = _iso(self._now())
-            latest.thread_states[candidate.target_id] = _thread_state_payload(
-                candidate,
-                inbound_revision=candidate.inbound_revision,
-                decision_id=decision_id,
-                outcome="failed_before_click",
-                reason=reason,
-                updated_at=latest.updated_at,
-            )
+            existing_state = latest.thread_states.get(candidate.target_id)
+            if candidate.inbound_revision is None and existing_state is not None:
+                # A list/open failure has not established a new authoritative
+                # inbound revision.  Preserve any previously confirmed thread
+                # state and record only the new discovery failure; clearing the
+                # full revision here would weaken duplicate-send suppression.
+                next_state = dict(existing_state)
+                next_state.update(
+                    {
+                        "last_discovery_revision": candidate.discovery_revision,
+                        "last_discovery_outcome": "failed_before_click",
+                        "last_discovery_reason": reason,
+                        "updated_at": latest.updated_at,
+                    }
+                )
+            else:
+                next_state = _thread_state_payload(
+                    candidate,
+                    inbound_revision=candidate.inbound_revision or "",
+                    decision_id=decision_id,
+                    outcome="failed_before_click",
+                    reason=reason,
+                    updated_at=latest.updated_at,
+                )
+            latest.thread_states[candidate.target_id] = next_state
             latest.last_result = dict(result)
             self.store.save(latest)
         self._event(latest, "tick_finished", status="failed_before_click", reason=reason, target_id=candidate.target_id)
+        return result
+
+    def _finish_authoritative_duplicate(
+        self,
+        record: ManagedRunRecord,
+        candidate: ThreadCandidate,
+    ) -> dict[str, Any]:
+        """Remember the discovery hint without replacing authoritative state."""
+
+        with self.store.state_lease(record.run_id):
+            latest = self.store.load(record.run_id) or record
+            if latest.status != "active":
+                return _result(
+                    latest.status,
+                    reason=latest.pause_reason or latest.stop_reason or "managed_run_not_active",
+                    run_id=latest.run_id,
+                )
+            state = latest.thread_states.get(candidate.target_id)
+            if state is not None:
+                state = dict(state)
+                state["last_discovery_revision"] = candidate.discovery_revision
+                state["last_discovery_outcome"] = state.get("last_outcome")
+                state["last_discovery_reason"] = state.get("last_reason")
+                state["updated_at"] = _iso(self._now())
+                latest.thread_states[candidate.target_id] = state
+            result = _result(
+                "no_work",
+                reason="inbound_revision_already_processed",
+                run_id=latest.run_id,
+                target_id=candidate.target_id,
+            )
+            latest.last_result = dict(result)
+            latest.updated_at = _iso(self._now())
+            self.store.save(latest)
+        self._event(
+            latest,
+            "tick_finished",
+            status="no_work",
+            reason="inbound_revision_already_processed",
+            target_id=candidate.target_id,
+        )
         return result
 
     def _resolve_record(self, run_id: str | None) -> ManagedRunRecord | None:
@@ -1135,6 +1255,9 @@ class ManagedRun:
                         "target_id": target_id,
                         "candidate_key": str(attempt.get("candidate_key") or target_id),
                         "target_binding": str(attempt.get("target_binding") or ""),
+                        "last_discovery_revision": str(attempt.get("discovery_revision") or ""),
+                        "last_discovery_outcome": "unknown_after_click",
+                        "last_discovery_reason": reason,
                         "last_inbound_revision": str(attempt.get("inbound_revision") or ""),
                         "last_decision_id": str(attempt.get("decision_id") or ""),
                         "last_outcome": "unknown_after_click",
@@ -1165,12 +1288,22 @@ class ManagedRun:
         eligible: list[ThreadCandidate] = []
         for candidate in candidates:
             state = record.thread_states.get(candidate.target_id)
+            authoritative = candidate.inbound_revision is not None
+            state_revision = state.get(
+                "last_inbound_revision" if authoritative else "last_discovery_revision"
+            ) if state is not None else None
+            candidate_revision = candidate.inbound_revision or candidate.discovery_revision
             if (
                 state is not None
-                and state.get("last_inbound_revision") == candidate.inbound_revision
+                and state_revision == candidate_revision
             ):
-                outcome = state.get("last_outcome")
-                if outcome == "wait" and state.get("last_reason") == "managed_nudge_not_due":
+                outcome = state.get("last_outcome") if authoritative else state.get(
+                    "last_discovery_outcome", state.get("last_outcome")
+                )
+                reason = state.get("last_reason") if authoritative else state.get(
+                    "last_discovery_reason", state.get("last_reason")
+                )
+                if outcome == "wait" and reason == "managed_nudge_not_due":
                     if not _nudge_retry_due(state, now=self._now()):
                         continue
                     eligible.append(candidate)
@@ -1181,16 +1314,19 @@ class ManagedRun:
         return eligible
 
     def _event(self, record: ManagedRunRecord, event_type: str, **payload: Any) -> None:
-        self.store.append_event(
-            {
-                "schema_version": MANAGED_RUN_SCHEMA_VERSION,
-                "event_id": f"event_{uuid.uuid4().hex}",
-                "event_type": event_type,
-                "run_id": record.run_id,
-                "created_at": _iso(self._now()),
-                **payload,
-            }
-        )
+        try:
+            self.store.append_event(
+                {
+                    "schema_version": MANAGED_RUN_SCHEMA_VERSION,
+                    "event_id": f"event_{uuid.uuid4().hex}",
+                    "event_type": event_type,
+                    "run_id": record.run_id,
+                    "created_at": _iso(self._now()),
+                    **payload,
+                }
+            )
+        except Exception:  # noqa: BLE001 - durable run state owns behavior; events are diagnostic only.
+            return
 
     @staticmethod
     def _config_block_reason(config: ManagedRunConfig) -> str | None:
@@ -1349,6 +1485,7 @@ class SendTransaction:
                 "candidate_key": candidate.candidate_key,
                 "target_id": candidate.target_id,
                 "target_binding": candidate.target_binding,
+                "discovery_revision": candidate.discovery_revision,
                 "inbound_revision": thread.inbound_revision,
                 "action": decision.action,
                 "exact_text": decision.text,
@@ -1672,6 +1809,7 @@ class SendTransaction:
                 "candidate_key": candidate.candidate_key,
                 "target_id": candidate.target_id,
                 "target_binding": candidate.target_binding,
+                "discovery_revision": candidate.discovery_revision,
                 "inbound_revision": decision.inbound_revision,
                 "action": decision.action,
                 "exact_text": decision.text,
@@ -1732,6 +1870,9 @@ def _thread_state_payload(
         "target_id": candidate.target_id,
         "candidate_key": candidate.candidate_key,
         "target_binding": candidate.target_binding,
+        "last_discovery_revision": candidate.discovery_revision,
+        "last_discovery_outcome": outcome,
+        "last_discovery_reason": reason,
         "last_inbound_revision": inbound_revision,
         "last_decision_id": decision_id,
         "last_outcome": outcome,
@@ -1758,6 +1899,9 @@ def _inherited_unknown_thread_states(record: ManagedRunRecord | None) -> dict[st
             "target_id": target_id,
             "candidate_key": str(attempt.get("candidate_key") or target_id),
             "target_binding": str(attempt.get("target_binding") or ""),
+            "last_discovery_revision": str(attempt.get("discovery_revision") or ""),
+            "last_discovery_outcome": "unknown_after_click",
+            "last_discovery_reason": str(attempt.get("reason") or "unknown_after_click"),
             "last_inbound_revision": str(attempt.get("inbound_revision") or ""),
             "last_decision_id": str(attempt.get("decision_id") or ""),
             "last_outcome": "unknown_after_click",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -7,6 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from dating_boost.core.managed_run import (
+    DraftDecision,
     JsonManagedRunStore,
     ManagedAuthorization,
     ManagedRun,
@@ -478,6 +480,149 @@ class _ManagedActionAdapter:
         }
 
 
+def test_truncated_list_preview_defers_to_full_thread_revision_for_send_and_dedup(tmp_path: Path) -> None:
+    truncated_previews = [
+        "我工作时间没办法哈哈哈 但我也喜…",
+        "我工作时间没办法哈哈哈 但我也喜欢…",
+    ]
+    full_inbound = "我工作时间没办法哈哈哈 但我也喜欢周末出去走走"
+    preview_revisions = [hashlib.sha256(value.encode("utf-8")).hexdigest() for value in truncated_previews]
+    authoritative_revision = hashlib.sha256(full_inbound.encode("utf-8")).hexdigest()
+    assert authoritative_revision not in preview_revisions
+
+    binding = {
+        "binding_type": "current_thread_visual_identity",
+        "candidate_key": "row_ada",
+        "thread_evidence": {
+            "observation_id": "obs_thread_ada",
+            "screen_state": "tashuo_conversation",
+            "latest_inbound_fingerprint": authoritative_revision,
+            "visual_anchor_hash": "thread-anchor",
+            "visual_anchor_region": {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.84},
+        },
+        "message_list_evidence": {
+            "visual_anchor_hash": "list-anchor",
+            "visual_anchor_region": {"x1": 0.05, "y1": 0.2, "x2": 0.95, "y2": 0.3},
+        },
+    }
+
+    class Provider:
+        scan_count = 0
+        thread_count = 0
+
+        def observe_message_list(self, *, app_id: str, scan_cursor: dict[str, object]) -> dict[str, object]:
+            revision = preview_revisions[min(self.scan_count, len(preview_revisions) - 1)]
+            self.scan_count += 1
+            return {
+                "status": "ok",
+                "observation_type": "message_list",
+                "runtime": "mac-ios-app",
+                "captured_at": "2026-08-27T04:00:00Z",
+                "message_list_snapshot": {
+                    "entries": [
+                        {
+                            "app_id": app_id,
+                            "candidate_key": "row_ada",
+                            "target_id": "match_ada",
+                            "latest_preview_hash": revision,
+                            "message_list_evidence": dict(binding["message_list_evidence"]),
+                        }
+                    ]
+                },
+                "scan_cursor": scan_cursor,
+            }
+
+        def observe_thread(self, *, app_id: str, candidate_key: str) -> dict[str, object]:
+            self.thread_count += 1
+            return {
+                "status": "ok",
+                "observation_type": "thread",
+                "app_id": app_id,
+                "candidate_key": candidate_key,
+                "target_id": "match_ada",
+                "latest_inbound_fingerprint": authoritative_revision,
+                "captured_at": "2026-08-27T04:00:01Z",
+                "target_binding": binding,
+                "assessment": {"recommended_next": "reply"},
+            }
+
+    class Decision:
+        def __init__(self) -> None:
+            self.revisions: list[str] = []
+
+        def prioritize(
+            self,
+            candidates: list[ThreadCandidate] | tuple[ThreadCandidate, ...],
+            *,
+            thread_states: object,
+        ) -> ThreadCandidate | None:
+            del thread_states
+            return candidates[0] if candidates else None
+
+        def decide(self, observation: ThreadObservation, *, config: ManagedRunConfig) -> DraftDecision:
+            del config
+            self.revisions.append(observation.inbound_revision)
+            return DraftDecision.send(
+                decision_id="decision_full_inbound",
+                target_id=observation.target_id,
+                inbound_revision=observation.inbound_revision,
+                text="听起来周末派更适合你哈哈",
+            )
+
+    data_dir = tmp_path / "data"
+    provider = Provider()
+    observation = StandaloneObservationManagedRunPort(
+        data_dir,
+        provider,
+        fixture_mode=False,
+        live_inbound_revision_observer=lambda _binding: {
+            "status": "ok",
+            "inbound_revision": "ax-static-v1:managed-revision",
+            "inbound_revision_observation_id": "managed_revision_obs_1",
+            "inbound_revision_captured_at": "2026-08-27T04:00:01.500000Z",
+        },
+    )
+    decision = Decision()
+    adapter = _ManagedActionAdapter()
+    action = TaShuoMacIosManagedActionPort(
+        data_dir,
+        output_dir=tmp_path / "harness",
+        adapter_factory=lambda: adapter,
+    )
+    runtime = ManagedRun(JsonManagedRunStore(data_dir), observation, decision, action)
+    config = ManagedRunConfig(
+        app_id="tashuo",
+        runtime="mac-ios-app",
+        authorization=ManagedAuthorization(
+            authorization_id="auth_truncated_preview",
+            app_id="tashuo",
+            runtime="mac-ios-app",
+            allow_all_targets=True,
+        ),
+    )
+
+    runtime.start(config, run_id="run_truncated_preview")
+    run_result = runtime.run(max_steps=3)
+    first, second, third = run_result["steps"]
+
+    assert run_result["processed_count"] == 1
+    assert first["status"] == "confirmed"
+    assert second["status"] == "no_work"
+    assert second["reason"] == "inbound_revision_already_processed"
+    assert third["status"] == "no_work"
+    assert third["reason"] == "no_eligible_thread"
+    assert provider.thread_count == 2
+    assert decision.revisions == [authoritative_revision]
+    assert adapter.calls == ["stage", "click", "post"]
+    record = JsonManagedRunStore(data_dir).load("run_truncated_preview")
+    assert record is not None
+    assert record.thread_states["match_ada"]["last_inbound_revision"] == authoritative_revision
+    assert record.thread_states["match_ada"]["last_discovery_revision"] == preview_revisions[-1]
+    attempt = next(iter(record.send_attempts.values()))
+    assert attempt["inbound_revision"] == authoritative_revision
+    assert attempt["discovery_revision"] == preview_revisions[0]
+
+
 def test_tashuo_action_port_uses_split_adapter_boundaries_without_all_in_one_send(tmp_path: Path) -> None:
     adapter = _ManagedActionAdapter()
     port = TaShuoMacIosManagedActionPort(
@@ -489,6 +634,7 @@ def test_tashuo_action_port_uses_split_adapter_boundaries_without_all_in_one_sen
         candidate_key="row_ada",
         target_id="match_ada",
         target_binding="tashuo-list-anchor:verified",
+        discovery_revision="preview_ada_7",
         inbound_revision="inbound_7",
         metadata={
             "verified_target_binding": {

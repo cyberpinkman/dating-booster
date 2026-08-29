@@ -232,16 +232,16 @@ class StandaloneObservationManagedRunPort:
             return None
         app_id = _first_string(entry, "app_id") or _first_string(entry.get("provenance"), "app_id") or self._app_id
         target_id = _first_string(entry, "target_id", "match_id") or candidate_key
-        inbound_revision = _first_string(
+        discovery_revision = _first_string(
             entry,
             "inbound_revision",
             "latest_inbound_fingerprint",
             "latest_preview_hash",
         )
-        if not inbound_revision:
+        if not discovery_revision:
             hints = entry.get("match_identity_hints")
-            inbound_revision = _first_string(hints, "conversation_fingerprint")
-        if not inbound_revision:
+            discovery_revision = _first_string(hints, "conversation_fingerprint")
+        if not discovery_revision:
             return None
 
         target_binding: str
@@ -258,7 +258,7 @@ class StandaloneObservationManagedRunPort:
             candidate_key=candidate_key,
             target_id=target_id,
             target_binding=target_binding,
-            inbound_revision=inbound_revision,
+            discovery_revision=discovery_revision,
             priority=priority,
             metadata={"app_id": app_id, "position": position, "source_entry": dict(entry)},
         )
@@ -427,16 +427,18 @@ class DevelopmentFixtureActionPort:
 
     def observe_composer(self, candidate: ThreadCandidate) -> ComposerObservation:
         self.calls.append("observe_composer")
+        inbound_revision = _authoritative_candidate_revision(candidate)
         return ComposerObservation(
             target_id=candidate.target_id,
             target_binding=candidate.target_binding,
-            inbound_revision=candidate.inbound_revision,
+            inbound_revision=inbound_revision,
             text=self._composer.get(candidate.candidate_key, ""),
             captured_at=self._tick(),
         )
 
     def stage_text(self, candidate: ThreadCandidate, text: str) -> ComposerObservation:
         self.calls.append("stage_text")
+        inbound_revision = _authoritative_candidate_revision(candidate)
         if not text:
             raise ValueError("fixture_stage_text_empty")
         if self._composer.get(candidate.candidate_key, ""):
@@ -445,7 +447,7 @@ class DevelopmentFixtureActionPort:
         return ComposerObservation(
             target_id=candidate.target_id,
             target_binding=candidate.target_binding,
-            inbound_revision=candidate.inbound_revision,
+            inbound_revision=inbound_revision,
             text=text,
             captured_at=self._tick(),
         )
@@ -503,6 +505,7 @@ class TaShuoMacIosManagedActionPort:
 
     def observe_composer(self, candidate: ThreadCandidate) -> ComposerObservation:
         binding = self._verified_binding(candidate)
+        inbound_revision = _authoritative_candidate_revision(candidate)
         managed_inbound_revision = self._managed_inbound_revision(binding)
         payload = self.adapter.observe_managed_composer(
             target_binding=binding,
@@ -515,7 +518,7 @@ class TaShuoMacIosManagedActionPort:
         return ComposerObservation(
             target_id=candidate.target_id,
             target_binding=candidate.target_binding,
-            inbound_revision=candidate.inbound_revision,
+            inbound_revision=inbound_revision,
             text=text,
             captured_at=str(payload["captured_at"]),
         )
@@ -523,6 +526,7 @@ class TaShuoMacIosManagedActionPort:
     def stage_text(self, candidate: ThreadCandidate, text: str) -> ComposerObservation:
         self._require_mutation_allowed()
         binding = self._verified_binding(candidate)
+        inbound_revision = _authoritative_candidate_revision(candidate)
         managed_inbound_revision = self._managed_inbound_revision(binding)
         payload = self.adapter.stage_managed_text(
             text,
@@ -542,7 +546,7 @@ class TaShuoMacIosManagedActionPort:
         return ComposerObservation(
             target_id=candidate.target_id,
             target_binding=candidate.target_binding,
-            inbound_revision=candidate.inbound_revision,
+            inbound_revision=inbound_revision,
             text=text,
             captured_at=captured_at,
         )
@@ -606,7 +610,7 @@ class TaShuoMacIosManagedActionPort:
         revision = str(candidate.metadata.get("verified_inbound_revision") or "")
         if not isinstance(binding, dict):
             raise RuntimeError("managed_structured_target_binding_missing")
-        if revision != candidate.inbound_revision:
+        if revision != _authoritative_candidate_revision(candidate):
             raise RuntimeError("managed_structured_target_binding_stale")
         return binding
 
@@ -995,6 +999,13 @@ def _thread_inbound_revision(raw: dict[str, Any]) -> str:
         return direct
     observation = raw.get("observation")
     return _first_string(observation, "observation_id")
+
+
+def _authoritative_candidate_revision(candidate: ThreadCandidate) -> str:
+    revision = str(candidate.inbound_revision or "").strip()
+    if not revision:
+        raise RuntimeError("managed_authoritative_inbound_revision_missing")
+    return revision
 
 
 def _captured_at(payload: dict[str, Any]) -> str:
