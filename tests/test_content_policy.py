@@ -235,7 +235,7 @@ class ContentPolicyTests(unittest.TestCase):
         self.assertTrue(decision.allowed)
         self.assertEqual(decision.severity, "low")
 
-    def test_blocks_soft_invite_with_specific_time_or_contact_details(self):
+    def test_requires_handoff_for_soft_invite_with_specific_time_or_contact_details(self):
         context_pack = {
             "items": [
                 {
@@ -267,8 +267,9 @@ class ContentPolicyTests(unittest.TestCase):
             with self.subTest(reply=draft.best_reply):
                 decision = evaluate_draft_content(draft, context_pack)
 
-                self.assertFalse(decision.allowed)
-                self.assertEqual(decision.severity, "high")
+                self.assertTrue(decision.allowed)
+                self.assertTrue(decision.requires_user_confirmation)
+                self.assertEqual(decision.severity, "medium")
 
     def test_allows_soft_invite_without_concrete_logistics(self):
         draft = _draft_response(

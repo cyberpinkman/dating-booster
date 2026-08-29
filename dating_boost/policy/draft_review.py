@@ -67,7 +67,7 @@ def review_draft(
     payload_format = "message_sequence" if len(messages) > 1 else "single_message"
 
     findings: list[DraftReviewFinding] = []
-    findings.extend(_content_findings(draft, context))
+    findings.extend(_content_findings(draft, context, messages))
     findings.extend(_planner_findings(raw_draft, planner))
     findings.extend(_disclosure_findings(raw_draft, draft, review_disclosure_profile))
     findings.extend(_low_investment_findings(raw_draft, draft, planner))

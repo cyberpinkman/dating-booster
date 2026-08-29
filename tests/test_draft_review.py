@@ -122,7 +122,41 @@ class DraftReviewTests(unittest.TestCase):
             mode="managed_live",
         )
         self.assertFalse(soft_invite_review.allowed_for_managed_send)
-        self.assertIn("content_soft_invite_detail", {finding.code for finding in soft_invite_review.findings})
+        self.assertTrue(soft_invite_review.allowed_for_display)
+        self.assertTrue(soft_invite_review.allowed_for_stage)
+        self.assertTrue(soft_invite_review.requires_user_confirmation)
+        self.assertIn("content_managed_handoff_required", {finding.code for finding in soft_invite_review.findings})
+
+    def test_managed_live_handoffs_contact_or_concrete_appointment_from_final_text(self):
+        cases = (
+            ("加微信 abc123", True),
+            ("周六晚上七点三里屯见", True),
+            ("周六你一般干嘛", False),
+            ("你平时用微信多吗", False),
+        )
+
+        for final_text, requires_handoff in cases:
+            with self.subTest(final_text=final_text):
+                review = review_draft(
+                    _draft_payload(
+                        best_reply=final_text,
+                        conversation_move="bridge_topic",
+                    ),
+                    _context_pack(),
+                    mode="managed_live",
+                )
+
+                self.assertEqual(review.allowed_for_managed_send, not requires_handoff)
+                if requires_handoff:
+                    self.assertTrue(review.allowed_for_display)
+                    self.assertTrue(review.allowed_for_stage)
+                    self.assertTrue(review.requires_user_confirmation)
+                    self.assertEqual(review.primary_reason, "content_managed_handoff_required")
+                else:
+                    self.assertNotIn(
+                        "content_managed_handoff_required",
+                        {finding.code for finding in review.findings},
+                    )
 
     def test_display_mode_reports_naturalness_revision_without_blocking_display(self):
         review = review_draft(

@@ -34,8 +34,16 @@ __all__ = [
     "_status_for_review",
 ]
 
-def _content_findings(draft: DraftResponse, context_pack: Mapping[str, Any]) -> list[DraftReviewFinding]:
-    policy = evaluate_draft_content(draft, context_pack)
+def _content_findings(
+    draft: DraftResponse,
+    context_pack: Mapping[str, Any],
+    final_messages: list[dict[str, Any]],
+) -> list[DraftReviewFinding]:
+    policy = evaluate_draft_content(
+        draft,
+        context_pack,
+        final_texts=(str(message.get("text") or "") for message in final_messages),
+    )
     if policy.allowed and not policy.requires_user_confirmation:
         return []
     code = "content_user_confirmation_required"
@@ -44,13 +52,13 @@ def _content_findings(draft: DraftResponse, context_pack: Mapping[str, Any]) -> 
     blocks_display = False
     blocks_stage = False
     requires_confirmation = bool(policy.requires_user_confirmation)
+    reason = policy.reason.lower()
+    if "user handoff" in reason:
+        code = "content_managed_handoff_required"
     if not policy.allowed:
         blocks_display = True
         blocks_stage = True
-        reason = policy.reason.lower()
-        if "soft invite" in reason:
-            code = "content_soft_invite_detail"
-        elif "hard fact" in reason or "contradict" in reason or "overseas study" in reason:
+        if "hard fact" in reason or "contradict" in reason or "overseas study" in reason:
             code = "content_hard_fact"
         else:
             code = "content_blocked"
@@ -384,7 +392,7 @@ def _message_for_code(code: str) -> str:
 def _hint_for_code(code: str) -> str:
     return {
         "content_hard_fact": "删除无法由用户硬事实支持的自我事实。",
-        "content_soft_invite_detail": "保留低压线下试探，不给具体时间、地点或联系方式。",
+        "content_managed_handoff_required": "自动托管只保留低压试探；联系方式或具体时间地点交给用户接管。",
         "content_user_confirmation_required": "让用户确认 persona/stance 偏移后再发送。",
         "draft_forced_choice_restates_confirmed_info": "不要把已确认事实做成选项，改问未知细节或用 yes/no 假设。",
         "draft_stale_temporal_topic_without_bridge": "把陈旧时间话题桥到现在仍成立的生活把手。",
