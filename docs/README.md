@@ -1,12 +1,12 @@
 # 文档导航
 
-第一次使用请从[项目 README](../README.md) 开始。本页按任务找资料；agent 的执行规则以 [`AGENTS.md`](../AGENTS.md) 为准。
+第一次使用请从[中文版 README](../README.zh-CN.md) 或 [English README](../README.md) 开始。本页按任务找资料；agent 的执行规则以 [`AGENTS.md`](../AGENTS.md) 为准。
 
 ## 安装与使用
 
 | 你要做什么 | 文档 |
 | --- | --- |
-| 了解项目、Jev 分工和支持范围 | [项目 README](../README.md) |
+| 了解项目、Jev 分工和支持范围 | [中文版 README](../README.zh-CN.md) · [English README](../README.md) |
 | 让 agent 检查环境、准备资料并运行 | [`AGENTS.md`](../AGENTS.md) |
 | 安装 Codex skill | [Codex 安装说明](../skills/dating-booster-codex/INSTALL.md) |
 | 安装 Claude Code adapter | [Claude Code 安装说明](../agent_adapters/claude-code/INSTALL.md) |
@@ -24,7 +24,7 @@
 | `managed-session` / `host-loop` | 既有多 app 兼容路径，沿用各自授权和配置流程 |
 | `standalone-session` | 用户显式选择的独立运行时；当前 GUI 只暂存草稿，不实发 |
 
-ManagedRun 的用户入口见[README 全托管说明](../README.md#全托管怎么用)，操作与恢复细节见 [`AGENTS.md`](../AGENTS.md)。不同入口分别使用对应的授权、运行状态和 app 环境。
+ManagedRun 的用户入口见[README 全托管说明](../README.zh-CN.md#全托管怎么用)，操作与恢复细节见 [`AGENTS.md`](../AGENTS.md)。不同入口分别使用对应的授权、运行状态和 app 环境。
 
 ## Jev 与消息连发
 
@@ -57,7 +57,7 @@ ManagedRun 的用户入口见[README 全托管说明](../README.md#全托管怎�
 
 `dating_boost/resources/agent_adapters/` 是随 wheel 打包的镜像，不是独立编辑入口；修改源 adapter 文档时，应同步对应镜像并通过发布检查。
 
-常规验证见[README 验证说明](../README.md#验证)。用 `dating-boost capabilities --json --data-dir .local/dating-boost` 查看当前安装提供的能力接口。
+常规验证见[README 验证说明](../README.zh-CN.md#验证)。用 `dating-boost capabilities --json --data-dir .local/dating-boost` 查看当前安装提供的能力接口。
 
 ## 历史记录
 

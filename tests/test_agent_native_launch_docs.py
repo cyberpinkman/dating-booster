@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -84,7 +85,6 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
         install_text = (ROOT / "skills" / "dating-booster-codex" / "INSTALL.md").read_text(
             encoding="utf-8"
         )
-        readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
 
         required_install_phrases = (
             "CODEX_HOME",
@@ -96,32 +96,43 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
         )
         for phrase in required_install_phrases:
             self.assertIn(phrase, install_text)
-        self.assertIn("AGENTS.md", readme_text.splitlines()[2])
-        self.assertIn("skills/dating-booster-codex/INSTALL.md", readme_text)
+        for filename, translation in (("README.md", "README.zh-CN.md"), ("README.zh-CN.md", "README.md")):
+            with self.subTest(readme=filename):
+                readme_text = (ROOT / filename).read_text(encoding="utf-8")
+                introduction = readme_text.split("\n## ", 1)[0]
+                self.assertIn(f"]({translation})", introduction)
+                self.assertIn("AGENTS.md", introduction)
+                self.assertIn("skills/dating-booster-codex/INSTALL.md", readme_text)
 
     def test_readme_uses_venv_pip_install_and_ci_core_verification(self):
-        readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
-        quickstart = readme_text.split("## 给人类的快速开始", 1)[1].split("## 本地数据", 1)[0]
-        verification = readme_text.split("## 验证", 1)[1].split("## 许可证", 1)[0]
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-
-        self.assertIn("python3 -m venv .venv", quickstart)
-        self.assertIn("source .venv/bin/activate", quickstart)
-        self.assertIn("python3 -m pip install -e .", quickstart)
-        self.assertNotIn("uv run", quickstart)
-        self.assertIn('python3 -m pip install -e ".[test]"', verification)
-        self.assertIn('python3 -m pytest -m "not nightly_lab" -q', verification)
-        self.assertLess(
-            verification.index('python3 -m pip install -e ".[test]"'),
-            verification.index('python3 -m pytest -m "not nightly_lab" -q'),
-        )
+        commands_by_language = []
+        for filename in ("README.md", "README.zh-CN.md"):
+            with self.subTest(readme=filename):
+                readme_text = (ROOT / filename).read_text(encoding="utf-8")
+                commands = "\n".join(
+                    line.strip()
+                    for block in re.findall(r"```bash\n(.*?)```", readme_text, re.DOTALL)
+                    for line in block.splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")
+                )
+                commands_by_language.append(commands)
+                self.assertIn("python3 -m venv .venv", commands)
+                self.assertIn("source .venv/bin/activate", commands)
+                self.assertIn("python3 -m pip install -e .", commands)
+                self.assertNotIn("uv run", commands)
+                self.assertIn('python3 -m pip install -e ".[test]"', commands)
+                self.assertIn('python3 -m pytest -m "not nightly_lab" -q', commands)
+                self.assertLess(
+                    commands.index('python3 -m pip install -e ".[test]"'),
+                    commands.index('python3 -m pytest -m "not nightly_lab" -q'),
+                )
+        self.assertEqual(commands_by_language[0], commands_by_language[1])
         self.assertIn(".DS_Store", gitignore)
         self.assertIn("uv.lock", gitignore)
 
     def test_public_readme_is_user_facing_not_an_internal_protocol_dump(self):
-        readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
-
-        self.assertLessEqual(len(readme_text.splitlines()), 220)
+        readme_text = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
         for heading in (
             "## 它能做什么",
             "## 当前支持范围",
@@ -130,17 +141,21 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
             "## 文档导航",
         ):
             self.assertIn(heading, readme_text)
-        for internal_detail in (
-            "visual_anchor_hash",
-            "canary_accept_token",
-            "standalone_production_runner",
-            "100 committed cycles",
-            "8 monotonic hours",
-            "event hash chain",
-        ):
-            self.assertNotIn(internal_detail, readme_text)
-        self.assertIn("docs/superpowers/", readme_text)
         self.assertIn("不是用户操作手册", readme_text)
+        for filename in ("README.md", "README.zh-CN.md"):
+            with self.subTest(readme=filename):
+                localized_text = (ROOT / filename).read_text(encoding="utf-8")
+                self.assertLessEqual(len(localized_text.splitlines()), 220)
+                for internal_detail in (
+                    "visual_anchor_hash",
+                    "canary_accept_token",
+                    "standalone_production_runner",
+                    "100 committed cycles",
+                    "8 monotonic hours",
+                    "event hash chain",
+                ):
+                    self.assertNotIn(internal_detail, localized_text)
+                self.assertIn("docs/superpowers/", localized_text)
 
     def test_architecture_docs_cover_current_extension_axes_without_roadmap_dump(self):
         architecture_text = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8").lower()
@@ -175,18 +190,22 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
         self.assertIn("docs/architecture.md", root_readme)
 
     def test_docs_describe_standalone_as_opt_in(self):
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         architecture = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
         standalone_fixture = ROOT / "tests" / "fixtures" / "standalone"
         standalone_auth = standalone_fixture / "auth_tinder_stage.json"
         standalone_message_list = standalone_fixture / "message_list.json"
 
-        self.assertIn("standalone-session", readme)
-        self.assertIn("Host-native 是默认路径", readme)
-        self.assertIn("standalone GUI executor 只支持 stage", readme)
-        self.assertIn("standalone live send 未启用", readme)
-        self.assertNotIn("--authorization tests/fixtures/standalone/auth_tinder_stage.json", readme)
+        for filename, phrases in (
+            ("README.md", ("The default is host-native", "staging drafts only", "live sending disabled")),
+            ("README.zh-CN.md", ("Host-native 是默认路径", "standalone GUI executor 只支持 stage", "standalone live send 未启用")),
+        ):
+            with self.subTest(readme=filename):
+                readme = (ROOT / filename).read_text(encoding="utf-8")
+                self.assertIn("standalone-session", readme)
+                for phrase in phrases:
+                    self.assertIn(phrase, readme)
+                self.assertNotIn("--authorization tests/fixtures/standalone/auth_tinder_stage.json", readme)
         self.assertIn("host-native remains the default", agents)
         self.assertIn("DATING_BOOST_KEY_PROVIDER=local dating-boost standalone-session start", agents)
         self.assertIn("--authorization tests/fixtures/standalone/auth_tinder_stage.json", agents)
