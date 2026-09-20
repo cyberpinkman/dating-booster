@@ -1,97 +1,64 @@
-# Dating Booster 文档地图
+# 文档导航
 
-这个目录索引区分了三类内容：用户入口、agent 运行手册和维护者资料。不要把历史设计文档当成当前产品说明；当前能力以代码、app profile、CLI capabilities 和测试为准。
+第一次使用请从[项目 README](../README.md) 开始。本页按任务找资料；agent 的执行规则以 [`AGENTS.md`](../AGENTS.md) 为准。
 
-## 从哪里开始
+## 安装与使用
 
-| 读者 / 目标 | 入口 |
+| 你要做什么 | 文档 |
 | --- | --- |
-| 第一次了解或安装 | [`README.md`](../README.md) |
-| Host agent 执行真实任务 | [`AGENTS.md`](../AGENTS.md) |
-| Codex 安装与 startup check | [`skills/dating-booster-codex/INSTALL.md`](../skills/dating-booster-codex/INSTALL.md) |
-| Claude Code 安装 | [`agent_adapters/claude-code/INSTALL.md`](../agent_adapters/claude-code/INSTALL.md) |
-| OpenClaw / Hermes 安装 | [`agent_adapters/openclaw/INSTALL.md`](../agent_adapters/openclaw/INSTALL.md) |
-| 查看 app contract | [`app_profiles/README.md`](../app_profiles/README.md) |
-| 理解扩展边界 | [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) |
+| 了解项目、支持范围和真实验证状态 | [项目 README](../README.md) |
+| 让 agent 检查环境、准备资料并运行 | [`AGENTS.md`](../AGENTS.md) |
+| 安装 Codex skill | [Codex 安装说明](../skills/dating-booster-codex/INSTALL.md) |
+| 安装 Claude Code adapter | [Claude Code 安装说明](../agent_adapters/claude-code/INSTALL.md) |
+| 安装 OpenClaw / Hermes adapter | [OpenClaw 兼容安装说明](../agent_adapters/openclaw/INSTALL.md) |
+| 查各 app 的观察、导航、草稿和发送限制 | [App 能力契约](../app_profiles/README.md) |
 
-真实 dating-app 内容只能在 startup check、support session 和目标 app/runtime 确定后观察。默认只 stage 草稿；普通聊天 live send 也必须经过明确授权、目标验证、输入文本验证和发送后验证。
+首次安装、源码或 adapter 更新、迁移、权限变化后，先完成兼容性检查再观察真实内容。已验证的同一环境可直接启动日常任务；Support session 仅用于实机验收、诊断或导出，不是每次启动的必经步骤。
 
-## 当前产品事实
+## 选择运行入口
 
-### 支持的 host
+| 入口 | 用途与限制 |
+| --- | --- |
+| Host 草稿流程 | 由 Codex、Claude Code、OpenClaw 或 Hermes 读取上下文、起草；默认不发送 |
+| `manage` / ManagedRun | 新的限时全托管，当前仅聚焦她说 `mac-ios-app`；本地实机连续发送验收未完成 |
+| `managed-session` / `host-loop` | 既有多 app 兼容路径，沿用各自授权和配置流程 |
+| `standalone-session` | 用户显式选择的独立运行时；当前 GUI 只暂存草稿，不实发 |
 
-- Codex：安装 `skills/dating-booster-codex/`。
-- Claude Code：安装独立 adapter package。
-- OpenClaw：安装 OpenClaw-compatible adapter package。
-- Hermes：通过兼容命令使用同一份 OpenClaw-compatible skill contract。
+ManagedRun 的用户入口见[README 全托管说明](../README.md#实验性全托管)，操作与恢复细节见 [`AGENTS.md`](../AGENTS.md)。不要在不同入口之间混用授权、运行状态或 app 环境。
 
-新增 host 接入应继续复用同一组 CLI、capabilities、app profile、policy 和
-audit contract，不复制 dating-specific 逻辑。
+## 性能与当前开发进展
 
-### 支持的 app/runtime
+[ManagedRun 性能与 Jev 说明](managed-run-performance.md) 记录队列复用、短消息连续发送、AX 与视觉的分工、TypeSafe / Jev 配置和实测限制。
 
-| App | Runtime | 主要能力 |
-| --- | --- | --- |
-| Tinder | macOS iPhone Mirroring | 观察、只读导航、stage、可选普通聊天托管发送 |
-| Bumble | macOS iPhone Mirroring | 观察、只读导航、Opening Move 辅助、stage、可选普通聊天托管发送 |
-| TaShuo / 她说 | macOS iPhone Mirroring；Apple Silicon `mac-ios-app` | 观察、只读导航、question-gate 辅助、stage、可选普通聊天托管发送；`mac-ios-app` 是 standalone 主路径 |
-| WeChat / 微信 | macOS 桌面微信 | continuation-channel 观察、stage、可选普通聊天托管发送 |
+**截至 2026-09-20，这些重构代码仍在本地，尚未推送到远端。** 该文档中的新配置、`manage reconcile` 和基准脚本适用于本地开发版本，不是当前远端安装承诺。离线测试、单步导航、一次历史发送的证据确认与完整连续实发是不同层级的验证；最新结论见[验证状态](managed-run-performance.md#当前状态2026-09-20)。
 
-不要从静态文档推断本机能力。使用机器可读命令确认：
+## Agent 操作参考
 
-```bash
-dating-boost capabilities --json --data-dir .local/dating-boost
-```
+- [跨 host 契约](../agent_adapters/shared/references/contracts.md)：JSON、隐私、capabilities 与执行边界。
+- [跨 host 工作流](../agent_adapters/shared/references/workflows.md)：共享操作步骤。
+- [Codex skill](../skills/dating-booster-codex/SKILL.md)：Codex 的执行契约。
+- [Codex 参考资料](../skills/dating-booster-codex/references/README.md)：观察转录、规划、草稿、host-loop 和生产暂存手册。
 
-`supported_app_profiles` 中不存在的 app 视为未支持；不要创建 placeholder profile，也不要用固定坐标或通用 UI marker 临时绕过。
+安装说明和兼容手册保留了既有流程；涉及新的日常 ManagedRun 启动时，优先使用根目录 [`AGENTS.md`](../AGENTS.md) 的对应章节。
 
-## Agent 运行资料
+## 架构与贡献
 
-- [`agent_adapters/shared/references/contracts.md`](../agent_adapters/shared/references/contracts.md)：跨 host 的 JSON、隐私和执行契约。
-- [`agent_adapters/shared/references/workflows.md`](../agent_adapters/shared/references/workflows.md)：跨 host 的可复用 workflow。
-- [`skills/dating-booster-codex/SKILL.md`](../skills/dating-booster-codex/SKILL.md)：Codex 运行契约。
-- [`skills/dating-booster-codex/references/`](../skills/dating-booster-codex/references/)：observation、planner、drafting、host-loop 和生产 stage runbook。
-- [`app_profiles/README.md`](../app_profiles/README.md)：app profile schema 与支持等级。
+先读 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)，再按修改范围进入代码：
 
-`dating_boost/resources/agent_adapters/` 下的文件是构建 wheel 时使用的打包镜像，不是文档编辑入口。权威源文件位于 `skills/` 和 `agent_adapters/`；发布检查会验证源文件与打包镜像一致。
+| 目录 | 职责 |
+| --- | --- |
+| `dating_boost/core/` | 本地存储、记忆、调度、运行状态、策略与恢复 |
+| `dating_boost/apps/` | 每个 app 的页面、对象定位与操作验证 |
+| `dating_boost/harness/` | 共享 GUI 基础能力 |
+| `dating_boost/intelligence/` | 模型调用、视觉与回复生成 |
+| `app_profiles/`、`schemas/` | 能力契约与数据格式 |
+| `agent_adapters/`、`skills/` | Host 接入和操作文档的权威源文件 |
+| `scripts/`、`tests/` | 安装检查、模拟流程与回归验证 |
 
-## 代码与架构
+`dating_boost/resources/agent_adapters/` 是随 wheel 打包的镜像，不是独立编辑入口；修改源 adapter 文档时，应同步对应镜像并通过发布检查。
 
-- `dating_boost/cli.py`：CLI 总入口。
-- `dating_boost/core/`：存储、memory、planner、policy、operator、managed session、safety、diagnostics。
-- `dating_boost/apps/`：各 app 的页面语义、runtime、target binding 和发送验证。
-- `dating_boost/harness/`：跨 app 的 GUI 基础能力。
-- `dating_boost/intelligence/`：模型 backend 与回复生成 wiring。
-- `dating_boost/host_loop.py`：host-loop supervisor。
-- `app_profiles/` 与 `schemas/`：app 产品契约及 JSON schema。
-- `agent_adapters/` 与 `skills/`：host-specific 安装包和操作文档。
-- `scripts/`：fixture、managed 和 standalone smoke/qualification 入口。
-- `tests/`：contract、storage、policy、adapter、host-loop、GUI 和 production qualification 回归。
+常规验证见[README 验证说明](../README.md#验证)。能力声明可用 `dating-boost capabilities --json --data-dir .local/dating-boost` 查看；它表示当前安装实现了哪些接口，不证明本机已通过实发验收。
 
-扩展 host agent、app、goal 或 memory/workflow 前，先读 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)。架构按 host agent adapter、app support profile、goal type registry 和 memory evolution 四条轴拆分，避免把一个 app 或 host 的特殊逻辑写进全局 contract。
+## 历史记录
 
-## 历史设计记录
-
-`docs/superpowers/specs/` 和 `docs/superpowers/plans/` 保存开发阶段的设计、评审和实施记录，适合维护者追溯“为什么曾经这样设计”。
-
-这些文件：
-
-- 不是用户安装或运行入口；
-- 不保证描述当前 CLI 或成熟度；
-- 不应从根 README 作为主要产品能力展示；
-- 与当前实现冲突时，以代码、capabilities、app profile、agent contract 和测试为准。
-
-## 验证文档与实现
-
-```bash
-python3 -m dating_boost.cli release doctor --json
-python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
-python3 -m pytest -q
-```
-
-无 GUI 的完整 fixture workflow：
-
-```bash
-DATING_BOOST_KEY_PROVIDER=local \
-python3 scripts/agent_native_smoke.py --data-dir .local/dating-boost-smoke
-```
+`docs/superpowers/specs/` 和 `docs/superpowers/plans/` 保存历史设计、评审和实施记录，用于追溯设计原因，不是安装或运行入口。若与现状冲突，以当前代码、能力契约、执行规则和验证证据为准。

@@ -99,24 +99,21 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
         self.assertIn("AGENTS.md", readme_text.splitlines()[2])
         self.assertIn("skills/dating-booster-codex/INSTALL.md", readme_text)
 
-    def test_readme_uses_pip_first_install_and_pytest_first_verification(self):
+    def test_readme_uses_venv_pip_install_and_ci_core_verification(self):
         readme_text = (ROOT / "README.md").read_text(encoding="utf-8")
         quickstart = readme_text.split("## 给人类的快速开始", 1)[1].split("## 本地数据", 1)[0]
         verification = readme_text.split("## 验证", 1)[1].split("## 许可证", 1)[0]
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
 
-        self.assertIn("python3 -m pip install --user -e .", quickstart)
+        self.assertIn("python3 -m venv .venv", quickstart)
+        self.assertIn("source .venv/bin/activate", quickstart)
+        self.assertIn("python3 -m pip install -e .", quickstart)
         self.assertNotIn("uv run", quickstart)
-        self.assertIn('python3 -m pip install --user -e ".[test]"', verification)
-        self.assertIn("python3 -m pytest -q", verification)
-        self.assertIn("uv run --extra test python -m pytest -q", verification)
+        self.assertIn('python3 -m pip install -e ".[test]"', verification)
+        self.assertIn('python3 -m pytest -m "not nightly_lab" -q', verification)
         self.assertLess(
-            verification.index('python3 -m pip install --user -e ".[test]"'),
-            verification.index("python3 -m pytest -q"),
-        )
-        self.assertLess(
-            verification.index("python3 -m pytest -q"),
-            verification.index("uv run --extra test python -m pytest -q"),
+            verification.index('python3 -m pip install -e ".[test]"'),
+            verification.index('python3 -m pytest -m "not nightly_lab" -q'),
         )
         self.assertIn(".DS_Store", gitignore)
         self.assertIn("uv.lock", gitignore)
