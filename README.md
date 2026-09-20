@@ -1,48 +1,81 @@
 # Dating Booster
 
-> **给 agent：**请先阅读 [`AGENTS.md`](AGENTS.md)，再安装、检查环境和执行任务。
+> **给 agent：**从 [`AGENTS.md`](AGENTS.md) 开始安装和接入。
 
-Dating Booster 帮助你的 AI 助手记住聊天背景、起草回复，并在你明确授权的一段时间内代管普通聊天。它通过可见的应用界面操作，本地保存记忆和执行记录；你可以随时暂停或停止。
+**让 AI 记住每段对话，也跟上聊天的节奏。**
 
-**目前是预发布实验版。** 全托管的重点是 Apple Silicon Mac 上的「她说」iOS app。本地开发版已有真实导航验证，一条历史发送已通过证据核对确认；**2–3 条短消息连续发送仍未完成实机验收**，尚不能承诺稳定性或端到端速度。
+Dating Booster 是一个本地优先的开源聊天工作流，让 Codex、Claude Code、OpenClaw 和 Hermes 拥有持续的对话记忆、回复辅助与限时全托管能力。你决定聊多久、发多少、哪些事情亲自处理，agent 负责把上下文和操作衔接起来。
 
-[快速开始](#给人类的快速开始) · [支持范围](#当前支持范围) · [全托管怎么用](#实验性全托管) · [最新进展](#最新进展与验证状态) · [文档地图](docs/README.md)
+正在引入 **TypeSafe / Jev**：将“要不要回复、是否需要你接手”交给结构化语义判断，让视觉、生成和本地执行各司其职，减少重复分析与等待。
+
+**Python 3.11+ · macOS GUI · 本地加密存储 · MIT 开源**
+
+[为什么用 Jev](#为什么用-jev) · [快速开始](#给人类的快速开始) · [全托管](#全托管怎么用) · [支持范围](#当前支持范围) · [参与贡献](#参与贡献)
 
 ## 它能做什么
 
-- **记住上下文**：保存你的资料、对方资料、已知事实、约定和反馈，减少每次重新解释。
-- **辅助回复**：结合上下文生成草稿，检查内容与表达；可以只展示，或暂存到输入框而不发送。
-- **限时全托管**：在授权时长和消息预算内，依次处理多个普通聊天，核对发送对象、文本和结果。
-- **遇到问题停下来**：需要你判断、目标不明确或发送结果不确定时暂停或交回处理，保留诊断记录。
+- **让对话接得上。** 本地记忆保存你的资料、对方的偏好、聊过的话题和约定，为下一次回复提供上下文。
+- **让表达有自己的节奏。** 支持草稿辅助；开发版保留自然生成的 2–3 条短消息，一次规划后依次执行，无需把一组话反复交回 host 处理。
+- **让多段聊天有条理。** 在你授权的时长与消息预算内，按优先级处理普通聊天，并汇总进度。
+- **让重要决定留在你手里。** 你可以随时暂停、继续或停止；具体邀约、联系方式等需要本人判断的节点交回给你。
 
-未开启托管时默认不发送。托管也不包含点赞、筛选对象、具体邀约、交换联系方式、通话或支付。
+## 为什么用 Jev
+
+聊天自动化里，许多步骤只需要回答一个小问题：**这条消息值得回复吗？现在应该等待吗？需要本人接手吗？** 如果每次都进入完整的分析和起草流程，操作之间的等待会不断累积。
+
+Dating Booster 的 Jev 集成把这些判断从长流程中提出来：一次请求同时判断聊天边界和回复必要性，返回有限选项，由代码决定下一步。
+
+| 分工 | 在工作流里做什么 |
+| --- | --- |
+| **视觉模型：看懂界面** | 读取聊天列表、会话正文与发送后的界面变化 |
+| **TypeSafe / Jev：判断下一步** | 根据可见聊天文本，判断普通聊天／本人接手，以及回复／等待 |
+| **生成模型：组织表达** | 结合记忆和上下文，起草单条回复或一组短消息 |
+| **本地执行器：完成操作** | 管理队列、核对对象、写入输入框、发送并逐条验证 |
+
+```mermaid
+flowchart LR
+    A["视觉读取聊天"] --> B["可选 Jev 文本判断"]
+    B -->|明确无需回复| C["等待"]
+    B -->|需要本人判断| D["交给你"]
+    B -->|需要回复或判断不确定| E["上下文与回复生成"]
+    E --> F["策略检查"]
+    F -->|允许发送| G["本地执行与逐条验证"]
+```
+
+Jev 处理文字语义，视觉模型负责图像理解。明确可以等待的聊天直接跳过起草；判断不确定或服务不可用时，回到原有规划流程。是否允许发送，始终由授权与策略检查决定。
+
+### 一次起草，连续表达
+
+开发版将一组 2–3 条短消息作为一次完整回复规划。在同一执行循环内逐条发送和验证，组内不再重新调用 Jev、重新起草、重新扫描列表或等待 host 的下一轮操作。
+
+输入框的读写与清空由 macOS 辅助功能（AX）检查，聊天正文和新增气泡由视觉核对。消息列表的短期队列也能复用，让时间花在新的对话内容上。每条消息独立计入预算；收到新来信后，尚未发送的尾条会取消，留给下一轮重新判断。
+
+> **开发版集成：**Jev 与连发优化正在本地开发，尚未合入 `main`。[实现说明与 Jev 配置 →](docs/managed-run-performance.md)
 
 ## 当前支持范围
 
-可由 **Codex、Claude Code、OpenClaw、Hermes** 驱动；各自安装对应的 skill 或 adapter。Hermes 复用 OpenClaw 兼容适配器。
+接入你已经在用的 agent：**Codex、Claude Code、OpenClaw、Hermes**。各 host 共用本地记忆、策略与应用适配层。
 
-| App / 环境 | 当前入口与范围 |
-| --- | --- |
-| **她说 / TaShuo：Apple Silicon Mac 本地 iOS app** | 新全托管入口 `manage` 的重点路径；支持观察、导航、草稿暂存和受控发送，实机验收尚未完成 |
-| 她说：macOS iPhone Mirroring | 既有观察、导航、草稿与托管兼容路径 |
-| Tinder / Bumble：macOS iPhone Mirroring | 既有观察、导航、草稿与普通聊天托管兼容路径 |
-| 微信 / WeChat：macOS 桌面端 | 承接已有关系的聊天、草稿与普通聊天托管兼容路径 |
+| App | 运行环境 | 接入方式 |
+| --- | --- | --- |
+| **她说 / TaShuo** | Apple Silicon Mac 上的本地 iOS app | 当前重点：`manage` 限时全托管、观察、导航与草稿 |
+| 她说 / TaShuo | macOS iPhone Mirroring | `managed-session` / `host-loop` |
+| Tinder / Bumble | macOS iPhone Mirroring | `managed-session` / `host-loop` |
+| 微信 / WeChat | macOS 桌面端 | 已有关系的聊天延续与草稿、托管兼容路径 |
 
-“已有发送路径”不代表当前机器已经通过实发验证。其他 app 使用 `managed-session` / `host-loop`，不能直接套用下文的她说 `manage` 命令。具体能力由 [`app_profiles/`](app_profiles/) 和本机 `dating-boost capabilities --json` 确认。
-
-她说的本地 app 与 iPhone Mirroring 是两种独立运行环境，不能在一次任务里自动切换。本地 app 不支持 question-gate 暂存或发送；Bumble Opening Move 等特殊互动也不属于普通聊天自动放行范围。微信记忆继承需先由你确认两个账号对应同一个人。
+各 app 的具体动作见 [App 适配说明](app_profiles/README.md)。她说本地 app 与 iPhone Mirroring 分别选择使用；微信可在你确认是同一个人后，继承 dating app 中的关系记忆。
 
 ## 给人类的快速开始
 
-### 让你的 agent 安装
+### 把安装交给 agent
 
-将仓库地址和这段话交给你使用的 agent：
+复制下面这段话给你的 Codex、Claude Code、OpenClaw 或 Hermes：
 
-> 请安装 https://github.com/cyberpinkman/dating-booster ，先阅读 AGENTS.md，再安装 CLI 和与你对应的 adapter，完成首次环境检查。先帮我准备资料和草稿；只有我明确开启限时全托管后，才允许发送普通聊天消息。
+> 请安装 https://github.com/cyberpinkman/dating-booster ，先阅读 AGENTS.md，安装 CLI 和对应的 adapter，检查环境并帮我准备用户资料。先从回复辅助开始；我明确开启限时全托管后，再发送普通聊天消息。
 
 ### 手动安装
 
-需要 **Python 3.11+**。真实应用操作需要 macOS；她说本地 iOS app 还需要 Apple Silicon Mac、已安装并登录的 app，以及对应的辅助功能和屏幕录制权限。
+需要 **Python 3.11+**。真实界面操作需要 macOS；她说本地 iOS app 需要 Apple Silicon Mac、已安装并登录的 app，以及辅助功能和屏幕录制权限。
 
 ```bash
 git clone https://github.com/cyberpinkman/dating-booster.git
@@ -51,48 +84,40 @@ python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -e .
 
-# 以 Codex 为例；其他 host 替换为 claude-code、openclaw 或 hermes
+# 以 Codex 为例；可替换为 claude-code、openclaw 或 hermes
 dating-boost adapter codex install --scope user --json
 dating-boost adapter codex doctor --data-dir .local/dating-boost --json
 dating-boost release doctor --json
 dating-boost data doctor --data-dir .local/dating-boost --json
 ```
 
-若 data doctor 返回 `needs_migration`，先初始化或迁移，再复查：
+若返回 `needs_migration`，初始化或迁移数据，再复查：
 
 ```bash
 dating-boost data migrate --data-dir .local/dating-boost --json
 dating-boost data doctor --data-dir .local/dating-boost --json
-```
-
-检查通过后确认可用能力：
-
-```bash
 dating-boost capabilities --json --data-dir .local/dating-boost
 ```
 
-后续命令和 agent 都应使用同一个虚拟环境与数据目录。更新源码后，重新执行 `pip install -e .` 和对应的 `adapter … install`；只运行 `git pull` 不会更新已复制的 skill。首次安装、源码或 adapter 更新、迁移、权限变化后重新检查；相同环境的日常启动不必重复完整检查。
+后续使用同一虚拟环境和数据目录。更新源码后，重新执行 `pip install -e .` 和对应的 `adapter … install`，更新 agent 使用的 skill 副本。首次安装、更新、迁移或权限变化后检查环境；日常启动复用已有配置。
 
-详细说明：[Codex 安装](skills/dating-booster-codex/INSTALL.md) · [其他 agent 安装](agent_adapters/README.md)。实际运行规则以 [`AGENTS.md`](AGENTS.md) 为准。
+[Codex 安装指南](skills/dating-booster-codex/INSTALL.md) · [其他 agent 接入](agent_adapters/README.md)
 
-## 实验性全托管
+## 全托管怎么用
 
-完成安装后，还需设置模型密钥、准备你的用户资料，并选定 app 环境。当前她说 ManagedRun 默认使用 MiniMax 进行视觉理解和回复生成：
+以她说本地 app 为例，安装模型依赖，在运行 agent 的环境中设置 `MINIMAX_API_KEY`。当前默认由 MiniMax 提供视觉理解和回复生成。
 
 ```bash
 python3 -m pip install -e ".[models]"
-# 在运行 agent / CLI 的环境中设置 MINIMAX_API_KEY，不要写入仓库
 dating-boost runtime select --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --json
 dating-boost user readiness --data-dir .local/dating-boost --mode autonomous --json
 ```
 
-若返回 `needs_user_profile`，让 agent 先完成资料访谈。选定的 app 环境会保存下来，日常使用无需重复选择。
+如果返回 `needs_user_profile`，先让 agent 帮你完成资料访谈。之后，用一句话设定本次范围：
 
-之后，你可以这样授权：
+> 全托管她说 2 小时，只回复普通聊天，最多发送 5 条，不主动追问，23:00–08:00 不发送。具体邀约和联系方式交给我。
 
-> 全托管她说 2 小时，只回复普通聊天，最多发送 5 条，不主动追问，23:00–08:00 不发送。需要具体邀约、交换联系方式或遇到不确定情况时交给我。
-
-Agent 会创建本次运行并持有执行进程；你不需要手写授权 JSON。以下是对应的开发者命令，**第二条会开始处理真实界面和合格消息，只应在明确授权后执行**：
+Agent 会创建本次运行并持有执行进程。对应的 CLI 如下；`start` 保存授权窗口，`run --wait` 开始处理真实界面与消息：
 
 ```bash
 dating-boost manage start \
@@ -103,84 +128,75 @@ dating-boost manage start \
 dating-boost manage run --data-dir .local/dating-boost --wait --poll-interval 30 --json
 ```
 
-`start` 只保存本次运行，不打开界面、不启动后台任务；`run --wait` 才持续执行。Host 应持有这个进程，进程结束后不会继续托管。主动跟进默认关闭，只有你明确允许时才加 `--nudge`。首次实发应使用短时长、小预算。
+你随时可以说“查看进度”“暂停”“继续”或“停止”：
 
-你可以直接对 agent 说“查看进度”“暂停”“继续”或“停止”，也可使用：
-
-| 操作 | 命令 | 行为 |
+| 操作 | CLI | 行为 |
 | --- | --- | --- |
-| 查看进度 | `dating-boost manage status --data-dir .local/dating-boost --json` | 查看当前运行 |
-| 暂停 | `dating-boost manage pause --data-dir .local/dating-boost --json` | 在下一次界面修改前停止推进，执行循环退出 |
-| 继续 | `dating-boost manage resume --data-dir .local/dating-boost --json` | 恢复同一次运行；agent 随后重新持有 `run --wait` |
-| 停止 | `dating-boost manage stop --data-dir .local/dating-boost --json` | 结束本次运行并返回进度报告 |
+| 查看进度 | `dating-boost manage status --data-dir .local/dating-boost --json` | 查看当前运行与对象进度 |
+| 暂停 | `dating-boost manage pause --data-dir .local/dating-boost --json` | 在下一次界面修改前暂停，执行循环退出 |
+| 继续 | `dating-boost manage resume --data-dir .local/dating-boost --json` | 恢复同一次运行，agent 随后重新启动 `run --wait` |
+| 停止 | `dating-boost manage stop --data-dir .local/dating-boost --json` | 结束运行并返回进度报告 |
 
-Host-native 是默认路径，即由现有 agent 接入、管理任务。普通草稿可由 host 起草；ManagedRun 在本地执行循环中调用模型。另一个显式选择的入口 `standalone-session` 用于独立运行：目前 standalone GUI executor 只支持 stage（暂存草稿），standalone live send 未启用，不应与 ManagedRun 混用。
+托管随执行进程结束而停止，不在窗口之外持续监听。主动跟进默认关闭，明确允许时使用 `--nudge`。
 
-## 最新进展与验证状态
+<details>
+<summary>其他运行模式</summary>
 
-**截至 2026-09-20，本节是本地开发进展。** 本次先同步文档；下列 Jev、连发与视觉验证重构的代码尚未推送到远端。仅克隆当前 `main` 不会获得这些改动，配置与开发验证见[性能与 Jev 说明](docs/managed-run-performance.md)。
+Host-native 是默认路径：现有 agent 管理任务，普通草稿可由 host 起草，ManagedRun 在本地执行循环中调用模型。其他 app 沿用 `managed-session` / `host-loop`。独立入口 `standalone-session` 需显式选择；当前 standalone GUI executor 只支持 stage（暂存草稿），standalone live send 未启用。
 
-| 本地改动 | 解决的问题 |
-| --- | --- |
-| 复用短期消息列表队列 | 避免每处理一个对象都重新扫描同一列表；进入会话后仍重新核对对象 |
-| 可选 TypeSafe / Jev 文本判断 | 先判断是否值得回复、是否需要你接手，减少不必要的起草；Jev 不读图、不生成回复 |
-| 一次起草 2–3 条短消息，本地顺序发送 | 组内不再反复返回 host 分析、重新起草或等待下一轮轮询；每条仍独立验证并占用预算 |
-| 输入框与聊天正文分别取证 | AX（macOS 辅助功能）检查输入框；视觉模型理解聊天和核对新增气泡，不再强求 AX 读取气泡正文 |
-| 文字框辅助定位与统一草稿改写规则 | 减少含表情昵称的定位偏差，让可修订草稿进入一次改写后再审核 |
-
-最近一次本地常规回归记录为 **2192 项通过、193 项夜间测试未运行**。真实设备已验证多个会话的导航与身份核对；历史一次发送经原始证据核对确认，未重发。最近一轮实测在应用前台／窗口绑定处受阻，已暂停，新增发送 0 条。
-
-**尚未验收：**完整的两条连续实发、实际消息间隔，以及稳定的端到端耗时。局部计时和离线模拟不能替代这些结果；本项目也未据此取得生产环境认证。
+</details>
 
 ## 安全与隐私
 
-- **发送有范围**：限于你授权窗口内的普通聊天；不自动点赞、pass、unmatch、举报、改资料、安排具体邀约、交换联系方式、通话或支付。不使用私有 API 或风控绕过。
-- **结果要核对**：确认对象与输入文本后才发送，发送后读取新鲜界面核验；结果不确定时暂停，禁止自动重发。底层发送命令仅供受控执行器使用，不手工拼装发送请求。
-- **数据在本地加密保存**：业务数据使用加密 SQLite，macOS 默认通过 Keychain 管理密钥。项目不发送网络遥测。
-- **模型调用有数据边界**：host 或配置的模型服务可能处理本次任务的可见内容。本地开发版若显式开启 Jev，也会将必要的可见聊天文本发送给 TypeSafe；它不接收截图或整库记忆。
-- **诊断默认脱敏**：严格诊断包不含原始聊天、资料、截图、剪贴板或完整草稿。Support session 用于实机验收、诊断或导出，不是每次日常启动的前置条件。
+- **你的授权决定范围。** 默认只辅助回复或暂存草稿；普通聊天发送受时长、预算和安静时段约束。点赞、pass、unmatch、资料编辑、具体邀约、联系方式、通话和支付不自动执行。
+- **每条操作有依据。** 发送前核对对象与输入文本，发送后核对结果；结果不确定时暂停，不自动重发。
+- **记忆留在本地。** 业务数据使用加密 SQLite，macOS 默认由 Keychain 管理密钥。项目不发送网络遥测，不使用私有 API 或风控绕过。
+- **模型数据流透明。** 视觉与生成服务处理当前任务所需内容；显式开启 Jev 时，必要的可见聊天文本会发送给 TypeSafe，不发送截图或整库记忆。诊断包默认脱敏。
 
 ## 本地数据
 
-示例统一使用 `.local/dating-boost`；请持续使用同一目录，避免把不同运行状态混在一起。检查数据用 `data doctor`，只有提示需要迁移时才运行 `data migrate`。
-
-全局暂停与单次 ManagedRun 暂停不同：它会阻止真实草稿写入和发送，可用于阻止后续界面修改：
+示例统一使用 `.local/dating-boost`。用 `data doctor` 检查数据，仅在提示需要时迁移。需要阻止后续草稿写入和发送时，可以启用全局暂停：
 
 ```bash
 dating-boost safety pause --data-dir .local/dating-boost --reason manual-stop --json
 dating-boost safety status --data-dir .local/dating-boost --json
 ```
 
+## 参与贡献
+
+欢迎一起改进 **Jev 的中文语义分流、消息节奏、应用适配与本地工作流**。可以从复现问题、补充脱敏用例、改进文档或提交代码开始。
+
+新增 host 时复用共享契约；新增 app 时扩展应用适配层。这样，记忆、策略和执行逻辑可以持续服务于不同的 agent 与聊天环境。[架构与扩展指南 →](docs/ARCHITECTURE.md)
+
 ## 文档导航
 
-| 你要做什么 | 入口 |
+| 你想了解 | 文档 |
 | --- | --- |
-| 让 agent 安装和执行任务 | [`AGENTS.md`](AGENTS.md) |
-| 安装 Codex / 其他 host | [Codex 安装](skills/dating-booster-codex/INSTALL.md) · [适配器目录](agent_adapters/README.md) |
-| 理解 Jev、连发与实测进度 | [性能与 Jev 说明](docs/managed-run-performance.md)，本地开发中 |
-| 查各 app 的能力与限制 | [`app_profiles/README.md`](app_profiles/README.md) |
-| 理解架构或贡献代码 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| 找运行手册和维护资料 | [`docs/README.md`](docs/README.md) |
+| Agent 安装与执行规则 | [`AGENTS.md`](AGENTS.md) |
+| Jev 集成、消息连发与性能设计 | [ManagedRun 开发说明](docs/managed-run-performance.md) |
+| Codex / 其他 host 接入 | [Codex 安装](skills/dating-booster-codex/INSTALL.md) · [适配器目录](agent_adapters/README.md) |
+| App 能力与扩展契约 | [`app_profiles/README.md`](app_profiles/README.md) |
+| 架构、运行手册与维护资料 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [文档地图](docs/README.md) |
 
-`docs/superpowers/` 是历史设计与实施记录，不是用户操作手册。
+`docs/superpowers/` 保存历史设计与实施记录，不是用户操作手册。
 
 ## 验证
 
-不打开 app、不调用真实模型、不发送消息的安装检查（`local` 密钥仅用于这个可丢弃的测试目录）：
+离线安装检查使用独立测试目录，不打开 app、不调用真实模型、不发送消息：
 
 ```bash
 DATING_BOOST_KEY_PROVIDER=local \
 python3 scripts/agent_native_smoke.py --data-dir .local/dating-boost-smoke
 ```
 
-开发者在已激活的虚拟环境中运行常规回归，与 CI 的主要反馈路径一致：
+开发者在已激活的虚拟环境中运行常规回归：
 
 ```bash
 python3 -m pip install -e ".[test]"
 python3 -m pytest -m "not nightly_lab" -q
 ```
 
-完整测试（含较慢的夜间协议）使用 `python3 -m pytest -q`。这些测试不能证明真实应用已通过发送验收。
+完整测试（含夜间协议）：`python3 -m pytest -q`。开发记录与分阶段测量见 [ManagedRun 开发说明](docs/managed-run-performance.md)。
 
 ## 许可证
 
