@@ -198,7 +198,7 @@ python3 -m pip install -e ".[test]"
 python3 -m pytest -m "not nightly_lab" -q
 ```
 
-For the full suite, including nightly protocols, run `python3 -m pytest -q`. See the [ManagedRun development notes](docs/managed-run-performance.md) for implementation history and measurements of individual stages.
+For the full suite, including slow qualification protocols, run `python3 -m pytest -q`. CI runs on pushes to `main`, version tags, pull requests, and manual dispatch. For full OS/Python compatibility and coverage, select **CI → Run workflow** in GitHub Actions and enable `full_compatibility`; there is no daily scheduled run. See the [ManagedRun development notes](docs/managed-run-performance.md) for implementation history and measurements of individual stages.
 
 ## License
 

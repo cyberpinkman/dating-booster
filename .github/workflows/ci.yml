@@ -8,12 +8,10 @@ name: CI
   workflow_dispatch:
     inputs:
       full_compatibility:
-        description: Run the full test suite across every supported OS/Python pair
+        description: Run full OS/Python compatibility and canonical coverage
         required: false
         default: false
         type: boolean
-  schedule:
-    - cron: "31 18 * * *"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -51,9 +49,9 @@ jobs:
       - name: Product and core regression suite
         run: python -m pytest -m "not nightly_lab" -q
 
-  nightly-coverage:
-    name: Nightly canonical coverage
-    if: ${{ github.event_name == 'schedule' || inputs.full_compatibility == true }}
+  manual-coverage:
+    name: Manual canonical coverage
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_compatibility == true }}
     needs: managed-critical
     runs-on: ubuntu-latest
     steps:
@@ -101,7 +99,7 @@ jobs:
 
   compatibility-contracts:
     name: Contracts (${{ matrix.os }}, Python ${{ matrix.python-version }})
-    if: ${{ github.event_name != 'schedule' && inputs.full_compatibility != true }}
+    if: ${{ inputs.full_compatibility != true }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -126,7 +124,7 @@ jobs:
 
   full-compatibility:
     name: Full compatibility (${{ matrix.os }}, Python ${{ matrix.python-version }})
-    if: ${{ github.event_name == 'schedule' || inputs.full_compatibility == true }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_compatibility == true }}
     needs: managed-critical
     runs-on: ${{ matrix.os }}
     strategy:

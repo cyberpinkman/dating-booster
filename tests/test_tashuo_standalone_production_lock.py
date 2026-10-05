@@ -251,9 +251,11 @@ def test_worker_registry_reconciles_orphan_process_group_without_waitpid(tmp_pat
             "-c",
             (
                 "import subprocess,sys; "
-                "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'],"
-                "start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,"
-                "stderr=subprocess.DEVNULL); print(p.pid,flush=True)"
+                "p=subprocess.Popen([sys.executable,'-c',"
+                "'import time; print(1,flush=True); time.sleep(30)'],"
+                "start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,"
+                "stderr=subprocess.DEVNULL); "
+                "assert p.stdout.readline().strip() == b'1'; print(p.pid,flush=True)"
             ),
         ],
         text=True,
@@ -265,39 +267,49 @@ def test_worker_registry_reconciles_orphan_process_group_without_waitpid(tmp_pat
     _, stderr = launcher.communicate(timeout=10)
     assert launcher.returncode == 0, stderr
     identity = _wait_identity(worker_pid)
-    ledger = ProductionQualificationLedger(paths.data_dir)
-    registry = WorkerProcessRegistry(ledger)
-    registry.register(
-        context_id="attempt_orphan_1",
-        worker_kind="attempt",
-        pid=worker_pid,
-        pgid=os.getpgid(worker_pid),
-        worker_nonce="nonce_orphan_1",
-        identity=identity,
-    )
-    registry.mark_child_ready(
-        context_id="attempt_orphan_1",
-        worker_nonce="nonce_orphan_1",
-        pid=worker_pid,
-    )
+    try:
+        ledger = ProductionQualificationLedger(paths.data_dir)
+        registry = WorkerProcessRegistry(ledger)
+        registry.register(
+            context_id="attempt_orphan_1",
+            worker_kind="attempt",
+            pid=worker_pid,
+            pgid=os.getpgid(worker_pid),
+            worker_nonce="nonce_orphan_1",
+            identity=identity,
+        )
+        registry.mark_child_ready(
+            context_id="attempt_orphan_1",
+            worker_nonce="nonce_orphan_1",
+            pid=worker_pid,
+        )
 
-    result = registry.reconcile_orphan("attempt_orphan_1", grace_seconds=2)
+        result = registry.reconcile_orphan("attempt_orphan_1", grace_seconds=2)
 
-    assert result["status"] == "terminated"
-    assert registry.read("attempt_orphan_1")["status"] == "disappeared"
-    assert process_identity(worker_pid) is None
+        assert result["status"] == "terminated"
+        assert registry.read("attempt_orphan_1")["status"] == "disappeared"
+        assert process_identity(worker_pid) is None
+    finally:
+        if process_identity(worker_pid) == identity:
+            try:
+                os.kill(worker_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
 
-def test_worker_identity_or_pgid_mismatch_never_signals_process_group(tmp_path, monkeypatch):
+@pytest.mark.parametrize("field", ["process_start_time", "executable_path", "executable_digest", "pgid"])
+def test_worker_identity_or_pgid_mismatch_never_signals_process_group(tmp_path, monkeypatch, field):
     paths = _paths(tmp_path)
     process = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"],
+        [sys.executable, "-c", "import time; print(1,flush=True); time.sleep(30)"],
         start_new_session=True,
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
     try:
+        assert process.stdout is not None
+        assert process.stdout.readline().strip() == b"1"
         identity = _wait_identity(process.pid)
         ledger = ProductionQualificationLedger(paths.data_dir)
         registry = WorkerProcessRegistry(ledger)
@@ -318,7 +330,7 @@ def test_worker_identity_or_pgid_mismatch_never_signals_process_group(tmp_path, 
         ledger.compare_and_swap(
             "standalone_production/workers/attempt_identity_1.json",
             expected_version=current["ledger_version"],
-            changes={"process_start_time": "reused-pid-start-time"},
+            changes={field: current[field] + 1 if field == "pgid" else "different-process-identity"},
         )
         calls = []
         monkeypatch.setattr(os, "killpg", lambda pgid, sig: calls.append((pgid, sig)))
@@ -326,7 +338,11 @@ def test_worker_identity_or_pgid_mismatch_never_signals_process_group(tmp_path, 
         result = registry.signal_verified_group("attempt_identity_1", sig=signal.SIGTERM)
 
         assert result["status"] == "blocked"
-        assert result["reason"] == "worker_identity_mismatch"
+        expected_reason = "worker_process_group_mismatch" if field == "pgid" else "worker_identity_mismatch"
+        assert result["reason"] == expected_reason
+        with pytest.raises(WorkerIdentityConflict, match=expected_reason) as raised:
+            registry.reconcile_orphan("attempt_identity_1")
+        assert raised.value.field == (None if field == "pgid" else field)
         assert calls == []
         with pytest.raises(WorkerIdentityConflict, match="worker_registration_binding_mismatch"):
             WorkerProcessRegistry(ledger).mark_child_ready(

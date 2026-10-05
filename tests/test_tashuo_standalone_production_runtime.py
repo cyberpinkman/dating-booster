@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1000,13 +1001,17 @@ def test_worker_stdout_secret_is_blocked_and_temporary_output_is_destroyed(tmp_p
         },
     )
 
-    def leaking_launcher(_command, **kwargs):
+    def leaking_launcher(command, **kwargs):
+        ready_fd = command[command.index("--ready-fd") + 1]
+        barrier_fd = command[command.index("--barrier-fd") + 1]
         return subprocess.Popen(
             [
                 sys.executable,
                 "-c",
                 (
                     "import os,time; "
+                    f"os.write({ready_fd},b'1'); os.close({ready_fd}); "
+                    f"assert os.read({barrier_fd},1) == b'1'; os.close({barrier_fd}); "
                     "print(os.environ['DATING_BOOST_TEST_KEY'], flush=True); "
                     "time.sleep(0.2)"
                 ),
@@ -1042,3 +1047,98 @@ def test_worker_stdout_secret_is_blocked_and_temporary_output_is_destroyed(tmp_p
     io_dir = paths.work_dir / "worker-io"
     assert io_dir.is_dir()
     assert list(io_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("startup", ["ready", "closed", "silent", "launch_error"])
+def test_worker_startup_registers_only_after_interpreter_ready(tmp_path, monkeypatch, startup):
+    paths = _paths(tmp_path)
+    processes = []
+    inherited_fds = []
+    worker = """
+import os, sys
+from pathlib import Path
+from dating_boost.apps.tashuo.standalone_production_ledger import ProductionQualificationLedger
+from dating_boost.apps.tashuo.standalone_production_lock import WorkerProcessRegistry
+from dating_boost.apps.tashuo.standalone_production_runtime import worker_input, write_worker_result
+from dating_boost.core.gui_runtime_lock import current_process_identity
+
+def arg(name):
+    return sys.argv[sys.argv.index(name) + 1]
+
+ready_fd, barrier_fd = int(arg('--ready-fd')), int(arg('--barrier-fd'))
+context_id = arg('--context-id')
+ledger = ProductionQualificationLedger(Path(arg('--data-dir')))
+registry = WorkerProcessRegistry(ledger)
+try:
+    registry.read(context_id)
+except FileNotFoundError:
+    pass
+else:
+    raise AssertionError('registered before worker reached startup barrier')
+if sys.argv[-1] == 'ready':
+    os.write(ready_fd, b'1')
+if sys.argv[-1] != 'silent':
+    os.close(ready_fd)
+released = os.read(barrier_fd, 1)
+os.close(barrier_fd)
+if released != b'1':
+    raise SystemExit(70)
+assert sys.argv[-1] == 'ready'
+payload = worker_input(ledger, context_id)
+record = registry.mark_child_ready(
+    context_id=context_id, worker_nonce=payload['worker_nonce'], pid=os.getpid()
+)
+assert all(record[key] == value for key, value in current_process_identity().items())
+write_worker_result(ledger, context_id=context_id, result={'status': 'ok'})
+"""
+
+    def launcher(command, **kwargs):
+        inherited_fds.extend(kwargs["pass_fds"])
+        if startup == "launch_error":
+            raise OSError("fixture launch failed")
+        process = subprocess.Popen(
+            [sys.executable, "-c", worker, *command[3:], startup], **kwargs
+        )
+        processes.append(process)
+        return process
+
+    runtime = TaShuoStandaloneProductionRuntime(worker_launcher=launcher, source_root=Path.cwd())
+    monkeypatch.setattr(runtime, "_child_environment", lambda *args, **kwargs: dict(os.environ))
+    runtime.start_phase(
+        {
+            "phase": "canary",
+            "paths": paths,
+            "lock_renewer": lambda: {"qualification_id": paths.qualification_id},
+        }
+    )
+
+    result = runtime._run_worker(
+        worker_kind="selection_probe",
+        context_id="probe_startup",
+        payload={"schema_version": 1},
+        timeout_seconds=0.05 if startup == "silent" else 5,
+        lock_capability={},
+    )
+
+    if startup == "ready":
+        assert result["worker_status"] == "completed", result
+        assert result["status"] == "ok"
+        record = ProductionQualificationLedger(paths.data_dir).read_record(
+            "standalone_production/workers/probe_startup.json"
+        )
+        assert record["status"] == "terminal"
+        assert record["exit_code"] == 0
+    else:
+        assert result["worker_status"] == "launch_failed"
+        assert result["worker_failure_reason"] == (
+            "worker_launch_error" if startup == "launch_error" else "worker_startup_not_ready"
+        )
+        with pytest.raises(FileNotFoundError):
+            ProductionQualificationLedger(paths.data_dir).read_record(
+                "standalone_production/workers/probe_startup.json"
+            )
+    assert all(process.poll() is not None for process in processes)
+    for fd in inherited_fds:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+    assert list((paths.work_dir / "worker-io").iterdir()) == []

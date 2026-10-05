@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import select
 import shutil
 import signal
 import subprocess
@@ -251,6 +252,7 @@ class TaShuoStandaloneProductionRuntime:
         read_fd, write_fd = os.pipe()
         os.set_inheritable(read_fd, True)
         os.set_inheritable(write_fd, False)
+        ready_read_fd, ready_write_fd = os.pipe()
         command = [
             sys.executable,
             "-m",
@@ -262,8 +264,11 @@ class TaShuoStandaloneProductionRuntime:
             context_id,
             "--barrier-fd",
             str(read_fd),
+            "--ready-fd",
+            str(ready_write_fd),
         ]
         process: subprocess.Popen[bytes] | None = None
+        registered = False
         io_dir = paths.work_dir / "worker-io"
         io_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         stdout_file = tempfile.TemporaryFile(dir=io_dir)
@@ -278,10 +283,19 @@ class TaShuoStandaloneProductionRuntime:
                 stderr=stderr_file,
                 start_new_session=True,
                 close_fds=True,
-                pass_fds=(read_fd,),
+                pass_fds=(read_fd, ready_write_fd),
             )
             os.close(read_fd)
             read_fd = -1
+            os.close(ready_write_fd)
+            ready_write_fd = -1
+            # A Python launcher may exec the interpreter after Popen returns.
+            # Sample identity only after worker code reaches its startup barrier.
+            readable, _, _ = select.select([ready_read_fd], [], [], min(30, timeout_seconds))
+            if not readable or os.read(ready_read_fd, 1) != b"1":
+                raise WorkerIdentityConflict("worker_startup_not_ready")
+            os.close(ready_read_fd)
+            ready_read_fd = -1
             identity = _wait_for_process_identity(process.pid)
             if identity is None:
                 raise WorkerIdentityConflict("worker_identity_unavailable")
@@ -294,6 +308,7 @@ class TaShuoStandaloneProductionRuntime:
                 worker_nonce=worker_nonce,
                 identity=identity,
             )
+            registered = True
             os.write(write_fd, b"1")
             os.close(write_fd)
             write_fd = -1
@@ -304,17 +319,40 @@ class TaShuoStandaloneProductionRuntime:
                 worker_nonce=worker_nonce,
                 timeout_seconds=timeout_seconds,
             )
-        except (OSError, WorkerIdentityConflict, subprocess.SubprocessError):
+        except (OSError, WorkerIdentityConflict, subprocess.SubprocessError) as exc:
+            if write_fd >= 0:
+                os.close(write_fd)
+                write_fd = -1
             if process is not None:
-                self._terminate_worker(ledger, context_id=context_id, process=process)
+                if registered:
+                    self._terminate_worker(ledger, context_id=context_id, process=process)
+                else:
+                    # Before barrier release, only our direct child can run;
+                    # Popen guards against signaling an already reaped PID.
+                    process.terminate()
+                    try:
+                        process.wait(timeout=WORKER_TERMINATION_GRACE_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=WORKER_TERMINATION_GRACE_SECONDS)
             stdout_file.close()
             stderr_file.close()
-            return {"worker_status": "launch_failed", "worker_nonce": worker_nonce}
+            return {
+                "worker_status": "launch_failed",
+                "worker_nonce": worker_nonce,
+                "worker_failure_reason": (
+                    str(exc) if isinstance(exc, WorkerIdentityConflict) else "worker_launch_error"
+                ),
+            }
         finally:
             if read_fd >= 0:
                 os.close(read_fd)
             if write_fd >= 0:
                 os.close(write_fd)
+            if ready_read_fd >= 0:
+                os.close(ready_read_fd)
+            if ready_write_fd >= 0:
+                os.close(ready_write_fd)
         stdout_bytes = _read_bounded_worker_output(stdout_file)
         stderr_bytes = _read_bounded_worker_output(stderr_file)
         stdout_file.close()

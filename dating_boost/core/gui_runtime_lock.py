@@ -493,8 +493,9 @@ def boot_session_id() -> str:
 
 
 def _process_executable_path(pid: int) -> Path | None:
-    if pid == os.getpid():
-        return Path(sys.executable).resolve()
+    # sys.executable can name a launcher that has already exec'd another binary
+    # (notably macOS framework Python). Owners and observers must use the same
+    # kernel-reported executable when comparing a process identity.
     if platform.system() == "Darwin":
         try:
             libproc = ctypes.CDLL("/usr/lib/libproc.dylib")

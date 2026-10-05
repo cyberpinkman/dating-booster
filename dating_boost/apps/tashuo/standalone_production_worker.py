@@ -20,12 +20,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--context-id", required=True)
     parser.add_argument("--barrier-fd", type=int, required=True)
+    parser.add_argument("--ready-fd", type=int, required=True)
     args = parser.parse_args(argv)
     ledger = ProductionQualificationLedger(args.data_dir)
     payload = worker_input(ledger, args.context_id)
     worker_nonce = str(payload.get("worker_nonce") or "")
     try:
+        try:
+            os.write(args.ready_fd, b"1")
+        finally:
+            os.close(args.ready_fd)
         released = os.read(args.barrier_fd, 1)
+    except BrokenPipeError:
+        return 70
     finally:
         os.close(args.barrier_fd)
     if released != b"1":

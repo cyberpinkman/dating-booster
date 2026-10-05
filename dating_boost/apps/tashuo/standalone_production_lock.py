@@ -42,7 +42,10 @@ class ProductionLockConflict(ProductionLockError):
 
 
 class WorkerIdentityConflict(ProductionLockError):
-    pass
+    def __init__(self, reason: str, *, field: str | None = None):
+        self.reason = reason
+        self.field = field
+        super().__init__(f"{reason}:{field}" if field else reason)
 
 
 class WorkerProcessRegistry:
@@ -190,13 +193,17 @@ class WorkerProcessRegistry:
             return {"status": "already_terminal", "context_id": context_id}
         verified = self.verify_live_identity(context_id)
         if verified.get("status") == "blocked":
-            raise WorkerIdentityConflict(str(verified.get("reason") or "worker_identity_mismatch"))
+            raise WorkerIdentityConflict(
+                str(verified.get("reason") or "worker_identity_mismatch"), field=verified.get("field")
+            )
         if verified.get("status") == "not_alive":
             self.mark_disappeared(context_id=context_id, worker_nonce=worker_nonce)
             return {"status": "disappeared", "context_id": context_id}
         signaled = self.signal_verified_group(context_id, sig=signal.SIGTERM)
         if signaled.get("status") not in {"signaled", "not_alive"}:
-            raise WorkerIdentityConflict(str(signaled.get("reason") or "worker_identity_mismatch"))
+            raise WorkerIdentityConflict(
+                str(signaled.get("reason") or "worker_identity_mismatch"), field=signaled.get("field")
+            )
         deadline = monotonic() + grace_seconds
         while monotonic() < deadline:
             if not _process_group_alive(int(record["pgid"])):
@@ -205,10 +212,14 @@ class WorkerProcessRegistry:
             sleep(min(0.05, max(0.0, deadline - monotonic())))
         verified = self.verify_live_identity(context_id)
         if verified.get("status") != "ok":
-            raise WorkerIdentityConflict(str(verified.get("reason") or "worker_identity_mismatch"))
+            raise WorkerIdentityConflict(
+                str(verified.get("reason") or "worker_identity_mismatch"), field=verified.get("field")
+            )
         signaled = self.signal_verified_group(context_id, sig=signal.SIGKILL)
         if signaled.get("status") != "signaled":
-            raise WorkerIdentityConflict(str(signaled.get("reason") or "worker_identity_mismatch"))
+            raise WorkerIdentityConflict(
+                str(signaled.get("reason") or "worker_identity_mismatch"), field=signaled.get("field")
+            )
         deadline = monotonic() + grace_seconds
         while monotonic() < deadline:
             if not _process_group_alive(int(record["pgid"])):
