@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -11,7 +12,9 @@ from dating_boost.core.gui_runtime_lock import (
     GuiRuntimeLock,
     RuntimeLockConflict,
     RuntimeSafetyPaused,
+    SystemProcessPort,
     current_process_identity,
+    process_identity,
 )
 
 
@@ -178,3 +181,28 @@ def test_current_process_identity_is_stable_for_same_process():
     assert first["pid"] == os.getpid()
     assert first["process_start_time"]
     assert first["executable_digest"]
+
+
+def test_process_identity_agrees_between_owner_and_observer():
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import json,os,sys; "
+            "from dating_boost.core.gui_runtime_lock import current_process_identity; "
+            "print(json.dumps(current_process_identity()),flush=True); sys.stdin.read(1)",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert child.stdout is not None
+        identity = json.loads(child.stdout.readline())
+        assert process_identity(child.pid) == identity
+        assert SystemProcessPort().identity_is_alive(identity)
+        assert not SystemProcessPort().identity_is_alive(
+            {**identity, "process_start_time": "reused-pid-start-time"}
+        )
+    finally:
+        child.communicate("x", timeout=5)
