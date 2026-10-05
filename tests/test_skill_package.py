@@ -156,9 +156,8 @@ class SkillPackageTests(unittest.TestCase):
         self.assertIn("plan selection is never an agent action", skill_text)
         self.assertNotIn("harness wechat stage-draft --text ", skill_text)
 
-    def test_agent_facing_docs_do_not_present_handcrafted_live_send_requests(self):
-        docs = [
-            Path("README.md"),
+    def test_docs_preserve_live_send_boundaries_for_their_audience(self):
+        agent_docs = [
             Path("AGENTS.md"),
             Path("skills/dating-booster-codex/SKILL.md"),
             Path("skills/dating-booster-codex/INSTALL.md"),
@@ -177,6 +176,9 @@ class SkillPackageTests(unittest.TestCase):
             Path("dating_boost/resources/agent_adapters/openclaw/skills/dating-booster/SKILL.md"),
             Path("dating_boost/resources/agent_adapters/shared/references/workflows.md"),
         ]
+        # Public READMEs route agents to AGENTS.md; their links are checked in
+        # test_agent_native_launch_docs. Operational instructions own these guards.
+        public_docs = [Path("README.md"), Path("README.zh-CN.md")]
         forbidden = (
             "--action-request action_request.json",
             "--action-request action-request.json",
@@ -191,11 +193,14 @@ class SkillPackageTests(unittest.TestCase):
             "mac-ios-app is not currently a managed live-send runtime",
         )
 
-        for path in docs:
+        for path in agent_docs:
             text = path.read_text(encoding="utf-8").lower()
             with self.subTest(path=str(path)):
                 self.assertIn("do not handcraft", text)
                 self.assertIn("executor-internal", text)
+        for path in [*agent_docs, *public_docs]:
+            text = path.read_text(encoding="utf-8").lower()
+            with self.subTest(path=str(path)):
                 for phrase in forbidden:
                     self.assertNotIn(phrase, text)
 

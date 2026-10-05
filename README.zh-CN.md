@@ -198,7 +198,7 @@ python3 -m pip install -e ".[test]"
 python3 -m pytest -m "not nightly_lab" -q
 ```
 
-完整测试（含夜间协议）：`python3 -m pytest -q`。开发记录与分阶段测量见 [ManagedRun 开发说明](docs/managed-run-performance.md)。
+完整测试（含较慢的资格验证协议）：`python3 -m pytest -q`。CI 在推送 `main`、版本标签、提交 PR 或手动启动时运行；完整 OS/Python 兼容性与覆盖率检查通过 GitHub Actions 的 **CI → Run workflow** 勾选 `full_compatibility` 按需执行，不再每日定时运行。开发记录与分阶段测量见 [ManagedRun 开发说明](docs/managed-run-performance.md)。
 
 ## 许可证
 

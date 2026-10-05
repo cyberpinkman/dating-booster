@@ -24,7 +24,7 @@ def _job_block(text: str, job_id: str) -> str:
 
 
 class CiConfigTests(unittest.TestCase):
-    def test_daily_triggers_do_not_duplicate_feature_branch_push_and_pull_request(self):
+    def test_ci_runs_on_changes_or_manual_dispatch_without_a_schedule(self):
         triggers = _ci_text().split("\njobs:\n", 1)[0]
 
         self.assertIn("branches: [main]", triggers)
@@ -32,7 +32,8 @@ class CiConfigTests(unittest.TestCase):
         self.assertNotIn('branches: ["**"]', triggers)
         self.assertIn("pull_request:", triggers)
         self.assertIn("workflow_dispatch:", triggers)
-        self.assertIn("schedule:", triggers)
+        self.assertNotIn("schedule:", triggers)
+        self.assertNotIn("cron:", triggers)
         self.assertIn("full_compatibility:", triggers)
 
     def test_managed_critical_and_pr_core_have_one_fast_canonical_owner(self):
@@ -51,12 +52,11 @@ class CiConfigTests(unittest.TestCase):
         self.assertIn('python -m pytest -m "not nightly_lab" -q', pr_core)
         self.assertNotIn("--cov", pr_core)
 
-    def test_coverage_is_single_canonical_nightly_job(self):
+    def test_coverage_is_single_canonical_manual_job(self):
         text = _ci_text()
-        coverage = _job_block(text, "nightly-coverage")
+        coverage = _job_block(text, "manual-coverage")
 
-        self.assertIn("github.event_name == 'schedule'", coverage)
-        self.assertIn("inputs.full_compatibility == true", coverage)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.full_compatibility == true", coverage)
         self.assertIn("runs-on: ubuntu-latest", coverage)
         self.assertNotIn("matrix:", coverage)
         self.assertEqual(text.count("--cov=dating_boost"), 1)
@@ -83,7 +83,6 @@ class CiConfigTests(unittest.TestCase):
         text = _ci_text()
         compatibility = _job_block(text, "compatibility-contracts")
 
-        self.assertIn("github.event_name != 'schedule'", compatibility)
         self.assertIn("inputs.full_compatibility != true", compatibility)
         self.assertIn("os: [ubuntu-latest, macos-latest]", compatibility)
         self.assertIn('python-version: ["3.11", "3.12", "3.13"]', compatibility)
@@ -98,11 +97,10 @@ class CiConfigTests(unittest.TestCase):
         self.assertNotIn("python -m build", compatibility)
         self.assertNotIn("agent_native_smoke.py", compatibility)
 
-    def test_full_compatibility_matrix_is_nightly_or_explicit_only(self):
+    def test_full_compatibility_matrix_requires_explicit_manual_dispatch(self):
         full_compatibility = _job_block(_ci_text(), "full-compatibility")
 
-        self.assertIn("github.event_name == 'schedule'", full_compatibility)
-        self.assertIn("inputs.full_compatibility == true", full_compatibility)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.full_compatibility == true", full_compatibility)
         self.assertIn("needs: managed-critical", full_compatibility)
         self.assertIn("os: [ubuntu-latest, macos-latest]", full_compatibility)
         self.assertIn('python-version: ["3.11", "3.12", "3.13"]', full_compatibility)

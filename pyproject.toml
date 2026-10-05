@@ -67,7 +67,7 @@ dating_boost = [
 testpaths = ["tests"]
 markers = [
     "managed_critical: fast tests for the full-managed product's critical invariants and vertical paths",
-    "nightly_lab: slow qualification, crash, and compatibility protocols excluded from the PR feedback path",
+    "nightly_lab: slow qualification, crash, and compatibility protocols run on demand outside the PR feedback path",
 ]
 
 [tool.ruff]
