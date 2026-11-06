@@ -720,7 +720,7 @@ class GuiHarnessTashuoSendTests(GuiHarnessTestCase):
             def run(self, command, *, input=None):
                 if (
                     command[:3] == ["xcrun", "swift", "-e"]
-                    and "NSWorkspace.shared.frontmostApplication" in command[-1]
+                    and "NSWorkspace.shared.runningApplications" in command[-1]
                 ):
                     self.commands.append(command)
                     self.command_inputs.append((command, input))

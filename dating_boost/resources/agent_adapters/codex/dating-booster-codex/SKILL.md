@@ -190,14 +190,51 @@ for the same run. Stop returns `relationship_progress_report`. `run` and `tick`
 are public CLI subcommands; treating them as host-internal is a product UX
 convention, not an access-control boundary.
 
+For an unknown send, use `manage reconcile --data-dir <dir> --run-id <id> --json`
+to verify existing receipt evidence; add `--decision-key` when several attempts
+need reconciliation. It never stages, sends, refunds budget, or resumes an old
+sequence tail. A valid reconciliation preserves the original unknown audit and
+adds one confirmation exactly once. It leaves the run stopped/paused; a paused
+run needs explicit resume and the same host-owned `run --wait` loop afterward.
+Do not supply a success flag or expected text to clear unknown state. New sends
+persist encrypted pre/receipt/post evidence digests. Legacy evidence imports
+must name their host-reviewed capture provenance and pass verification; do not
+claim their manifest existed when the original send occurred.
+
 The live action port is limited to ordinary TaShuo chat and is split into
 composer observation, exact staging, Return-only click, and fresh post-send
-observation. Question gate, concrete invitation details, contact exchange,
+observation. AX checks composer emptiness, exact text reads/writes, and clearing;
+visual verification checks the target, conversation text, and the exact newly
+added outbound text. Do not require chat-body text from AX. Reuse the initial
+conversation screenshot, use unchanged conversation pixels when geometry is
+verified, and otherwise compare the before/after images in one model request
+from the same process. Do not restore a per-message Codex observation loop. Jev only
+routes typed text decisions; it neither reads images nor generates replies.
+Question gate, concrete invitation details, contact exchange,
 target uncertainty, occupied composer, stale inbound revision, or any
 `unknown_after_click` result must hand off/pause. Never auto-retry an unknown
-click result.
+click result. A verified send followed by a new inbound message keeps that
+send confirmed and cancels the unsent sequence tail. Only a trusted proof that
+Return was never invoked may release its reserved budget as `failed_before_click`;
+an ordinary click exception remains unknown.
 
-This release has not recorded a ManagedRun live-send GUI qualification. A
+The emoticon fallback is limited to identical ordinary text with at
+most three differences in U+1F600–U+1F64F emoticons, after exact AX input proof
+and paired-image proof of the same conversation and new outbound bubble. One
+additional comparison of the BEFORE composer and AFTER new bubble receives no
+expected string; both must be fully readable with an `identical/high` verdict.
+This is combined evidence, not Unicode equivalence or fuzzy text matching.
+Persist every frame-pair verdict, including negative/uncertain ones; never retry
+to select a favorable result. This combined evidence has reconciled one legacy
+attempt; new continuous live sending still awaits acceptance.
+
+The early authorized GUI attempt recorded zero clicks and zero sends. A later
+Return was initially unknown after an emoji transcription mismatch, without
+retry. It was later reconciled using host-reviewed original captures and an
+explicit import of genuine existing comparison results. Repeating reconcile
+did not count twice; the unknown audit, stopped run, and cancelled tail remain.
+This does not qualify automatic recovery from arbitrary files or continuous
+live sending. A
 manually reviewed, small-budget real send is only experiment evidence and does
 not automatically update capabilities. The current
 `managed_run_real_gui_canary_passed` value is a static release claim, not a
@@ -299,8 +336,13 @@ current mood, current availability, "摸鱼", or what is happening right now,
 do not continue it as if it is still current; bridge to present evidence or
 choose a new handle.
 
-ManagedRun currently stages and sends one `DraftDecision.text` per transaction;
-do not claim that it sends a multi-bubble sequence. In the operator/host-loop
+ManagedRun preserves a writer-provided `message_sequence` of two or three
+messages and executes one verified transaction per bubble in the same tick.
+Jev routing and drafting happen before the sequence; visual verification can
+still call the model between sends. Each bubble consumes its own budget, and
+each later Return must occur within 20 seconds of the preceding send. Never
+resume an unsent tail after interruption or an unknown result, and do not claim
+real-device multi-bubble success from fixture results. In the operator/host-loop
 compatibility path, when one reply naturally has two jobs, a
 `message_sequence` may use several short messages instead of one dense
 paragraph. Split near commas or sentence boundaries. Each message should stand
@@ -570,11 +612,12 @@ execution. Only the compatibility executor consumes a system-generated work
 item; never handcraft one or call direct harness live send. Both paths require
 target-specific binding, exact staged-text verification, a fresh post-send
 observation, input-cleared evidence, and outbound
-exact-text verification. For mac-ios-app, exact verification may use
-Accessibility text evidence plus visual state; do not require header OCR or
-message-list row position. For iPhone Mirroring, OCR/text evidence remains the
-default exact-text path. Visual-only button or bubble evidence alone does not
-satisfy exact-text verification. TaShuo ordinary chat sends by pressing Return
+exact-text verification. ManagedRun mac-ios-app uses AX for composer text and
+structured visual before/after verification for the target and newly added
+outbound text; the compatibility executor retains its existing evidence gates.
+Do not require header OCR or message-list row position. For iPhone Mirroring,
+OCR/text evidence remains the default exact-text path. A button or bubble merely
+being visible does not establish exact text. TaShuo ordinary chat sends by pressing Return
 after exact staged-text verification; do not click or plan a Send-button action.
 
 Launch search should type `tashu`, not full `tashuo`, and verify the `她说` or

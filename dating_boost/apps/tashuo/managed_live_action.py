@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -9,6 +11,7 @@ from uuid import uuid4
 from dating_boost.apps.tashuo.runtime_common import (
     _capture_tashuo_window,
     _is_mac_ios_app_session,
+    _read_png_pixels,
     _sleep_for_tashuo_post_action_observation,
     _tashuo_capture_prefix,
     _tashuo_message_input_tap_ratio,
@@ -23,7 +26,7 @@ from dating_boost.apps.tashuo.send_input_ax import (
     _tashuo_ax_text_area_value,
 )
 from dating_boost.apps.tashuo.send_verification import _verify_tashuo_outbound_message
-from dating_boost.apps.tashuo.targeting import _verify_tashuo_target_binding
+from dating_boost.apps.tashuo.targeting import _tashuo_visual_anchor_hash_for_pixels, _verify_tashuo_target_binding
 
 
 def observe_tashuo_managed_inbound_revision(
@@ -42,7 +45,7 @@ def observe_tashuo_managed_inbound_revision(
     )
     if context.get("status") != "ok":
         return context
-    revision = _observe_current_conversation_revision(session)
+    revision = _observe_current_conversation_revision(session, target_binding=target_binding)
     if revision.get("status") != "ok":
         return {
             **context,
@@ -188,6 +191,7 @@ def click_tashuo_managed_send_only(
     target_binding: dict[str, Any],
     inbound_revision: str,
     output_dir: Path | None = None,
+    click_deadline_at: str | None = None,
 ) -> dict[str, Any]:
     """Press Return only after fresh target and exact-composer verification.
 
@@ -259,6 +263,17 @@ def click_tashuo_managed_send_only(
             "reason": "managed_pre_click_occurrence_baseline_missing",
         }
     before_occurrences = before_occurrences_raw
+
+    # Check at the irreversible boundary: AX/focus work may have consumed the
+    # burst window after the caller's earlier scheduling check.
+    if click_deadline_at is not None:
+        try:
+            deadline = _strict_iso_time(click_deadline_at)
+            deadline_expired = _strict_iso_time(platform._now_iso()) >= deadline
+        except (TypeError, ValueError):
+            return {**context, "status": "blocked", "reason": "managed_burst_continuation_deadline_invalid"}
+        if deadline_expired:
+            return {**context, "status": "blocked", "reason": "managed_burst_continuation_expired"}
 
     send_result = session._press_return_key()
     if send_result.get("status") != "ok":
@@ -362,8 +377,32 @@ def observe_tashuo_managed_post_send(
             "pre_click_expected_text_occurrences": before_occurrences,
             "post_click_expected_text_occurrences": after_occurrences,
             "post_send_verification": verification,
+            "continuation_verified": False,
         }
     observation_id = _observation_id("post_send", captured_at)
+    continuation_revision = _continuation_revision(
+        click_receipt=click_receipt,
+        target_binding=target_binding,
+        inbound_revision=inbound_revision,
+        expected_text=expected_text,
+        post_static=post_static,
+        captured_at=captured_at,
+    )
+    continuation_anchor = (
+        _continuation_visual_anchor(target_binding, pre_click_screen, post_screen)
+        if continuation_revision is not None else None
+    )
+    continuation = {"continuation_verified": continuation_revision is not None and continuation_anchor is not None}
+    if continuation_revision is not None and continuation_anchor is not None:
+        continuation.update(
+            {
+                "continuation_inbound_revision": continuation_revision,
+                "continuation_inbound_revision_observation_id": observation_id,
+                "continuation_inbound_revision_captured_at": captured_at,
+                "continuation_visual_anchor_hash": continuation_anchor["visual_anchor_hash"],
+                "continuation_visual_anchor_region": continuation_anchor["visual_anchor_region"],
+            }
+        )
     return {
         "schema_version": 1,
         "status": "ok",
@@ -382,6 +421,7 @@ def observe_tashuo_managed_post_send(
         "post_click_expected_text_occurrences": after_occurrences,
         "post_send_verification": verification,
         "expected_payload_hash": platform._hash_text(expected_text),
+        **continuation,
     }
 
 
@@ -432,6 +472,7 @@ def _observe_matching_conversation_revision(
 ) -> dict[str, Any]:
     revision = _observe_current_conversation_revision(
         session,
+        target_binding=target_binding,
         expected_text_for_occurrences=expected_text_for_occurrences,
         expected_composer_text=expected_composer_text,
     )
@@ -472,6 +513,10 @@ def _observe_matching_conversation_revision(
         result["pre_click_expected_text_occurrences"] = int(
             revision.get("expected_text_occurrences") or 0
         )
+        # This sequence is retained only in the process-local click receipt.
+        # Public revision evidence and post-send diagnostics never include it.
+        if revision.get("_static_text_hashes") is not None:
+            result["_pre_click_static_text_hashes"] = revision["_static_text_hashes"]
     if expected_composer_text is not None:
         result.update(
             {
@@ -522,6 +567,7 @@ def _observe_bound_target(
 def _observe_current_conversation_revision(
     session: Any,
     *,
+    target_binding: dict[str, Any],
     expected_text_for_occurrences: str | None = None,
     expected_composer_text: str | None = None,
 ) -> dict[str, Any]:
@@ -536,18 +582,14 @@ def _observe_current_conversation_revision(
             "reason": observed.get("reason") or "managed_inbound_revision_ax_unavailable",
             "evidence_source": "macos_accessibility_static_text",
         }
-    raw_values = observed.get("values")
-    if not isinstance(raw_values, list):
+    values = _strict_static_values(observed)
+    expected_hashes = _bound_message_text_hashes(target_binding)
+    if values is None or not _message_coverage_matches(
+        tuple(platform._hash_text(value) for value in values), expected_hashes
+    ):
         return {
             "status": "blocked",
-            "reason": "managed_inbound_revision_ax_values_invalid",
-            "evidence_source": "macos_accessibility_static_text",
-        }
-    values = [str(item).strip() for item in raw_values if str(item).strip()]
-    if not values:
-        return {
-            "status": "blocked",
-            "reason": "managed_inbound_revision_ax_values_empty",
+            "reason": "managed_conversation_text_not_accessible",
             "evidence_source": "macos_accessibility_static_text",
         }
     encoded = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
@@ -558,6 +600,8 @@ def _observe_current_conversation_revision(
         "observation_id": _observation_id("inbound_revision", captured_at),
         "captured_at": captured_at,
         "value_count": len(values),
+        "covered_message_count": len(expected_hashes),
+        "conversation_text_coverage_verified": True,
         "evidence_source": "macos_accessibility_static_text",
     }
     if expected_text_for_occurrences is not None:
@@ -565,6 +609,9 @@ def _observe_current_conversation_revision(
             observed,
             expected_text_for_occurrences,
         )
+        strict_values = _strict_static_values(observed)
+        if strict_values is not None:
+            result["_static_text_hashes"] = tuple(platform._hash_text(value) for value in strict_values)
     if expected_composer_text is not None:
         composer_found = observed.get("composer_found") is True
         composer_value = str(observed.get("composer_value") or "") if composer_found else ""
@@ -582,9 +629,148 @@ def _observe_current_conversation_revision(
 def _public_revision_evidence(revision: dict[str, Any]) -> dict[str, Any]:
     return {
         key: revision.get(key)
-        for key in ("status", "observation_id", "captured_at", "value_count", "evidence_source")
+        for key in ("status", "observation_id", "captured_at", "value_count", "evidence_source", "covered_message_count", "conversation_text_coverage_verified")
         if revision.get(key) is not None
     }
+
+
+def _strict_static_values(observation: dict[str, Any]) -> list[str] | None:
+    if observation.get("status") != "ok":
+        return None
+    values = observation.get("values")
+    if not isinstance(values, list) or not values or any(not isinstance(value, str) or not value.strip() for value in values):
+        return None
+    if "value_count" in observation and (type(observation["value_count"]) is not int or observation["value_count"] != len(values)):
+        return None
+    return [value.strip() for value in values]
+
+
+def _bound_message_text_hashes(target_binding: dict[str, Any]) -> tuple[str, ...]:
+    evidence = target_binding.get("thread_evidence")
+    values = evidence.get("managed_message_text_hashes") if isinstance(evidence, dict) else None
+    if not isinstance(values, list) or not values or any(
+        not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None for value in values
+    ):
+        return ()
+    return tuple(values)
+
+
+def _message_coverage_matches(observed: tuple[str, ...], expected: tuple[str, ...]) -> bool:
+    # Unrelated AX labels are not messages. Only the visually observed message
+    # hashes count, with their complete order and duplicate multiplicity intact.
+    expected_set = set(expected)
+    return bool(expected) and tuple(value for value in observed if value in expected_set) == expected
+
+
+def _continuation_revision(
+    *,
+    click_receipt: dict[str, Any],
+    target_binding: dict[str, Any],
+    inbound_revision: str,
+    expected_text: str,
+    post_static: dict[str, Any],
+    captured_at: str,
+) -> str | None:
+    """Prove that the same AX snapshot gained only the expected outbound entry.
+
+    A successful send can lack this stronger proof: scrolling, a timestamp label,
+    a concurrent inbound message, or missing legacy evidence stops the burst
+    without changing the already established result of the first Return.
+    """
+    before = click_receipt.get("_pre_click_static_text_hashes")
+    if not isinstance(before, tuple) or not before:
+        return None
+    if any(not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None for value in before):
+        return None
+    expected_messages = _bound_message_text_hashes(target_binding)
+    if not _message_coverage_matches(before, expected_messages):
+        return None
+    if (
+        click_receipt.get("inbound_revision_verified") is not True
+        or click_receipt.get("inbound_revision") != inbound_revision
+        or _bound_managed_inbound_revision(target_binding) != inbound_revision
+        or re.fullmatch(r"ax-static-v1:[0-9a-f]{64}", inbound_revision) is None
+    ):
+        return None
+    baseline_id = click_receipt.get("inbound_revision_observation_id")
+    if not isinstance(baseline_id, str) or not baseline_id or baseline_id == _bound_managed_inbound_revision_observation_id(target_binding):
+        return None
+    try:
+        baseline_time = _strict_iso_time(click_receipt.get("inbound_revision_captured_at"))
+        clicked_time = _strict_iso_time(click_receipt.get("clicked_at"))
+        if not baseline_time <= clicked_time < _strict_iso_time(captured_at):
+            return None
+        bound_time = target_binding.get("thread_evidence", {}).get("managed_inbound_revision_captured_at")
+        if bound_time is not None and baseline_time < _strict_iso_time(bound_time):
+            return None
+    except (TypeError, ValueError):
+        return None
+    values = _strict_static_values(post_static)
+    if values is None or len(values) != len(before) + 1:
+        return None
+    after = tuple(platform._hash_text(value) for value in values)
+    expected_hash = platform._hash_text(expected_text.strip())
+    if not _message_coverage_matches(after, (*expected_messages, expected_hash)):
+        return None
+    if not any(value == expected_hash and after[:index] + after[index + 1 :] == before for index, value in enumerate(after)):
+        return None
+    encoded = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+    return "ax-static-v1:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _strict_iso_time(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("timestamp must be a string")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp timezone is required")
+    return parsed
+
+
+def _continuation_visual_anchor(
+    target_binding: dict[str, Any],
+    pre_click_screen: dict[str, Any],
+    post_screen: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Refresh the same thread crop only after the AX transition was proven.
+
+    The crop includes chat content, so the previous hash may legitimately change
+    on our own send. Existing screenshots must remain readable at the same size;
+    this never changes identity fields, the crop, or message-list evidence.
+    """
+    if target_binding.get("binding_type") != "current_thread_visual_identity":
+        return None
+    evidence = target_binding.get("thread_evidence")
+    region = evidence.get("visual_anchor_region") if isinstance(evidence, dict) else None
+    if not isinstance(region, dict) or set(region) != {"x1", "y1", "x2", "y2"}:
+        return None
+    if any(isinstance(value, bool) or not isinstance(value, (float, int)) for value in region.values()):
+        return None
+    if not (0 <= region["x1"] < region["x2"] <= 1 and 0 <= region["y1"] < region["y2"] <= 1):
+        return None
+    # Decode each existing PNG once, without a full pixel-difference pass. The
+    # AX proof owns which changes are allowed; only geometry and a new crop hash
+    # are needed here.
+    try:
+        before_path, after_path = pre_click_screen.get("path"), post_screen.get("path")
+        if not isinstance(before_path, str) or not before_path or not isinstance(after_path, str) or not after_path:
+            return None
+        before_pixels = _read_png_pixels(Path(before_path))
+        after_pixels = _read_png_pixels(Path(after_path))
+        dimensions = ("width", "height", "channels")
+        if any(type(before_pixels.get(key)) is not int or before_pixels[key] <= 0 for key in dimensions):
+            return None
+        if any(type(after_pixels.get(key)) is not int or after_pixels[key] != before_pixels[key] for key in dimensions):
+            return None
+        result = _tashuo_visual_anchor_hash_for_pixels(after_pixels, region=dict(region))
+    except Exception:  # noqa: BLE001 - a missing optional proof cannot undo a confirmed send.
+        return None
+    if not isinstance(result, dict):
+        return None
+    visual_hash = result.get("visual_anchor_hash")
+    if result.get("status") != "ok" or not isinstance(visual_hash, str) or re.fullmatch(r"[0-9a-f]{16}", visual_hash) is None:
+        return None
+    return {"visual_anchor_hash": visual_hash, "visual_anchor_region": dict(region)}
 
 
 def _bound_managed_inbound_revision(target_binding: dict[str, Any]) -> str:

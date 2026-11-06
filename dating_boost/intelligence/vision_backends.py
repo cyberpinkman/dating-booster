@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, Sequence
 
 from dating_boost.intelligence.backends import (
     MINIMAX_STRUCTURED_TOOL_NAME,
@@ -28,6 +28,15 @@ class VisionBackend(Protocol):
     ) -> dict[str, Any]:
         """Analyze an image and return a structured response."""
 
+    def analyze_images_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        image_paths: Sequence[Path],
+        schema: Mapping[str, object],
+    ) -> dict[str, Any]:
+        """Analyze ordered images together in one structured request."""
+
 
 class ScriptedVisionBackend:
     """Deterministic vision backend for tests and local scripted flows."""
@@ -49,6 +58,17 @@ class ScriptedVisionBackend:
         image_path: Path,
         schema: Mapping[str, object],
     ) -> dict[str, Any]:
+        return self.analyze_images_structured(system_prompt, user_prompt, [image_path], schema)
+
+    def analyze_images_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        image_paths: Sequence[Path],
+        schema: Mapping[str, object],
+    ) -> dict[str, Any]:
+        if not image_paths:
+            raise ValueError("vision_backend_images_required")
         if self._cursor >= len(self._payloads):
             payload = self._payloads[-1]
         else:
@@ -80,7 +100,16 @@ class OpenAIVisionBackend:
         image_path: Path,
         schema: Mapping[str, object],
     ) -> dict[str, Any]:
-        data_url = f"{_image_mime_type(image_path)};base64,{base64.b64encode(image_path.read_bytes()).decode('ascii')}"
+        return self.analyze_images_structured(system_prompt, user_prompt, [image_path], schema)
+
+    def analyze_images_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        image_paths: Sequence[Path],
+        schema: Mapping[str, object],
+    ) -> dict[str, Any]:
+        data_urls = _image_data_urls(image_paths)
         response = self._client.responses.create(
             model=self._model,
             input=[
@@ -89,7 +118,7 @@ class OpenAIVisionBackend:
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": user_prompt},
-                        {"type": "input_image", "image_url": data_url},
+                        *({"type": "input_image", "image_url": data_url} for data_url in data_urls),
                     ],
                 },
             ],
@@ -116,7 +145,16 @@ class MiniMaxVisionBackend(MiniMaxBackend):
         image_path: Path,
         schema: Mapping[str, object],
     ) -> dict[str, Any]:
-        data_url = f"{_image_mime_type(image_path)};base64,{base64.b64encode(image_path.read_bytes()).decode('ascii')}"
+        return self.analyze_images_structured(system_prompt, user_prompt, [image_path], schema)
+
+    def analyze_images_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        image_paths: Sequence[Path],
+        schema: Mapping[str, object],
+    ) -> dict[str, Any]:
+        data_urls = _image_data_urls(image_paths)
         response = self._client.chat.completions.create(
             model=self._model,
             messages=[
@@ -125,13 +163,13 @@ class MiniMaxVisionBackend(MiniMaxBackend):
                     "role": "user",
                     "content": [
                         {"type": "text", "text": user_prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": data_url,
-                                "detail": "high",
-                            },
-                        },
+                        *(
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": data_url, "detail": "high"},
+                            }
+                            for data_url in data_urls
+                        ),
                     ],
                 },
             ],
@@ -150,6 +188,15 @@ class MiniMaxVisionBackend(MiniMaxBackend):
         )
         self.last_response_identity = response_identity(response)
         return _extract_minimax_tool_payload(response)
+
+
+def _image_data_urls(image_paths: Sequence[Path]) -> list[str]:
+    if not image_paths:
+        raise ValueError("vision_backend_images_required")
+    return [
+        f"{_image_mime_type(path)};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
+        for path in image_paths
+    ]
 
 
 def _image_mime_type(path: Path) -> str:

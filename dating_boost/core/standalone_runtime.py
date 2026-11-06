@@ -578,15 +578,22 @@ def _observation_runtime(observation: Any) -> str | None:
 
 
 def _standalone_policy_retryable(review: Any) -> bool:
-    if review.allowed_for_managed_send:
+    # Review semantics own rewrite eligibility; a code list drifts as new
+    # quality findings are added and can ignore a simultaneous hard blocker.
+    if (
+        review.allowed_for_managed_send
+        or review.status != "needs_revision"
+        or review.allowed_for_stage is not True
+        or review.requires_user_confirmation
+    ):
         return False
-    retryable = {
-        "draft_no_answerable_relationship_handle",
-        "planner_misaligned_draft",
-        "draft_strategy_delta_missing",
-        "draft_revision_required",
-    }
-    return any(getattr(finding, "code", "") in retryable for finding in getattr(review, "findings", []))
+    return not any(
+        finding.severity == "high"
+        or finding.blocks_display
+        or finding.blocks_stage
+        or finding.requires_user_confirmation
+        for finding in review.findings
+    )
 
 
 def _policy_revision_prompts(review: Any) -> list[str]:

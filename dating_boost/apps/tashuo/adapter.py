@@ -161,6 +161,7 @@ class TaShuoAdapter(LegacyHarnessAdapter):
         target_binding: dict[str, Any],
         inbound_revision: str,
         output_dir: Path | None = None,
+        click_deadline_at: str | None = None,
     ) -> dict[str, Any]:
         return self._with_runtime_guard(
             lambda: tashuo_managed_live_action.click_tashuo_managed_send_only(
@@ -169,6 +170,7 @@ class TaShuoAdapter(LegacyHarnessAdapter):
                 target_binding=target_binding,
                 inbound_revision=inbound_revision,
                 output_dir=output_dir,
+                click_deadline_at=click_deadline_at,
             )
         )
 

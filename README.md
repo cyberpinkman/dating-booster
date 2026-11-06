@@ -8,7 +8,7 @@
 
 Dating Booster is a local-first, open-source chat workflow that gives Codex, Claude Code, OpenClaw, and Hermes persistent conversation memory, drafting assistance, and time-limited managed chat. You decide how long it runs, how many messages it can send, and which decisions need your attention. The agent connects that context to the next action.
 
-We're integrating **TypeSafe / Jev** to answer bounded questions such as "Does this need a reply?" and "Should the user take over?" Vision, generation, and local execution each have a specific job, reducing repeated analysis and waiting.
+TaShuo ManagedRun can use **TypeSafe / Jev** to answer two questions before drafting. Does this need a reply? Should the user take over? Jev is opt-in.
 
 **Python 3.11+ · macOS GUI · Encrypted local storage · MIT licensed**
 
@@ -17,7 +17,7 @@ We're integrating **TypeSafe / Jev** to answer bounded questions such as "Does t
 ## What it does
 
 - **Keeps conversations connected.** Local memory stores your profile, the other person's preferences, past topics, and commitments to give the next reply context.
-- **Preserves the rhythm of a reply.** Use drafting assistance, or try the development build's support for 2–3 short messages: plan the group once, then execute it in sequence without handing each message back to the host agent.
+- **Preserves the rhythm of a reply.** The experimental TaShuo runner can plan 2–3 short messages together and verify each one individually.
 - **Organizes multiple conversations.** Within your authorized time window and message budget, it prioritizes ordinary chat and reports progress.
 - **Leaves important decisions with you.** Pause, resume, or stop at any time. Specific meeting arrangements, contact exchanges, and other decisions that need your judgment come back to you.
 
@@ -48,11 +48,11 @@ Jev evaluates text; the vision model interprets images. Conversations that clear
 
 ### Draft once, send as a sequence
 
-The development build plans a group of 2–3 short messages as one reply. It sends and verifies them individually within the same execution loop, without repeating Jev calls, drafting, list scans, or waiting for the host agent's next turn between messages.
+ManagedRun can plan a group of 2–3 short messages as one reply. It sends and verifies them individually within the same execution loop, without repeating Jev calls, drafting, list scans, or waiting for the host agent's next turn between messages.
 
 macOS Accessibility (AX) checks the composer's contents and whether it clears after sending. Vision verifies conversation text and new message bubbles. A short-lived candidate queue also avoids repeated message-list scans. Each message counts separately against the budget. If a new message arrives, the unsent tail is canceled so the next cycle can reassess the conversation.
 
-> **Development integration:** Jev and the message-sequence improvements are in local development and have not yet been merged into `main`. [Implementation notes and Jev configuration →](docs/managed-run-performance.md)
+> Offline tests cover message sequences. Real-device verification of consecutive sends is pending. [Implementation notes and Jev configuration →](docs/managed-run-performance.md)
 
 ## Supported apps and hosts
 

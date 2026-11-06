@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dating_boost.harness.window_capture import capture_window_image
+
 from .runtime_common import (
     annotations, copy, hashlib, json,
     Path, re, Any, uuid4,
@@ -609,24 +611,12 @@ def _refresh_tashuo_mac_ios_window(session: Any) -> tuple[dict[str, Any], Any | 
 
 def _capture_tashuo_visual_screen(session: Any, window: Any, *, output: Path | None = None) -> dict[str, Any]:
     output = (output or platform._default_screenshot_path()).resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    window_id = getattr(window, "window_id", None)
-    if window_id is not None:
-        command = ["screencapture", "-x", "-l", str(window_id), str(output)]
-    else:
-        command = [
-            "screencapture",
-            "-x",
-            "-R",
-            f"{window.x},{window.y},{window.width},{window.height}",
-            str(output),
-        ]
-    result = session.runner.run(command)
-    if result.returncode != 0:
+    capture = capture_window_image(
+        session.runner, window, output, require_process_binding=_is_mac_ios_app_session(session),
+    )
+    if capture["status"] != "ok":
         return {
-            "status": "blocked",
-            "reason": "screenshot_failed",
-            "stderr": platform._short(result.stderr),
+            **capture,
             "state": "unknown",
             "text_state": "not_run",
             "visual_state": "unknown",

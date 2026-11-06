@@ -297,5 +297,37 @@ class ContentPolicyTests(unittest.TestCase):
         self.assertTrue(decision.allowed)
         self.assertEqual(decision.severity, "low")
 
+    def test_final_message_sequence_checks_individual_and_combined_handoff_content(self):
+        cases = (
+            (["明晚八点", "我们见面吧"], True),
+            (["我的微信", "发给你吧"], True),
+            (["三里屯", "一起喝一杯吧"], True),
+            (["周六你一般干嘛", "你平时用微信多吗"], False),
+        )
+        for messages, requires_handoff in cases:
+            with self.subTest(messages=messages):
+                decision = evaluate_draft_content(
+                    _draft_response(), {"items": []}, final_texts=iter(messages),
+                )
+                self.assertEqual(decision.requires_user_confirmation, requires_handoff)
+
+    def test_hard_facts_cover_actual_sequence_when_reply_variants_are_safe(self):
+        context = {"items": [{
+            "label": "user_hard_facts",
+            "content": {"age": 30, "city": "Shanghai", "education": "Chinese university graduate"},
+        }]}
+        cases = (
+            (["I'm", "25."], "age"),
+            (["I live in", "London."], "location"),
+            (["I studied", "overseas too."], "overseas study"),
+            (["I live in London.", "Shanghai sounds interesting."], "location"),
+        )
+        for messages, reason in cases:
+            with self.subTest(messages=messages):
+                decision = evaluate_draft_content(_draft_response(), context, final_texts=iter(messages))
+                self.assertFalse(decision.allowed)
+                self.assertEqual(decision.severity, "high")
+                self.assertIn(reason, decision.reason)
+
 if __name__ == "__main__":
     unittest.main()

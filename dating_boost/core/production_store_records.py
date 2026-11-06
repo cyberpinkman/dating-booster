@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from dating_boost.core.encryption import EncryptionError, payload_is_encrypted
 from dating_boost.core.production_store_common import (
     AUTOMATION_LOCK_SCHEMA_VERSION, BACKUP_RECOVERY_KEY_SCHEMA_VERSION, BLOCKED_DRAFT_TEXT_KEYS, CONFIRMATION_SCHEMA_VERSION,
     DATA_STORE_SCHEMA_VERSION, DIAGNOSTIC_BUNDLE_SCHEMA_VERSION, ENCRYPTED_PAYLOAD_SCHEMA_VERSION, KEYCHAIN_BINDING_SCHEMA_VERSION,
@@ -83,7 +84,7 @@ class ProductionStoreRecordsMixin:
                     ),
                 )
 
-    def get_document(self, relative_path: str) -> dict[str, Any] | None:
+    def get_document(self, relative_path: str, *, require_encrypted: bool = False) -> dict[str, Any] | None:
         self.ensure_schema()
         with self._connect() as conn:
             row = conn.execute(
@@ -92,6 +93,8 @@ class ProductionStoreRecordsMixin:
             ).fetchone()
         if row is None:
             return None
+        if require_encrypted and not payload_is_encrypted(row["payload_json"]):
+            raise EncryptionError("document_encryption_required")
         payload = self._decode_document(row["path"], row["payload_json"])
         return payload if isinstance(payload, dict) else {"payload": payload}
 

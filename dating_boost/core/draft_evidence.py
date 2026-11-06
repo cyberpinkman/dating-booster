@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.context_pack import build_context_pack
+from dating_boost.core.memory.models import IdentityTrustStatus
 from dating_boost.core.memory.repositories import MemoryRepository, _validate_match_id
 from dating_boost.core.models import ReplyMode, UserProfile
 from dating_boost.core.planner import PlannerRepository, build_planner_recommendation, planner_context_items
@@ -381,6 +382,15 @@ def build_draft_evidence(
             draft_kind=draft_kind,
             reason="match_memory_required",
             missing_blocks=["match_memory"],
+        )
+
+    if match_projection.identity_status == IdentityTrustStatus.APP_SCOPE_REVIEW_REQUIRED:
+        return _blocked_pack(
+            match_id=match_id,
+            reply_mode=reply_mode_value,
+            draft_kind=draft_kind,
+            reason="match_app_scope_review_required",
+            missing_blocks=["verified_match_app_scope"],
         )
 
     user_projection = UserMemoryRepository(root).load_projection_or_none()

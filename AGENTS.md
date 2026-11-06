@@ -315,10 +315,35 @@ data-dir 为同一 run 重新启动 `run --wait`，不能新建 run。Stop 返�
 `relationship_progress_report`。`run/tick` 是公开 CLI 子命令，“内部”只是产品交互
 分层，不是访问控制边界。
 
+未知发送结果会阻断 start/resume。异常恢复使用
+`dating-boost manage reconcile --data-dir <dir> --run-id <run_id> --json`，多条未知尝试
+时加 `--decision-key`。该入口只核对回执与证据，不发送、不恢复旧尾条，不接受裸
+success 或 expected text。成功核销保留原 unknown 审计与预算，确认计数只加一次；
+旧 run 仍 stopped/paused，paused run 明确 resume 后仍须由 host 重启同一 `run --wait`。
+新发送持久化加密的原始 pre/receipt/post 摘要；legacy 导入必须记录 host 对原工具
+捕获关联的审核 provenance，并重新验证，不能倒称原发送时已有 manifest。
+
 ManagedRun live action 只能通过四段 adapter seam：composer observe、exact stage、
-Return-only click、fresh post-send observe。它不调用一体化 `send_message`。任何
-`unknown_after_click` 都暂停整个 run，禁止自动重发。真实 GUI Canary 尚未在代码
-实现过程中自动执行；只有用户明确授权并完成本节所有前置检查后才能做小预算实发。
+Return-only click、fresh post-send observe。它不调用一体化 `send_message`。默认 AX
+只负责输入框空白、精确读写和清空确认；视觉核对目标、正文与发送后 exact 新增
+气泡，不要求 AX 读取聊天正文。复用初始会话截图，正文像素未变时走本地快路，
+需要视觉判断时在同一进程一次请求对比前后两图，不要恢复 Codex 逐条读图循环。
+Jev 只做文字类型语义分流，不读图、不生成回复。
+
+表情补充验证仅限普通正文完全一致、差异至多三个 U+1F600–U+1F64F
+表情，且 AX 精确输入与双图新增 outbound 证据均成立时，才允许额外一次不含
+expected 字符串的前输入框/后气泡比较。两处完整可读且 `identical/high` 才组成
+有效证据，不等同于 Unicode 相等；每对 frame 的否定/不确定结果也持久化，不反复择优。
+
+一次规划可保留 2–3 条短消息，逐条验证、记录 checkpoint 并使用发送预算。
+新来信与已确认本条同时出现时保留本条结果、取消尾部；任何 `unknown_after_click`
+都暂停整个 run，禁止自动重发。只有明确证明未按 Return 的阻断才能记为
+`failed_before_click` 并释放本次预留预算，普通点击异常仍按结果未知处理。
+早期实机尝试为 0 次点击、0 条发送；后续一次 Return 最初因表情识别差异记为
+unknown，未重发，现已通过审核原截图与既有比较结果的 legacy 证据核销。重复
+reconcile 未重复计数，原 unknown 审计、stopped 状态和取消尾条保留；这不构成
+自动任意文件恢复。连续发送仍待实机验收；后续小预算实发仍须用户明确授权并完成
+本节前置检查。
 
 高级开发环境可通过 `DATING_BOOST_MANAGED_RUN_TASHUO_CONFIG` 覆盖默认模型配置；
 fixture 只在同时设置 `DATING_BOOST_MANAGED_RUN_FIXTURE_DIR` 和

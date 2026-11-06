@@ -1,42 +1,29 @@
 from __future__ import annotations
 
-import hashlib
+import math
 from pathlib import Path
 from typing import Any
 
 from dating_boost.apps.tashuo.native import _tashuo_visual_anchor_hash_for_path
 from dating_boost.apps.tashuo.standalone_common import (
-    SYNTHETIC_MESSAGE_LIST_VISIBLE_NAME_PREFIX,
     _normalized_visible_name,
     _stable_text_hash,
     _visual_anchor_region_from_source,
 )
 
 __all__ = [
-    "_align_visual_anchor_region_to_tap_y",
-    "_all_messages_open_tap_x",
-    "_all_messages_start_y",
     "_attach_tashuo_message_list_perceptual_anchors",
     "_candidate_type_from_visual_row",
-    "_correct_tashuo_message_list_tap_ratios",
     "_dedupe_tashuo_message_list_rows",
-    "_fallback_first_chat_row_y",
-    "_fallback_message_list_avatar_region",
-    "_fallback_message_list_row_ys",
-    "_first_all_messages_row_index",
-    "_infer_first_visible_chat_row_grid_start",
     "_looks_like_tashuo_action_artifact",
     "_looks_like_tashuo_non_chat_gate",
     "_message_list_entry_from_visual_row",
     "_message_list_evidence_from_target",
     "_open_conversation_target_options",
-    "_precheck_has_tashuo_message_list_anchor",
     "_redacted_skipped_visual_row",
     "_redacted_step_result",
     "_screen_path_from_observation",
-    "_tap_y",
     "_tashuo_message_list_duplicate_key",
-    "_tashuo_message_list_grid_fallback_rows",
     "_tashuo_message_list_visual_row_skip_reason",
 ]
 
@@ -80,11 +67,15 @@ def _message_list_entry_from_visual_row(row: dict[str, Any], *, position: int) -
     tap_ratio = row.get("tap_ratio") if isinstance(row.get("tap_ratio"), dict) else None
     region = _visual_anchor_region_from_source(row)
     selection_method = str(row.get("selection_method") or "standalone_vision_message_list_row")
+    timestamp_cue = row.get("timestamp_cue")
+    unread_cue = str(row.get("unread_cue") or "unknown").strip().lower()
     entry = {
         "candidate_key": str(row.get("candidate_key") or f"tashuo_visual_{anchor}").strip(),
         "visible_name": visible_name or None,
         "latest_preview": latest_preview,
         "latest_preview_hash": _stable_text_hash(latest_preview or anchor),
+        "timestamp_cue": timestamp_cue.strip() if isinstance(timestamp_cue, str) else "",
+        "unread_cue": unread_cue if unread_cue in {"present", "absent", "reply_badge", "unknown"} else "unknown",
         "candidate_type": _candidate_type_from_visual_row(row),
         "position": position,
         "identity_confidence": row.get("confidence") if row.get("confidence") in {"low", "medium", "high"} else "medium",
@@ -116,18 +107,39 @@ def _tashuo_message_list_visual_row_skip_reason(row: dict[str, Any]) -> str | No
     tap_ratio = row.get("tap_ratio") if isinstance(row.get("tap_ratio"), dict) else None
     if not tap_ratio:
         return "missing_tap_ratio"
+    if any(type(tap_ratio.get(key)) not in (int, float) or not math.isfinite(tap_ratio[key])
+           or not 0 <= tap_ratio[key] <= 1 for key in ("x", "y")):
+        return "invalid_tap_ratio"
     anchor = str(row.get("visual_anchor_hash") or row.get("candidate_key") or "").strip()
     region = _visual_anchor_region_from_source(row)
-    if not anchor and region is None:
+    if region is None or str(row.get("visual_anchor_region_source") or "").startswith("derived_from_tap_ratio"):
+        return "missing_visual_anchor_region"
+    if not anchor:
         return "missing_visual_anchor"
     return None
 
 
 def _dedupe_tashuo_message_list_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    # Two distinct visual rows can land on the same OCR box or hash. Neither
+    # may own that cache key, even if its competing row occurs later.
+    owners: dict[str, tuple[str, str] | None] = {}
+    ambiguous: set[str] = set()
+    for row in rows:
+        candidate_key = str(row.get("candidate_key") or "").strip()
+        if not candidate_key:
+            continue
+        identity = _tashuo_message_list_duplicate_key(row)
+        if candidate_key in owners and (identity is None or owners[candidate_key] != identity):
+            ambiguous.add(candidate_key)
+        owners[candidate_key] = identity
+
     seen: set[tuple[str, str]] = set()
     kept: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     for position, row in enumerate(rows, start=1):
+        if str(row.get("candidate_key") or "").strip() in ambiguous:
+            skipped.append(_redacted_skipped_visual_row(row, reason="ambiguous_candidate_key", position=position))
+            continue
         key = _tashuo_message_list_duplicate_key(row)
         if key is not None and key in seen:
             skipped.append(_redacted_skipped_visual_row(row, reason="duplicate_visual_row", position=position))
@@ -266,157 +278,6 @@ def _looks_like_tashuo_non_chat_gate(combined: str, *, visible_name: str, latest
     return False
 
 
-def _correct_tashuo_message_list_tap_ratios(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if len(rows) < 2:
-        return rows
-    first_index = _first_all_messages_row_index(rows)
-    if first_index is None:
-        inferred = _infer_first_visible_chat_row_grid_start(rows)
-        if inferred is None:
-            return rows
-        first_index, start_y = inferred
-    else:
-        start_y = _all_messages_start_y(rows[first_index])
-        if start_y is None:
-            return rows
-    corrected: list[dict[str, Any]] = []
-    row_step = 0.122
-    grid_offset = 0
-    for index, row in enumerate(rows):
-        item = dict(row)
-        tap_ratio = item.get("tap_ratio") if isinstance(item.get("tap_ratio"), dict) else {}
-        if index >= first_index:
-            y = round(min(0.965, start_y + grid_offset * row_step), 4)
-            item["tap_ratio"] = {**tap_ratio, "x": _all_messages_open_tap_x(item), "y": y}
-            item["tap_ratio_source"] = "corrected_all_messages_row_action"
-            item = _align_visual_anchor_region_to_tap_y(item, tap_y=y)
-            if not _looks_like_tashuo_action_artifact(item):
-                grid_offset += 1
-        corrected.append(item)
-    return corrected
-
-
-def _infer_first_visible_chat_row_grid_start(rows: list[dict[str, Any]]) -> tuple[int, float] | None:
-    for index, row in enumerate(rows):
-        if _candidate_type_from_visual_row(row) == "non_chat_gate":
-            continue
-        if not _normalized_visible_name(row.get("visible_name")):
-            continue
-        y = _tap_y(row)
-        region = _visual_anchor_region_from_source(row)
-        if y is None:
-            continue
-        region_y1 = float(region["y1"]) if isinstance(region, dict) else y - 0.06
-        if 0.52 <= y <= 0.66 and region_y1 <= 0.62:
-            return index, 0.577
-        return None
-    return None
-
-
-def _all_messages_open_tap_x(row: dict[str, Any]) -> float:
-    visible_name = str(row.get("visible_name") or "").strip()
-    latest_preview = str(row.get("latest_preview") or "").strip()
-    anchor = str(row.get("visual_anchor_hash") or row.get("candidate_key") or "").strip().lower()
-    combined = f"{visible_name} {latest_preview} {anchor}".lower()
-    if _looks_like_tashuo_non_chat_gate(combined, visible_name=visible_name, latest_preview=latest_preview):
-        return 0.5
-    return 0.87
-
-
-def _align_visual_anchor_region_to_tap_y(row: dict[str, Any], *, tap_y: float) -> dict[str, Any]:
-    region = _visual_anchor_region_from_source(row)
-    if region is None:
-        return row
-    if float(region["y1"]) <= tap_y <= float(region["y2"]):
-        return row
-    height = max(0.03, min(0.28, float(region["y2"]) - float(region["y1"])))
-    y1 = max(0.0, min(1.0 - height, tap_y - height / 2.0))
-    aligned = {
-        **region,
-        "y1": round(y1, 4),
-        "y2": round(y1 + height, 4),
-    }
-    return {**row, "visual_anchor_region": aligned}
-
-
-def _tashuo_message_list_grid_fallback_rows(
-    *,
-    precheck: dict[str, Any],
-    rows: list[dict[str, Any]],
-    screen_path: Path | None,
-) -> list[dict[str, Any]]:
-    if screen_path is None or not _precheck_has_tashuo_message_list_anchor(precheck):
-        return []
-    start_y = _fallback_first_chat_row_y(rows)
-    if start_y is None:
-        return []
-    fallback_rows = []
-    for offset, y in enumerate(_fallback_message_list_row_ys(start_y), start=1):
-        row = {
-            "tap_ratio": {"x": 0.87, "y": y},
-            "tap_ratio_source": "synthetic_all_messages_row_action",
-            "visible_name": f"{SYNTHETIC_MESSAGE_LIST_VISIBLE_NAME_PREFIX} {offset}",
-            "latest_preview": "",
-            "visual_anchor_hash": f"synthetic_grid_row_{offset}_{int(y * 10000)}",
-            "visual_anchor_region": _fallback_message_list_avatar_region(y),
-            "visual_anchor_region_source": "synthetic_message_list_grid",
-            "confidence": "low",
-            "selection_method": "standalone_visual_message_list_grid_fallback",
-        }
-        fallback_rows.append(row)
-    enriched = _attach_tashuo_message_list_perceptual_anchors(fallback_rows, screen_path=screen_path)
-    normalized = []
-    for row in enriched:
-        item = dict(row)
-        anchor = str(item.get("visual_anchor_hash") or item.get("visual_anchor_label") or "").strip()
-        if not anchor:
-            anchor = hashlib.sha256(
-                f"{item.get('visible_name')}|{item.get('tap_ratio')}|{item.get('visual_anchor_region')}".encode("utf-8")
-            ).hexdigest()[:16]
-        item["candidate_key"] = f"tashuo_visual_{anchor}"
-        normalized.append(item)
-    return normalized
-
-
-def _precheck_has_tashuo_message_list_anchor(precheck: dict[str, Any]) -> bool:
-    if precheck.get("screen_state") != "tashuo_chat_list":
-        return False
-    if precheck.get("message_list_top_anchor_present") is True:
-        return True
-    screen = precheck.get("screen") if isinstance(precheck.get("screen"), dict) else {}
-    if screen.get("message_list_top_anchor_present") is True:
-        return True
-    layout = precheck.get("layout_hints") if isinstance(precheck.get("layout_hints"), dict) else {}
-    return bool(layout.get("message_list_top_anchor_present") or layout.get("chat_list_visual_present"))
-
-
-def _fallback_first_chat_row_y(rows: list[dict[str, Any]]) -> float | None:
-    first_index = _first_all_messages_row_index(rows)
-    if first_index is not None:
-        start_y = _all_messages_start_y(rows[first_index])
-        if start_y is not None:
-            return round(start_y + 0.122, 4)
-    if rows and any(_candidate_type_from_visual_row(row) == "non_chat_gate" for row in rows):
-        return 0.577
-    return None
-
-
-def _fallback_message_list_row_ys(start_y: float) -> list[float]:
-    values = []
-    for index in range(3):
-        y = round(start_y + index * 0.122, 4)
-        if 0.52 <= y <= 0.86:
-            values.append(y)
-    return values
-
-
-def _fallback_message_list_avatar_region(y: float) -> dict[str, float]:
-    height = 0.101
-    y1 = max(0.0, y - height / 2.0)
-    y2 = min(1.0, y + height / 2.0)
-    return {"x1": 0.041, "y1": round(y1, 4), "x2": 0.37, "y2": round(y2, 4)}
-
-
 def _attach_tashuo_message_list_perceptual_anchors(
     rows: list[dict[str, Any]],
     *,
@@ -442,46 +303,10 @@ def _attach_tashuo_message_list_perceptual_anchors(
 
 
 def _screen_path_from_observation(observation: dict[str, Any]) -> Path | None:
-    screen = observation.get("screen") if isinstance(observation.get("screen"), dict) else {}
+    screen = observation.get("screen")
+    if not isinstance(screen, dict):
+        return None
     path = screen.get("path") if isinstance(screen.get("path"), str) else None
     if not path:
         return None
     return Path(path)
-
-
-def _first_all_messages_row_index(rows: list[dict[str, Any]]) -> int | None:
-    for index, row in enumerate(rows):
-        visible_name = str(row.get("visible_name") or "")
-        latest_preview = str(row.get("latest_preview") or "")
-        anchor = str(row.get("visual_anchor_hash") or row.get("candidate_key") or "").lower()
-        if any(token in visible_name for token in ("有个优秀的女生想认识你", "查看谁喜欢了我", "喜欢了你")):
-            return index
-        if any(token in anchor for token in ("new_promo", "new_badge", "liked_you", "likes_you", "liked_", "likes_")):
-            return index
-        if latest_preview.startswith("你们已经可以进行会话") and _tap_y(row) and _tap_y(row) > 0.72:
-            return index
-    return None
-
-
-def _all_messages_start_y(first_row: dict[str, Any]) -> float | None:
-    visible_name = str(first_row.get("visible_name") or "")
-    anchor = str(first_row.get("visual_anchor_hash") or first_row.get("candidate_key") or "").lower()
-    if (
-        "查看谁喜欢了我" in visible_name
-        or "喜欢了你" in visible_name
-        or any(token in anchor for token in ("liked_you", "likes_you", "liked_", "likes_"))
-    ):
-        return 0.455
-    if "有个优秀的女生想认识你" in visible_name or any(token in anchor for token in ("new_promo", "new_badge")):
-        return 0.525
-    if str(first_row.get("latest_preview") or "").startswith("你们已经可以进行会话"):
-        return 0.635
-    return None
-
-
-def _tap_y(row: dict[str, Any]) -> float | None:
-    tap_ratio = row.get("tap_ratio") if isinstance(row.get("tap_ratio"), dict) else {}
-    try:
-        return float(tap_ratio.get("y"))
-    except (TypeError, ValueError):
-        return None

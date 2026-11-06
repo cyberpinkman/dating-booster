@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import errno
 import os
+import re
 import threading
 import time
 import uuid
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,16 +29,58 @@ except ImportError:  # pragma: no cover - Windows uses the process-local lease.
 MANAGED_RUN_SCHEMA_VERSION = 1
 MANAGED_RUN_INDEX_PATH = Path("managed_run") / "index.json"
 MANAGED_RUN_EVENTS_PATH = Path("audit") / "managed_run_events.jsonl"
+_START_LEASE_KEY = "__managed_run_start__"
 
 ACTIVE_RUN_STATUSES = {"active", "paused"}
 TERMINAL_SEND_STATUSES = {"confirmed", "failed_before_click", "unknown_after_click"}
 MANAGED_RUN_RECENT_STEP_LIMIT = 100
+MANAGED_RUN_DISCOVERY_BATCH_LIMIT = 100
+MANAGED_BURST_MAX_MESSAGES = 3
+MANAGED_BURST_MAX_GAP_SECONDS = 20.0
 MANAGED_NUDGE_FALLBACK_RETRY_SECONDS = 30 * 60
 
 _LEASE_REGISTRY_GUARD = threading.Lock()
 _LEASE_LOCKS: dict[Path, threading.Lock] = {}
 _STATE_LEASE_LOCKS: dict[Path, threading.RLock] = {}
 _STATE_LEASE_LOCAL = threading.local()
+
+
+class ManagedActionError(RuntimeError):
+    """Action-port failure carrying a bounded machine code, never raw error text."""
+
+    def __init__(self, reason_code: Any, *, fallback_reason: str = "managed_action_failed"):
+        self.reason_code = (
+            reason_code if self.valid_reason_code(reason_code)
+            else fallback_reason if self.valid_reason_code(fallback_reason)
+            else "managed_action_failed"
+        )
+        super().__init__(self.reason_code)
+
+    @staticmethod
+    def valid_reason_code(value: Any) -> bool:
+        return (
+            isinstance(value, str)
+            and 1 <= len(value) <= 96
+            and re.fullmatch(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*", value) is not None
+        )
+
+
+class ManagedClickBlocked(ManagedActionError):
+    """Trusted action-port proof that Return was never invoked.
+
+    Errors after invoking the irreversible primitive must never use this type.
+    """
+
+
+def _action_reason_details(value: Any) -> dict[str, str]:
+    return {"action_reason": value} if ManagedActionError.valid_reason_code(value) else {}
+
+
+def _action_exception_details(exc: Exception) -> dict[str, str]:
+    details = {"error_type": type(exc).__name__}
+    if isinstance(exc, ManagedActionError):
+        details.update(_action_reason_details(exc.reason_code))
+    return details
 
 
 def _now_utc() -> datetime:
@@ -62,6 +107,21 @@ def _payload_hash(text: str) -> str:
 def _stable_hash(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _redacted_triage_metrics(value: Any) -> dict[str, Any]:
+    """Copy only bounded route labels and numeric telemetry, never model text."""
+    if not isinstance(value, dict):
+        return {}
+    metrics: dict[str, Any] = {}
+    route = value.get("route")
+    if isinstance(route, str) and route in {"draft", "wait", "handoff", "fallback"}:
+        metrics["route"] = route
+    for field_name in ("duration_ms", "input_tokens", "output_tokens", "request_count"):
+        number = value.get(field_name)
+        if (type(number) is int or type(number) is float) and math.isfinite(number) and number >= 0:
+            metrics[field_name] = number
+    return metrics
 
 
 @dataclass(frozen=True)
@@ -258,6 +318,9 @@ class DraftDecision:
     payload_hash: str = ""
     action: str = "send_message"
     reason_codes: tuple[str, ...] = ()
+    message_sequence: tuple[str, ...] = ()
+    burst_id: str = ""
+    message_index: int = 0
 
     @classmethod
     def send(
@@ -268,7 +331,13 @@ class DraftDecision:
         inbound_revision: str,
         text: str,
         reason_codes: Sequence[str] = (),
+        message_sequence: Sequence[str] | None = None,
     ) -> DraftDecision:
+        if message_sequence is not None:
+            reason = _message_sequence_block_reason(message_sequence, text)
+            if reason is not None:
+                raise ValueError(reason)
+        messages = tuple(message_sequence) if message_sequence is not None else ()
         return cls(
             decision_id=decision_id,
             outcome="send",
@@ -277,6 +346,7 @@ class DraftDecision:
             text=text,
             payload_hash=_payload_hash(text),
             reason_codes=tuple(reason_codes),
+            message_sequence=messages,
         )
 
 
@@ -304,6 +374,8 @@ class PostSendObservation:
     captured_at: str
     input_cleared: bool
     outbound_text: str | None
+    continuation_verified: bool = False
+    recovery_evidence_digest: str | None = None
 
 
 class ManagedObservationPort(Protocol):
@@ -370,7 +442,12 @@ class ManagedRunRecord:
     confirmed_send_count: int = 0
     thread_states: dict[str, dict[str, Any]] = field(default_factory=dict)
     send_attempts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    send_bursts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    send_reconciliations: dict[str, dict[str, Any]] = field(default_factory=dict)
     last_result: dict[str, Any] | None = None
+    # A pause/resume round trip must invalidate in-process discovery even if
+    # the wall clock returns the same timestamp for both commands.
+    lifecycle_revision: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -388,7 +465,10 @@ class ManagedRunRecord:
             "confirmed_send_count": self.confirmed_send_count,
             "thread_states": {key: dict(value) for key, value in self.thread_states.items()},
             "send_attempts": {key: dict(value) for key, value in self.send_attempts.items()},
+            "send_bursts": {key: dict(value) for key, value in self.send_bursts.items()},
+            "send_reconciliations": {key: dict(value) for key, value in self.send_reconciliations.items()},
             "last_result": dict(self.last_result) if self.last_result is not None else None,
+            "lifecycle_revision": self.lifecycle_revision,
         }
 
     @classmethod
@@ -409,7 +489,10 @@ class ManagedRunRecord:
             confirmed_send_count=int(payload.get("confirmed_send_count") or 0),
             thread_states={str(key): dict(value) for key, value in dict(payload.get("thread_states") or {}).items()},
             send_attempts={str(key): dict(value) for key, value in dict(payload.get("send_attempts") or {}).items()},
+            send_bursts={str(key): dict(value) for key, value in dict(payload.get("send_bursts") or {}).items()},
+            send_reconciliations={str(key): dict(value) for key, value in dict(payload.get("send_reconciliations") or {}).items()},
             last_result=dict(payload["last_result"]) if isinstance(payload.get("last_result"), dict) else None,
+            lifecycle_revision=int(payload.get("lifecycle_revision") or 0),
         )
 
 
@@ -600,7 +683,7 @@ class JsonManagedRunStore:
     @contextmanager
     def state_lease(self, run_id: str) -> Iterator[bool]:
         lock_path = self._state_lease_path(run_id)
-        held_paths = getattr(_STATE_LEASE_LOCAL, "held_paths", set())
+        held_paths: set[Path] = getattr(_STATE_LEASE_LOCAL, "held_paths", set())
         if lock_path in held_paths:
             yield True
             return
@@ -645,6 +728,14 @@ class JsonManagedRunStore:
         return self._storage.root / "managed_run" / "locks" / f"{digest}.state.lock"
 
 
+@dataclass
+class _DiscoveryBatch:
+    run_id: str
+    started_monotonic: float
+    candidates: tuple[ThreadCandidate, ...]
+    expected_state: str
+
+
 class ManagedRun:
     """One in-process full-managed loop with one durable source of truth."""
 
@@ -657,15 +748,23 @@ class ManagedRun:
         *,
         now: Callable[[], datetime] | None = None,
         sleeper: Callable[[float], None] | None = None,
+        scan_batch_max_age_seconds: float = 0.0,
+        monotonic: Callable[[], float] | None = None,
     ):
+        if not math.isfinite(scan_batch_max_age_seconds) or scan_batch_max_age_seconds < 0:
+            raise ValueError("scan_batch_max_age_seconds_must_be_finite_and_nonnegative")
         self.store = store
         self.observation = observation
         self.decision = decision
         self.action = action
         self._now = now or _now_utc
         self._sleep = sleeper or time.sleep
+        self._monotonic = monotonic or time.monotonic
+        self._scan_batch_max_age_seconds = scan_batch_max_age_seconds
+        self._discovery_batch: _DiscoveryBatch | None = None
 
     def start(self, config: ManagedRunConfig | Mapping[str, Any], *, run_id: str | None = None) -> dict[str, Any]:
+        self._discovery_batch = None
         if not isinstance(config, ManagedRunConfig):
             config = ManagedRunConfig.from_dict(config)
         reason = self._config_block_reason(config)
@@ -678,14 +777,21 @@ class ManagedRun:
         )
         if session_reason not in {None, "authorization_quiet_hours"}:
             return _result("blocked", reason=session_reason)
-        with self.store.execution_lease("__managed_run_start__") as acquired:
+        with self.store.execution_lease(_START_LEASE_KEY) as acquired:
             if not acquired:
                 return _result("blocked", reason="managed_run_busy")
             current_id = self.store.current_run_id()
             current = self.store.load(current_id) if current_id else None
             if current is not None:
-                self._reconcile_unfinished_click(current)
-                current = self.store.load(current.run_id) or current
+                with self._run_lease_while_start_locked(current.run_id) as run_acquired:
+                    if not run_acquired:
+                        return _result("blocked", reason="managed_run_busy", run_id=current.run_id)
+                    self._reconcile_unfinished_click(current)
+                    current = self.store.load(current.run_id) or current
+            if current is not None and _has_unresolved_send(current, self.store):
+                return _result(
+                    "blocked", reason="unknown_after_click_requires_reconciliation", run_id=current.run_id,
+                )
             if current is not None and current.status in ACTIVE_RUN_STATUSES:
                 return _result("blocked", reason="managed_run_already_active", run_id=current.run_id)
             normalized_run_id = run_id or f"managed_{uuid.uuid4().hex}"
@@ -697,7 +803,6 @@ class ManagedRun:
                 started_at=now,
                 updated_at=now,
                 scan_cursor=dict(config.scan_cursor),
-                thread_states=_inherited_unknown_thread_states(current),
             )
             self.store.create(record)
             self._event(record, "run_started")
@@ -705,7 +810,7 @@ class ManagedRun:
             "active",
             run_id=record.run_id,
             run=record.to_dict(),
-            relationship_progress_snapshot=_progress_snapshot(record),
+            relationship_progress_snapshot=_progress_snapshot(record, self.store),
         )
 
     def status(self, run_id: str | None = None) -> dict[str, Any]:
@@ -716,13 +821,18 @@ class ManagedRun:
             record.status,
             run_id=record.run_id,
             run=record.to_dict(),
-            relationship_progress_snapshot=_progress_snapshot(record),
+            relationship_progress_snapshot=_progress_snapshot(record, self.store),
         )
 
     def current_run_id(self) -> str | None:
         return self.store.current_run_id()
 
+    def _run_lease_while_start_locked(self, run_id: str) -> ContextManager[bool]:
+        # A caller-supplied ID can name the lease the caller already owns.
+        return nullcontext(True) if run_id == _START_LEASE_KEY else self.store.execution_lease(run_id)
+
     def pause(self, run_id: str | None = None, *, reason: str = "manual_pause") -> dict[str, Any]:
+        self._discovery_batch = None
         normalized_run_id = run_id or self.store.current_run_id()
         if normalized_run_id is None:
             return _result("not_found", reason="managed_run_not_started")
@@ -733,6 +843,7 @@ class ManagedRun:
             if record.status == "stopped":
                 return _result("stopped", reason=record.stop_reason or "managed_run_stopped", run_id=record.run_id)
             record.status = "paused"
+            record.lifecycle_revision += 1
             record.pause_reason = reason
             record.updated_at = _iso(self._now())
             self.store.save(record)
@@ -742,19 +853,24 @@ class ManagedRun:
             reason=reason,
             run_id=record.run_id,
             run=record.to_dict(),
-            relationship_progress_snapshot=_progress_snapshot(record),
+            relationship_progress_snapshot=_progress_snapshot(record, self.store),
         )
 
     def resume(self, run_id: str | None = None) -> dict[str, Any]:
+        self._discovery_batch = None
         normalized_run_id = run_id or self.store.current_run_id()
         if normalized_run_id is None:
             return _result("not_found", reason="managed_run_not_started")
-        with self.store.execution_lease("__managed_run_start__") as acquired:
+        with self.store.execution_lease(_START_LEASE_KEY) as acquired:
             if not acquired:
                 return _result("blocked", reason="managed_run_busy", run_id=normalized_run_id)
             current_id = self.store.current_run_id()
             if current_id and current_id != normalized_run_id:
                 current = self.store.load(current_id)
+                if current is not None and _has_unresolved_send(current, self.store):
+                    return _result(
+                        "blocked", reason="unknown_after_click_requires_reconciliation", run_id=current.run_id,
+                    )
                 if current is not None and current.status in ACTIVE_RUN_STATUSES:
                     return _result("blocked", reason="managed_run_already_active", run_id=current.run_id)
             with self.store.state_lease(normalized_run_id):
@@ -763,7 +879,14 @@ class ManagedRun:
                     return _result("not_found", reason="managed_run_not_started")
                 if record.status == "stopped":
                     return _result("stopped", reason=record.stop_reason or "managed_run_stopped", run_id=record.run_id)
+                if _has_unresolved_send(record, self.store):
+                    if record.status != "paused" or record.pause_reason != "unknown_after_click":
+                        self.pause(record.run_id, reason="unknown_after_click")
+                    return _result(
+                        "blocked", reason="unknown_after_click_requires_reconciliation", run_id=record.run_id,
+                    )
                 record.status = "active"
+                record.lifecycle_revision += 1
                 record.pause_reason = None
                 record.updated_at = _iso(self._now())
                 self.store.save(record)
@@ -772,10 +895,104 @@ class ManagedRun:
             "active",
             run_id=record.run_id,
             run=record.to_dict(),
-            relationship_progress_snapshot=_progress_snapshot(record),
+            relationship_progress_snapshot=_progress_snapshot(record, self.store),
         )
 
+    def reconcile(self, run_id: str | None = None, *, decision_key: str | None = None) -> dict[str, Any]:
+        """Verify an unknown receipt without replaying any action or cancelled tail."""
+        self._discovery_batch = None
+        normalized_run_id = run_id or self.store.current_run_id()
+        if normalized_run_id is None:
+            return _result("not_found", reason="managed_run_not_started")
+        with self.store.execution_lease(_START_LEASE_KEY) as start_acquired:
+            if not start_acquired:
+                return _result("blocked", reason="managed_run_busy", run_id=normalized_run_id)
+            current_id = self.store.current_run_id()
+            if current_id and current_id != normalized_run_id:
+                current = self.store.load(current_id)
+                if current is not None and current.status == "active":
+                    return _result("blocked", reason="managed_run_already_active", run_id=current_id)
+            with self._run_lease_while_start_locked(normalized_run_id) as acquired:
+                if not acquired:
+                    return _result("blocked", reason="managed_run_busy", run_id=normalized_run_id)
+                return self._reconcile_with_lease(normalized_run_id, decision_key)
+
+    def _reconcile_with_lease(self, run_id: str, decision_key: str | None) -> dict[str, Any]:
+        with self.store.state_lease(run_id):
+            record = self.store.load(run_id)
+            if record is None:
+                return _result("not_found", reason="managed_run_not_started")
+            unknown_keys = [key for key, attempt in record.send_attempts.items() if attempt.get("status") == "unknown_after_click"]
+            if decision_key is None:
+                pending = [key for key in unknown_keys if not _valid_send_reconciliation(record, key)]
+                choices = pending or unknown_keys
+                if len(choices) != 1:
+                    return _result("blocked", reason="managed_reconciliation_attempt_required", run_id=run_id)
+                decision_key = choices[0]
+            if decision_key not in unknown_keys:
+                return _result("blocked", reason="managed_reconciliation_attempt_not_unknown", run_id=run_id)
+            if _valid_send_reconciliation(record, decision_key):
+                return _reconciliation_result(record, self.store, decision_key, already_reconciled=True)
+            if decision_key in record.send_reconciliations:
+                return _result("blocked", reason="managed_reconciliation_conflict", run_id=run_id)
+            if record.status not in {"paused", "stopped"}:
+                return _result("blocked", reason="managed_reconciliation_requires_inactive_run", run_id=run_id)
+            attempt = deepcopy(record.send_attempts[decision_key])
+            reason = _recovery_attempt_block_reason(attempt, decision_key)
+            if reason is not None:
+                return _result("blocked", reason=reason, run_id=run_id, decision_key=decision_key)
+            attempt_digest = _stable_hash(attempt)
+
+        try:
+            recover = getattr(self.action, "recover_send", None)
+            if not callable(recover):
+                return _result("blocked", reason="managed_recovery_unavailable", run_id=run_id)
+            # The recovery port owns trusted manifest verification. It receives
+            # only a detached stored attempt, never user-supplied success/text.
+            post = recover({**deepcopy(attempt), "run_id": run_id})
+        except Exception as exc:  # noqa: BLE001 - observation failure must leave the attempt intact.
+            return _result("blocked", reason="managed_recovery_failed", run_id=run_id, **_action_exception_details(exc))
+        reason = _recovery_post_block_reason(attempt, post)
+        if reason is not None:
+            return _result("blocked", reason=reason, run_id=run_id, decision_key=decision_key)
+
+        with self.store.state_lease(run_id):
+            latest = self.store.load(run_id)
+            if latest is None or _stable_hash(latest.send_attempts.get(decision_key, {})) != attempt_digest:
+                return _result("blocked", reason="managed_reconciliation_attempt_changed", run_id=run_id)
+            if _valid_send_reconciliation(latest, decision_key):
+                return _reconciliation_result(latest, self.store, decision_key, already_reconciled=True)
+            if decision_key in latest.send_reconciliations:
+                return _result("blocked", reason="managed_reconciliation_conflict", run_id=run_id)
+            evidence = {
+                "schema_version": 1, "outcome": "confirmed_sent", "run_id": run_id,
+                "decision_key": decision_key, "attempt_digest": attempt_digest,
+                "receipt_id": attempt["receipt_id"], "clicked_at": attempt["clicked_at"],
+                "payload_hash": attempt["payload_hash"], "target_id": attempt["target_id"],
+                "target_binding": attempt["target_binding"],
+                "post_observation_id": post.observation_id, "post_captured_at": post.captured_at,
+                "recovery_evidence_digest": post.recovery_evidence_digest,
+                "reconciled_at": _iso(self._now()),
+            }
+            evidence["reconciliation_id"] = _stable_hash(evidence)
+            latest.send_reconciliations[decision_key] = evidence
+            latest.confirmed_send_count += 1
+            latest.lifecycle_revision += 1
+            latest.updated_at = _iso(self._now())
+            # One atomic run document owns the commit. Original attempt, budget,
+            # lifecycle status and cancelled burst contents remain unchanged.
+            try:
+                self.store.save(latest)
+            except Exception:  # noqa: BLE001 - a failed acknowledgement may follow a committed write.
+                committed = self.store.load(run_id)
+                if committed is None or not _valid_send_reconciliation(committed, decision_key):
+                    return _result("blocked", reason="managed_reconciliation_save_failed", run_id=run_id)
+                latest = committed
+        self._event(latest, "send_reconciliation_committed", decision_key=decision_key, reconciliation_id=evidence["reconciliation_id"])
+        return _reconciliation_result(latest, self.store, decision_key, already_reconciled=False)
+
     def stop(self, run_id: str | None = None, *, reason: str = "manual_stop") -> dict[str, Any]:
+        self._discovery_batch = None
         normalized_run_id = run_id or self.store.current_run_id()
         if normalized_run_id is None:
             return _result("stopped", reason=reason)
@@ -784,6 +1001,7 @@ class ManagedRun:
             if record is None:
                 return _result("stopped", reason=reason)
             record.status = "stopped"
+            record.lifecycle_revision += 1
             record.stop_reason = reason
             record.pause_reason = None
             record.updated_at = _iso(self._now())
@@ -794,8 +1012,8 @@ class ManagedRun:
             reason=reason,
             run_id=record.run_id,
             run=record.to_dict(),
-            relationship_progress_snapshot=_progress_snapshot(record),
-            relationship_progress_report=_progress_report(record),
+            relationship_progress_snapshot=_progress_snapshot(record, self.store),
+            relationship_progress_report=_progress_report(record, self.store),
         )
 
     def run(
@@ -817,6 +1035,8 @@ class ManagedRun:
         for _ in range(max(1, int(max_steps))):
             result = self.tick(normalized_run_id)
             results.append(result)
+            if result.get("status") in {"wait", "handoff", "no_work"} and self._has_pending_candidates(normalized_run_id):
+                continue
             if (
                 result.get("status") == "no_work"
                 and result.get("reason") == "inbound_revision_already_processed"
@@ -866,6 +1086,8 @@ class ManagedRun:
             if status == "no_work":
                 if reason == "send_budget_exhausted":
                     break
+                if self._has_pending_candidates(normalized_run_id):
+                    continue
                 if reason == "inbound_revision_already_processed":
                     # The latest discovery hint was just consumed and stored;
                     # immediately rescan so another visible candidate is not
@@ -881,6 +1103,8 @@ class ManagedRun:
                     break
                 continue
             if status == "wait":
+                if self._has_pending_candidates(normalized_run_id):
+                    continue
                 poll_count += 1
                 interrupted = self._wait_sleep_result(
                     normalized_run_id,
@@ -923,23 +1147,67 @@ class ManagedRun:
     def tick(self, run_id: str | None = None) -> dict[str, Any]:
         normalized_run_id = run_id or self.store.current_run_id()
         if normalized_run_id is None:
+            self._discovery_batch = None
             return _result("not_found", reason="managed_run_not_started")
         with self.store.execution_lease(normalized_run_id) as acquired:
             if not acquired:
+                self._discovery_batch = None
                 return _result(
                     "blocked",
                     reason="managed_run_busy",
                     run_id=normalized_run_id,
                 )
-            return self._tick_with_lease(normalized_run_id)
+            started = self._monotonic()
+            profile: dict[str, Any] = {
+                "scan_reused": False,
+                "stage_ms": {stage: 0.0 for stage in ("scan", "open_thread", "observe_thread", "decide", "send")},
+            }
+            initial = self.store.load(normalized_run_id)
+            try:
+                result = self._tick_with_lease(normalized_run_id, profile=profile)
+            except BaseException:
+                self._discovery_batch = None
+                raise
+            self._finish_discovery_batch(initial, result)
+            try:
+                drain_action_metrics = getattr(self.action, "drain_metrics", None)
+                if callable(drain_action_metrics):
+                    profile["visual_verification"] = drain_action_metrics()
+            except Exception:  # noqa: BLE001 - optional diagnostics never change a completed action.
+                pass
+            latest = self.store.load(normalized_run_id)
+            if latest is not None:
+                self._event(
+                    latest,
+                    "tick_profile",
+                    total_ms=round(max(0.0, self._monotonic() - started) * 1000, 3),
+                    **profile,
+                )
+            return result
 
-    def _tick_with_lease(self, run_id: str) -> dict[str, Any]:
+    def _tick_with_lease(self, run_id: str, *, profile: dict[str, Any]) -> dict[str, Any]:
         record = self.store.load(run_id)
         if record is None:
             return _result("not_found", reason="managed_run_not_started")
         unfinished_click = self._reconcile_unfinished_click(record)
+        interrupted_burst = self._reconcile_interrupted_bursts(record)
+        record = self.store.load(run_id) or record
+        unknown_pause = None
+        if record.status == "active" and _has_unresolved_send(record, self.store):
+            unknown_pause = self.pause(record.run_id, reason="unknown_after_click")
         if unfinished_click is not None:
+            if interrupted_burst is not None:
+                return {
+                    **unfinished_click,
+                    **{key: interrupted_burst[key] for key in (
+                        "burst_id", "message_count", "completed_message_count", "cancelled_message_count", "unknown_message_count",
+                    )},
+                }
             return unfinished_click
+        if interrupted_burst is not None:
+            return interrupted_burst
+        if unknown_pause is not None:
+            return unknown_pause
         if record.status != "active":
             return _result(
                 record.status,
@@ -964,6 +1232,8 @@ class ManagedRun:
         try:
             with self.store.state_lease(record.run_id):
                 latest_before_scan = self.store.load(record.run_id) or record
+                if latest_before_scan.status == "active" and _has_unresolved_send(latest_before_scan, self.store):
+                    return self.pause(latest_before_scan.run_id, reason="unknown_after_click")
                 if latest_before_scan.status != "active":
                     return _result(
                         latest_before_scan.status,
@@ -972,21 +1242,12 @@ class ManagedRun:
                         or "managed_run_not_active",
                         run_id=latest_before_scan.run_id,
                     )
-                snapshot = self.observation.scan_message_list(
-                    run_id=latest_before_scan.run_id,
-                    app_id=latest_before_scan.config.app_id,
-                    runtime=latest_before_scan.config.runtime,
-                    cursor=dict(latest_before_scan.scan_cursor),
-                )
-                latest_before_scan.scan_cursor = dict(snapshot.next_cursor)
-                latest_before_scan.cycle_count += 1
-                latest_before_scan.updated_at = _iso(self._now())
-                self.store.save(latest_before_scan)
+                candidates = self._discover_candidates(latest_before_scan, profile)
                 record = latest_before_scan
         except Exception as exc:  # noqa: BLE001 - a port failure is a managed wait point.
-            return self._finish_tick(record, "blocked", reason="message_list_observation_failed", error_type=type(exc).__name__)
+            return self._finish_tick(record, "blocked", reason="message_list_observation_failed", **_action_exception_details(exc))
 
-        eligible = self._eligible_candidates(record, snapshot.candidates)
+        eligible = self._eligible_candidates(record, candidates)
         try:
             candidate = self.decision.prioritize(eligible, thread_states=record.thread_states)
         except Exception as exc:  # noqa: BLE001 - a decision-port failure ends this runner.
@@ -997,9 +1258,15 @@ class ManagedRun:
                 error_type=type(exc).__name__,
             )
         if candidate is None:
+            self._discovery_batch = None
             return self._finish_tick(record, "no_work", reason="no_eligible_thread")
         if candidate not in eligible:
             return self._finish_tick(record, "blocked", reason="prioritizer_returned_ineligible_thread")
+        if self._discovery_batch is not None:
+            self._discovery_batch.candidates = tuple(
+                item for item in self._discovery_batch.candidates
+                if (item.candidate_key, item.target_id) != (candidate.candidate_key, candidate.target_id)
+            )
 
         try:
             with self.store.state_lease(record.run_id):
@@ -1012,17 +1279,19 @@ class ManagedRun:
                         or "managed_run_not_active",
                         run_id=latest_before_open.run_id,
                     )
-                opened = self.observation.open_thread(candidate)
+                with self._profile_stage(profile, "open_thread"):
+                    opened = self.observation.open_thread(candidate)
         except Exception as exc:  # noqa: BLE001
-            return self._finish_tick(record, "blocked", reason="open_thread_failed", error_type=type(exc).__name__)
+            return self._finish_tick(record, "blocked", reason="open_thread_failed", **_action_exception_details(exc))
         target_reason = _target_evidence_block_reason(candidate, opened.target_id, opened.target_binding)
         if target_reason is not None:
             return self._finish_candidate_tick(record, candidate, reason=target_reason)
 
         try:
-            thread = self.observation.observe_thread(candidate)
+            with self._profile_stage(profile, "observe_thread"):
+                thread = self.observation.observe_thread(candidate)
         except Exception as exc:  # noqa: BLE001
-            return self._finish_tick(record, "blocked", reason="thread_observation_failed", error_type=type(exc).__name__)
+            return self._finish_tick(record, "blocked", reason="thread_observation_failed", **_action_exception_details(exc))
         target_reason = _target_evidence_block_reason(candidate, thread.target_id, thread.target_binding)
         if target_reason is not None:
             return self._finish_candidate_tick(record, candidate, reason=target_reason)
@@ -1042,9 +1311,16 @@ class ManagedRun:
         decision = transaction.prepared_decision(record, candidate, thread)
         if decision is None:
             try:
-                decision = self.decision.decide(thread, config=record.config)
+                with self._profile_stage(profile, "decide"):
+                    decision = self.decision.decide(thread, config=record.config)
             except Exception as exc:  # noqa: BLE001
                 return self._finish_tick(record, "blocked", reason="draft_decision_failed", error_type=type(exc).__name__)
+            try:
+                triage = _redacted_triage_metrics(getattr(self.decision, "last_triage_metrics", None))
+                if triage:
+                    profile["triage"] = triage
+            except Exception:  # noqa: BLE001 - optional telemetry cannot affect the decision.
+                pass
         decision_reason = _decision_block_reason(decision, thread)
         if decision_reason is not None:
             return self._finish_candidate_tick(
@@ -1056,7 +1332,12 @@ class ManagedRun:
         if decision.outcome != "send":
             return self._record_non_send_decision(record, candidate, thread, decision)
 
-        result = transaction.execute(record, candidate, thread, decision)
+        with self._profile_stage(profile, "send"):
+            result = (
+                self._execute_burst(record, candidate, thread, decision)
+                if len(decision.message_sequence) > 1
+                else transaction.execute(record, candidate, thread, decision)
+            )
         latest = self.store.load(record.run_id) or record
         state = latest.thread_states.get(candidate.target_id)
         self._event(latest, "send_transaction_finished", **_event_result_fields(result))
@@ -1064,6 +1345,297 @@ class ManagedRun:
         if state is not None:
             payload["thread_state"] = dict(state)
         return payload
+
+    @contextmanager
+    def _profile_stage(self, profile: dict[str, Any], stage: str) -> Iterator[None]:
+        started = self._monotonic()
+        try:
+            yield
+        finally:
+            profile["stage_ms"][stage] = round(max(0.0, self._monotonic() - started) * 1000, 3)
+
+    def _valid_discovery_batch(self, record: ManagedRunRecord) -> _DiscoveryBatch | None:
+        batch = self._discovery_batch
+        if batch is None:
+            return None
+        age = self._monotonic() - batch.started_monotonic
+        if (
+            record.status != "active"
+            or batch.run_id != record.run_id
+            or not 0 <= age < self._scan_batch_max_age_seconds
+            or batch.expected_state != _stable_hash(record.to_dict())
+        ):
+            self._discovery_batch = None
+            return None
+        return batch
+
+    def _has_pending_candidates(self, run_id: str | None) -> bool:
+        record = self._resolve_record(run_id)
+        if record is None:
+            return False
+        batch = self._valid_discovery_batch(record)
+        return bool(batch and self._eligible_candidates(record, batch.candidates))
+
+    def _discover_candidates(self, record: ManagedRunRecord, profile: dict[str, Any]) -> Sequence[ThreadCandidate]:
+        batch = self._valid_discovery_batch(record)
+        pending = self._eligible_candidates(record, batch.candidates) if batch else []
+        if pending:
+            profile["scan_reused"] = True
+            return pending
+        self._discovery_batch = None
+        started = self._monotonic()
+        with self._profile_stage(profile, "scan"):
+            snapshot = self.observation.scan_message_list(
+                run_id=record.run_id,
+                app_id=record.config.app_id,
+                runtime=record.config.runtime,
+                cursor=dict(record.scan_cursor),
+            )
+        record.scan_cursor = dict(snapshot.next_cursor)
+        record.cycle_count += 1
+        record.updated_at = _iso(self._now())
+        self.store.save(record)
+        if self._scan_batch_max_age_seconds > 0 and snapshot.candidates:
+            # Discovery hints are navigation work only. Every consumer must still
+            # open and observe the target, obtain its authoritative revision and
+            # pass every send boundary. Never cache a draft or action result.
+            self._discovery_batch = _DiscoveryBatch(
+                run_id=record.run_id,
+                started_monotonic=started,
+                candidates=tuple(self._eligible_candidates(record, snapshot.candidates)[:MANAGED_RUN_DISCOVERY_BATCH_LIMIT]),
+                expected_state=_stable_hash(record.to_dict()),
+            )
+        return snapshot.candidates
+
+    def _finish_discovery_batch(self, initial: ManagedRunRecord | None, result: Mapping[str, Any]) -> None:
+        batch = self._discovery_batch
+        if batch is None:
+            return
+        with self.store.state_lease(batch.run_id):
+            latest = self.store.load(batch.run_id)
+            if (
+                initial is None
+                or latest is None
+                or initial.run_id != batch.run_id
+                or latest.status != "active"
+                or latest.lifecycle_revision != initial.lifecycle_revision
+                or latest.config.to_dict() != initial.config.to_dict()
+                or result.get("status") in {"paused", "stopped", "blocked", "unknown_after_click", "not_found"}
+                or result.get("reason") == "authorization_quiet_hours"
+                or not batch.candidates
+                or self._monotonic() - batch.started_monotonic >= self._scan_batch_max_age_seconds
+            ):
+                self._discovery_batch = None
+                return
+            batch.expected_state = _stable_hash(latest.to_dict())
+
+    def _execute_burst(
+        self,
+        record: ManagedRunRecord,
+        candidate: ThreadCandidate,
+        thread: ThreadObservation,
+        decision: DraftDecision,
+    ) -> dict[str, Any]:
+        """Execute one reviewed reply in adjacent bubbles without another model turn."""
+        burst_id = _stable_hash({
+            "run_id": record.run_id,
+            "target_id": candidate.target_id,
+            "inbound_revision": thread.inbound_revision,
+            "messages": list(decision.message_sequence),
+        })
+        with self.store.state_lease(record.run_id):
+            latest = self.store.load(record.run_id) or record
+            if burst_id in latest.send_bursts:
+                previous = latest.send_bursts[burst_id]
+                return _result(
+                    str(previous.get("result_status") or "handoff"),
+                    reason=str(previous.get("reason") or "message_burst_already_consumed"),
+                    run_id=latest.run_id, target_id=candidate.target_id, burst_id=burst_id,
+                    decision_id=previous["decision_id"],
+                    **_action_reason_details(previous.get("action_reason")),
+                    deduplicated=True, **_burst_counts(latest, burst_id),
+                )
+            # Exact content lives only in the existing encrypted durable state.
+            # Events and returned summaries contain counts, ids and hashes.
+            latest.send_bursts[burst_id] = {
+                "burst_id": burst_id,
+                "decision_id": decision.decision_id,
+                "target_id": candidate.target_id,
+                "candidate_key": candidate.candidate_key,
+                "target_binding": candidate.target_binding,
+                "discovery_revision": candidate.discovery_revision,
+                "inbound_revision": thread.inbound_revision,
+                "payload_hash": decision.payload_hash,
+                "messages": list(decision.message_sequence),
+                "message_count": len(decision.message_sequence),
+                "status": "active",
+                "created_at": _iso(self._now()),
+                "lifecycle_revision": record.lifecycle_revision,
+                "completed_message_count": 0,
+                "cancelled_message_count": 0,
+                "unknown_message_count": 0,
+                "first_clicked_at": None,
+                "last_clicked_at": None,
+            }
+            self.store.save(latest)
+        self._event(latest, "message_burst_prepared", burst_id=burst_id, message_count=len(decision.message_sequence), payload_hash=decision.payload_hash)
+        last_clicked_at: str | None = None
+        previous_deadline = candidate.metadata.get("managed_burst_click_deadline_at")
+        try:
+            for index, text in enumerate(decision.message_sequence, start=1):
+                deadline = (
+                    _parse_iso(last_clicked_at) + timedelta(seconds=MANAGED_BURST_MAX_GAP_SECONDS)
+                    if last_clicked_at is not None else None
+                )
+                if deadline is None:
+                    candidate.metadata.pop("managed_burst_click_deadline_at", None)
+                else:
+                    candidate.metadata["managed_burst_click_deadline_at"] = _iso(deadline)
+
+                def before_click() -> str | None:
+                    current = self.store.load(record.run_id)
+                    if current is None or current.lifecycle_revision != record.lifecycle_revision:
+                        return "message_burst_lifecycle_changed"
+                    if deadline is not None and self._now() >= deadline:
+                        return "message_burst_gap_expired"
+                    return None
+
+                child = replace(
+                    DraftDecision.send(
+                        decision_id=f"{decision.decision_id}.message_{index}",
+                        target_id=decision.target_id,
+                        inbound_revision=decision.inbound_revision,
+                        text=text,
+                    ),
+                    burst_id=burst_id,
+                    message_index=index,
+                )
+                transaction = SendTransaction(store=self.store, action=self.action, now=self._now, before_click=before_click)
+                result = transaction.execute(record, candidate, thread, child)
+                if result.get("status") != "confirmed":
+                    status = str(result["status"])
+                    current = self.store.load(record.run_id) or record
+                    attempt = current.send_attempts.get(_decision_key(record.run_id, child), {})
+                    if status == "failed_before_click" and attempt.get("prepared_at") and current.status == "active":
+                        # Staging completed but the inter-bubble deadline or
+                        # lifecycle guard cancelled the click. Keep the known
+                        # unsent composer for review and stop further GUI work.
+                        status = "paused"
+                    return self._finish_burst(
+                        record, burst_id, status=status,
+                        reason=str(result.get("reason") or "message_burst_interrupted"),
+                        action_reason=result.get("action_reason"),
+                    )
+                last_clicked_at = str(result["clicked_at"])
+                with self.store.state_lease(record.run_id):
+                    latest = self.store.load(record.run_id) or record
+                    progress = dict(latest.send_bursts[burst_id])
+                    progress.update(_burst_counts(latest, burst_id))
+                    progress["cancelled_message_count"] = 0
+                    progress["first_clicked_at"] = progress.get("first_clicked_at") or last_clicked_at
+                    progress["last_clicked_at"] = last_clicked_at
+                    latest.send_bursts[burst_id] = progress
+                    self.store.save(latest)
+                if index < len(decision.message_sequence) and result.get("continuation_verified") is not True:
+                    return self._finish_burst(record, burst_id, status="handoff", reason="message_burst_continuation_unverified")
+            return self._finish_burst(record, burst_id, status="confirmed", reason="message_burst_confirmed")
+        finally:
+            if previous_deadline is None:
+                candidate.metadata.pop("managed_burst_click_deadline_at", None)
+            else:
+                candidate.metadata["managed_burst_click_deadline_at"] = previous_deadline
+
+    def _finish_burst(
+        self,
+        record: ManagedRunRecord,
+        burst_id: str,
+        *,
+        status: str,
+        reason: str,
+        abandoned: bool = False,
+        action_reason: str | None = None,
+    ) -> dict[str, Any]:
+        action_details = _action_reason_details(action_reason)
+        with self.store.state_lease(record.run_id):
+            latest = self.store.load(record.run_id) or record
+            progress = dict(latest.send_bursts[burst_id])
+            counts = _burst_counts(latest, burst_id)
+            progress.update(counts)
+            progress.update({
+                "status": "completed" if status == "confirmed" else "abandoned" if abandoned else "cancelled",
+                "result_status": status,
+                "reason": reason,
+                "finished_at": _iso(self._now()),
+                **action_details,
+            })
+            latest.send_bursts[burst_id] = progress
+            if status == "paused" and latest.status == "active":
+                latest.status = "paused"
+                latest.pause_reason = reason
+            result = _result(
+                status,
+                reason=reason,
+                run_id=latest.run_id,
+                target_id=progress["target_id"],
+                decision_id=progress["decision_id"],
+                burst_id=burst_id,
+                **counts,
+                **action_details,
+            )
+            target_id = str(progress["target_id"])
+            existing = latest.thread_states.get(target_id, {})
+            outcome = (
+                "unknown_after_click" if existing.get("last_outcome") == "unknown_after_click"
+                else "confirmed" if status == "confirmed" else "handoff"
+            )
+            latest.thread_states[target_id] = {
+                **existing,
+                "target_id": target_id,
+                "candidate_key": progress["candidate_key"],
+                "target_binding": progress["target_binding"],
+                "last_inbound_revision": progress["inbound_revision"],
+                "last_discovery_revision": progress["discovery_revision"],
+                "last_outcome": outcome,
+                "last_discovery_outcome": outcome,
+                "last_reason": reason,
+                "last_discovery_reason": reason,
+                "last_burst_id": burst_id,
+                "updated_at": _iso(self._now()),
+            }
+            if status == "stopped":
+                result["relationship_progress_snapshot"] = _progress_snapshot(latest, self.store)
+                result["relationship_progress_report"] = _progress_report(latest, self.store)
+            latest.last_result = dict(result)
+            latest.updated_at = _iso(self._now())
+            self.store.save(latest)
+        self._event(latest, "message_burst_finished", burst_id=burst_id, status=status, reason=reason, **counts, **action_details)
+        return result
+
+    def _reconcile_interrupted_bursts(self, record: ManagedRunRecord) -> dict[str, Any] | None:
+        """A new tick may reconcile a reply, but never resume its stale tail."""
+        latest = self.store.load(record.run_id) or record
+        result = None
+        for burst_id, progress in latest.send_bursts.items():
+            if progress.get("status") != "active":
+                continue
+            counts = _burst_counts(latest, burst_id)
+            prepared = any(
+                attempt.get("burst_id") == burst_id and attempt.get("status") == "prepared_to_click"
+                for attempt in latest.send_attempts.values()
+            )
+            completed = counts["completed_message_count"] == counts["message_count"]
+            status = "confirmed" if completed else "paused" if prepared else "handoff"
+            if counts["unknown_message_count"]:
+                status = "unknown_after_click"
+            result = self._finish_burst(
+                latest,
+                burst_id,
+                status=status,
+                reason="message_burst_confirmed" if completed else "message_burst_interrupted",
+                abandoned=not completed,
+            )
+            latest = self.store.load(record.run_id) or latest
+        return result
 
     def _record_non_send_decision(
         self,
@@ -1230,6 +1802,7 @@ class ManagedRun:
         return self.store.load(normalized_run_id) if normalized_run_id else None
 
     def _reconcile_unfinished_click(self, record: ManagedRunRecord) -> dict[str, Any] | None:
+        """Recover an abandoned click only while holding this run's execution lease."""
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
             for decision_key, stored_attempt in latest.send_attempts.items():
@@ -1370,10 +1943,12 @@ class SendTransaction:
         store: ManagedRunStore,
         action: ManagedActionPort,
         now: Callable[[], datetime],
+        before_click: Callable[[], str | None] | None = None,
     ):
         self.store = store
         self.action = action
         self._now = now
+        self._before_click = before_click
 
     def prepared_decision(
         self,
@@ -1386,6 +1961,8 @@ class SendTransaction:
         latest = self.store.load(record.run_id) or record
         for decision_key in sorted(latest.send_attempts):
             attempt = latest.send_attempts[decision_key]
+            if attempt.get("burst_id"):
+                continue
             if attempt.get("status") != "prepared_to_click":
                 continue
             if attempt.get("target_id") != candidate.target_id:
@@ -1429,6 +2006,7 @@ class SendTransaction:
                     decision_id=decision.decision_id,
                     decision_key=decision_key,
                     deduplicated=True,
+                    **_action_reason_details(existing.get("action_reason")),
                 )
             if status == "prepared_to_click":
                 return self._resume_prepared(latest, candidate, thread, decision, decision_key, existing)
@@ -1463,7 +2041,7 @@ class SendTransaction:
                     decision,
                     decision_key,
                     "staging_failed",
-                    error_type=type(exc).__name__,
+                    **_action_exception_details(exc),
                 )
             staged_reason = _composer_block_reason(
                 candidate,
@@ -1493,6 +2071,7 @@ class SendTransaction:
                 "status": "prepared_to_click",
                 "prepared_at": _iso(self._now()),
                 "reason": None,
+                **({"burst_id": decision.burst_id, "message_index": decision.message_index} if decision.burst_id else {}),
             }
             latest.send_attempts[decision_key] = attempt
             latest.updated_at = _iso(self._now())
@@ -1524,7 +2103,7 @@ class SendTransaction:
                 decision,
                 decision_key,
                 "prepared_checkpoint_composer_unknown",
-                error_type=type(exc).__name__,
+                **_action_exception_details(exc),
             )
         evidence_reason = _composer_identity_or_revision_block_reason(candidate, thread, staged)
         if evidence_reason is not None:
@@ -1576,6 +2155,11 @@ class SendTransaction:
             if active_reason is not None:
                 return self._gate_result(latest, candidate, decision, decision_key, active_reason)
 
+            if self._before_click is not None:
+                continuation_reason = self._before_click()
+                if continuation_reason is not None:
+                    return self._failed_before_click(latest, candidate, decision, decision_key, continuation_reason)
+
             # `click_started` is the durable irreversible-boundary checkpoint.
             # The state lease remains held through the one irreversible port
             # call, so stop/pause cannot return and then observe a later click.
@@ -1587,6 +2171,11 @@ class SendTransaction:
             self.store.save(latest)
             try:
                 receipt = self.action.click_send(candidate)
+            except ManagedClickBlocked as exc:
+                return self._failed_before_click(
+                    latest, candidate, decision, decision_key, "click_not_performed",
+                    **_action_exception_details(exc),
+                )
             except Exception as exc:  # noqa: BLE001 - the port may have crossed the click boundary.
                 current = self.store.load(record.run_id) or latest
                 return self._unknown_after_click(
@@ -1595,7 +2184,7 @@ class SendTransaction:
                     decision,
                     decision_key,
                     "click_result_unknown",
-                    error_type=type(exc).__name__,
+                    **_action_exception_details(exc),
                 )
             attempt.update(
                 {
@@ -1621,7 +2210,7 @@ class SendTransaction:
         try:
             post = self.action.observe_post_send(candidate, receipt)
         except Exception as exc:  # noqa: BLE001
-            return self._unknown_after_click(record, candidate, decision, decision_key, "post_send_observation_failed", error_type=type(exc).__name__)
+            return self._unknown_after_click(record, candidate, decision, decision_key, "post_send_observation_failed", **_action_exception_details(exc))
         reason = _post_send_unknown_reason(candidate, decision, receipt, post)
         if reason is not None:
             return self._unknown_after_click(record, candidate, decision, decision_key, reason)
@@ -1633,6 +2222,7 @@ class SendTransaction:
             status="confirmed",
             reason="fresh_outbound_exact_text_verified",
             post_observation_id=post.observation_id,
+            **({"continuation_verified": post.continuation_verified is True, "clicked_at": receipt.clicked_at} if decision.burst_id else {}),
         )
 
     def _pre_stage_block_reason(
@@ -1645,6 +2235,10 @@ class SendTransaction:
         active_reason = self._active_block_reason(record, candidate, decision)
         if active_reason is not None:
             return active_reason
+        if self._before_click is not None:
+            continuation_reason = self._before_click()
+            if continuation_reason is not None:
+                return continuation_reason
         if thread.inbound_revision != decision.inbound_revision:
             return "inbound_revision_changed"
         return None
@@ -1710,8 +2304,8 @@ class SendTransaction:
                     target_id=candidate.target_id,
                     decision_id=decision.decision_id,
                     decision_key=decision_key,
-                    relationship_progress_snapshot=_progress_snapshot(latest),
-                    relationship_progress_report=_progress_report(latest),
+                    relationship_progress_snapshot=_progress_snapshot(latest, self.store),
+                    relationship_progress_report=_progress_report(latest, self.store),
                 )
                 latest.last_result = dict(result)
                 latest.updated_at = _iso(self._now())
@@ -1817,11 +2411,15 @@ class SendTransaction:
                 "status": status,
                 "reason": reason,
                 "finished_at": _iso(self._now()),
+                **({"burst_id": decision.burst_id, "message_index": decision.message_index} if decision.burst_id else {}),
                 **extra,
             }
             if status == "unknown_after_click" and latest.status != "stopped":
                 latest.status = "paused"
                 latest.pause_reason = "unknown_after_click"
+            if previous_status == "click_started" and status == "failed_before_click":
+                # Commit the unused reservation with its proof that Return was not invoked.
+                latest.attempted_send_count -= 1
             if status == "confirmed" and previous_status != "confirmed":
                 latest.confirmed_send_count += 1
             latest.updated_at = _iso(self._now())
@@ -1881,35 +2479,135 @@ def _thread_state_payload(
     }
 
 
-def _inherited_unknown_thread_states(record: ManagedRunRecord | None) -> dict[str, dict[str, Any]]:
+def _has_unresolved_send(record: ManagedRunRecord | None, store: ManagedRunStore) -> bool:
+    """An unresolved click blocks the run, regardless of target aliases or revisions."""
     if record is None:
-        return {}
-    inherited = {
-        target_id: {**state, "inherited_from_run_id": record.run_id}
+        return False
+    return any(
+        attempt.get("status") == "unknown_after_click" and not _valid_send_reconciliation(record, key)
+        for key, attempt in record.send_attempts.items()
+    ) or any(
+        state.get("last_outcome") == "unknown_after_click" and not _thread_unknown_reconciled(record, target_id, state, store)
         for target_id, state in record.thread_states.items()
-        if state.get("last_outcome") == "unknown_after_click"
+    )
+
+
+def _recovery_attempt_block_reason(attempt: Mapping[str, Any], decision_key: str) -> str | None:
+    required = (
+        "decision_key", "decision_id", "candidate_key", "target_id", "target_binding",
+        "inbound_revision", "exact_text", "payload_hash", "receipt_id", "clicked_at",
+    )
+    if any(not isinstance(attempt.get(key), str) or not attempt[key] for key in required):
+        return "managed_recovery_attempt_incomplete"
+    if attempt["decision_key"] != decision_key or attempt.get("status") != "unknown_after_click":
+        return "managed_recovery_attempt_mismatch"
+    if attempt["payload_hash"] != _payload_hash(attempt["exact_text"]):
+        return "managed_recovery_payload_hash_mismatch"
+    try:
+        clicked = datetime.fromisoformat(attempt["clicked_at"].replace("Z", "+00:00"))
+        if clicked.tzinfo is None or clicked.utcoffset() is None:
+            raise ValueError
+    except (TypeError, ValueError, OverflowError):
+        return "managed_recovery_click_time_invalid"
+    return None
+
+
+def _recovery_post_block_reason(attempt: Mapping[str, Any], post: Any) -> str | None:
+    if not isinstance(post, PostSendObservation):
+        return "managed_recovery_observation_invalid"
+    if not isinstance(post.recovery_evidence_digest, str) or re.fullmatch(r"[0-9a-f]{64}", post.recovery_evidence_digest) is None:
+        return "managed_recovery_evidence_missing"
+    if not isinstance(post.observation_id, str) or not post.observation_id:
+        return "post_send_observation_id_missing"
+    if post.receipt_id != attempt["receipt_id"]:
+        return "post_send_receipt_mismatch"
+    if post.target_id != attempt["target_id"] or post.target_binding != attempt["target_binding"]:
+        return "managed_recovery_target_mismatch"
+    try:
+        captured = datetime.fromisoformat(post.captured_at.replace("Z", "+00:00"))
+        if captured.tzinfo is None or captured.utcoffset() is None or captured <= _parse_iso(attempt["clicked_at"]):
+            raise ValueError
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return "managed_recovery_observation_not_fresh"
+    if post.input_cleared is not True:
+        return "composer_not_cleared_after_click"
+    if post.outbound_text != attempt["exact_text"]:
+        return "outbound_text_not_exact"
+    return None
+
+
+def _valid_send_reconciliation(record: ManagedRunRecord, decision_key: str) -> bool:
+    attempt = record.send_attempts.get(decision_key)
+    evidence = record.send_reconciliations.get(decision_key)
+    if not attempt or not evidence or _recovery_attempt_block_reason(attempt, decision_key) is not None:
+        return False
+    expected = {
+        "schema_version": 1, "outcome": "confirmed_sent", "run_id": record.run_id,
+        "decision_key": decision_key, "attempt_digest": _stable_hash(attempt),
+        **{key: attempt[key] for key in ("receipt_id", "clicked_at", "payload_hash", "target_id", "target_binding")},
     }
-    for attempt in record.send_attempts.values():
-        if attempt.get("status") != "unknown_after_click":
-            continue
-        target_id = str(attempt.get("target_id") or "")
-        if not target_id or target_id in inherited:
-            continue
-        inherited[target_id] = {
-            "target_id": target_id,
-            "candidate_key": str(attempt.get("candidate_key") or target_id),
-            "target_binding": str(attempt.get("target_binding") or ""),
-            "last_discovery_revision": str(attempt.get("discovery_revision") or ""),
-            "last_discovery_outcome": "unknown_after_click",
-            "last_discovery_reason": str(attempt.get("reason") or "unknown_after_click"),
-            "last_inbound_revision": str(attempt.get("inbound_revision") or ""),
-            "last_decision_id": str(attempt.get("decision_id") or ""),
-            "last_outcome": "unknown_after_click",
-            "last_reason": str(attempt.get("reason") or "unknown_after_click"),
-            "updated_at": str(attempt.get("finished_at") or record.updated_at),
-            "inherited_from_run_id": record.run_id,
-        }
-    return inherited
+    if any(evidence.get(key) != value for key, value in expected.items()):
+        return False
+    if evidence.get("reconciliation_id") != _stable_hash({key: value for key, value in evidence.items() if key != "reconciliation_id"}):
+        return False
+    post = PostSendObservation(
+        observation_id=evidence.get("post_observation_id", ""), receipt_id=evidence["receipt_id"],
+        target_id=evidence["target_id"], target_binding=evidence["target_binding"],
+        captured_at=evidence.get("post_captured_at", ""), input_cleared=True,
+        outbound_text=attempt["exact_text"], recovery_evidence_digest=evidence.get("recovery_evidence_digest"),
+    )
+    return _recovery_post_block_reason(attempt, post) is None
+
+
+def _thread_unknown_reconciled(
+    record: ManagedRunRecord, target_id: str, state: Mapping[str, Any], store: ManagedRunStore,
+) -> bool:
+    # Legacy runs copied an unknown state from their predecessor, including its
+    # run ID. Follow only that explicit chain; never match by name or content.
+    visited = {record.run_id}
+    source_id = state.get("inherited_from_run_id")
+    while source_id is not None:
+        if not isinstance(source_id, str) or not source_id or source_id in visited:
+            return False
+        source = store.load(source_id)
+        if source is None or source.run_id != source_id:
+            return False
+        visited.add(source_id)
+        record = source
+        if any(
+            attempt.get("target_id") == target_id and attempt.get("status") == "unknown_after_click"
+            and not _valid_send_reconciliation(record, key)
+            for key, attempt in record.send_attempts.items()
+        ):
+            return False
+        source_state = record.thread_states.get(target_id)
+        if source_state is None:
+            break  # A legacy state could also be copied directly from a stored attempt.
+        if source_state.get("last_outcome") != "unknown_after_click" or any(
+            source_state.get(field) != state.get(field)
+            for field in ("candidate_key", "target_binding", "last_decision_id", "last_inbound_revision")
+        ):
+            return False
+        source_id = source_state.get("inherited_from_run_id")
+    return any(
+        attempt.get("target_id") == target_id
+        and attempt.get("candidate_key") == state.get("candidate_key")
+        and attempt.get("target_binding") == state.get("target_binding")
+        and attempt.get("decision_id") == state.get("last_decision_id")
+        and attempt.get("inbound_revision") == state.get("last_inbound_revision")
+        and _valid_send_reconciliation(record, key)
+        for key, attempt in record.send_attempts.items()
+    )
+
+
+def _reconciliation_result(record: ManagedRunRecord, store: ManagedRunStore, decision_key: str, *, already_reconciled: bool) -> dict[str, Any]:
+    return _result(
+        "reconciled", reason="already_reconciled" if already_reconciled else "fresh_outbound_exact_text_reconciled",
+        run_id=record.run_id, decision_key=decision_key,
+        reconciliation_id=record.send_reconciliations[decision_key]["reconciliation_id"],
+        run_status=record.status, already_reconciled=already_reconciled,
+        relationship_progress_snapshot=_progress_snapshot(record, store),
+    )
 
 
 def _nudge_next_retry_at(thread: ThreadObservation, *, now: datetime) -> str:
@@ -1963,6 +2661,10 @@ def _decision_block_reason(decision: DraftDecision, thread: ThreadObservation) -
     if decision.outcome not in {"send", "wait", "handoff"}:
         return "unsupported_decision_outcome"
     if decision.outcome == "send":
+        if decision.message_sequence:
+            sequence_reason = _message_sequence_block_reason(decision.message_sequence, decision.text)
+            if sequence_reason is not None:
+                return sequence_reason
         if decision.action != "send_message":
             return "unsupported_managed_action"
         if not decision.text:
@@ -1970,6 +2672,29 @@ def _decision_block_reason(decision: DraftDecision, thread: ThreadObservation) -
         if decision.payload_hash != _payload_hash(decision.text):
             return "draft_payload_hash_mismatch"
     return None
+
+
+def _message_sequence_block_reason(messages: Any, text: str) -> str | None:
+    if not isinstance(messages, (tuple, list)) or not 1 <= len(messages) <= MANAGED_BURST_MAX_MESSAGES:
+        return "message_sequence_count_invalid"
+    if any(not isinstance(message, str) or not message.strip() for message in messages):
+        return "message_sequence_text_invalid"
+    if text != "\n".join(messages):
+        return "message_sequence_text_mismatch"
+    return None
+
+
+def _burst_counts(record: ManagedRunRecord, burst_id: str) -> dict[str, int]:
+    message_count = int(record.send_bursts[burst_id]["message_count"])
+    attempts = [attempt for attempt in record.send_attempts.values() if attempt.get("burst_id") == burst_id]
+    completed = sum(attempt.get("status") == "confirmed" for attempt in attempts)
+    unknown = sum(attempt.get("status") in {"click_started", "click_committed", "unknown_after_click"} for attempt in attempts)
+    return {
+        "message_count": message_count,
+        "completed_message_count": completed,
+        "unknown_message_count": unknown,
+        "cancelled_message_count": max(0, message_count - completed - unknown),
+    }
 
 
 def _composer_identity_or_revision_block_reason(
@@ -2090,6 +2815,7 @@ def _decision_key(run_id: str, decision: DraftDecision) -> str:
             "inbound_revision": decision.inbound_revision,
             "payload_hash": decision.payload_hash,
             "action": decision.action,
+            **({"burst_id": decision.burst_id, "message_index": decision.message_index} if decision.burst_id else {}),
         }
     )
 
@@ -2097,22 +2823,22 @@ def _decision_key(run_id: str, decision: DraftDecision) -> str:
 def _event_result_fields(result: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: result[key]
-        for key in ("status", "reason", "target_id", "decision_id", "decision_key")
+        for key in ("status", "reason", "target_id", "decision_id", "decision_key", "action_reason")
         if key in result
     }
 
 
-def _progress_snapshot(record: ManagedRunRecord) -> dict[str, Any]:
+def _progress_snapshot(record: ManagedRunRecord, store: ManagedRunStore) -> dict[str, Any]:
     outcomes = [str(state.get("last_outcome") or "") for state in record.thread_states.values()]
     unknown_targets = {
         str(attempt.get("target_id") or decision_key)
         for decision_key, attempt in record.send_attempts.items()
-        if attempt.get("status") == "unknown_after_click"
+        if attempt.get("status") == "unknown_after_click" and not _valid_send_reconciliation(record, decision_key)
     }
     unknown_targets.update(
         target_id
         for target_id, state in record.thread_states.items()
-        if state.get("last_outcome") == "unknown_after_click"
+        if state.get("last_outcome") == "unknown_after_click" and not _thread_unknown_reconciled(record, target_id, state, store)
     )
     return {
         "schema_version": 1,
@@ -2123,13 +2849,14 @@ def _progress_snapshot(record: ManagedRunRecord) -> dict[str, Any]:
         "waiting": outcomes.count("wait"),
         "handoffs": outcomes.count("handoff"),
         "unknown_sends": len(unknown_targets),
+        "reconciled_sends": sum(_valid_send_reconciliation(record, key) for key in record.send_reconciliations),
         "send_budget_remaining": max(0, record.config.max_sends_per_run - record.attempted_send_count),
         "scan_cycles": record.cycle_count,
     }
 
 
-def _progress_report(record: ManagedRunRecord) -> dict[str, Any]:
-    snapshot = _progress_snapshot(record)
+def _progress_report(record: ManagedRunRecord, store: ManagedRunStore) -> dict[str, Any]:
+    snapshot = _progress_snapshot(record, store)
     return {
         **snapshot,
         "summary": (

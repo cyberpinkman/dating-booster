@@ -707,7 +707,11 @@ def _locate_visible_text_y_ratio(self, screen: dict[str, Any], marker: str) -> d
     return _visible_text_location_from_tsv(str(tsv.get("text") or ""), marker, Path(path))
 
 
-def _ocr_tsv(self, image_path: Path) -> dict[str, str]:
+def _ocr_tsv(
+    self, image_path: Path, *, segmentation_mode: int = 6, allow_language_fallback: bool = True,
+) -> dict[str, str]:
+    if type(segmentation_mode) is not int or segmentation_mode not in (6, 11):
+        return {"status": "failed", "text": "", "reason": "ocr_segmentation_mode_invalid"}
     if not self._command_available("tesseract"):
         return {"status": "unavailable", "text": "", "reason": "ocr_unavailable"}
     result = self.runner.run(
@@ -718,12 +722,14 @@ def _ocr_tsv(self, image_path: Path) -> dict[str, str]:
             "-l",
             "eng+chi_sim",
             "--psm",
-            "6",
+            str(segmentation_mode),
             "tsv",
         ]
     )
     if result.returncode != 0:
-        fallback = self.runner.run(["tesseract", str(image_path), "stdout", "--psm", "6", "tsv"])
+        if not allow_language_fallback:
+            return {"status": "failed", "text": "", "reason": "ocr_tsv_failed"}
+        fallback = self.runner.run(["tesseract", str(image_path), "stdout", "--psm", str(segmentation_mode), "tsv"])
         if fallback.returncode != 0:
             return {"status": "failed", "text": "", "error": _short(fallback.stderr or result.stderr)}
         return {"status": "ok", "text": fallback.stdout}

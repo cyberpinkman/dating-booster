@@ -724,7 +724,9 @@ def _locate_tashuo_message_list_visual_target(
     if tap_ratio is not None:
         tap_y_offset = (float(tap_ratio["y"]) - float(source_region["y1"])) / row_height
         prior_tap_y = max(0.0, min(1.0, float(tap_ratio["y"])))
-    tap_y_offset = max(0.05, min(0.95, tap_y_offset))
+    # The visual anchor may include a banner or only an avatar. It is an
+    # identity patch, not the bounds of a clickable row. Preserve the explicit
+    # tap's offset when that patch moves, including taps outside the patch.
     tap_x = float(tap_ratio["x"]) if tap_ratio is not None else (source_x1 + source_x2) / 2.0
     max_distance = int(evidence.get("visual_anchor_max_hamming_distance") or TASHUO_CHAT_LIST_VISUAL_ANCHOR_MAX_DISTANCE)
     preserve_action_tap = _tashuo_message_list_relocation_preserves_action_tap(evidence)
@@ -736,7 +738,7 @@ def _locate_tashuo_message_list_visual_target(
             if source_hash.get("status") == "ok" and observed_source_hash
             else None
         )
-        if source_distance is not None and source_distance <= max_distance:
+        if source_distance == 0:
             safe_tap = _safe_tashuo_message_list_visual_anchor_tap_ratio(
                 _copy_tap_ratio(tap_ratio),
                 matched_region=source_region,
@@ -841,8 +843,9 @@ def _locate_tashuo_message_list_visual_target(
     }
 
 def _tashuo_message_list_relocation_preserves_action_tap(evidence: dict[str, Any]) -> bool:
-    source = str(evidence.get("tap_ratio_source") or "").strip().lower()
-    return source in {"corrected_all_messages_row_action"}
+    # All explicit visually selected taps have the same coordinate contract;
+    # provenance labels must not enable a different click geometry.
+    return _tap_ratio_option(evidence.get("tap_ratio")) is not None
 
 def _safe_tashuo_message_list_visual_anchor_tap_ratio(
     tap_ratio: dict[str, float],

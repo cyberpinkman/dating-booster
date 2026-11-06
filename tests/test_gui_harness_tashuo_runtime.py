@@ -308,7 +308,8 @@ class GuiHarnessTashuoRuntimeTests(GuiHarnessTestCase):
                     self.commands.append(command)
                     self.command_inputs.append((command, input))
                     if self.recovered:
-                        return _result(stdout="true, 100, 50, 350, 760, 她说\n")
+                        self.ax_window_seen = True
+                        return _result(stdout="true, 100, 50, 350, 760, 她说, 35218\n")
                     return _result(stdout="missing value\n")
                 return super().run(command, input=input)
 
@@ -363,7 +364,8 @@ class GuiHarnessTashuoRuntimeTests(GuiHarnessTestCase):
                     self.commands.append(command)
                     self.command_inputs.append((command, input))
                     if self.force_recovered:
-                        return _result(stdout="true, 100, 50, 350, 760, 她说\n")
+                        self.ax_window_seen = True
+                        return _result(stdout="true, 100, 50, 350, 760, 她说, 35218\n")
                     return _result(stdout="missing value\n")
                 return super().run(command, input=input)
 

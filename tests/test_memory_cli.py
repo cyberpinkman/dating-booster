@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -23,6 +24,46 @@ FIXTURE_PATH = Path("tests/fixtures/intelligence/app_observation_chat.json")
 
 
 class MemoryObservationExtractionTests(unittest.TestCase):
+    def test_screenshot_ingest_reports_missing_app_before_creating_a_match(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            image = root / "screen.png"
+            image.touch()
+            analysis = load_observation(FIXTURE_PATH).to_dict()
+            del analysis["app_id"]
+            analysis_file = root / "analysis.json"
+            analysis_file.write_text(json.dumps(analysis), encoding="utf-8")
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(["observe-screenshot", "--data-dir", str(root), "--screenshot", str(image),
+                             "--analysis", str(analysis_file)])
+            self.assertEqual(code, 2)
+            self.assertIn("app_id", json.loads(output.getvalue())["message"])
+            self.assertEqual(MatchRepository(root).list_match_candidates(), [])
+
+    def test_context_cannot_fall_back_to_observations_of_a_mixed_legacy_match(self):
+        tinder = load_observation(FIXTURE_PATH)
+        wechat = replace(tinder, app_id="wechat", observation_id="obs_from_wechat")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            storage = JsonStorage(root)
+            storage.write_json(Path("matches/index.json"), {
+                "schema_version": 1,
+                "matches": [{"match_id": "legacy", "observation_ids": [tinder.observation_id, wechat.observation_id]}],
+            })
+            storage.write_json(Path("matches/legacy/observations.json"), {
+                "schema_version": 1, "observations": [tinder.to_dict(), wechat.to_dict()],
+            })
+            with redirect_stdout(StringIO()):
+                main(["init-profile", "--data-dir", str(root), "--input", "tests/fixtures/intelligence/user_profile.json"])
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(["context", "build", "--data-dir", str(root), "--match-id", "legacy", "--mode", "adaptive"])
+            result = json.loads(output.getvalue())
+            self.assertEqual(code, 2)
+            self.assertEqual(result["reason"], "match_app_scope_review_required")
+            self.assertNotIn("context_pack", result)
+
     def test_extracts_deterministic_events_without_copying_full_message_text(self):
         observation = load_observation(FIXTURE_PATH)
 
@@ -149,6 +190,7 @@ class MemoryObservationExtractionTests(unittest.TestCase):
                         "matches": [
                             {
                                 "match_id": "bad/id",
+                                "app_id": observation.app_id,
                                 "display_name": observation.match_identity_hints.visible_name,
                                 "profile_cues": list(observation.match_identity_hints.profile_cues),
                                 "conversation_fingerprint": observation.match_identity_hints.conversation_fingerprint,
@@ -175,6 +217,7 @@ class MemoryObservationExtractionTests(unittest.TestCase):
             matches_dir = data_dir / "matches"
             matches_dir.mkdir(parents=True)
             duplicate_record = {
+                "app_id": observation.app_id,
                 "display_name": observation.match_identity_hints.visible_name,
                 "profile_cues": list(observation.match_identity_hints.profile_cues),
                 "conversation_fingerprint": observation.match_identity_hints.conversation_fingerprint,
@@ -338,6 +381,7 @@ class MemoryRebuildTests(unittest.TestCase):
                         "matches": [
                             {
                                 "match_id": "match_alex_existing",
+                                "app_id": observation.app_id,
                                 "display_name": observation.match_identity_hints.visible_name,
                                 "profile_cues": [],
                                 "conversation_fingerprint": None,
@@ -511,6 +555,42 @@ class MemoryRebuildTests(unittest.TestCase):
 
 
 class MemoryUpdateMatchTests(unittest.TestCase):
+    def test_cross_app_updates_validate_scope_before_writing(self):
+        tinder = load_observation(FIXTURE_PATH)
+        wechat = replace(
+            tinder,
+            app_id="wechat",
+            observation_id="wechat_obs",
+            match_identity_hints=replace(tinder.match_identity_hints, visible_name="WeChat contact"),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir)
+            source = store_observation_with_memory(data_dir, tinder)["match_id"]
+            target = store_observation_with_memory(data_dir, wechat)["match_id"]
+            memory = MemoryRepository(data_dir)
+            before = {match_id: memory.export_match(match_id) for match_id in (source, target)}
+            cases = (
+                ("merge_identity", source, target, {}),
+                ("inherit_memory", target, source, {}),
+                ("inherit_memory", source, target, {"direction": "wechat_to_dating_app"}),
+            )
+            for action, src, dst, options in cases:
+                with self.subTest(action=action, source=src, options=options):
+                    request = self._write_json(data_dir, "update.json", {
+                        "action": action,
+                        "source_match_id": src,
+                        "target_match_id": dst,
+                        "confirmation_token": f"{action}:{src}:{dst}",
+                        **options,
+                    })
+                    code, result, _ = self._run([
+                        "memory", "update-match", "--data-dir", str(data_dir),
+                        "--match-id", dst, "--input", str(request),
+                    ])
+                    self.assertEqual(code, 2)
+                    self.assertEqual(result["status"], "error")
+                    self.assertEqual({key: memory.export_match(key) for key in before}, before)
+
     def test_update_match_confirms_identity(self):
         observation = load_observation(FIXTURE_PATH)
 
@@ -525,6 +605,7 @@ class MemoryUpdateMatchTests(unittest.TestCase):
                         "matches": [
                             {
                                 "match_id": "match_alex_existing",
+                                "app_id": observation.app_id,
                                 "display_name": observation.match_identity_hints.visible_name,
                                 "profile_cues": [],
                                 "conversation_fingerprint": None,
@@ -774,6 +855,7 @@ class MemoryUpdateMatchTests(unittest.TestCase):
         source_observation = load_observation(FIXTURE_PATH)
         target_payload = source_observation.to_dict()
         target_payload["observation_id"] = "obs_wechat_001"
+        target_payload["app_id"] = "wechat"
         target_payload["match_identity_hints"] = {
             **target_payload["match_identity_hints"],
             "visible_name": "Alex WeChat",
@@ -805,6 +887,7 @@ class MemoryUpdateMatchTests(unittest.TestCase):
         source_observation = load_observation(FIXTURE_PATH)
         target_payload = source_observation.to_dict()
         target_payload["observation_id"] = "obs_wechat_002"
+        target_payload["app_id"] = "wechat"
         target_payload["match_identity_hints"] = {
             **target_payload["match_identity_hints"],
             "visible_name": "Alex WeChat",
@@ -1011,6 +1094,7 @@ class MemoryUpdateMatchTests(unittest.TestCase):
         source_observation = load_observation(FIXTURE_PATH)
         target_payload = source_observation.to_dict()
         target_payload["observation_id"] = "obs_wechat_004"
+        target_payload["app_id"] = "wechat"
         target_payload["match_identity_hints"] = {
             **target_payload["match_identity_hints"],
             "visible_name": "Alex WeChat",
@@ -1055,6 +1139,7 @@ class MemoryUpdateMatchTests(unittest.TestCase):
         source_observation = load_observation(FIXTURE_PATH)
         target_payload = source_observation.to_dict()
         target_payload["observation_id"] = "obs_wechat_005"
+        target_payload["app_id"] = "wechat"
         target_payload["match_identity_hints"] = {
             **target_payload["match_identity_hints"],
             "visible_name": "Alex WeChat",
@@ -1399,6 +1484,7 @@ class MemoryPrivacyCliTests(unittest.TestCase):
                     "matches": [
                         {
                             "match_id": "match_alex_existing",
+                            "app_id": observation.app_id,
                             "display_name": observation.match_identity_hints.visible_name,
                             "profile_cues": [],
                             "conversation_fingerprint": None,

@@ -97,7 +97,12 @@ def _handle_observation_normalize(args: argparse.Namespace) -> int:
 
 
 def _persist_observation(data_dir: Path, observation: AppObservation) -> int:
-    _print_json(_store_observation(data_dir, observation))
+    try:
+        result = _store_observation(data_dir, observation)
+    except ValueError as exc:
+        _print_json({"schema_version": 1, "status": "error", "reason": "invalid_observation", "message": str(exc)})
+        return 2
+    _print_json(result)
     return 0
 
 
@@ -109,16 +114,10 @@ def _store_observation(data_dir: Path, observation: AppObservation) -> dict[str,
 
 
 def _handle_memory_get_match(args: argparse.Namespace) -> int:
-    for record in MatchRepository(args.data_dir).list_match_candidates():
-        if record.get("match_id") == args.match_id:
-            _print_json(
-                {
-                    "schema_version": 1,
-                    "status": "ok",
-                    "match": record,
-                }
-            )
-            return 0
+    record = _match_record(args.data_dir, args.match_id)
+    if record is not None:
+        _print_json({"schema_version": 1, "status": "ok", "match": record})
+        return 0
     _print_json(
         {
             "schema_version": 1,
@@ -568,13 +567,15 @@ def _apply_memory_identity_merge(data_dir: Path, match_id: str, update: dict[str
     if confirmation_token != expected_token:
         raise ValueError(f"merge_identity requires confirmation_token {expected_token!r}")
 
+    match_repo = MatchRepository(data_dir)
+    match_repo.validate_same_app_merge(source_match_id=source_match_id, target_match_id=target_match_id)
     memory_repo = MemoryRepository(data_dir)
     observation_repo = ObservationRepository(data_dir)
     source_events = memory_repo.load_events(source_match_id)
     target_events_before = memory_repo.load_events(target_match_id)
     for observation in observation_repo.load_observations(source_match_id):
         observation_repo.save_observation(target_match_id, observation)
-    MatchRepository(data_dir).merge_matches(
+    match_repo.merge_matches(
         source_match_id=source_match_id,
         target_match_id=target_match_id,
     )
@@ -788,6 +789,14 @@ def _apply_memory_inheritance(data_dir: Path, match_id: str, update: dict[str, A
     if confirmation_token != expected_token:
         raise ValueError(f"inherit_memory requires confirmation_token {expected_token!r}")
 
+    match_repo = MatchRepository(data_dir)
+    if (
+        direction != "dating_app_to_wechat"
+        or match_repo.get_match_app_id(source_match_id) not in {"tinder", "bumble", "tashuo"}
+        or match_repo.get_match_app_id(target_match_id) != "wechat"
+    ):
+        raise ValueError("inherit_memory requires a dating app source and a WeChat target (dating_app_to_wechat)")
+
     memory_repo = MemoryRepository(data_dir)
     source_events = memory_repo.load_events(source_match_id)
     if not source_events:
@@ -922,10 +931,7 @@ def _required_text(payload: dict[str, Any], key: str) -> str:
 
 
 def _match_record(data_dir: Path, match_id: str) -> dict[str, object] | None:
-    for record in MatchRepository(data_dir).list_match_candidates():
-        if record.get("match_id") == match_id:
-            return record
-    return None
+    return MatchRepository(data_dir).get_match_record(match_id)
 
 
 def _handle_draft(args: argparse.Namespace) -> int:
@@ -1046,6 +1052,12 @@ def _handle_context_build(args: argparse.Namespace) -> int:
                 "reason": "max_memory_items_must_be_positive",
             }
         )
+        return 2
+    if MatchRepository(args.data_dir).app_scope_requires_review(args.match_id):
+        _print_json({
+            "schema_version": 1, "status": "blocked", "match_id": args.match_id,
+            "reason": "match_app_scope_review_required",
+        })
         return 2
     reply_mode = ReplyMode(args.mode)
     observation = ObservationRepository(args.data_dir).load_latest_observation(args.match_id)

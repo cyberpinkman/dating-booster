@@ -323,7 +323,7 @@ class GuiHarnessSharedTests(GuiHarnessTestCase):
                 if command[:3] == ["xcrun", "swift", "-e"] and "CGWindowListCopyWindowInfo" in command[-1]:
                     self.commands.append(command)
                     self.command_inputs.append((command, input))
-                    return _result(stdout="1093\t111\t288\t541\t1713\t她说\n")
+                    return _result(stdout="1093\t111\t288\t541\t1713\t35218\ttrue\t她说\n")
                 return super().run(command, input=input)
 
         runner = CoreGraphicsWindowRunner(ocr_text="", window_name="她说")
@@ -340,7 +340,7 @@ class GuiHarnessSharedTests(GuiHarnessTestCase):
         self.assertEqual(payload["window"]["window_id"], 1713)
         swift_commands = [command for command in runner.commands if command[:3] == ["xcrun", "swift", "-e"]]
         self.assertTrue(swift_commands)
-        self.assertIn('"她说"', swift_commands[-1][-1])
+        self.assertIn("Set<Int>([35218])", swift_commands[-1][-1])
 
     def test_tashuo_mac_ios_app_doctor_blocks_when_loginwindow_frontmost(self):
         class LoginWindowFrontmostRunner(FakeRunner):
@@ -400,7 +400,7 @@ class GuiHarnessSharedTests(GuiHarnessTestCase):
                 if command[:3] == ["xcrun", "swift", "-e"] and "CGWindowListCopyWindowInfo" in command[-1]:
                     self.commands.append(command)
                     self.command_inputs.append((command, input))
-                    return _result(stdout="1093\t111\t288\t541\t1713\t她说\n")
+                    return _result(stdout="1093\t111\t288\t541\t1713\t35218\ttrue\t她说\n")
                 return super().run(command, input=input)
 
         runner = CoreGraphicsWindowRunner(
@@ -413,7 +413,7 @@ class GuiHarnessSharedTests(GuiHarnessTestCase):
             payload = harness.capture_window(output=Path(temp_dir) / "capture.png")
 
         self.assertEqual(payload["status"], "ok")
-        self.assertTrue(any(command[:4] == ["screencapture", "-x", "-l", "1713"] for command in runner.commands))
+        self.assertTrue(any(command[:5] == ["screencapture", "-x", "-o", "-l", "1713"] for command in runner.commands))
 
     def test_tashuo_mac_ios_prepare_message_page_uses_core_graphics_window_id_capture(self):
         class CoreGraphicsWindowRunner(FakeRunner):
@@ -429,7 +429,7 @@ class GuiHarnessSharedTests(GuiHarnessTestCase):
                 if command[:3] == ["xcrun", "swift", "-e"] and "CGWindowListCopyWindowInfo" in command[-1]:
                     self.commands.append(command)
                     self.command_inputs.append((command, input))
-                    return _result(stdout="1093\t111\t288\t541\t1713\t她说\n")
+                    return _result(stdout="1093\t111\t288\t541\t1713\t35218\ttrue\t她说\n")
                 return super().run(command, input=input)
 
         runner = CoreGraphicsWindowRunner(
@@ -447,7 +447,7 @@ class GuiHarnessSharedTests(GuiHarnessTestCase):
 
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["preflight"]["window"]["window_id"], 1713)
-        self.assertTrue(any(command[:4] == ["screencapture", "-x", "-l", "1713"] for command in runner.commands))
+        self.assertTrue(any(command[:5] == ["screencapture", "-x", "-o", "-l", "1713"] for command in runner.commands))
         self.assertFalse(any(command[:3] == ["screencapture", "-x", "-R"] for command in runner.commands))
 
     def test_open_profile_launch_if_needed_combines_launch_and_profile_navigation(self):

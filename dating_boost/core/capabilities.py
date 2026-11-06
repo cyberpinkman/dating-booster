@@ -160,6 +160,7 @@ _BASE_SUPPORTED_COMMANDS: list[str] = [
     "manage status",
     "manage pause",
     "manage resume",
+    "manage reconcile",
     "manage stop",
     "standalone-session start",
     "standalone-session tick",

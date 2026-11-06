@@ -370,6 +370,10 @@ def _handle_manage_resume(args: argparse.Namespace) -> int:
     return _handle_managed_run_operation(args, "resume")
 
 
+def _handle_manage_reconcile(args: argparse.Namespace) -> int:
+    return _handle_managed_run_operation(args, "reconcile", decision_key=args.decision_key)
+
+
 def _handle_manage_stop(args: argparse.Namespace) -> int:
     return _handle_managed_run_operation(args, "stop", reason=args.reason)
 
@@ -469,7 +473,7 @@ def _manage_quiet_hours(value: Any) -> list[dict[str, str]]:
 
 
 def _handle_managed_run_operation(args: argparse.Namespace, operation: str, **kwargs: Any) -> int:
-    runtime = _build_managed_run_runtime(args.data_dir, require_ports=operation in {"run", "tick"})
+    runtime = _build_managed_run_runtime(args.data_dir, require_ports=operation in {"run", "tick", "reconcile"})
     if runtime is None:
         return _print_managed_run_runtime_not_configured()
     try:
@@ -1145,7 +1149,7 @@ __all__ = [
     '_handle_automation_scan_assemble', '_handle_automation_get_state', '_handle_automation_pause', '_handle_automation_resume',
     '_handle_managed_session_start', '_handle_managed_session_tick', '_handle_managed_session_run', '_handle_managed_session_notify',
     '_handle_managed_session_status', '_handle_managed_session_stop', '_handle_manage_start', '_handle_manage_tick',
-    '_handle_manage_run', '_handle_manage_status', '_handle_manage_pause', '_handle_manage_resume', '_handle_manage_stop',
+    '_handle_manage_run', '_handle_manage_status', '_handle_manage_pause', '_handle_manage_resume', '_handle_manage_reconcile', '_handle_manage_stop',
     '_managed_run_config_payload', '_managed_run_authorization', '_handle_managed_run_operation',
     '_manage_quiet_hours',
     '_build_managed_run_runtime', '_print_managed_run_runtime_not_configured',

@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from dating_boost.core.automation_prioritization import _split_entries_at_history_cutoff
 from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason
 from dating_boost.core.managed_run import (
     ClickReceipt,
@@ -16,6 +18,7 @@ from dating_boost.core.managed_run import (
     DraftDecision,
     JsonManagedRunStore,
     ManagedRun,
+    ManagedActionError,
     ManagedRunConfig,
     MessageListSnapshot,
     OpenThreadObservation,
@@ -31,6 +34,7 @@ from dating_boost.core.user_disclosure import UserDisclosureRepository
 MANAGED_RUN_FIXTURE_DIR_ENV = "DATING_BOOST_MANAGED_RUN_FIXTURE_DIR"
 MANAGED_RUN_SCRIPTED_BACKEND_ENV = "DATING_BOOST_MANAGED_RUN_SCRIPTED_BACKEND_OUTPUT"
 MANAGED_RUN_TASHUO_CONFIG_ENV = "DATING_BOOST_MANAGED_RUN_TASHUO_CONFIG"
+MANAGED_RUN_JEV_ENV = "DATING_BOOST_MANAGED_RUN_JEV"
 
 # The legacy all-in-one send_message remains for host-loop compatibility.
 # ManagedRun uses the separate adapter seam below so its durable
@@ -116,6 +120,11 @@ class ManagedRunProviderRuntime:
     def resume(self, run_id: str | None = None) -> dict[str, Any]:
         return self.runtime.resume(run_id)
 
+    def reconcile(self, run_id: str | None = None, *, decision_key: str | None = None) -> dict[str, Any]:
+        if not self.runnable:
+            return _blocked(self.unavailable_reason, provider_kind=self.provider_kind, run_id=run_id)
+        return self.runtime.reconcile(run_id, decision_key=decision_key)
+
     def stop(self, run_id: str | None = None, *, reason: str = "manual_stop") -> dict[str, Any]:
         return self.runtime.stop(run_id, reason=reason)
 
@@ -152,11 +161,13 @@ class StandaloneObservationManagedRunPort:
         *,
         fixture_mode: bool,
         live_inbound_revision_observer: Callable[[dict[str, Any]], Mapping[str, Any]] | None = None,
+        live_thread_binder: Callable[[dict[str, Any], dict[str, Any]], Mapping[str, Any]] | None = None,
     ):
         self.root = root
         self.provider = provider
         self.fixture_mode = fixture_mode
         self.live_inbound_revision_observer = live_inbound_revision_observer
+        self.live_thread_binder = live_thread_binder
         self._app_id = ""
         self._candidates: dict[str, ThreadCandidate] = {}
         self._opened: dict[str, _CachedThread] = {}
@@ -176,8 +187,19 @@ class StandaloneObservationManagedRunPort:
         payload_runtime = str(payload.get("runtime") or runtime)
         if payload_runtime != runtime:
             raise ValueError("managed_observation_runtime_mismatch")
+        # A fresh scan owns a new candidate generation. A cached discovery
+        # batch may reuse that generation, but never rows from an older one.
+        self._candidates.clear()
+        self._opened.clear()
         captured_at = _captured_at(payload)
-        entries = _message_list_entries(payload)
+        # Apply the same visible-row boundary as the compatibility operator
+        # before candidate priorities can move lower rows ahead of old history.
+        entries, _, history_cutoff_reached = _split_entries_at_history_cutoff(
+            _message_list_entries(payload), captured_at=captured_at,
+        )
+        next_cursor = _next_cursor(payload)
+        if history_cutoff_reached:
+            next_cursor = {**next_cursor, "current": None, "next": None, "exhausted": True}
         candidates: list[ThreadCandidate] = []
         for position, entry in enumerate(entries, start=1):
             candidate = self._candidate_from_entry(entry, position=position)
@@ -188,7 +210,7 @@ class StandaloneObservationManagedRunPort:
         return MessageListSnapshot(
             candidates=tuple(candidates),
             captured_at=captured_at,
-            next_cursor=_next_cursor(payload),
+            next_cursor=next_cursor,
         )
 
     def open_thread(self, candidate: ThreadCandidate) -> OpenThreadObservation:
@@ -266,51 +288,55 @@ class StandaloneObservationManagedRunPort:
     def _map_thread(self, candidate: ThreadCandidate, raw: dict[str, Any]) -> _CachedThread:
         raw_candidate_key = _first_string(raw, "candidate_key")
         if raw_candidate_key and raw_candidate_key != candidate.candidate_key:
-            raise ValueError("managed_thread_candidate_key_mismatch")
+            raise ManagedActionError("managed_thread_candidate_key_mismatch")
         raw_target_id = _first_string(raw, "target_id", "match_id")
         if raw_target_id and raw_target_id != candidate.target_id:
-            raise ValueError("managed_thread_target_id_mismatch")
+            raise ManagedActionError("managed_thread_target_id_mismatch")
         if self.fixture_mode:
             raw_binding = raw.get("target_binding")
             if raw_binding is not None and _canonical_binding(raw_binding) != candidate.target_binding:
-                raise ValueError("managed_thread_target_binding_mismatch")
+                raise ManagedActionError("managed_thread_target_binding_mismatch")
         else:
             raw_binding = raw.get("target_binding")
             if not _live_thread_binding_corroborates(candidate, raw_binding):
-                raise ValueError("managed_thread_structural_binding_not_corroborated")
+                raise ManagedActionError("managed_thread_structural_binding_not_corroborated")
             # `ThreadCandidate` is immutable, but its metadata is an intentional
             # run-local evidence cache.  The live action port only accepts the
             # original structured binding after this list-to-thread
             # corroboration succeeds; it never reconstructs evidence from the
             # canonical hash stored in candidate.target_binding.
             verified_binding = json.loads(json.dumps(raw_binding, ensure_ascii=False))
-            if self.live_inbound_revision_observer is not None:
+            thread_evidence = verified_binding.get("thread_evidence")
+            if not isinstance(thread_evidence, dict):
+                raise ManagedActionError("managed_thread_evidence_missing")
+            revision_payload = None
+            if self.live_thread_binder is not None:
+                revision_payload = dict(self.live_thread_binder(verified_binding, raw))
+            elif self.live_inbound_revision_observer is not None:
+                thread_evidence["managed_message_text_hashes"] = _visible_message_text_hashes(raw)
                 revision_payload = dict(self.live_inbound_revision_observer(verified_binding))
-                if revision_payload.get("status") != "ok":
-                    raise ValueError(
-                        str(revision_payload.get("reason") or "managed_inbound_revision_observation_failed")
-                    )
+            if revision_payload is not None:
+                _require_action_ok(revision_payload, "managed_inbound_revision_observation_failed")
                 managed_revision = str(revision_payload.get("inbound_revision") or "").strip()
                 revision_observation_id = str(
                     revision_payload.get("inbound_revision_observation_id") or ""
                 ).strip()
                 if not managed_revision or not revision_observation_id:
-                    raise ValueError("managed_inbound_revision_evidence_incomplete")
-                thread_evidence = verified_binding.get("thread_evidence")
-                if not isinstance(thread_evidence, dict):
-                    raise ValueError("managed_thread_evidence_missing")
+                    raise ManagedActionError("managed_inbound_revision_evidence_incomplete")
                 thread_evidence["managed_inbound_revision"] = managed_revision
                 thread_evidence["managed_inbound_revision_observation_id"] = revision_observation_id
                 thread_evidence["managed_inbound_revision_captured_at"] = revision_payload.get(
                     "inbound_revision_captured_at"
                 )
-                thread_evidence["managed_inbound_revision_source"] = "macos_accessibility_static_text"
+                thread_evidence["managed_inbound_revision_source"] = revision_payload.get(
+                    "evidence_source", "macos_accessibility_static_text"
+                )
                 candidate.metadata["managed_inbound_revision"] = managed_revision
             candidate.metadata["verified_target_binding"] = verified_binding
 
         inbound_revision = _thread_inbound_revision(raw)
         if not inbound_revision:
-            raise ValueError("managed_thread_inbound_revision_missing")
+            raise ManagedActionError("managed_thread_inbound_revision_missing")
         candidate.metadata["verified_inbound_revision"] = inbound_revision
         return _CachedThread(
             raw=dict(raw),
@@ -334,9 +360,15 @@ class StandaloneObservationManagedRunPort:
 
 
 class StandalonePlannerManagedDecisionPort:
-    def __init__(self, planner: StandaloneDraftPlanner, *, action_available: bool = True):
+    def __init__(
+        self, planner: StandaloneDraftPlanner, *, action_available: bool = True,
+        triage: Any = None, draft_constraints: Sequence[str] = (),
+    ):
         self.planner = planner
         self.action_available = action_available
+        self.triage = triage
+        self.draft_constraints = tuple(draft_constraints)
+        self.last_triage_metrics: dict[str, Any] = {}
 
     def prioritize(
         self,
@@ -348,6 +380,7 @@ class StandalonePlannerManagedDecisionPort:
         return min(candidates, key=lambda item: (item.priority, item.candidate_key)) if candidates else None
 
     def decide(self, observation: ThreadObservation, *, config: ManagedRunConfig) -> DraftDecision:
+        self.last_triage_metrics = {}
         raw = observation.context.get("standalone_thread_observation")
         assessment_value = raw.get("assessment") if isinstance(raw, dict) else None
         assessment: dict[str, Any] = dict(assessment_value) if isinstance(assessment_value, dict) else {}
@@ -380,7 +413,23 @@ class StandalonePlannerManagedDecisionPort:
                 inbound_revision=observation.inbound_revision,
                 reason_codes=("managed_thread_memory_match_missing",),
             )
-        result = self.planner.draft_for_match(match_id=match_id, mode="adaptive")
+        if self.triage is not None and recommended == "reply" and isinstance(raw, dict):
+            routed = self.triage.evaluate(raw)
+            self.last_triage_metrics = dict(routed.metrics)
+            if routed.route in {"wait", "handoff"}:
+                return DraftDecision(
+                    decision_id=_decision_id(observation, routed.reason),
+                    outcome=routed.route,
+                    target_id=observation.target_id,
+                    inbound_revision=observation.inbound_revision,
+                    reason_codes=(routed.reason,),
+                )
+        if self.draft_constraints:
+            result = self.planner.draft_for_match(
+                match_id=match_id, mode="adaptive", supplemental_prompts=list(self.draft_constraints),
+            )
+        else:
+            result = self.planner.draft_for_match(match_id=match_id, mode="adaptive")
         if result.get("status") != "ok" or not isinstance(result.get("draft"), dict):
             return DraftDecision(
                 decision_id=_decision_id(observation, "handoff"),
@@ -390,7 +439,21 @@ class StandalonePlannerManagedDecisionPort:
                 reason_codes=(str(result.get("reason") or "managed_draft_not_available"),),
             )
         draft = result["draft"]
-        text = str(draft.get("best_reply") or "").strip()
+        raw_sequence = draft.get("message_sequence")
+        if raw_sequence is not None and (
+            not isinstance(raw_sequence, list)
+            or len(raw_sequence) > 3
+            or any(not isinstance(item, str) or not item.strip() for item in raw_sequence)
+        ):
+            return DraftDecision(
+                decision_id=_decision_id(observation, "invalid_message_sequence"),
+                outcome="handoff",
+                target_id=observation.target_id,
+                inbound_revision=observation.inbound_revision,
+                reason_codes=("managed_draft_message_sequence_invalid",),
+            )
+        messages = tuple(item.strip() for item in raw_sequence) if raw_sequence is not None else ()
+        text = "\n".join(messages) if messages else str(draft.get("best_reply") or "").strip()
         if not text:
             return DraftDecision(
                 decision_id=_decision_id(observation, "handoff"),
@@ -413,6 +476,7 @@ class StandalonePlannerManagedDecisionPort:
             target_id=observation.target_id,
             inbound_revision=observation.inbound_revision,
             text=text,
+            message_sequence=messages or None,
         )
 
 
@@ -476,6 +540,7 @@ class DevelopmentFixtureActionPort:
             captured_at=self._tick(),
             input_cleared=self._composer.get(candidate.candidate_key, "") == "",
             outbound_text=committed[1],
+            continuation_verified=True,
         )
 
     def _tick(self) -> str:
@@ -536,12 +601,12 @@ class TaShuoMacIosManagedActionPort:
         )
         _require_action_ok(payload, "managed_stage_failed")
         if payload.get("staged_exact_text_ax_verified") is not True:
-            raise RuntimeError("managed_staged_exact_text_not_verified")
+            raise ManagedActionError("managed_staged_exact_text_not_verified")
         if payload.get("post_stage_inbound_revision_verified") is not True:
-            raise RuntimeError("managed_post_stage_inbound_revision_not_verified")
+            raise ManagedActionError("managed_post_stage_inbound_revision_not_verified")
         captured_at = str(payload.get("captured_at") or "")
         if not captured_at:
-            raise RuntimeError("managed_stage_observation_incomplete")
+            raise ManagedActionError("managed_stage_observation_incomplete")
         self._last_composer[candidate.candidate_key] = text
         return ComposerObservation(
             target_id=candidate.target_id,
@@ -557,18 +622,21 @@ class TaShuoMacIosManagedActionPort:
         managed_inbound_revision = self._managed_inbound_revision(binding)
         expected_text = self._last_composer.get(candidate.candidate_key, "")
         if not expected_text:
-            raise RuntimeError("managed_expected_composer_text_missing")
+            raise ManagedActionError("managed_expected_composer_text_missing")
+        deadline = candidate.metadata.get("managed_burst_click_deadline_at")
+        deadline_options = {"click_deadline_at": deadline} if deadline is not None else {}
         payload = self.adapter.click_managed_send_only(
             expected_text,
             target_binding=binding,
             inbound_revision=managed_inbound_revision,
             output_dir=self.output_dir,
+            **deadline_options,
         )
         _require_action_ok(payload, "managed_click_result_unknown")
         receipt_id = str(payload.get("receipt_id") or "")
         clicked_at = str(payload.get("clicked_at") or "")
         if not receipt_id or not clicked_at:
-            raise RuntimeError("managed_click_receipt_incomplete")
+            raise ManagedActionError("managed_click_receipt_incomplete")
         self._receipts[receipt_id] = dict(payload)
         return ClickReceipt(receipt_id=receipt_id, clicked_at=clicked_at)
 
@@ -580,7 +648,7 @@ class TaShuoMacIosManagedActionPort:
         if not expected_text or click_payload is None:
             # Recovery without the process-local pre-click capture is unknown,
             # never a reason to repeat the irreversible Return action.
-            raise RuntimeError("managed_click_receipt_evidence_missing")
+            raise ManagedActionError("managed_click_receipt_evidence_missing")
         payload = self.adapter.observe_managed_post_send(
             expected_text,
             target_binding=binding,
@@ -594,7 +662,8 @@ class TaShuoMacIosManagedActionPort:
             and payload.get("outbound_exact_text_ax_verified") is True
             and payload.get("fresh_outbound_occurrence_verified") is True
         ):
-            raise RuntimeError("managed_post_send_exact_freshness_not_verified")
+            raise ManagedActionError("managed_post_send_exact_freshness_not_verified")
+        continuation_verified = self._bind_continuation(candidate, binding, payload)
         return PostSendObservation(
             observation_id=str(payload["post_action_observation_id"]),
             receipt_id=receipt.receipt_id,
@@ -603,15 +672,75 @@ class TaShuoMacIosManagedActionPort:
             captured_at=str(payload["captured_at"]),
             input_cleared=True,
             outbound_text=expected_text,
+            continuation_verified=continuation_verified,
         )
+
+    def _bind_continuation(
+        self, candidate: ThreadCandidate, binding: dict[str, Any], payload: dict[str, Any]
+    ) -> bool:
+        """Advance AX evidence only from the just-verified outbound-only transition.
+
+        The logical inbound revision stays unchanged for deduplication. A fresh
+        stage/click still verifies this new AX baseline before each next bubble.
+        """
+        if payload.get("continuation_verified") is not True:
+            return False
+        from dating_boost.apps.tashuo.managed_live_action import _bound_message_text_hashes
+
+        message_hashes = _bound_message_text_hashes(binding)
+        sent_text = self._last_composer.get(candidate.candidate_key, "")
+        if not message_hashes or not sent_text.strip():
+            return False
+        revision = payload.get("continuation_inbound_revision")
+        observation_id = payload.get("continuation_inbound_revision_observation_id")
+        captured_at = payload.get("continuation_inbound_revision_captured_at")
+        evidence = binding.get("thread_evidence", {})
+        if (
+            not isinstance(revision, str)
+            or re.fullmatch(r"ax-static-v1:[0-9a-f]{64}", revision) is None
+            or revision == self._managed_inbound_revision(binding)
+            or not isinstance(observation_id, str)
+            or not observation_id
+            or observation_id != payload.get("post_action_observation_id")
+            or observation_id == evidence.get("managed_inbound_revision_observation_id")
+            or not isinstance(captured_at, str)
+            or not captured_at
+            or captured_at != payload.get("captured_at")
+        ):
+            return False
+        visual_evidence: dict[str, Any] = {}
+        if binding.get("binding_type") == "current_thread_visual_identity":
+            from dating_boost.apps.tashuo.targeting import _tashuo_visual_anchor_region
+
+            anchor = payload.get("continuation_visual_anchor_hash")
+            region = payload.get("continuation_visual_anchor_region")
+            if (
+                not isinstance(anchor, str)
+                or re.fullmatch(r"[0-9a-f]{16}", anchor) is None
+                or region != _tashuo_visual_anchor_region(evidence)
+            ):
+                return False
+            visual_evidence = {"visual_anchor_hash": anchor, "visual_anchor_region": dict(region)}
+        candidate.metadata["verified_target_binding"] = {
+            **binding,
+            "thread_evidence": {
+                **evidence,
+                "managed_inbound_revision": revision,
+                "managed_inbound_revision_observation_id": observation_id,
+                "managed_inbound_revision_captured_at": captured_at,
+                "managed_message_text_hashes": [*message_hashes, hashlib.sha256(sent_text.strip().encode("utf-8")).hexdigest()],
+                **visual_evidence,
+            },
+        }
+        return True
 
     def _verified_binding(self, candidate: ThreadCandidate) -> dict[str, Any]:
         binding = candidate.metadata.get("verified_target_binding")
         revision = str(candidate.metadata.get("verified_inbound_revision") or "")
         if not isinstance(binding, dict):
-            raise RuntimeError("managed_structured_target_binding_missing")
+            raise ManagedActionError("managed_structured_target_binding_missing")
         if revision != _authoritative_candidate_revision(candidate):
-            raise RuntimeError("managed_structured_target_binding_stale")
+            raise ManagedActionError("managed_structured_target_binding_stale")
         return binding
 
     @staticmethod
@@ -623,12 +752,33 @@ class TaShuoMacIosManagedActionPort:
             else ""
         )
         if not revision:
-            raise RuntimeError("managed_inbound_revision_binding_missing")
+            raise ManagedActionError("managed_inbound_revision_binding_missing")
         return revision
 
     def _require_mutation_allowed(self) -> None:
         if self.safety.is_paused():
-            raise RuntimeError("global_safety_paused")
+            raise ManagedActionError("global_safety_paused")
+
+
+def _visible_message_text_hashes(raw: dict[str, Any]) -> list[str]:
+    observation = raw.get("observation")
+    conversation = observation.get("conversation_observation") if isinstance(observation, dict) else None
+    messages = conversation.get("visible_messages") if isinstance(conversation, dict) else None
+    if not isinstance(messages, list):
+        raise ManagedActionError("managed_conversation_text_not_accessible")
+    hashes: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            raise ManagedActionError("managed_conversation_text_not_accessible")
+        if message.get("sender") == "system":
+            continue
+        text = message.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ManagedActionError("managed_conversation_text_not_accessible")
+        hashes.append(hashlib.sha256(text.strip().encode("utf-8")).hexdigest())
+    if not hashes:
+        raise ManagedActionError("managed_conversation_text_not_accessible")
+    return hashes
 
 
 def build_managed_run_runtime(
@@ -775,6 +925,15 @@ def _build_tashuo_managed_run_from_config(
             unavailable_reason=str(scope_block.get("reason") or "runtime_scope_required"),
         )
     try:
+        triage = _build_managed_triage(config)
+    except (RuntimeError, ValueError) as exc:
+        return ManagedRunProviderRuntime(
+            ManagedRun(store, port, port, port),
+            provider_kind="tashuo_mac_ios_live",
+            runnable=False,
+            unavailable_reason=getattr(exc, "reason", "managed_run_typesafe_configuration_invalid"),
+        )
+    try:
         vision_backend = create_vision_backend(dict(vision_config))
     except (FileNotFoundError, RuntimeError, ValueError):
         return ManagedRunProviderRuntime(
@@ -789,40 +948,70 @@ def _build_tashuo_managed_run_from_config(
         return create_adapter("tashuo", runtime="mac-ios-app")
 
     from dating_boost.apps.tashuo.standalone import TaShuoMacIosStandaloneObservationProvider
+    from dating_boost.apps.tashuo.managed_visual_evidence import ManagedVisualVerifier
+    from dating_boost.apps.tashuo.managed_visual_io import TaShuoManagedVisualIO
+    from dating_boost.core.managed_visual_action import TaShuoVisualManagedActionPort
+
+    visual_io = TaShuoManagedVisualIO(data_dir, output_dir, adapter_factory)
+    action = TaShuoVisualManagedActionPort(
+        data_dir, io=visual_io, verifier=ManagedVisualVerifier(vision_backend),
+    )
 
     provider = TaShuoMacIosStandaloneObservationProvider(
         root=data_dir,
         output_dir=output_dir,
         vision_backend=vision_backend,
         adapter_factory=adapter_factory,
+        thread_capture=visual_io.capture_initial_thread,
     )
-
-    def observe_live_inbound_revision(target_binding: dict[str, Any]) -> Mapping[str, Any]:
-        return adapter_factory().observe_managed_inbound_revision(
-            target_binding=target_binding,
-            output_dir=output_dir,
-        )
 
     observation = StandaloneObservationManagedRunPort(
         data_dir,
         provider,
         fixture_mode=False,
-        live_inbound_revision_observer=observe_live_inbound_revision,
+        live_thread_binder=action.bind_thread,
     )
     decision = StandalonePlannerManagedDecisionPort(
         StandaloneDraftPlanner(data_dir, backend_config=dict(backend_config)),
         action_available=True,
-    )
-    action = TaShuoMacIosManagedActionPort(
-        data_dir,
-        output_dir=output_dir,
-        adapter_factory=adapter_factory,
+        triage=triage,
     )
     return ManagedRunProviderRuntime(
-        ManagedRun(store, observation, decision, action),
+        ManagedRun(store, observation, decision, action, scan_batch_max_age_seconds=120.0),
         provider_kind="tashuo_mac_ios_live",
         runnable=True,
         start_precondition=lambda: managed_run_start_readiness(data_dir),
+    )
+
+
+def _build_managed_triage(config: Mapping[str, Any]) -> Any:
+    """Explicit opt-in only: possession of a key does not change data routing."""
+
+    router = config.get("semantic_router")
+    if router is None:
+        enabled = os.environ.get(MANAGED_RUN_JEV_ENV, "").strip().lower()
+        if enabled in {"", "0", "false", "no"}:
+            return None
+        if enabled not in {"1", "true", "yes"}:
+            raise ValueError("managed_run_typesafe_enable_flag_invalid")
+        router = {"type": "typesafe"}
+    if not isinstance(router, dict):
+        raise ValueError("managed_run_semantic_router_invalid")
+    if router.get("type") == "disabled":
+        return None
+    if router.get("type") != "typesafe":
+        raise ValueError("managed_run_semantic_router_type_invalid")
+    from dating_boost.intelligence.managed_triage import JevManagedTriage
+    from dating_boost.intelligence.typesafe import TypeSafeClient
+
+    return JevManagedTriage(
+        TypeSafeClient(
+            model=router.get("model", "jev-latest"),
+            api_key_env=router.get("api_key_env", "TYPESAFE_API_KEY"),
+            timeout_seconds=router.get("timeout_seconds", 5.0),
+        ),
+        confidence_threshold=router.get("confidence_threshold", 0.85),
+        probability_threshold=router.get("probability_threshold", 0.90),
     )
 
 
@@ -919,9 +1108,9 @@ def _nudge_wait_reason(assessment: dict[str, Any], *, config: ManagedRunConfig) 
 
 def _require_action_ok(payload: Any, fallback_reason: str) -> None:
     if not isinstance(payload, dict):
-        raise RuntimeError(fallback_reason)
+        raise ManagedActionError(fallback_reason)
     if payload.get("status") != "ok":
-        raise RuntimeError(str(payload.get("reason") or fallback_reason))
+        raise ManagedActionError(payload.get("reason"), fallback_reason=fallback_reason)
 
 
 def _message_list_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1004,7 +1193,7 @@ def _thread_inbound_revision(raw: dict[str, Any]) -> str:
 def _authoritative_candidate_revision(candidate: ThreadCandidate) -> str:
     revision = str(candidate.inbound_revision or "").strip()
     if not revision:
-        raise RuntimeError("managed_authoritative_inbound_revision_missing")
+        raise ManagedActionError("managed_authoritative_inbound_revision_missing")
     return revision
 
 
@@ -1021,12 +1210,14 @@ def _captured_at(payload: dict[str, Any]) -> str:
 
 def _require_ok_observation(payload: Any, expected_type: str) -> None:
     if not isinstance(payload, dict):
-        raise ValueError("managed_observation_must_be_object")
-    if payload.get("status") == "blocked":
-        raise ValueError(str(payload.get("reason") or "managed_observation_blocked"))
+        raise ManagedActionError("managed_observation_must_be_object")
+    # Legacy observation fixtures omit status; explicit non-ok results cannot
+    # become usable evidence or lose their bounded diagnostic reason.
+    if payload.get("status", "ok") != "ok":
+        raise ManagedActionError(payload.get("reason"), fallback_reason="managed_observation_blocked")
     observation_type = str(payload.get("observation_type") or expected_type)
     if observation_type != expected_type:
-        raise ValueError("managed_observation_type_mismatch")
+        raise ManagedActionError("managed_observation_type_mismatch")
 
 
 def _canonical_binding(value: Any) -> str:

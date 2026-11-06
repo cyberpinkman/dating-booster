@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -9,10 +10,14 @@ import pytest
 
 from dating_boost.core.managed_run import (
     DraftDecision,
+    InMemoryManagedRunStore,
     JsonManagedRunStore,
     ManagedAuthorization,
+    ManagedActionError,
     ManagedRun,
     ManagedRunConfig,
+    MessageListSnapshot,
+    OpenThreadObservation,
     ThreadCandidate,
     ThreadObservation,
 )
@@ -27,11 +32,120 @@ from dating_boost.core.managed_run_provider import (
     StandaloneObservationManagedRunPort,
     TaShuoMacIosManagedActionPort,
     build_managed_run_runtime,
+    _require_action_ok,
+    _require_ok_observation,
 )
 from dating_boost.core.runtime_scope import RuntimeScopeRepository
 
 
 pytestmark = pytest.mark.managed_critical
+
+
+@pytest.mark.parametrize("runnable", [True, False])
+def test_reconciliation_facade_requires_provider_and_forwards_only_recovery(runnable):
+    runtime = Mock()
+    runtime.reconcile.return_value = {"status": "reconciled"}
+    facade = ManagedRunProviderRuntime(runtime, provider_kind="test", runnable=runnable)
+
+    result = facade.reconcile("old-run", decision_key="old-attempt")
+
+    if runnable:
+        assert result == {"status": "reconciled"}
+        runtime.reconcile.assert_called_once_with("old-run", decision_key="old-attempt")
+    else:
+        assert result["status"] == "blocked"
+        runtime.reconcile.assert_not_called()
+    runtime.start.assert_not_called()
+    runtime.run.assert_not_called()
+
+
+@pytest.mark.parametrize("reason", [None, "", "PRIVATE chat and key", "UPPER_CASE", "bad-code", "bad__code", "bad_code_", "a" * 97, {"private": "text"}])
+def test_action_adapter_error_rejects_raw_or_unbounded_reason_payloads(reason) -> None:
+    with pytest.raises(ManagedActionError) as caught:
+        _require_action_ok({"status": "blocked", "reason": reason}, "managed_stage_failed")
+    assert caught.value.reason_code == "managed_stage_failed"
+    assert str(caught.value) == "managed_stage_failed"
+
+
+def test_action_adapter_error_keeps_only_a_bounded_machine_code() -> None:
+    with pytest.raises(ManagedActionError) as caught:
+        _require_action_ok({"status": "blocked", "reason": "managed_inbound_revision_changed", "error": "PRIVATE chat"}, "managed_stage_failed")
+    assert caught.value.reason_code == "managed_inbound_revision_changed"
+    assert "PRIVATE" not in str(caught.value)
+    assert ManagedActionError("PRIVATE chat", fallback_reason="PRIVATE key").reason_code == "managed_action_failed"
+    assert ManagedActionError("a" * 96).reason_code == "a" * 96
+
+
+def test_observation_adapter_error_preserves_the_safe_machine_code() -> None:
+    with pytest.raises(ManagedActionError) as caught:
+        _require_ok_observation({
+            "status": "blocked", "observation_type": "thread",
+            "reason": "tashuo_conversation_not_verified", "error": "PRIVATE diagnostic text",
+        }, "thread")
+    assert caught.value.reason_code == "tashuo_conversation_not_verified"
+    assert str(caught.value) == "tashuo_conversation_not_verified"
+
+
+@pytest.mark.parametrize("reason", [None, "", "PRIVATE chat and key", "UPPER_CASE", "bad-code", "bad__code", "bad_code_", "a" * 97, {"private": "text"}, True])
+def test_observation_adapter_error_sanitizes_invalid_reasons(reason) -> None:
+    with pytest.raises(ManagedActionError) as caught:
+        _require_ok_observation({"status": "blocked", "reason": reason}, "thread")
+    assert caught.value.reason_code == "managed_observation_blocked"
+    assert str(caught.value) == "managed_observation_blocked"
+
+
+@pytest.mark.parametrize("payload", [None, [], "PRIVATE raw payload", True, 1])
+def test_observation_adapter_error_requires_an_object(payload) -> None:
+    with pytest.raises(ManagedActionError) as caught:
+        _require_ok_observation(payload, "message_list")
+    assert caught.value.reason_code == "managed_observation_must_be_object"
+
+
+@pytest.mark.parametrize("status", [None, "", "blocked", "failed", "needs_verification", "unknown", True, 1, [], {}])
+def test_observation_adapter_error_rejects_explicit_non_ok_status(status) -> None:
+    payload = {"observation_type": "thread", "status": status}
+    with pytest.raises(ManagedActionError) as caught:
+        _require_ok_observation(payload, "thread")
+    assert caught.value.reason_code == "managed_observation_blocked"
+
+
+@pytest.mark.parametrize("observation_type", ["message_list", "PRIVATE type", True, 1, ["wrong"], {"private": "type"}])
+def test_observation_adapter_error_keeps_existing_observation_type_mismatch_check(observation_type) -> None:
+    payload = {"status": "ok", "observation_type": observation_type}
+    with pytest.raises(ManagedActionError) as caught:
+        _require_ok_observation(payload, "thread")
+    assert caught.value.reason_code == "managed_observation_type_mismatch"
+
+
+@pytest.mark.parametrize("expected_type", ["message_list", "thread"])
+def test_observation_adapter_accepts_explicit_ok_and_matching_type(expected_type) -> None:
+    assert _require_ok_observation({"status": "ok", "observation_type": expected_type}, expected_type) is None
+
+
+@pytest.mark.parametrize("payload", [{}, {"status": "ok"}, {"observation_type": "thread"}, {"status": "ok", "observation_type": None}])
+def test_observation_adapter_preserves_legacy_omitted_status_and_default_type(payload) -> None:
+    assert _require_ok_observation(payload, "thread") is None
+
+
+@pytest.mark.parametrize(
+    ("fixture_mode", "raw", "reason"),
+    [
+        (True, {"candidate_key": "wrong"}, "managed_thread_candidate_key_mismatch"),
+        (True, {"target_id": "wrong"}, "managed_thread_target_id_mismatch"),
+        (True, {"target_binding": "wrong"}, "managed_thread_target_binding_mismatch"),
+        (False, {}, "managed_thread_structural_binding_not_corroborated"),
+        (True, {}, "managed_thread_inbound_revision_missing"),
+    ],
+)
+def test_thread_mapping_keeps_known_failure_codes_at_observation_boundary(tmp_path, fixture_mode, raw, reason) -> None:
+    port = StandaloneObservationManagedRunPort(tmp_path, Mock(), fixture_mode=fixture_mode)
+    candidate = ThreadCandidate(
+        candidate_key="row", target_id="target", target_binding="fixture:target", discovery_revision="preview",
+    )
+    with pytest.raises(ManagedActionError) as caught:
+        port._map_thread(candidate, raw)
+    assert caught.value.reason_code == reason
+    assert str(caught.value) == reason
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +162,37 @@ class _Planner:
         assert match_id
         assert mode == "adaptive"
         return {"status": "ok", "draft": {"best_reply": "可以，周日下午怎么样？"}}
+
+
+@pytest.mark.parametrize("messages", [[], ["哈哈，是有点"], ["哈哈，是有点", "你后来怎么处理的？"], ["哈哈", "这个画面感", "你后来怎么处理的？"]])
+def test_decision_preserves_complete_authored_bubble_sequence(messages: list[str]) -> None:
+    planner = Mock()
+    planner.draft_for_match.return_value = {
+        "status": "ok", "draft": {"best_reply": "单条备用回复", "message_sequence": messages},
+    }
+    port = StandalonePlannerManagedDecisionPort(planner)
+    decision = port.decide(ThreadObservation(
+        target_id="target", target_binding="binding", inbound_revision="inbound",
+        captured_at="2026-09-20T04:00:00Z", context={"match_id": "match"},
+    ), config=_config())
+    assert decision.outcome == "send"
+    assert decision.text == ("\n".join(messages) if messages else "单条备用回复")
+    assert tuple(decision.message_sequence or (decision.text,)) == tuple(messages or ["单条备用回复"])
+    planner.draft_for_match.assert_called_once_with(match_id="match", mode="adaptive")
+
+
+@pytest.mark.parametrize("messages", [["一", "二", "三", "四"], ["一", ""], ["一", 2], "一二"])
+def test_invalid_sequence_is_not_silently_truncated_or_cast(messages: object) -> None:
+    planner = Mock()
+    planner.draft_for_match.return_value = {
+        "status": "ok", "draft": {"best_reply": "备用回复", "message_sequence": messages},
+    }
+    decision = StandalonePlannerManagedDecisionPort(planner).decide(ThreadObservation(
+        target_id="target", target_binding="binding", inbound_revision="inbound",
+        captured_at="2026-09-20T04:00:00Z", context={"match_id": "match"},
+    ), config=_config())
+    assert decision.outcome == "handoff"
+    assert decision.reason_codes == ("managed_draft_message_sequence_invalid",)
 
 
 def _config() -> ManagedRunConfig:
@@ -348,7 +493,9 @@ def test_nudge_later_waits_without_both_authorized_config_and_due_evidence(
     assert result.reason_codes == (expected_reason,)
 
 
-def test_live_observation_caches_only_corroborated_structured_binding_for_action_port(tmp_path: Path) -> None:
+@pytest.mark.parametrize("accessible", [True, False])
+@pytest.mark.parametrize("visual", [True, False])
+def test_live_observation_caches_only_corroborated_structured_binding_for_action_port(tmp_path: Path, accessible: bool, visual: bool) -> None:
     binding = {
         "binding_type": "current_thread_visual_identity",
         "candidate_key": "row_ada",
@@ -397,19 +544,26 @@ def test_live_observation_caches_only_corroborated_structured_binding_for_action
                 "captured_at": "2026-08-27T04:00:01Z",
                 "target_binding": binding,
                 "assessment": {"recommended_next": "wait"},
+                "observation": _app_observation(),
             }
 
-    managed_revision = "ax-static-v1:managed-revision"
+    managed_revision = ("visual-frame-v1:" if visual else "ax-static-v1:") + "managed-revision"
+    revision_payload = {
+        "status": "ok" if accessible else "blocked",
+        "reason": "managed_conversation_text_not_accessible",
+        "inbound_revision": managed_revision,
+        "inbound_revision_observation_id": "managed_revision_obs_1",
+        "inbound_revision_captured_at": "2026-08-27T04:00:01.500000Z",
+        "evidence_source": "visible_conversation_screenshot" if visual else "macos_accessibility_static_text",
+    }
+    ax_observer = Mock(return_value=revision_payload)
+    binder = Mock(return_value=revision_payload)
     port = StandaloneObservationManagedRunPort(
         tmp_path,
         Provider(),
         fixture_mode=False,
-        live_inbound_revision_observer=lambda _binding: {
-            "status": "ok",
-            "inbound_revision": managed_revision,
-            "inbound_revision_observation_id": "managed_revision_obs_1",
-            "inbound_revision_captured_at": "2026-08-27T04:00:01.500000Z",
-        },
+        live_inbound_revision_observer=ax_observer,
+        live_thread_binder=binder if visual else None,
     )
     snapshot = port.scan_message_list(
         run_id="run_1",
@@ -419,6 +573,12 @@ def test_live_observation_caches_only_corroborated_structured_binding_for_action
     )
     candidate = snapshot.candidates[0]
 
+    if not accessible:
+        with pytest.raises(ManagedActionError) as caught:
+            port.open_thread(candidate)
+        assert caught.value.reason_code == "managed_conversation_text_not_accessible"
+        assert "verified_target_binding" not in candidate.metadata
+        return
     port.open_thread(candidate)
     port.observe_thread(candidate)
 
@@ -429,6 +589,32 @@ def test_live_observation_caches_only_corroborated_structured_binding_for_action
         == "managed_revision_obs_1"
     )
     assert candidate.metadata["verified_inbound_revision"] == "inbound_7"
+    if visual:
+        ax_observer.assert_not_called()
+        binder.assert_called_once()
+        assert "managed_message_text_hashes" not in verified_binding["thread_evidence"]
+        assert verified_binding["thread_evidence"]["managed_inbound_revision_source"] == "visible_conversation_screenshot"
+    else:
+        assert verified_binding["thread_evidence"]["managed_message_text_hashes"] == [
+            hashlib.sha256(text.encode()).hexdigest() for text in ["周末有空", "那你定呀"]
+        ]
+
+
+@pytest.mark.parametrize("messages", [None, [], [{"sender": "system", "text": "system only"}], [{"sender": "match", "text": ""}], [None]])
+def test_visible_message_coverage_expectations_fail_closed_when_missing(messages) -> None:
+    from dating_boost.core.managed_run_provider import _visible_message_text_hashes
+
+    raw = {"observation": {"conversation_observation": {"visible_messages": messages}}}
+    with pytest.raises(ManagedActionError) as caught:
+        _visible_message_text_hashes(raw)
+    assert caught.value.reason_code == "managed_conversation_text_not_accessible"
+
+
+def test_visible_message_coverage_uses_only_ordered_non_system_body_hashes() -> None:
+    from dating_boost.core.managed_run_provider import _visible_message_text_hashes
+
+    messages = [{"sender": "system", "text": "system"}] + [{"sender": sender, "text": "repeat"} for sender in ["match", "user"]]
+    assert _visible_message_text_hashes({"observation": {"conversation_observation": {"visible_messages": messages}}}) == [hashlib.sha256(b"repeat").hexdigest()] * 2
 
 
 class _ManagedActionAdapter:
@@ -544,6 +730,9 @@ def test_truncated_list_preview_defers_to_full_thread_revision_for_send_and_dedu
                 "captured_at": "2026-08-27T04:00:01Z",
                 "target_binding": binding,
                 "assessment": {"recommended_next": "reply"},
+                "observation": {**_app_observation(), "conversation_observation": {
+                    "visible_messages": [{"sender": "match", "text": full_inbound}],
+                }},
             }
 
     class Decision:
@@ -659,6 +848,173 @@ def test_tashuo_action_port_uses_split_adapter_boundaries_without_all_in_one_sen
     assert not hasattr(adapter, "send_message")
 
 
+@pytest.mark.parametrize("proof", ["valid", "absent", "wrong_revision", "stale_observation", "wrong_time", "missing_anchor", "wrong_region"])
+def test_live_burst_continuation_advances_only_proven_ax_baseline(tmp_path: Path, proof: str) -> None:
+    adapter = _ManagedActionAdapter()
+    original_post = adapter.observe_managed_post_send
+    next_revision = "ax-static-v1:" + "a" * 64
+
+    def post(text: str, **kwargs: object) -> dict[str, object]:
+        payload = original_post(text, **kwargs)
+        payload.update({
+            "continuation_verified": proof != "absent",
+            "continuation_inbound_revision": next_revision if proof != "wrong_revision" else "arbitrary",
+            "continuation_inbound_revision_observation_id": "post_ada" if proof != "stale_observation" else "baseline",
+            "continuation_inbound_revision_captured_at": payload["captured_at"] if proof != "wrong_time" else "stale",
+            "continuation_visual_anchor_hash": "ffffffffffffffff" if proof != "missing_anchor" else None,
+            "continuation_visual_anchor_region": {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65 if proof != "wrong_region" else 0.66},
+        })
+        return payload
+
+    adapter.observe_managed_post_send = post
+    port = TaShuoMacIosManagedActionPort(tmp_path, output_dir=tmp_path / "harness", adapter_factory=lambda: adapter)
+    original_binding = {
+        "binding_type": "current_thread_visual_identity",
+        "thread_evidence": {
+            "visual_anchor_hash": "retained-anchor",
+            "managed_inbound_revision": "ax-static-v1:baseline",
+            "managed_inbound_revision_observation_id": "baseline",
+            "managed_message_text_hashes": [hashlib.sha256(b"old message").hexdigest()],
+        },
+    }
+    candidate = ThreadCandidate(
+        candidate_key="row", target_id="target", target_binding="binding",
+        discovery_revision="preview", inbound_revision="original-inbound",
+        metadata={"verified_target_binding": original_binding, "verified_inbound_revision": "original-inbound"},
+    )
+    port.stage_text(candidate, "第一条")
+    receipt = port.click_send(candidate)
+    observed = port.observe_post_send(candidate, receipt)
+    assert observed.outbound_text == "第一条"  # Confirmation does not depend on permission to continue.
+    assert observed.continuation_verified is (proof == "valid")
+    binding = candidate.metadata["verified_target_binding"]
+    expected_revision = next_revision if proof == "valid" else "ax-static-v1:baseline"
+    assert binding["thread_evidence"]["managed_inbound_revision"] == expected_revision
+    assert binding["thread_evidence"]["visual_anchor_hash"] == ("ffffffffffffffff" if proof == "valid" else "retained-anchor")
+    assert candidate.metadata["verified_inbound_revision"] == "original-inbound"
+    assert original_binding["thread_evidence"]["managed_inbound_revision"] == "ax-static-v1:baseline"
+    expected_messages = [hashlib.sha256(b"old message").hexdigest()]
+    if proof == "valid":
+        expected_messages.append(hashlib.sha256("第一条".encode()).hexdigest())
+    assert binding["thread_evidence"]["managed_message_text_hashes"] == expected_messages
+    if proof == "valid":
+        staged = port.stage_text(candidate, "第二条")
+        assert staged.inbound_revision == "original-inbound"
+        assert adapter.inbound_revisions[-1] == next_revision
+
+
+def test_live_port_forwards_burst_deadline_to_irreversible_boundary(tmp_path: Path) -> None:
+    adapter = _ManagedActionAdapter()
+    adapter.click_managed_send_only = Mock(wraps=adapter.click_managed_send_only)
+    port = TaShuoMacIosManagedActionPort(tmp_path, output_dir=tmp_path / "harness", adapter_factory=lambda: adapter)
+    candidate = ThreadCandidate(
+        candidate_key="row", target_id="target", target_binding="binding",
+        discovery_revision="preview", inbound_revision="inbound",
+        metadata={
+            "verified_inbound_revision": "inbound",
+            "verified_target_binding": {"thread_evidence": {"managed_inbound_revision": "ax-static-v1:baseline"}},
+            "managed_burst_click_deadline_at": "2026-09-20T04:00:20Z",
+        },
+    )
+    port.stage_text(candidate, "第二条")
+    port.click_send(candidate)
+    assert adapter.click_managed_send_only.call_args.kwargs["click_deadline_at"] == "2026-09-20T04:00:20Z"
+
+
+@pytest.mark.parametrize("message_count", [2, 3])
+def test_managed_runtime_burst_uses_each_fresh_ax_binding_without_replanning(tmp_path: Path, message_count: int) -> None:
+    now = [datetime(2026, 9, 20, 4, tzinfo=timezone.utc)]
+
+    def timestamp() -> str:
+        now[0] += timedelta(seconds=1)
+        return now[0].isoformat()
+
+    class Adapter(_ManagedActionAdapter):
+        revision = "ax-static-v1:" + "a" * 64
+        anchor = "0000000000000000"
+        sends = 0
+
+        def _record_revision(self, kwargs):
+            super()._record_revision(kwargs)
+            assert kwargs["inbound_revision"] == self.revision
+            assert kwargs["target_binding"]["thread_evidence"]["managed_inbound_revision"] == self.revision
+            assert kwargs["target_binding"]["thread_evidence"]["visual_anchor_hash"] == self.anchor
+
+        def stage_managed_text(self, text, **kwargs):
+            assert self.text == ""
+            payload = super().stage_managed_text(text, **kwargs)
+            return {**payload, "captured_at": timestamp()}
+
+        def click_managed_send_only(self, text, **kwargs):
+            payload = super().click_managed_send_only(text, **kwargs)
+            assert ("click_deadline_at" in kwargs) is (self.sends > 0)
+            self.sends += 1
+            return {**payload, "receipt_id": f"receipt_{self.sends}", "clicked_at": timestamp()}
+
+        def observe_managed_post_send(self, text, **kwargs):
+            payload = super().observe_managed_post_send(text, **kwargs)
+            self.text = ""
+            self.revision = "ax-static-v1:" + hashlib.sha256((self.revision + text).encode()).hexdigest()
+            self.anchor = f"{self.sends:016x}"
+            captured_at = timestamp()
+            observation_id = f"post_{self.sends}"
+            return {
+                **payload, "captured_at": captured_at, "post_action_observation_id": observation_id,
+                "continuation_verified": True, "continuation_inbound_revision": self.revision,
+                "continuation_inbound_revision_observation_id": observation_id,
+                "continuation_inbound_revision_captured_at": captured_at,
+                "continuation_visual_anchor_hash": self.anchor,
+                "continuation_visual_anchor_region": {"x1": 0.0, "y1": 0.08, "x2": 1.0, "y2": 0.65},
+            }
+
+    adapter = Adapter()
+    candidate = ThreadCandidate(
+        candidate_key="row", target_id="target", target_binding="binding",
+        discovery_revision="preview", inbound_revision="inbound",
+        metadata={
+            "verified_inbound_revision": "inbound",
+            "verified_target_binding": {
+                "binding_type": "current_thread_visual_identity",
+                "thread_evidence": {
+                    "managed_inbound_revision": adapter.revision,
+                    "visual_anchor_hash": adapter.anchor,
+                    "managed_message_text_hashes": [hashlib.sha256(b"old message").hexdigest()],
+                },
+            },
+        },
+    )
+    observation = Mock()
+    observation.scan_message_list.return_value = MessageListSnapshot((candidate,), timestamp())
+    observation.open_thread.return_value = OpenThreadObservation("target", "binding", timestamp())
+    observation.observe_thread.return_value = ThreadObservation(
+        "target", "binding", "inbound", timestamp(), {"match_id": "match"},
+    )
+    planner = Mock()
+    planner.draft_for_match.return_value = {
+        "status": "ok", "draft": {"best_reply": "备用", "message_sequence": ["哈哈", "有画面了", "后来呢？"][:message_count]},
+    }
+    store = InMemoryManagedRunStore()
+    runtime = ManagedRun(
+        store, observation, StandalonePlannerManagedDecisionPort(planner),
+        TaShuoMacIosManagedActionPort(tmp_path, output_dir=tmp_path / "harness", adapter_factory=lambda: adapter),
+        now=lambda: now[0],
+    )
+    config = ManagedRunConfig(
+        app_id="tashuo", runtime="mac-ios-app", max_sends_per_run=3,
+        authorization=ManagedAuthorization(
+            authorization_id="auth_burst", app_id="tashuo", runtime="mac-ios-app", allow_all_targets=True,
+        ),
+    )
+    runtime.start(config, run_id="burst")
+    result = runtime.tick()
+    assert result["status"] == "confirmed"
+    assert result["completed_message_count"] == message_count
+    assert adapter.calls == ["stage", "click", "post"] * message_count
+    planner.draft_for_match.assert_called_once()
+    observation.scan_message_list.assert_called_once()
+    assert store.load("burst").confirmed_send_count == message_count
+
+
 def test_tashuo_live_factory_is_runnable_only_with_explicit_config_and_runtime_scope(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     RuntimeScopeRepository(data_dir).select(app_id="tashuo", runtime="mac-ios-app")
@@ -690,7 +1046,11 @@ def test_tashuo_live_factory_is_runnable_only_with_explicit_config_and_runtime_s
 
     assert runtime.runnable is True
     assert runtime.provider_kind == "tashuo_mac_ios_live"
-    assert isinstance(runtime.runtime.action, TaShuoMacIosManagedActionPort)
+    from dating_boost.core.managed_visual_action import TaShuoVisualManagedActionPort
+    assert isinstance(runtime.runtime.action, TaShuoVisualManagedActionPort)
+    assert runtime.runtime.observation.live_inbound_revision_observer is None
+    assert runtime.runtime.observation.live_thread_binder == runtime.runtime.action.bind_thread
+    assert runtime.runtime.observation.provider.thread_capture == runtime.runtime.action.io.capture_initial_thread
 
 
 def test_tashuo_product_start_uses_existing_minimax_defaults_without_provider_json(tmp_path: Path) -> None:
@@ -726,6 +1086,7 @@ def test_tashuo_product_start_uses_existing_minimax_defaults_without_provider_js
     assert runtime.runnable is True
     assert runtime.provider_kind == "tashuo_mac_ios_live"
     assert runtime.runtime.decision.planner.backend_config == {"type": "minimax"}
+    assert runtime.runtime.observation.provider.thread_capture == runtime.runtime.action.io.capture_initial_thread
     create_vision.assert_called_once_with({"type": "minimax"})
 
 
@@ -764,6 +1125,25 @@ def test_tashuo_product_runtime_cannot_start_without_autonomous_user_readiness(t
     assert payload["reason"] == "autonomous_requires_user_profile"
     assert payload["user_profile_readiness"]["ready"] is False
     assert JsonManagedRunStore(data_dir).current_run_id() is None
+
+
+def test_new_scan_invalidates_candidates_from_previous_discovery_generation(tmp_path: Path) -> None:
+    provider = Mock()
+    first = {
+        "status": "ok", "observation_type": "message_list", "captured_at": "2026-09-20T04:00:00Z",
+        "message_list_snapshot": {"entries": [{
+            "candidate_key": "old-row", "target_id": "old-target", "inbound_revision": "old-preview",
+            "target_binding": "fixture:old",
+        }]},
+    }
+    provider.observe_message_list.side_effect = [first, {**first, "message_list_snapshot": {"entries": []}}]
+    port = StandaloneObservationManagedRunPort(tmp_path, provider, fixture_mode=True)
+    original = port.scan_message_list(run_id="r", app_id="tinder", runtime="default", cursor={})
+    port.scan_message_list(run_id="r", app_id="tinder", runtime="default", cursor={})
+
+    with pytest.raises(ValueError, match="managed_candidate_not_from_latest_scan"):
+        port.open_thread(original.candidates[0])
+    provider.observe_thread.assert_not_called()
 
 
 def _app_observation() -> dict[str, object]:

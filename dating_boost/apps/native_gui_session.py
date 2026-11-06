@@ -326,8 +326,16 @@ class AppSpecificNativeGuiSessionMixin:
     def _locate_visible_text_y_ratio(self, screen: dict[str, Any], marker: str) -> dict[str, Any]:
         return _iphone_runtime._locate_visible_text_y_ratio(self, screen, marker)
 
-    def _ocr_tsv(self, image_path: Path) -> dict[str, str]:
-        return _iphone_runtime._ocr_tsv(self, image_path)
+    def _ocr_tsv(
+        self, image_path: Path, *, segmentation_mode: int = 6, allow_language_fallback: bool = True,
+    ) -> dict[str, str]:
+        return _iphone_runtime._ocr_tsv(
+            self, image_path, segmentation_mode=segmentation_mode, allow_language_fallback=allow_language_fallback,
+        )
+
+    def _native_ocr_tsv(self, image_path: Path) -> dict[str, str]:
+        from dating_boost.harness.native_text import apple_vision_tsv
+        return apple_vision_tsv(getattr(self, "runner"), image_path)
 
     def _recover_tinder_subscription_paywall_for_send(
         self,

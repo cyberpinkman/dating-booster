@@ -23,20 +23,40 @@ class IdentityResult:
     reason: str
 
 
+def has_identity_app_id(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and value.strip().casefold() != "unknown"
+
+
 def resolve_match_identity(observation: Any, existing_matches: Iterable[dict[str, Any]]) -> IdentityResult:
     hints = observation.match_identity_hints
     visible_name = _normalize(hints.visible_name)
     profile_cues = {_normalize(cue) for cue in hints.profile_cues if _normalize(cue)}
     fingerprint = hints.conversation_fingerprint or ""
 
-    candidates = list(existing_matches)
+    if not has_identity_app_id(observation.app_id):
+        raise ValueError("identity resolution requires an app_id")
+    candidates = [candidate for candidate in existing_matches if candidate.get("app_id") == observation.app_id]
     if not candidates:
         return IdentityResult(
-            match_id=_new_match_id(observation),
+            match_id=observation_match_id(observation),
             confidence=IdentityConfidence.NEW,
             requires_user_confirmation=False,
             reason="No existing match candidates were available.",
         )
+
+    if not visible_name:
+        legacy_id = observation_match_id(observation, legacy_unscoped=True)
+        for candidate in candidates:
+            if candidate["match_id"] == legacy_id and (
+                observation.observation_id in candidate.get("observation_ids", [])
+                or _fingerprint_matches(candidate, fingerprint)
+            ):
+                return IdentityResult(
+                    match_id=legacy_id,
+                    confidence=IdentityConfidence.NEW,
+                    requires_user_confirmation=False,
+                    reason="Reused the same app's anonymous observation identity.",
+                )
 
     name_matches = [
         candidate
@@ -119,7 +139,7 @@ def resolve_match_identity(observation: Any, existing_matches: Iterable[dict[str
         )
 
     return IdentityResult(
-        match_id=_new_match_id(observation),
+        match_id=observation_match_id(observation),
         confidence=IdentityConfidence.NEW,
         requires_user_confirmation=False,
         reason="No existing match matched the observed identity hints.",
@@ -134,7 +154,7 @@ def _fingerprint_matches(candidate: dict[str, Any], fingerprint: str) -> bool:
     return bool(fingerprint and candidate.get("conversation_fingerprint") == fingerprint)
 
 
-def _new_match_id(observation: Any) -> str:
+def observation_match_id(observation: Any, *, legacy_unscoped: bool = False) -> str:
     hints = observation.match_identity_hints
     stable_parts = [hints.visible_name or ""]
     if hints.conversation_fingerprint:
@@ -144,7 +164,8 @@ def _new_match_id(observation: Any) -> str:
         stable_parts.append(observation.observation_id or "")
     stable_text = "|".join(part for part in stable_parts if part) or "unknown"
     slug = re.sub(r"[^a-z0-9]+", "_", stable_text.lower()).strip("_") or "unknown"
-    digest = hashlib.sha256(stable_text.encode("utf-8")).hexdigest()[:8]
+    key = stable_text if legacy_unscoped else f"{observation.app_id}\0{stable_text}"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
     return f"match_{slug[:32]}_{digest}"
 
 

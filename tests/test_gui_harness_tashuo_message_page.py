@@ -57,7 +57,7 @@ class GuiHarnessTashuoMessagePageTests(GuiHarnessTestCase):
             def run(self, command, *, input=None):
                 if (
                     command[:3] == ["xcrun", "swift", "-e"]
-                    and "NSWorkspace.shared.frontmostApplication" in command[-1]
+                    and "NSWorkspace.shared.runningApplications" in command[-1]
                 ):
                     self.commands.append(command)
                     self.command_inputs.append((command, input))
@@ -380,7 +380,9 @@ class GuiHarnessTashuoMessagePageTests(GuiHarnessTestCase):
         self.assertAlmostEqual(relocation["tap_ratio"]["y"], 0.60, delta=0.04)
         self.assertAlmostEqual(payload["executed_steps"][0]["tap_ratio"]["y"], 0.60, delta=0.04)
         self.assertEqual(payload["executed_steps"][0]["selection_method"], "message_list_visual_anchor_scan")
-        self.assertEqual(relocation["tap_adjustment"]["reason"], "row_upper_band_guard")
+        self.assertFalse(relocation["tap_adjustment"]["adjusted"])
+        self.assertIsNone(relocation["tap_adjustment"]["reason"])
+        self.assertEqual(relocation["tap_ratio"], relocation["raw_tap_ratio"])
 
     def test_tashuo_mac_ios_app_open_conversation_relocates_bottom_visible_visual_anchor(self):
         old_list_png = _tashuo_mac_ios_app_message_list_with_target_row_png(target_center_y=0.85)
@@ -423,7 +425,7 @@ class GuiHarnessTashuoMessagePageTests(GuiHarnessTestCase):
 
         self.assertEqual(payload["status"], "ok")
         relocation = payload["message_list_relocation"]["message_list_location"]
-        self.assertEqual(relocation["location_method"], "message_list_visual_anchor_scan")
+        self.assertEqual(relocation["location_method"], "message_list_visual_anchor_current_region_tap")
         self.assertAlmostEqual(relocation["tap_ratio"]["y"], 0.85, delta=0.02)
         self.assertAlmostEqual(payload["executed_steps"][0]["tap_ratio"]["y"], 0.85, delta=0.02)
         self.assertFalse(relocation["tap_adjustment"]["adjusted"])
@@ -456,7 +458,7 @@ class GuiHarnessTashuoMessagePageTests(GuiHarnessTestCase):
                 "open-conversation",
                 dry_run=False,
                 output_dir=Path(temp_dir),
-                tap_ratio={"x": 0.45, "y": 0.891},
+                tap_ratio={"x": 0.45, "y": 0.931},
                 visual_target_label="如是徧是",
                 visual_target_preview="确实，端午就该给自己开个省电…",
                 message_list_evidence={
@@ -464,18 +466,18 @@ class GuiHarnessTashuoMessagePageTests(GuiHarnessTestCase):
                     "selection_method": "message_list_visual_anchor_scan",
                     "visual_anchor_hash": row_visual_hash,
                     "visual_anchor_region": row_region,
-                    "tap_ratio": {"x": 0.45, "y": 0.891},
+                    "tap_ratio": {"x": 0.45, "y": 0.931},
                     "visual_anchor_max_hamming_distance": 0,
                 },
             )
 
         self.assertEqual(payload["status"], "ok")
         relocation = payload["message_list_relocation"]["message_list_location"]
-        self.assertEqual(relocation["location_method"], "message_list_visual_anchor_scan")
+        self.assertEqual(relocation["location_method"], "message_list_visual_anchor_current_region_tap")
         self.assertGreater(relocation["raw_tap_ratio"]["y"], relocation["tap_ratio"]["y"])
         self.assertLessEqual(relocation["tap_ratio"]["y"], 0.86)
         self.assertTrue(relocation["tap_adjustment"]["adjusted"])
-        self.assertEqual(relocation["tap_adjustment"]["reason"], "bottom_row_safe_tap_guard")
+        self.assertEqual(relocation["tap_adjustment"]["reason"], "bottom_nav_overlap_guard")
         self.assertTrue(relocation["tap_adjustment"]["bottom_row_detected"])
         self.assertEqual(payload["executed_steps"][0]["tap_ratio"], relocation["tap_ratio"])
 

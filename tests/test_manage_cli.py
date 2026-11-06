@@ -9,7 +9,9 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from dating_boost import cli
 from dating_boost.cli import main
+from dating_boost.cli_parser import build_parser
 from dating_boost.cli_sessions import _managed_run_authorization
 from dating_boost.core.live_send_contract import validate_live_send_contract
 from dating_boost.core.managed_run import JsonManagedRunStore, ManagedAuthorization, ManagedRun, ManagedRunConfig
@@ -50,12 +52,30 @@ class FakeManagedRunRuntime:
         self.calls.append(("resume", run_id))
         return {"schema_version": 1, "status": "active", "run_id": run_id}
 
+    def reconcile(self, run_id, *, decision_key=None):
+        self.calls.append(("reconcile", run_id, decision_key))
+        return {"schema_version": 1, "status": "reconciled", "run_id": run_id}
+
     def stop(self, run_id, *, reason):
         self.calls.append(("stop", run_id, reason))
         return {"schema_version": 1, "status": "stopped", "run_id": run_id}
 
 
 class ManageCliTests(unittest.TestCase):
+    def test_reconcile_loads_evidence_port_and_forwards_only_attempt_selection(self):
+        for options, expected_run, expected_key in (
+            ([], "run_current", None),
+            (["--run-id", "old_run", "--decision-key", "attempt_key"], "old_run", "attempt_key"),
+        ):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as temp_dir:
+                runtime = FakeManagedRunRuntime()
+                with patch("dating_boost.cli_sessions._build_managed_run_runtime", return_value=runtime) as build:
+                    code, payload = self._run(["manage", "reconcile", "--data-dir", temp_dir, *options, "--json"])
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["status"], "reconciled")
+                build.assert_called_once_with(Path(temp_dir), require_ports=True)
+                self.assertEqual(runtime.calls, ([('current_run_id',)] if not options else []) + [("reconcile", expected_run, expected_key)])
+
     def test_capabilities_expose_managed_run_as_the_public_lifecycle(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             exit_code, payload = self._run(["capabilities", "--data-dir", temp_dir, "--json"])
@@ -86,8 +106,13 @@ class ManageCliTests(unittest.TestCase):
             "static_release_claim",
         )
         self.assertFalse(payload["agent_native_capabilities"]["managed_run_real_gui_canary_passed"])
-        for command in ("start", "run", "tick", "status", "pause", "resume", "stop"):
-            self.assertIn(f"manage {command}", payload["supported_commands"])
+        parser = build_parser(cli)
+        groups = next(action.choices for action in parser._actions if action.dest == "command")
+        commands = next(action.choices for action in groups["manage"]._actions if action.dest == "manage_command")
+        self.assertEqual(
+            {f"manage {command}" for command in commands},
+            {entry for entry in payload["supported_commands"] if entry.startswith("manage ")},
+        )
         self.assertIn("managed-session start", payload["supported_commands"])
 
     def test_unconfigured_runtime_is_an_explicit_block_not_a_false_success(self):

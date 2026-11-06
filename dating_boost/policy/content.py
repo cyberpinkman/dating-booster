@@ -36,11 +36,13 @@ def evaluate_draft_content(
     *,
     final_texts: Iterable[str] | None = None,
 ) -> ContentPolicyDecision:
-    """Evaluate generated reply variants against MVP content safety rules."""
+    """Evaluate reply variants and the actual outgoing sequence against policy."""
 
-    handoff_violation = _managed_handoff_violation_reason(
-        final_texts if final_texts is not None else (getattr(draft, "best_reply", ""),)
-    )
+    # Draft review supplies a generator of normalized outgoing bubbles. Retain
+    # it once so every content rule checks the same payload that will be sent.
+    outgoing_texts = tuple(final_texts) if final_texts is not None else (getattr(draft, "best_reply", ""),)
+    policy_texts = (*_draft_texts(draft), *_message_sequence_text_views(outgoing_texts))
+    handoff_violation = _managed_handoff_violation_reason(outgoing_texts)
     if handoff_violation:
         return ContentPolicyDecision(
             allowed=True,
@@ -49,14 +51,14 @@ def evaluate_draft_content(
             requires_user_confirmation=True,
         )
 
-    if _has_overseas_study_constraint(context_pack) and _draft_contains_overseas_study_claim(draft):
+    if _has_overseas_study_constraint(context_pack) and any(_contains_overseas_study_claim(text) for text in policy_texts):
         return ContentPolicyDecision(
             allowed=False,
             severity="high",
             reason="Draft claims overseas study despite user hard facts or boundaries.",
         )
 
-    hard_fact_violation = _hard_fact_contradiction_reason(draft, context_pack)
+    hard_fact_violation = _hard_fact_contradiction_reason(policy_texts, context_pack)
     if hard_fact_violation:
         return ContentPolicyDecision(
             allowed=False,
@@ -80,7 +82,7 @@ def evaluate_draft_content(
 
 
 def _managed_handoff_violation_reason(final_texts: Iterable[str]) -> str | None:
-    for text in final_texts:
+    for text in _message_sequence_text_views(final_texts):
         if _contains_contact_exchange(text):
             return "Managed draft includes contact exchange details that require user handoff."
         has_specific_time = _contains_specific_appointment_time(text)
@@ -91,6 +93,13 @@ def _managed_handoff_violation_reason(final_texts: Iterable[str]) -> str | None:
         if has_specific_place and has_appointment_intent:
             return "Managed draft includes a specific meetup place that requires user handoff."
     return None
+
+
+def _message_sequence_text_views(texts: Iterable[str]) -> tuple[str, ...]:
+    messages = tuple(texts)
+    # Preserve individual checks while also recognizing meaning distributed
+    # across bubbles. Alternative reply variants are never joined together.
+    return (*messages, " ".join(messages)) if len(messages) > 1 else messages
 
 
 def _contains_contact_exchange(text: str) -> bool:
@@ -209,11 +218,11 @@ def _has_overseas_study_constraint(context_pack: Mapping[str, Any]) -> bool:
     return False
 
 
-def _hard_fact_contradiction_reason(draft: Any, context_pack: Mapping[str, Any]) -> str | None:
+def _hard_fact_contradiction_reason(texts: tuple[str, ...], context_pack: Mapping[str, Any]) -> str | None:
     hard_facts = _hard_fact_content(context_pack)
-    if _age_fact_contradicted(draft, hard_facts):
+    if _age_fact_contradicted(texts, hard_facts):
         return "Draft contradicts user age hard facts."
-    if _location_fact_contradicted(draft, hard_facts):
+    if _location_fact_contradicted(texts, hard_facts):
         return "Draft contradicts user location hard facts."
     return None
 
@@ -251,7 +260,7 @@ def _normalize_hard_fact(value: Mapping[str, Any]) -> Mapping[str, Any]:
     return value
 
 
-def _age_fact_contradicted(draft: Any, hard_facts: list[Mapping[str, Any]]) -> bool:
+def _age_fact_contradicted(texts: tuple[str, ...], hard_facts: list[Mapping[str, Any]]) -> bool:
     known_ages = {
         int(content["age"])
         for content in hard_facts
@@ -259,14 +268,14 @@ def _age_fact_contradicted(draft: Any, hard_facts: list[Mapping[str, Any]]) -> b
     }
     if not known_ages:
         return False
-    for text in _draft_texts(draft):
+    for text in texts:
         for match in re.finditer(r"\b(?:i(?:'m| am)|my age is)\s+(\d{1,3})\b", text.lower()):
             if int(match.group(1)) not in known_ages:
                 return True
     return False
 
 
-def _location_fact_contradicted(draft: Any, hard_facts: list[Mapping[str, Any]]) -> bool:
+def _location_fact_contradicted(texts: tuple[str, ...], hard_facts: list[Mapping[str, Any]]) -> bool:
     known_locations = {
         str(content[key]).strip().lower()
         for content in hard_facts
@@ -276,7 +285,7 @@ def _location_fact_contradicted(draft: Any, hard_facts: list[Mapping[str, Any]])
     if not known_locations:
         return False
     claim_markers = ("i live in ", "i'm in ", "i am in ", "based in ", "i'm based in ", "from ")
-    for text in _draft_texts(draft):
+    for text in texts:
         normalized = text.lower()
         if any(marker in normalized for marker in claim_markers) and not any(
             location in normalized for location in known_locations
@@ -296,13 +305,6 @@ def _mentions_local_chinese_education(text: str) -> bool:
         or ("chinese" in text and "university" in text)
         or ("china" in text and "university" in text)
     )
-
-
-def _draft_contains_overseas_study_claim(draft: Any) -> bool:
-    for value in _draft_texts(draft):
-        if _contains_overseas_study_claim(value):
-            return True
-    return False
 
 
 def _draft_texts(draft: Any) -> list[str]:
