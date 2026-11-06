@@ -678,14 +678,19 @@ class ManagedRun:
         )
         if session_reason not in {None, "authorization_quiet_hours"}:
             return _result("blocked", reason=session_reason)
-        with self.store.execution_lease("__managed_run_start__") as acquired:
+        start_lease_key = "__managed_run_start__"
+        with self.store.execution_lease(start_lease_key) as acquired:
             if not acquired:
                 return _result("blocked", reason="managed_run_busy")
             current_id = self.store.current_run_id()
             current = self.store.load(current_id) if current_id else None
             if current is not None:
-                self._reconcile_unfinished_click(current)
-                current = self.store.load(current.run_id) or current
+                with self.store.execution_lease(current.run_id) as run_acquired:
+                    # A caller-supplied run ID can equal the start lease we already hold.
+                    if not run_acquired and current.run_id != start_lease_key:
+                        return _result("blocked", reason="managed_run_busy", run_id=current.run_id)
+                    self._reconcile_unfinished_click(current)
+                    current = self.store.load(current.run_id) or current
             if current is not None and current.status in ACTIVE_RUN_STATUSES:
                 return _result("blocked", reason="managed_run_already_active", run_id=current.run_id)
             normalized_run_id = run_id or f"managed_{uuid.uuid4().hex}"
@@ -1230,6 +1235,7 @@ class ManagedRun:
         return self.store.load(normalized_run_id) if normalized_run_id else None
 
     def _reconcile_unfinished_click(self, record: ManagedRunRecord) -> dict[str, Any] | None:
+        """Recover an abandoned click only while holding this run's execution lease."""
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
             for decision_key, stored_attempt in latest.send_attempts.items():
