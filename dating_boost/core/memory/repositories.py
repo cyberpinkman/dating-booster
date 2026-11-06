@@ -9,7 +9,7 @@ from dating_boost.core.memory.reducers import reduce_match_memory
 from dating_boost.core.memory.review_queue import ReviewQueueRepository
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.repositories import MatchRepository
-from dating_boost.core.storage import JsonStorage
+from dating_boost.core.storage import JsonStorage, storage_write_lock
 from dating_boost.perception.observations import AppObservation
 
 
@@ -99,20 +99,21 @@ class MemoryRepository:
 
     def delete_match_documents(self, match_id: str) -> int:
         _validate_match_id(match_id)
-        store = ProductionDataStore(self._storage.root)
-        if not store.db_path.exists():
-            match_dir = self._storage.root / "matches" / match_id
-            if not match_dir.exists():
-                return 0
-            deleted_files = sum(1 for path in match_dir.rglob("*") if path.is_file())
-            import shutil
+        with storage_write_lock(self._storage.root):
+            store = ProductionDataStore(self._storage.root)
+            if not store.db_path.exists():
+                match_dir = self._storage.root / "matches" / match_id
+                if not match_dir.exists():
+                    return 0
+                deleted_files = sum(1 for path in match_dir.rglob("*") if path.is_file())
+                import shutil
 
-            shutil.rmtree(match_dir)
-        else:
-            prefix = f"matches/{match_id}/"
-            deleted_files = store.delete_documents_with_prefix(prefix) + store.delete_audit_events_with_stream_prefix(prefix)
-        ReviewQueueRepository(self._storage.root).delete_items_for_match(match_id)
-        return deleted_files
+                shutil.rmtree(match_dir)
+            else:
+                prefix = f"matches/{match_id}/"
+                deleted_files = store.delete_documents_with_prefix(prefix) + store.delete_audit_events_with_stream_prefix(prefix)
+            ReviewQueueRepository(self._storage.root).delete_items_for_match(match_id)
+            return deleted_files
 
     def match_ids_with_observations(self) -> list[str]:
         store = ProductionDataStore(self._storage.root)

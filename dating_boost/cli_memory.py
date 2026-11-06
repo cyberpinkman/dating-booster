@@ -46,6 +46,7 @@ from dating_boost.cli_ops import (
     _read_json_payload, _add_confirmation_binding_args, _unique_cli_strings, _digest,
     _validate_storage_id, _print_json,
 )
+from dating_boost.core.storage import storage_write_lock
 from dating_boost.core.repositories import user_profile_from_dict as _core_user_profile_from_dict
 
 def _handle_import_observation(args: argparse.Namespace) -> int:
@@ -296,17 +297,18 @@ def _handle_memory_delete_match(args: argparse.Namespace) -> int:
         return 2
 
     try:
-        prefix = f"matches/{args.match_id}/"
-        deleted_sqlite_documents = 0
-        deleted_sqlite_events = 0
-        store = ProductionDataStore(args.data_dir)
-        if (args.data_dir / "dating_boost.sqlite3").exists():
-            deleted_sqlite_documents = store.delete_documents_with_prefix(prefix)
-            deleted_sqlite_events = store.delete_audit_events_with_stream_prefix(prefix)
-        match_repo = MatchRepository(args.data_dir)
-        removed_identity_confirmations = match_repo.remove_identity_confirmations(args.match_id)
-        removed_index_records = match_repo.delete_match(args.match_id)
-        deleted_json_files = MemoryRepository(args.data_dir).delete_match_documents(args.match_id)
+        with storage_write_lock(args.data_dir):
+            prefix = f"matches/{args.match_id}/"
+            deleted_sqlite_documents = 0
+            deleted_sqlite_events = 0
+            store = ProductionDataStore(args.data_dir)
+            if (args.data_dir / "dating_boost.sqlite3").exists():
+                deleted_sqlite_documents = store.delete_documents_with_prefix(prefix)
+                deleted_sqlite_events = store.delete_audit_events_with_stream_prefix(prefix)
+            match_repo = MatchRepository(args.data_dir)
+            removed_identity_confirmations = match_repo.remove_identity_confirmations(args.match_id)
+            removed_index_records = match_repo.delete_match(args.match_id)
+            deleted_json_files = MemoryRepository(args.data_dir).delete_match_documents(args.match_id)
     except (OSError, RuntimeError, StorageError, ValueError) as exc:
         _print_json(
             {
@@ -567,6 +569,11 @@ def _apply_memory_identity_merge(data_dir: Path, match_id: str, update: dict[str
     if confirmation_token != expected_token:
         raise ValueError(f"merge_identity requires confirmation_token {expected_token!r}")
 
+    with storage_write_lock(data_dir):
+        return _merge_match_memory(data_dir, source_match_id, target_match_id, update)
+
+
+def _merge_match_memory(data_dir: Path, source_match_id: str, target_match_id: str, update: dict[str, Any]) -> dict[str, Any]:
     match_repo = MatchRepository(data_dir)
     match_repo.validate_same_app_merge(source_match_id=source_match_id, target_match_id=target_match_id)
     memory_repo = MemoryRepository(data_dir)

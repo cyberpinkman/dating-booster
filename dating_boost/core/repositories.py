@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from dating_boost.core.identity import has_identity_app_id
 from dating_boost.core.models import MemoryItem, ReplyMode, UserProfile
-from dating_boost.core.storage import JsonStorage, SchemaVersionError, StorageCorruptionError
+from dating_boost.core.storage import JsonStorage, SchemaVersionError, StorageCorruptionError, storage_write_lock
 
 if TYPE_CHECKING:
     from dating_boost.perception.observations import AppObservation
@@ -90,18 +90,19 @@ class ObservationRepository:
     def save_observation(self, match_id: str, observation: "AppObservation") -> None:
         if not has_identity_app_id(observation.app_id):
             raise ValueError("observation requires an app_id")
-        MatchRepository(self._storage.root).validate_observation_app(match_id, observation.app_id)
-        document = self._load_document(match_id)
-        if any(item.get("app_id") != observation.app_id for item in document["observations"]):
-            raise ValueError("observation does not match the stored app scope")
-        observations = [
-            item
-            for item in document["observations"]
-            if item.get("observation_id") != observation.observation_id
-        ]
-        observations.append(observation.to_dict())
-        document["observations"] = observations
-        self._storage.write_json(self._observations_path(match_id), document)
+        with storage_write_lock(self._storage.root):
+            MatchRepository(self._storage.root).validate_observation_app(match_id, observation.app_id)
+            document = self._load_document(match_id)
+            if any(item.get("app_id") != observation.app_id for item in document["observations"]):
+                raise ValueError("observation does not match the stored app scope")
+            observations = [
+                item
+                for item in document["observations"]
+                if item.get("observation_id") != observation.observation_id
+            ]
+            observations.append(observation.to_dict())
+            document["observations"] = observations
+            self._storage.write_json(self._observations_path(match_id), document)
 
     def load_latest_observation(self, match_id: str) -> "AppObservation | None":
         from dating_boost.perception.observations import AppObservation
@@ -240,41 +241,42 @@ class MatchRepository:
         requires_user_confirmation: bool,
     ) -> None:
         _validate_match_id(match_id)
-        index = self._load_index()
-        records = {
-            record["match_id"]: dict(record)
-            for record in index["matches"]
-        }
-        if not has_identity_app_id(observation.app_id):
-            raise ValueError("match observation requires an app_id")
-        self.validate_observation_app(match_id, observation.app_id)
-        current = records.get(
-            match_id,
-            {
-                "match_id": match_id,
-                "display_name": None,
-                "profile_cues": [],
-                "conversation_fingerprint": None,
-                "observation_ids": [],
-                "merged_match_ids": [],
-            },
-        )
-        current["app_id"] = observation.app_id
-        hints = observation.match_identity_hints
-        if hints.visible_name:
-            current["display_name"] = hints.visible_name
-        current["profile_cues"] = _unique_strings([*current.get("profile_cues", []), *hints.profile_cues])
-        if hints.conversation_fingerprint:
-            current["conversation_fingerprint"] = hints.conversation_fingerprint
-        current["observation_ids"] = _unique_strings(
-            [*current.get("observation_ids", []), observation.observation_id]
-        )
-        current["identity_confidence"] = confidence
-        current["requires_user_confirmation"] = requires_user_confirmation
-        current["updated_at"] = observation.captured_at
-        records[match_id] = current
-        index["matches"] = sorted(records.values(), key=lambda record: str(record["match_id"]))
-        self._storage.write_json(self._INDEX_PATH, index)
+        with storage_write_lock(self._storage.root):
+            index = self._load_index()
+            records = {
+                record["match_id"]: dict(record)
+                for record in index["matches"]
+            }
+            if not has_identity_app_id(observation.app_id):
+                raise ValueError("match observation requires an app_id")
+            self.validate_observation_app(match_id, observation.app_id)
+            current = records.get(
+                match_id,
+                {
+                    "match_id": match_id,
+                    "display_name": None,
+                    "profile_cues": [],
+                    "conversation_fingerprint": None,
+                    "observation_ids": [],
+                    "merged_match_ids": [],
+                },
+            )
+            current["app_id"] = observation.app_id
+            hints = observation.match_identity_hints
+            if hints.visible_name:
+                current["display_name"] = hints.visible_name
+            current["profile_cues"] = _unique_strings([*current.get("profile_cues", []), *hints.profile_cues])
+            if hints.conversation_fingerprint:
+                current["conversation_fingerprint"] = hints.conversation_fingerprint
+            current["observation_ids"] = _unique_strings(
+                [*current.get("observation_ids", []), observation.observation_id]
+            )
+            current["identity_confidence"] = confidence
+            current["requires_user_confirmation"] = requires_user_confirmation
+            current["updated_at"] = observation.captured_at
+            records[match_id] = current
+            index["matches"] = sorted(records.values(), key=lambda record: str(record["match_id"]))
+            self._storage.write_json(self._INDEX_PATH, index)
 
     def append_identity_confirmation(
         self,
@@ -297,16 +299,17 @@ class MatchRepository:
 
     def remove_identity_confirmations(self, match_id: str) -> int:
         _validate_match_id(match_id)
-        events = self._storage.read_jsonl(self._CONFIRMATIONS_PATH)
-        kept_events = [
-            event
-            for event in events
-            if event.get("match_id") != match_id
-        ]
-        removed = len(events) - len(kept_events)
-        if removed:
-            self._storage.write_jsonl(self._CONFIRMATIONS_PATH, kept_events)
-        return removed
+        with storage_write_lock(self._storage.root):
+            events = self._storage.read_jsonl(self._CONFIRMATIONS_PATH)
+            kept_events = [
+                event
+                for event in events
+                if event.get("match_id") != match_id
+            ]
+            removed = len(events) - len(kept_events)
+            if removed:
+                self._storage.write_jsonl(self._CONFIRMATIONS_PATH, kept_events)
+            return removed
 
     def validate_same_app_merge(self, *, source_match_id: str, target_match_id: str) -> None:
         if source_match_id == target_match_id:
@@ -316,40 +319,42 @@ class MatchRepository:
             raise ValueError("identity merge requires source and target from the same verified app")
 
     def merge_matches(self, *, source_match_id: str, target_match_id: str) -> None:
-        self.validate_same_app_merge(source_match_id=source_match_id, target_match_id=target_match_id)
-        _validate_match_id(source_match_id)
-        _validate_match_id(target_match_id)
-        index = self._load_index()
-        records = {record["match_id"]: dict(record) for record in index["matches"]}
-        if source_match_id not in records or target_match_id not in records:
-            raise ValueError("source and target match records must exist before merge")
-        source = records.pop(source_match_id)
-        target = records[target_match_id]
-        target["profile_cues"] = _unique_strings(
-            [*target.get("profile_cues", []), *source.get("profile_cues", [])]
-        )
-        target["observation_ids"] = _unique_strings(
-            [*target.get("observation_ids", []), *source.get("observation_ids", [])]
-        )
-        target["merged_match_ids"] = _unique_strings(
-            [*target.get("merged_match_ids", []), source_match_id, *source.get("merged_match_ids", [])]
-        )
-        index["matches"] = sorted(records.values(), key=lambda record: str(record["match_id"]))
-        self._storage.write_json(self._INDEX_PATH, index)
+        with storage_write_lock(self._storage.root):
+            self.validate_same_app_merge(source_match_id=source_match_id, target_match_id=target_match_id)
+            _validate_match_id(source_match_id)
+            _validate_match_id(target_match_id)
+            index = self._load_index()
+            records = {record["match_id"]: dict(record) for record in index["matches"]}
+            if source_match_id not in records or target_match_id not in records:
+                raise ValueError("source and target match records must exist before merge")
+            source = records.pop(source_match_id)
+            target = records[target_match_id]
+            target["profile_cues"] = _unique_strings(
+                [*target.get("profile_cues", []), *source.get("profile_cues", [])]
+            )
+            target["observation_ids"] = _unique_strings(
+                [*target.get("observation_ids", []), *source.get("observation_ids", [])]
+            )
+            target["merged_match_ids"] = _unique_strings(
+                [*target.get("merged_match_ids", []), source_match_id, *source.get("merged_match_ids", [])]
+            )
+            index["matches"] = sorted(records.values(), key=lambda record: str(record["match_id"]))
+            self._storage.write_json(self._INDEX_PATH, index)
 
     def delete_match(self, match_id: str) -> int:
         _validate_match_id(match_id)
-        index = self._load_index()
-        before = len(index["matches"])
-        index["matches"] = [
-            record
-            for record in index["matches"]
-            if record.get("match_id") != match_id
-        ]
-        removed = before - len(index["matches"])
-        if removed:
-            self._storage.write_json(self._INDEX_PATH, index)
-        return removed
+        with storage_write_lock(self._storage.root):
+            index = self._load_index()
+            before = len(index["matches"])
+            index["matches"] = [
+                record
+                for record in index["matches"]
+                if record.get("match_id") != match_id
+            ]
+            removed = before - len(index["matches"])
+            if removed:
+                self._storage.write_json(self._INDEX_PATH, index)
+            return removed
 
     def _load_index(self) -> dict[str, Any]:
         try:

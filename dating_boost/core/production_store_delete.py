@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.storage import STORAGE_LOCK_FILE, storage_write_lock
 from dating_boost.core.production_store_common import (
     AUTOMATION_LOCK_SCHEMA_VERSION, BACKUP_RECOVERY_KEY_SCHEMA_VERSION, BLOCKED_DRAFT_TEXT_KEYS, CONFIRMATION_SCHEMA_VERSION,
     DATA_STORE_SCHEMA_VERSION, DIAGNOSTIC_BUNDLE_SCHEMA_VERSION, ENCRYPTED_PAYLOAD_SCHEMA_VERSION, KEYCHAIN_BINDING_SCHEMA_VERSION,
@@ -28,6 +29,10 @@ class ProductionStoreDeleteMixin:
                 "reason": "confirm_token_mismatch",
                 "required_confirm_token": required,
             }
+        with storage_write_lock(self.root):
+            return self._delete_locked(scope, match_id)
+
+    def _delete_locked(self, scope: str, match_id: str | None) -> dict[str, Any]:
         if scope == "all":
             deleted_documents = 0
             deleted_events = 0
@@ -38,7 +43,8 @@ class ProductionStoreDeleteMixin:
                     deleted_events = int(conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0])
             if self.root.exists():
                 for child in list(self.root.iterdir()):
-                    _remove_path_if_exists(child)
+                    if child.name != STORAGE_LOCK_FILE:
+                        _remove_path_if_exists(child)
             self.root.mkdir(parents=True, exist_ok=True)
             return {
                 "schema_version": DATA_STORE_SCHEMA_VERSION,
@@ -59,8 +65,9 @@ class ProductionStoreDeleteMixin:
                         "schema_version": DATA_STORE_SCHEMA_VERSION,
                         "status": "blocked",
                         "reason": "match_id_required",
-                        "required_confirm_token": required,
+                        "required_confirm_token": delete_confirm_token(scope, match_id),
                     }
+                conn.execute("BEGIN IMMEDIATE")
                 deleted_documents = self._delete_match_documents(conn, match_id)
                 deleted_events = self._delete_match_audit_events(conn, match_id)
                 json_cleanup = self._delete_match_from_json_files(match_id)
@@ -72,7 +79,7 @@ class ProductionStoreDeleteMixin:
                     "schema_version": DATA_STORE_SCHEMA_VERSION,
                     "status": "blocked",
                     "reason": "invalid_scope",
-                    "required_confirm_token": required,
+                    "required_confirm_token": delete_confirm_token(scope, match_id),
                 }
         return {
             "schema_version": DATA_STORE_SCHEMA_VERSION,
