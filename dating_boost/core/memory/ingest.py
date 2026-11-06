@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.draft_evidence import ConversationThreadRepository, LatestTurnRepository
-from dating_boost.core.identity import resolve_match_identity
+from dating_boost.core.identity import observation_match_id, resolve_match_identity
 from dating_boost.core.memory.extractors import events_from_observation
 from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.core.repositories import MatchRepository, ObservationRepository
@@ -14,7 +14,13 @@ from dating_boost.perception.observations import AppObservation
 def store_observation_with_memory(root: Path, observation: AppObservation) -> dict[str, Any]:
     _validate_storage_id(observation.observation_id, "observation_id")
     match_repo = MatchRepository(root)
-    identity = resolve_match_identity(observation, existing_matches=match_repo.list_match_candidates())
+    name = (observation.match_identity_hints.visible_name or "").strip()
+    if name:
+        candidates = match_repo.list_match_candidates(visible_name=name)
+    else:
+        legacy = match_repo.get_match_record(observation_match_id(observation, legacy_unscoped=True))
+        candidates = [legacy] if legacy else []
+    identity = resolve_match_identity(observation, existing_matches=candidates)
     _validate_storage_id(identity.match_id, "match_id")
     ObservationRepository(root).save_observation(identity.match_id, observation)
     match_repo.upsert_match_from_observation(

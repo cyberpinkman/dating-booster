@@ -51,6 +51,7 @@ class IdentityTrustStatus(str, Enum):
     NEW = "new"
     TRUSTED = "trusted"
     NEEDS_CONFIRMATION = "needs_confirmation"
+    APP_SCOPE_REVIEW_REQUIRED = "app_scope_review_required"
     CONFLICTED = "conflicted"
     REJECTED = "rejected"
 

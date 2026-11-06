@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from dating_boost.core.identity import has_identity_app_id
 from dating_boost.core.models import MemoryItem, ReplyMode, UserProfile
-from dating_boost.core.storage import JsonStorage
+from dating_boost.core.storage import JsonStorage, SchemaVersionError, StorageCorruptionError
 
 if TYPE_CHECKING:
     from dating_boost.perception.observations import AppObservation
@@ -87,7 +88,12 @@ class ObservationRepository:
         self._storage = JsonStorage(root)
 
     def save_observation(self, match_id: str, observation: "AppObservation") -> None:
+        if not has_identity_app_id(observation.app_id):
+            raise ValueError("observation requires an app_id")
+        MatchRepository(self._storage.root).validate_observation_app(match_id, observation.app_id)
         document = self._load_document(match_id)
+        if any(item.get("app_id") != observation.app_id for item in document["observations"]):
+            raise ValueError("observation does not match the stored app scope")
         observations = [
             item
             for item in document["observations"]
@@ -130,8 +136,100 @@ class MatchRepository:
     def __init__(self, root: Path):
         self._storage = JsonStorage(root)
 
-    def list_match_candidates(self) -> list[dict[str, object]]:
-        return [dict(record) for record in self._load_index()["matches"]]
+    def list_match_candidates(self, *, visible_name: str | None = None) -> list[dict[str, Any]]:
+        records = self._load_index()["matches"]
+        if visible_name is not None:
+            name = visible_name.strip().casefold()
+            records = [record for record in records if name and str(record.get("display_name") or "").strip().casefold() == name]
+        return [self._scoped_record(record) for record in records]
+
+    def get_match_record(self, match_id: str) -> dict[str, Any] | None:
+        _validate_match_id(match_id)
+        for record in self._load_index()["matches"]:
+            if record["match_id"] == match_id:
+                return self._scoped_record(record)
+        return None
+
+    def get_match_app_id(self, match_id: str) -> str | None:
+        record = self.get_match_record(match_id)
+        return record["app_id"] if record else None
+
+    def _stored_app_scope(self, match_id: str) -> tuple[str | None, str]:
+        record = self.get_match_record(match_id)
+        if record:
+            return record["app_id"], record["app_scope_status"]
+        # Historical merges removed the source index entry but kept its observations.
+        # Scope those archives on direct access without restoring them as candidates.
+        return self._legacy_app_scope(match_id, [])
+
+    def app_scope_requires_review(self, match_id: str) -> bool:
+        return self._stored_app_scope(match_id)[1] in {"unknown", "mixed"}
+
+    def validate_observation_app(self, match_id: str, app_id: str) -> None:
+        stored_app, status = self._stored_app_scope(match_id)
+        if status != "absent" and stored_app != app_id:
+            raise ValueError("observation does not match the stored app scope")
+
+    def _scoped_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        app_id = record.get("app_id")
+        if has_identity_app_id(app_id):
+            return {**record, "app_scope_status": "verified"}
+        app_id, status = self._legacy_app_scope(
+            record["match_id"], record.get("observation_ids", [])
+        )
+        scoped = {**record, "app_id": app_id, "app_scope_status": "unknown" if status == "absent" else status}
+        if app_id is None:
+            scoped["requires_user_confirmation"] = True
+        return scoped
+
+    def _legacy_app_scope(self, match_id: str, indexed_ids: list[str]) -> tuple[str | None, str]:
+        _validate_match_id(match_id)
+        base = Path("matches") / match_id
+        try:
+            doc = self._storage.read_json(base / "observations.json", expected_schema_version=1)
+            events = self._storage.read_jsonl(base / "memory_events.jsonl")
+        except FileNotFoundError:
+            return None, "absent"
+        except (SchemaVersionError, StorageCorruptionError):
+            return None, "unknown"
+        history = doc.get("observations")
+        if not isinstance(history, list) or not history or not all(isinstance(item, dict) for item in history):
+            return None, "unknown"
+        app_evidence = [item.get("app_id") for item in history]
+        raw_ids = [item.get("observation_id") for item in history]
+        if not isinstance(indexed_ids, list):
+            return None, "unknown"
+        referenced_ids = list(indexed_ids)
+        # Older stores keyed raw observations by observation_id alone. Their native
+        # events can still identify the original app after another app replaced a row.
+        for event in events:
+            evidence = event.get("evidence") or {}
+            payload = event.get("payload")
+            if not isinstance(evidence, dict) or not isinstance(payload, dict):
+                return None, "unknown"
+            if evidence.get("source_type") == "memory_inheritance":
+                continue
+            if event.get("event_type") == "observation_ingested":
+                app_evidence.append(payload.get("app_id"))
+                referenced_ids.append(payload.get("observation_id"))
+            elif evidence.get("source_type") == "observation" and isinstance(payload.get("fact"), dict):
+                qualifiers = payload["fact"].get("qualifiers") or {}
+                if not isinstance(qualifiers, dict):
+                    return None, "unknown"
+                if "app_id" in qualifiers:
+                    app_evidence.append(qualifiers["app_id"])
+                    referenced_ids.append(evidence.get("source_observation_id"))
+
+        apps = {app for app in app_evidence if has_identity_app_id(app)}
+        if len(apps) > 1:
+            return None, "mixed"
+        if not all(has_identity_app_id(app) for app in app_evidence):
+            return None, "unknown"
+        if not all(isinstance(item, str) and item for item in [*raw_ids, *referenced_ids]):
+            return None, "unknown"
+        if not set(referenced_ids).issubset(raw_ids):
+            return None, "unknown"
+        return apps.pop(), "verified"
 
     def upsert_match_from_observation(
         self,
@@ -147,6 +245,9 @@ class MatchRepository:
             record["match_id"]: dict(record)
             for record in index["matches"]
         }
+        if not has_identity_app_id(observation.app_id):
+            raise ValueError("match observation requires an app_id")
+        self.validate_observation_app(match_id, observation.app_id)
         current = records.get(
             match_id,
             {
@@ -158,6 +259,7 @@ class MatchRepository:
                 "merged_match_ids": [],
             },
         )
+        current["app_id"] = observation.app_id
         hints = observation.match_identity_hints
         if hints.visible_name:
             current["display_name"] = hints.visible_name
@@ -206,7 +308,15 @@ class MatchRepository:
             self._storage.write_jsonl(self._CONFIRMATIONS_PATH, kept_events)
         return removed
 
+    def validate_same_app_merge(self, *, source_match_id: str, target_match_id: str) -> None:
+        if source_match_id == target_match_id:
+            raise ValueError("source and target match IDs must differ")
+        source_app = self.get_match_app_id(source_match_id)
+        if source_app is None or source_app != self.get_match_app_id(target_match_id):
+            raise ValueError("identity merge requires source and target from the same verified app")
+
     def merge_matches(self, *, source_match_id: str, target_match_id: str) -> None:
+        self.validate_same_app_merge(source_match_id=source_match_id, target_match_id=target_match_id)
         _validate_match_id(source_match_id)
         _validate_match_id(target_match_id)
         index = self._load_index()

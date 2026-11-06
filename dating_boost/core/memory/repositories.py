@@ -4,10 +4,11 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.memory.extractors import events_from_observation
-from dating_boost.core.memory.models import MemoryEvent, MemoryEventType, MatchMemoryProjection
+from dating_boost.core.memory.models import IdentityTrustStatus, MemoryEvent, MemoryEventType, MatchMemoryProjection
 from dating_boost.core.memory.reducers import reduce_match_memory
 from dating_boost.core.memory.review_queue import ReviewQueueRepository
 from dating_boost.core.production_store import ProductionDataStore
+from dating_boost.core.repositories import MatchRepository
 from dating_boost.core.storage import JsonStorage
 from dating_boost.perception.observations import AppObservation
 
@@ -59,7 +60,14 @@ class MemoryRepository:
             data = self._storage.read_json(self._projection_path(match_id), expected_schema_version=1)
         except FileNotFoundError:
             return None
-        return MatchMemoryProjection.from_dict(data)
+        return self._guard_app_scope(MatchMemoryProjection.from_dict(data))
+
+    def _guard_app_scope(self, projection: MatchMemoryProjection) -> MatchMemoryProjection:
+        if MatchRepository(self._storage.root).app_scope_requires_review(projection.match_id):
+            projection.identity_status = IdentityTrustStatus.APP_SCOPE_REVIEW_REQUIRED
+            projection.trusted_for_context = False
+            projection.trusted_for_managed_send = False
+        return projection
 
     def export_match(self, match_id: str) -> dict[str, Any]:
         _validate_match_id(match_id)
@@ -72,7 +80,7 @@ class MemoryRepository:
             for item in self._storage.read_jsonl(Path("matches") / "identity_confirmations.jsonl")
             if item.get("match_id") == match_id
         ]
-        match_record = self._load_match_record(match_id)
+        match_record = MatchRepository(self._storage.root).get_match_record(match_id)
         return {
             "schema_version": 1,
             "match_id": match_id,
@@ -135,7 +143,7 @@ class MemoryRepository:
 
     def rebuild_projection(self, match_id: str) -> MatchMemoryProjection:
         events = self.load_events(match_id)
-        projection = reduce_match_memory(match_id, events)
+        projection = self._guard_app_scope(reduce_match_memory(match_id, events))
         self.save_projection(match_id, projection)
         return projection
 
@@ -148,6 +156,8 @@ class MemoryRepository:
         requires_user_confirmation: bool | None = None,
     ) -> MatchMemoryProjection:
         _validate_match_id(match_id)
+        if MatchRepository(self._storage.root).app_scope_requires_review(match_id):
+            raise ValueError("match_app_scope_review_required")
         existing_events = self.load_events(match_id)
         identity_by_observation_id = _identity_assessments_by_observation_id(existing_events)
         generated_events: list[MemoryEvent] = []
@@ -198,19 +208,6 @@ class MemoryRepository:
             for observation in observations
             if isinstance(observation, dict)
         ]
-
-    def _load_match_record(self, match_id: str) -> dict[str, Any] | None:
-        try:
-            index = self._storage.read_json(Path("matches") / "index.json", expected_schema_version=1)
-        except FileNotFoundError:
-            return None
-        matches = index.get("matches", [])
-        if not isinstance(matches, list):
-            return None
-        for record in matches:
-            if isinstance(record, dict) and record.get("match_id") == match_id:
-                return dict(record)
-        return None
 
 
 def _identity_assessments_by_observation_id(events: list[MemoryEvent]) -> dict[str, dict[str, object]]:
