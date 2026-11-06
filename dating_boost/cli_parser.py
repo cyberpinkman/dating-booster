@@ -995,6 +995,11 @@ def _add_manage_commands(subparsers: argparse._SubParsersAction, handler_namespa
     _add_manage_run_selector(manage_resume_parser)
     manage_resume_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_resume"))
 
+    manage_reconcile_parser = manage_subparsers.add_parser("reconcile", help="Reobserve an unknown send without sending again.")
+    _add_manage_run_selector(manage_reconcile_parser)
+    manage_reconcile_parser.add_argument("--decision-key", help="Unknown attempt to verify; defaults to the sole unresolved attempt.")
+    manage_reconcile_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_reconcile"))
+
     manage_stop_parser = manage_subparsers.add_parser("stop", help="Stop the current managed run.")
     _add_manage_run_selector(manage_stop_parser)
     manage_stop_parser.add_argument("--reason", default="manual_stop")
