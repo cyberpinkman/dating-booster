@@ -5,6 +5,7 @@ import stat
 import struct
 import zlib
 from copy import deepcopy
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -13,6 +14,8 @@ import pytest
 
 from dating_boost.apps.tashuo import managed_visual_io as module
 from dating_boost.apps.tashuo.managed_visual_io import TaShuoManagedVisualIO
+from dating_boost.core.managed_run import ManagedClickBlocked
+from tests.test_managed_run import _config, _runtime
 
 
 pytestmark = pytest.mark.managed_critical
@@ -453,6 +456,33 @@ def test_return_checks_deadline_before_irreversible_action(setup, monkeypatch, d
     monkeypatch.setattr(module, "_now_iso", lambda: "2026-09-20T00:00:01Z")
     assert io.click_return("expected", deadline_at=deadline) == {"status": "blocked", "reason": reason}
     adapter.session._press_return_key.assert_not_called()
+
+
+def test_run_rechecks_quiet_hours_after_slow_gui_preflight_before_return(setup, monkeypatch):
+    io, adapter, read, *_ = setup
+    runtime, store, _, _, action, clock = _runtime()
+    quiet_start = clock.value + timedelta(minutes=1)
+    window = f"{quiet_start.astimezone():%H:%M}-{(quiet_start + timedelta(hours=1)).astimezone():%H:%M}"
+    runtime.start(_config(quiet_hours=(window,)), run_id="timing")
+
+    def slow_snapshot(*args, **kwargs):
+        clock.value = quiet_start
+        return _snapshot(action.composer_text)
+
+    original_click = action.click_send
+
+    def click(candidate):
+        result = io.click_return(action.composer_text)
+        if result["status"] == "blocked":
+            raise ManagedClickBlocked(result["reason"])
+        return original_click(candidate)
+
+    read.side_effect = slow_snapshot
+    monkeypatch.setattr(action, "click_send", click)
+    result = runtime.tick("timing")
+    adapter.session._press_return_key.assert_not_called()
+    assert result["action_reason"] == "authorization_quiet_hours"
+    assert store.load("timing").attempted_send_count == 0
 
 
 def test_return_is_once_without_focus_capture_stage_or_retry(setup, monkeypatch):

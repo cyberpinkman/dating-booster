@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
+from dating_boost.core.live_send_contract import pre_send_time_block
 from dating_boost.apps.tashuo.managed_composer_ax import guarded_stage, snapshot
 from dating_boost.apps.tashuo.runtime_common import (
     _is_mac_ios_app_session,
@@ -389,6 +390,8 @@ class TaShuoManagedVisualIO:
                     return _blocked("managed_burst_continuation_deadline_invalid")
                 if expired:
                     return _blocked("managed_burst_continuation_expired")
+            if time_block := pre_send_time_block():
+                return time_block
             invoked = True
             result = self.adapter.session._press_return_key()
             clicked_at = _now_iso()

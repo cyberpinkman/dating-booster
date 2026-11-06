@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from dating_boost.core.automation_send_evidence import (
@@ -17,10 +16,10 @@ from dating_boost.core.automation_send_revision import (
     _mark_draft_revision_required,
 )
 from dating_boost.core.automation_state import (
-    _parse_iso_local_clock,
     _parse_iso_utc,
     _safe_id,
 )
+from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason
 from dating_boost.perception.observations import AppObservation
 
 
@@ -147,69 +146,7 @@ def _send_authorization_block_reason(
         allowed = {str(item) for item in allowed_match_ids}
         if match_id not in allowed:
             return "authorization_match_not_allowed"
-    if _quiet_hours_active(authorization.get("quiet_hours"), now):
-        return "authorization_quiet_hours"
-    return None
-
-
-def _quiet_hours_active(value: Any, now: str) -> bool:
-    if not isinstance(value, list) or not value:
-        return False
-    try:
-        current = _clock_minutes(_parse_iso_local_clock(now))
-    except ValueError:
-        return True
-    for item in value:
-        window = _quiet_window_minutes(item)
-        if window is None:
-            continue
-        start, end = window
-        if _minutes_in_window(current, start, end):
-            return True
-    return False
-
-
-def _quiet_window_minutes(item: Any) -> tuple[int, int] | None:
-    if isinstance(item, dict):
-        start = item.get("start") or item.get("start_time")
-        end = item.get("end") or item.get("end_time")
-        start_minutes = _parse_clock_minutes(start)
-        end_minutes = _parse_clock_minutes(end)
-        if start_minutes is None or end_minutes is None:
-            return None
-        return start_minutes, end_minutes
-    if isinstance(item, str) and "-" in item:
-        start, end = item.split("-", 1)
-        start_minutes = _parse_clock_minutes(start.strip())
-        end_minutes = _parse_clock_minutes(end.strip())
-        if start_minutes is None or end_minutes is None:
-            return None
-        return start_minutes, end_minutes
-    return None
-
-
-def _parse_clock_minutes(value: Any) -> int | None:
-    if not isinstance(value, str) or ":" not in value:
-        return None
-    hour_text, minute_text = value.split(":", 1)
-    try:
-        hour = int(hour_text)
-        minute = int(minute_text)
-    except ValueError:
-        return None
-    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
-        return None
-    return hour * 60 + minute
-
-
-def _clock_minutes(value: datetime) -> int:
-    return value.hour * 60 + value.minute
-
-
-def _minutes_in_window(current: int, start: int, end: int) -> bool:
-    if start <= end:
-        return start <= current <= end
-    return current >= start or current <= end
+    return live_send_authorization_quiet_hours_block_reason(authorization.get("quiet_hours"), now=now)
 
 
 def _handoff_reason(assessment: dict[str, Any]) -> str:
@@ -296,11 +233,6 @@ __all__ = [
     "_can_request_nudge",
     "_authorization_revoked_or_expired",
     "_send_authorization_block_reason",
-    "_quiet_hours_active",
-    "_quiet_window_minutes",
-    "_parse_clock_minutes",
-    "_clock_minutes",
-    "_minutes_in_window",
     "_host_supplied_generation_binding",
     "_host_supplied_generation_contract_block_reason",
     "_stage_only_generation_soft_accept_allowed",

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dating_boost.core.live_send_contract import pre_send_time_block
+
 from dating_boost.apps.iphone_targeting import (
     annotations, hashlib, _platform, copy,
     csv, datetime, timezone, io,
@@ -336,6 +338,8 @@ def send_wechat_message(
         payload.update({"status": "blocked", "reason": stage_payload.get("reason") or "stage_failed"})
         return payload
 
+    if time_block := pre_send_time_block():
+        return {**payload, **time_block}
     send_result = self._press_return_key()
     payload["executed_steps"] = [
         {"intent": planned_steps[0]["intent"], "result": {"status": "ok"}},

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dating_boost.core.live_send_contract import pre_send_time_block
+
 from dating_boost.apps.iphone_targeting import (
     annotations, hashlib, _platform, copy,
     csv, datetime, timezone, io,
@@ -609,6 +611,8 @@ def _complete_bumble_send(
         )
         return payload
 
+    if time_block := pre_send_time_block():
+        return {**payload, **time_block, "executed_steps": executed_steps}
     send_result = self._click_ratio(window, send_step["tap_ratio"])
     executed_steps.append({**send_step, "result": send_result})
     payload["executed_steps"] = executed_steps

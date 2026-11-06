@@ -194,13 +194,6 @@ def _parse_iso_utc(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def _parse_iso_local_clock(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
 __all__ = [
     "ACTIVE_SLOT_STATUSES",
     "_action_result_mismatch",
@@ -219,5 +212,4 @@ __all__ = [
     "_unique_strings",
     "_now_iso",
     "_parse_iso_utc",
-    "_parse_iso_local_clock",
 ]

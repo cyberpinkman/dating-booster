@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dating_boost.core.live_send_contract import pre_send_time_block
+
 from .runtime_common import (
     annotations, copy, hashlib, json,
     Path, re, Any, uuid4,
@@ -815,6 +817,8 @@ def _complete_tashuo_live_send(
             return payload
         time.sleep(0.2)
 
+    if time_block := pre_send_time_block():
+        return {**payload, **time_block, "executed_steps": executed_steps}
     send_result = session._press_return_key()
     executed_steps.append({**send_step, "result": send_result})
     payload["executed_steps"] = executed_steps

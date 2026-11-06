@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from dating_boost.core.live_send_contract import pre_send_time_block
 from dating_boost.apps.tashuo.runtime_common import (
     _capture_tashuo_window,
     _is_mac_ios_app_session,
@@ -275,6 +276,8 @@ def click_tashuo_managed_send_only(
         if deadline_expired:
             return {**context, "status": "blocked", "reason": "managed_burst_continuation_expired"}
 
+    if time_block := pre_send_time_block():
+        return time_block
     send_result = session._press_return_key()
     if send_result.get("status") != "ok":
         return {
