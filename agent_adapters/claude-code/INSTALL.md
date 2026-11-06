@@ -11,10 +11,10 @@ cd dating-booster
 python3 -m pip install --user -e .
 python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 python3 -m dating_boost.cli adapter claude-code install --scope user --json
-python3 -m dating_boost.cli adapter claude-code doctor --data-dir .local/dating-boost --json
+python3 -m dating_boost.cli adapter claude-code doctor --scope user --data-dir .local/dating-boost --json
 ```
 
-After every source update, reinstall both the editable package and the copied Claude Code skill:
+After a source update, reinstall the editable package and the skill at its original scope and target. For a project installation, run:
 
 ```bash
 git pull --ff-only
@@ -48,10 +48,10 @@ dating-boost adapter claude-code install --scope user --json
 
 用户级 skill 路径是 `~/.claude/skills/dating-booster/`。
 
-Before real dating-app work, run:
+For the user installation above, run these checks. For a project installation, pass its original `--scope project` and `--target` to doctor.
 
 ```bash
-dating-boost adapter claude-code doctor --data-dir .local/dating-boost --json
+dating-boost adapter claude-code doctor --scope user --data-dir .local/dating-boost --json
 dating-boost release doctor --json
 dating-boost data doctor --data-dir .local/dating-boost --json
 dating-boost capabilities --json --data-dir .local/dating-boost

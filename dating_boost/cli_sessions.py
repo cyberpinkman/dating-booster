@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dating_boost.core.managed_run_commands import MANAGED_RUN_COMMANDS
 from dating_boost.cli_ops import (
     annotations, argparse, datetime, timezone,
     hashlib, json, os, sys,
@@ -324,7 +325,9 @@ def _handle_manage_start(args: argparse.Namespace) -> int:
             if readiness_block is not None:
                 payload = readiness_block
             else:
-                runtime = _build_managed_run_runtime(args.data_dir, require_ports=True, config=config)
+                runtime = _build_managed_run_runtime(
+                    args.data_dir, require_ports=MANAGED_RUN_COMMANDS["start"].requires_ports, config=config,
+                )
                 if runtime is None:
                     return _print_managed_run_runtime_not_configured()
                 payload = runtime.start(config, run_id=args.run_id)
@@ -468,7 +471,7 @@ def _manage_quiet_hours(value: Any) -> list[dict[str, str]]:
 
 
 def _handle_managed_run_operation(args: argparse.Namespace, operation: str, **kwargs: Any) -> int:
-    runtime = _build_managed_run_runtime(args.data_dir, require_ports=operation in {"run", "tick", "reconcile"})
+    runtime = _build_managed_run_runtime(args.data_dir, require_ports=MANAGED_RUN_COMMANDS[operation].requires_ports)
     if runtime is None:
         return _print_managed_run_runtime_not_configured()
     try:

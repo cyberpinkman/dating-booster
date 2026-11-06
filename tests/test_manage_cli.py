@@ -110,6 +110,17 @@ class ManageCliTests(unittest.TestCase):
         parser = build_parser(cli)
         groups = next(action.choices for action in parser._actions if action.dest == "command")
         commands = next(action.choices for action in groups["manage"]._actions if action.dest == "manage_command")
+        capabilities = payload["agent_native_capabilities"]
+        self.assertEqual(capabilities["managed_run_recovery_commands"], ["reconcile"])
+        classified = (
+            capabilities["managed_run_lifecycle"]
+            + capabilities["managed_run_host_runner_commands"]
+            + capabilities["managed_run_recovery_commands"]
+        )
+        self.assertCountEqual(commands, classified)
+        for command in classified:
+            parsed = parser.parse_args(["manage", command, "--data-dir", temp_dir])
+            self.assertIs(parsed.handler, getattr(cli, f"_handle_manage_{command}"))
         self.assertEqual(
             {f"manage {command}" for command in commands},
             {entry for entry in payload["supported_commands"] if entry.startswith("manage ")},
@@ -478,12 +489,13 @@ class ManageCliTests(unittest.TestCase):
         ]
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch("dating_boost.cli_sessions._build_managed_run_runtime", return_value=runtime):
+            with patch("dating_boost.cli_sessions._build_managed_run_runtime", return_value=runtime) as build:
                 for argv, expected_call in commands:
                     exit_code, payload = self._run([*argv, "--data-dir", temp_dir, "--json"])
                     self.assertEqual(exit_code, 0)
                     self.assertEqual(payload["run_id"], "run_current")
                     self.assertEqual(runtime.calls[-1], expected_call)
+                    build.assert_called_with(Path(temp_dir), require_ports=argv[1] in {"tick", "run"})
 
     def test_explicit_run_id_does_not_resolve_the_current_run(self):
         runtime = FakeManagedRunRuntime()

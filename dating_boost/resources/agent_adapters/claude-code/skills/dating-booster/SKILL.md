@@ -11,7 +11,7 @@ Use this skill when a Claude Code user asks for help with Dating Booster dating-
 
 Before observing any visible dating app content, screenshots, profile text, conversation text, or generated drafts, choose a local data directory. Prefer `.local/dating-boost` unless the user gives another path.
 
-If this is a freshly cloned or recently pulled repository, or if the installed Claude Code skill disagrees with `dating-boost capabilities`, refresh the local editable install and reinstall this adapter before startup checks:
+If this is a freshly cloned or recently pulled repository, or if the installed Claude Code skill disagrees with `dating-boost capabilities`, refresh the local editable install and reinstall this adapter at its original scope and target. The example uses a project installation. For a user installation, pass `--scope user` to both install and doctor.
 
 ```bash
 python3 -m pip install --user -e .

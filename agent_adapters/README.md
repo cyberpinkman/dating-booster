@@ -30,11 +30,18 @@ installation and operating notes.
 
 ## Adapter Install Checks
 
+Run doctor with the same scope and target as install. Add `--dry-run` to install to preview its target and files.
+
+The JSON field `target_path` names the inspected directory. `installation.status` distinguishes
+a missing directory, a partial installation, stale files, and unreadable files. The file lists
+use paths relative to that directory. `skill_doctor` reports the source package's compatibility
+with the CLI. To refresh a copy, run install again with the same scope and target.
+
 ```bash
-dating-boost adapter claude-code install --scope project --target . --dry-run --json
+dating-boost adapter claude-code install --scope project --target . --json
 dating-boost adapter claude-code doctor --data-dir .local/dating-boost --json
 dating-boost-host-loop doctor --adapter-package agent_adapters/claude-code/adapter-package.json --data-dir .local/dating-boost --json
-dating-boost adapter openclaw install --scope project --target . --dry-run --json
+dating-boost adapter openclaw install --scope project --target . --json
 dating-boost adapter openclaw doctor --data-dir .local/dating-boost --json
 dating-boost adapter hermes doctor --data-dir .local/dating-boost --json
 dating-boost-host-loop doctor --adapter-package agent_adapters/openclaw/adapter-package.json --data-dir .local/dating-boost --json

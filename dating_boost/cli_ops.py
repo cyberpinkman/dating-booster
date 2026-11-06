@@ -175,7 +175,7 @@ def _handle_adapter_claude_code_install(args: argparse.Namespace) -> int:
 
 
 def _handle_adapter_claude_code_doctor(args: argparse.Namespace) -> int:
-    payload = run_claude_code_adapter_doctor(args.data_dir)
+    payload = run_claude_code_adapter_doctor(args.data_dir, scope=args.scope, target=args.target)
     _print_json(payload)
     return 0 if payload["status"] == "ok" else 2
 
@@ -192,7 +192,7 @@ def _handle_adapter_openclaw_install(args: argparse.Namespace) -> int:
 
 
 def _handle_adapter_openclaw_doctor(args: argparse.Namespace) -> int:
-    payload = run_openclaw_adapter_doctor(args.data_dir, target_host="openclaw")
+    payload = run_openclaw_adapter_doctor(args.data_dir, scope=args.scope, target=args.target, target_host="openclaw")
     _print_json(payload)
     return 0 if payload["status"] == "ok" else 2
 
@@ -209,7 +209,7 @@ def _handle_adapter_hermes_install(args: argparse.Namespace) -> int:
 
 
 def _handle_adapter_hermes_doctor(args: argparse.Namespace) -> int:
-    payload = run_openclaw_adapter_doctor(args.data_dir, target_host="hermes")
+    payload = run_openclaw_adapter_doctor(args.data_dir, scope=args.scope, target=args.target, target_host="hermes")
     _print_json(payload)
     return 0 if payload["status"] == "ok" else 2
 
@@ -221,7 +221,7 @@ def _handle_adapter_codex_install(args: argparse.Namespace) -> int:
 
 
 def _handle_adapter_codex_doctor(args: argparse.Namespace) -> int:
-    payload = run_codex_adapter_doctor(args.data_dir)
+    payload = run_codex_adapter_doctor(args.data_dir, scope=args.scope, target=args.target)
     _print_json(payload)
     return 0 if payload["status"] == "ok" else 2
 

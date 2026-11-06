@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 from typing import Any
 
+from dating_boost.core.managed_run_commands import MANAGED_RUN_COMMANDS
 from dating_boost.cli_ops import (
     MINIMAX_DEFAULT_API_KEY_ENV,
     MINIMAX_DEFAULT_BASE_URL,
@@ -71,60 +72,24 @@ def _add_adapter_commands(subparsers: argparse._SubParsersAction, handler_namesp
     adapter_parser = subparsers.add_parser("adapter", help="Host-agent adapter installation and diagnostics.")
     adapter_subparsers = adapter_parser.add_subparsers(dest="adapter_command", required=True)
 
-    codex_parser = adapter_subparsers.add_parser("codex", help="Codex adapter commands.")
-    codex_subparsers = codex_parser.add_subparsers(dest="codex_command", required=True)
-    codex_install_parser = codex_subparsers.add_parser("install")
-    codex_install_parser.add_argument("--scope", choices=["project", "user"], default="user")
-    codex_install_parser.add_argument("--target", type=Path)
-    codex_install_parser.add_argument("--dry-run", action="store_true")
-    codex_install_parser.add_argument("--json", action="store_true")
-    codex_install_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_codex_install"))
-    codex_doctor_parser = codex_subparsers.add_parser("doctor")
-    codex_doctor_parser.add_argument("--data-dir", required=True, type=Path)
-    codex_doctor_parser.add_argument("--json", action="store_true")
-    codex_doctor_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_codex_doctor"))
-
-    claude_parser = adapter_subparsers.add_parser("claude-code", help="Claude Code adapter commands.")
-    claude_subparsers = claude_parser.add_subparsers(dest="claude_code_command", required=True)
-    claude_install_parser = claude_subparsers.add_parser("install")
-    claude_install_parser.add_argument("--scope", choices=["project", "user"], default="project")
-    claude_install_parser.add_argument("--target", type=Path)
-    claude_install_parser.add_argument("--dry-run", action="store_true")
-    claude_install_parser.add_argument("--json", action="store_true")
-    claude_install_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_claude_code_install"))
-    claude_doctor_parser = claude_subparsers.add_parser("doctor")
-    claude_doctor_parser.add_argument("--data-dir", required=True, type=Path)
-    claude_doctor_parser.add_argument("--json", action="store_true")
-    claude_doctor_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_claude_code_doctor"))
-
-    openclaw_parser = adapter_subparsers.add_parser("openclaw", help="OpenClaw adapter commands.")
-    openclaw_subparsers = openclaw_parser.add_subparsers(dest="openclaw_command", required=True)
-    openclaw_install_parser = openclaw_subparsers.add_parser("install")
-    openclaw_install_parser.add_argument("--scope", choices=["project", "user"], default="project")
-    openclaw_install_parser.add_argument("--target", type=Path)
-    openclaw_install_parser.add_argument("--dry-run", action="store_true")
-    openclaw_install_parser.add_argument("--json", action="store_true")
-    openclaw_install_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_openclaw_install"))
-    openclaw_doctor_parser = openclaw_subparsers.add_parser("doctor")
-    openclaw_doctor_parser.add_argument("--data-dir", required=True, type=Path)
-    openclaw_doctor_parser.add_argument("--json", action="store_true")
-    openclaw_doctor_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_openclaw_doctor"))
-
-    hermes_parser = adapter_subparsers.add_parser(
-        "hermes",
-        help="Hermes adapter commands using the OpenClaw-compatible skill contract.",
-    )
-    hermes_subparsers = hermes_parser.add_subparsers(dest="hermes_command", required=True)
-    hermes_install_parser = hermes_subparsers.add_parser("install")
-    hermes_install_parser.add_argument("--scope", choices=["project", "user"], default="project")
-    hermes_install_parser.add_argument("--target", type=Path)
-    hermes_install_parser.add_argument("--dry-run", action="store_true")
-    hermes_install_parser.add_argument("--json", action="store_true")
-    hermes_install_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_hermes_install"))
-    hermes_doctor_parser = hermes_subparsers.add_parser("doctor")
-    hermes_doctor_parser.add_argument("--data-dir", required=True, type=Path)
-    hermes_doctor_parser.add_argument("--json", action="store_true")
-    hermes_doctor_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_hermes_doctor"))
+    for host, help_text, default_scope in (
+        ("codex", "Codex adapter commands.", "user"),
+        ("claude-code", "Claude Code adapter commands.", "project"),
+        ("openclaw", "OpenClaw adapter commands.", "project"),
+        ("hermes", "Hermes adapter commands using the OpenClaw-compatible skill contract.", "project"),
+    ):
+        host_key = host.replace("-", "_")
+        host_parser = adapter_subparsers.add_parser(host, help=help_text)
+        commands = host_parser.add_subparsers(dest=f"{host_key}_command", required=True)
+        install = commands.add_parser("install")
+        install.add_argument("--dry-run", action="store_true")
+        doctor = commands.add_parser("doctor", help="Check the adapter installed for this host.")
+        doctor.add_argument("--data-dir", required=True, type=Path)
+        for command, name in ((install, "install"), (doctor, "doctor")):
+            command.add_argument("--scope", choices=["project", "user"], default=default_scope)
+            command.add_argument("--target", type=Path, help="Base directory used for this installation.")
+            command.add_argument("--json", action="store_true")
+            command.set_defaults(handler=_handler(handler_namespace, f"_handle_adapter_{host_key}_{name}"))
 
 
 
@@ -906,104 +871,81 @@ def _add_manage_commands(subparsers: argparse._SubParsersAction, handler_namespa
     )
     manage_subparsers = manage_parser.add_subparsers(dest="manage_command", required=True)
 
-    manage_start_parser = manage_subparsers.add_parser(
-        "start",
-        help="Start a durable managed run from one confirmed authorization window.",
-    )
-    manage_start_parser.add_argument("--data-dir", required=True, type=Path)
-    manage_start_parser.add_argument(
+    for name, command in MANAGED_RUN_COMMANDS.items():
+        parser = manage_subparsers.add_parser(name, help=command.help)
+        parser.set_defaults(handler=_handler(handler_namespace, f"_handle_manage_{name}"))
+        if name == "start":
+            _add_manage_start_arguments(parser)
+        else:
+            _add_manage_run_selector(parser)
+            if name == "run":
+                _add_manage_runner_arguments(parser)
+            elif name in {"pause", "stop"}:
+                parser.add_argument("--reason", default=f"manual_{name}")
+            elif name == "reconcile":
+                parser.add_argument("--decision-key", help="Unknown attempt to verify; defaults to the sole unresolved attempt.")
+
+
+def _add_manage_start_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--data-dir", required=True, type=Path)
+    parser.add_argument(
         "--app-id",
         choices=["tashuo"],
         default="tashuo",
         help="Flagship managed app (default: tashuo).",
     )
-    manage_start_parser.add_argument(
+    parser.add_argument(
         "--runtime",
         choices=["mac-ios-app"],
         default="mac-ios-app",
         help="Flagship managed runtime (default: mac-ios-app).",
     )
-    manage_start_parser.add_argument("--duration-minutes", type=int, default=120)
-    manage_start_parser.add_argument("--send-budget", type=int, default=5)
-    manage_start_parser.add_argument(
+    parser.add_argument("--duration-minutes", type=int, default=120)
+    parser.add_argument("--send-budget", type=int, default=5)
+    parser.add_argument(
         "--quiet-hours",
         default="23:00-08:00",
         help="Host-local quiet hours as HH:MM-HH:MM. Sending can resume at the end minute. Use 'off' to disable.",
     )
-    manage_start_parser.add_argument(
+    parser.add_argument(
         "--nudge",
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Allow a bounded follow-up only when the user explicitly included it in this run.",
     )
-    manage_start_parser.add_argument(
+    parser.add_argument(
         "--management-mode",
         choices=["conservative"],
         default="conservative",
         help=argparse.SUPPRESS,
     )
-    manage_start_parser.add_argument(
+    parser.add_argument(
         "--authorization",
         type=Path,
         help=argparse.SUPPRESS,
     )
-    manage_start_parser.add_argument(
+    parser.add_argument(
         "--config",
         type=Path,
         help=argparse.SUPPRESS,
     )
-    manage_start_parser.add_argument("--run-id")
-    manage_start_parser.add_argument("--json", action="store_true")
-    manage_start_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_start"))
+    parser.add_argument("--run-id")
+    parser.add_argument("--json", action="store_true")
 
-    manage_tick_parser = manage_subparsers.add_parser(
-        "tick",
-        help="Advance the current managed run by one bounded cycle.",
-    )
-    _add_manage_run_selector(manage_tick_parser)
-    manage_tick_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_tick"))
 
-    manage_run_parser = manage_subparsers.add_parser(
-        "run",
-        help="Advance to a wait point, or keep polling the same run with --wait.",
-    )
-    _add_manage_run_selector(manage_run_parser)
-    manage_run_parser.add_argument("--max-steps", type=int, default=100)
-    manage_run_parser.add_argument(
+def _add_manage_runner_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--max-steps", type=int, default=100)
+    parser.add_argument(
         "--wait",
         action="store_true",
         help="Keep polling the same durable run after an idle scan.",
     )
-    manage_run_parser.add_argument(
+    parser.add_argument(
         "--poll-interval",
         type=float,
         default=30.0,
         help="Seconds between idle scans when --wait is enabled.",
     )
-    manage_run_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_run"))
-
-    manage_status_parser = manage_subparsers.add_parser("status", help="Show the current managed run.")
-    _add_manage_run_selector(manage_status_parser)
-    manage_status_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_status"))
-
-    manage_pause_parser = manage_subparsers.add_parser("pause", help="Pause before the next managed mutation.")
-    _add_manage_run_selector(manage_pause_parser)
-    manage_pause_parser.add_argument("--reason", default="manual_pause")
-    manage_pause_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_pause"))
-
-    manage_resume_parser = manage_subparsers.add_parser("resume", help="Resume the same durable managed run.")
-    _add_manage_run_selector(manage_resume_parser)
-    manage_resume_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_resume"))
-
-    manage_reconcile_parser = manage_subparsers.add_parser("reconcile", help="Reobserve an unknown send without sending again.")
-    _add_manage_run_selector(manage_reconcile_parser)
-    manage_reconcile_parser.add_argument("--decision-key", help="Unknown attempt to verify; defaults to the sole unresolved attempt.")
-    manage_reconcile_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_reconcile"))
-
-    manage_stop_parser = manage_subparsers.add_parser("stop", help="Stop the current managed run.")
-    _add_manage_run_selector(manage_stop_parser)
-    manage_stop_parser.add_argument("--reason", default="manual_stop")
-    manage_stop_parser.set_defaults(handler=_handler(handler_namespace, "_handle_manage_stop"))
 
 
 def _add_manage_run_selector(parser: argparse.ArgumentParser) -> None:

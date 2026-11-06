@@ -20,7 +20,7 @@ The install command copies the skill and shared references into:
 
 ```bash
 dating-boost adapter openclaw install --scope user --json
-dating-boost adapter openclaw doctor --data-dir ~/.dating-boost --json
+dating-boost adapter openclaw doctor --scope user --data-dir ~/.dating-boost --json
 ```
 
 This writes:

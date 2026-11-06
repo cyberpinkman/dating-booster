@@ -20,6 +20,8 @@ Before observing any visible dating app content, screenshots, profile text,
 conversation text, or generated drafts, choose a local data directory. Prefer
 `.local/dating-boost` unless the user gives another path.
 
+The examples check a project installation in the current directory. For a user installation, pass `--scope user` to doctor. For a custom target, pass the same `--target` used at install.
+
 Run for OpenClaw:
 
 ```bash

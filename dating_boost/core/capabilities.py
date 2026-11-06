@@ -13,6 +13,7 @@ from dating_boost.core.production_store import (
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.harness.native_gui import GUI_HARNESS_SCHEMA_VERSION
 from dating_boost.core.live_send_contract import managed_live_send_guidance
+from dating_boost.core.managed_run_commands import MANAGED_RUN_COMMANDS, command_names_for_role
 from dating_boost.core.managed_session import MANAGED_SESSION_SCAN_BOUNDARY, MANAGED_SESSION_USER_CONFIGURABLE_FIELDS
 from dating_boost.core.support import SUPPORT_EVIDENCE_SCHEMA_VERSION, SUPPORT_LOG_SCHEMA_VERSION
 
@@ -154,14 +155,7 @@ _BASE_SUPPORTED_COMMANDS: list[str] = [
     "managed-session notify",
     "managed-session status",
     "managed-session stop",
-    "manage start",
-    "manage tick",
-    "manage run",
-    "manage status",
-    "manage pause",
-    "manage resume",
-    "manage reconcile",
-    "manage stop",
+    *(f"manage {name}" for name in MANAGED_RUN_COMMANDS),
     "standalone-session start",
     "standalone-session tick",
     "standalone-session status",
@@ -319,8 +313,9 @@ def build_capabilities(data_dir: Path | None = None) -> dict[str, Any]:
             "managed_run": True,
             "managed_run_command": "dating-boost manage",
             "managed_run_maturity": "experimental_real_gui_canary_pending",
-            "managed_run_lifecycle": ["start", "status", "pause", "resume", "stop"],
-            "managed_run_host_runner_commands": ["run", "tick"],
+            "managed_run_lifecycle": command_names_for_role("lifecycle"),
+            "managed_run_host_runner_commands": command_names_for_role("host_runner"),
+            "managed_run_recovery_commands": command_names_for_role("recovery"),
             "managed_run_current_run_resolution": True,
             "managed_run_foreground_wait_loop": True,
             "managed_run_start_spawns_runner": False,
