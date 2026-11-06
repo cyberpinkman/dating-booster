@@ -1,10 +1,11 @@
 import argparse
 import filecmp
 import json
+import shlex
 import tempfile
 import tomllib
 import unittest
-from contextlib import redirect_stdout
+from contextlib import chdir, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
@@ -156,17 +157,22 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
 
     def test_adapter_claude_code_doctor_reports_ok(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            exit_code, payload = self._run_cli([
-                "adapter",
-                "claude-code",
-                "doctor",
-                "--data-dir",
-                temp_dir,
-                "--json",
+            target = Path(temp_dir) / "personal host's install"
+            install_exit, installed = self._run_cli([
+                "adapter", "claude-code", "install", "--scope", "user", "--target", str(target), "--json",
             ])
+            self.assertEqual(install_exit, 0)
+            command = shlex.split(installed["startup_commands"][0])
+            self.assertEqual(command[:3], ["python3", "-m", "dating_boost.cli"])
+            self.assertEqual(shlex.split(installed["next_action"]), ["run", "dating-boost", *command[3:]])
+            with chdir(temp_dir):
+                exit_code, payload = self._run_cli(command[3:])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["scope"], "user")
+        self.assertEqual(payload["target_path"], installed["target_path"])
+        self.assertEqual(payload["installation"]["status"], "ok")
         self.assertEqual(payload["target_host"], "claude_code")
         self.assertEqual(payload["adapter_package"], str(ADAPTER_PACKAGE.resolve()))
         self.assertEqual(payload["skill_doctor"]["status"], "ok")
@@ -375,17 +381,19 @@ class ClaudeCodeAdapterTests(unittest.TestCase):
 
     def test_adapter_codex_doctor_reports_ok(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "host install"
+            install_exit, installed = self._run_cli(["adapter", "codex", "install", "--target", str(target), "--json"])
+            self.assertEqual(install_exit, 0)
             exit_code, payload = self._run_cli([
-                "adapter",
-                "codex",
-                "doctor",
-                "--data-dir",
-                temp_dir,
-                "--json",
+                "adapter", "codex", "doctor", "--target", str(target),
+                "--data-dir", str(Path(temp_dir) / "data"), "--json",
             ])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["scope"], "user")
+        self.assertEqual(payload["target_path"], installed["target_path"])
+        self.assertEqual(payload["installation"]["status"], "ok")
         self.assertEqual(payload["target_host"], "codex")
         self.assertEqual(payload["skill_doctor"]["status"], "ok")
 

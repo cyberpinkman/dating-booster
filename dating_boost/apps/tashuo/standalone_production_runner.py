@@ -74,7 +74,7 @@ from dating_boost.apps.tashuo.standalone_production_lock import (
     WorkerProcessRegistry,
 )
 from dating_boost.core.action_audit import ActionAuditRepository
-from dating_boost.core.agent_adapters import run_codex_adapter_doctor
+from dating_boost.core.agent_adapters import check_codex_adapter_package
 from dating_boost.core.capabilities import build_capabilities
 from dating_boost.core.gui_runtime_lock import GuiRuntimeLock, boot_session_id
 from dating_boost.core.production_store import ProductionDataStore
@@ -2743,7 +2743,7 @@ class DefaultProductionPreflight:
             release = release_doctor()
             if release.get("status") != "ok":
                 return _preflight_block("release_doctor_failed")
-            skill = run_codex_adapter_doctor(paths.data_dir)
+            skill = check_codex_adapter_package(paths.data_dir)
             if skill.get("status") != "ok":
                 return _preflight_block("skill_doctor_failed")
             store = ProductionDataStore(paths.data_dir)

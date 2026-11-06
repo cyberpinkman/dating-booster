@@ -88,7 +88,7 @@ python3 -m pip install -e .
 
 # 以 Codex 为例；可替换为 claude-code、openclaw 或 hermes
 dating-boost adapter codex install --scope user --json
-dating-boost adapter codex doctor --data-dir .local/dating-boost --json
+dating-boost adapter codex doctor --scope user --data-dir .local/dating-boost --json
 dating-boost release doctor --json
 dating-boost data doctor --data-dir .local/dating-boost --json
 ```

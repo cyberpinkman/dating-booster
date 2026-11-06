@@ -88,6 +88,10 @@ jobs:
           cd "$RUNNER_TEMP"
           "$RUNNER_TEMP/dating-booster-wheel-smoke/bin/dating-boost" capabilities --json --data-dir "$RUNNER_TEMP/wheel-smoke-data" > "$RUNNER_TEMP/wheel-capabilities.json"
           "$RUNNER_TEMP/dating-booster-wheel-smoke/bin/python" -c 'import json, pathlib; payload=json.loads(pathlib.Path("wheel-capabilities.json").read_text()); assert set(payload["agent_native_capabilities"]["supported_app_profiles"]) == {"bumble", "tashuo", "tinder", "wechat"}'
+          wheel_cli="$RUNNER_TEMP/dating-booster-wheel-smoke/bin/dating-boost"
+          "$wheel_cli" adapter openclaw install --scope project --target "$RUNNER_TEMP/wheel-project" --json > /dev/null
+          "$wheel_cli" adapter openclaw doctor --scope project --target "$RUNNER_TEMP/wheel-project" --data-dir "$RUNNER_TEMP/wheel-smoke-data" --json > wheel-adapter.json
+          "$RUNNER_TEMP/dating-booster-wheel-smoke/bin/python" -c 'import json, pathlib; result=json.loads(pathlib.Path("wheel-adapter.json").read_text()); assert result["installation"]["status"] == "ok"; assert (pathlib.Path(result["target_path"]) / "references" / "workflows.md").is_file()'
       - name: Static quality
         run: |
           python -m ruff check dating_boost tests scripts

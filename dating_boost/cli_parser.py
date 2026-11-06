@@ -72,60 +72,24 @@ def _add_adapter_commands(subparsers: argparse._SubParsersAction, handler_namesp
     adapter_parser = subparsers.add_parser("adapter", help="Host-agent adapter installation and diagnostics.")
     adapter_subparsers = adapter_parser.add_subparsers(dest="adapter_command", required=True)
 
-    codex_parser = adapter_subparsers.add_parser("codex", help="Codex adapter commands.")
-    codex_subparsers = codex_parser.add_subparsers(dest="codex_command", required=True)
-    codex_install_parser = codex_subparsers.add_parser("install")
-    codex_install_parser.add_argument("--scope", choices=["project", "user"], default="user")
-    codex_install_parser.add_argument("--target", type=Path)
-    codex_install_parser.add_argument("--dry-run", action="store_true")
-    codex_install_parser.add_argument("--json", action="store_true")
-    codex_install_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_codex_install"))
-    codex_doctor_parser = codex_subparsers.add_parser("doctor")
-    codex_doctor_parser.add_argument("--data-dir", required=True, type=Path)
-    codex_doctor_parser.add_argument("--json", action="store_true")
-    codex_doctor_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_codex_doctor"))
-
-    claude_parser = adapter_subparsers.add_parser("claude-code", help="Claude Code adapter commands.")
-    claude_subparsers = claude_parser.add_subparsers(dest="claude_code_command", required=True)
-    claude_install_parser = claude_subparsers.add_parser("install")
-    claude_install_parser.add_argument("--scope", choices=["project", "user"], default="project")
-    claude_install_parser.add_argument("--target", type=Path)
-    claude_install_parser.add_argument("--dry-run", action="store_true")
-    claude_install_parser.add_argument("--json", action="store_true")
-    claude_install_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_claude_code_install"))
-    claude_doctor_parser = claude_subparsers.add_parser("doctor")
-    claude_doctor_parser.add_argument("--data-dir", required=True, type=Path)
-    claude_doctor_parser.add_argument("--json", action="store_true")
-    claude_doctor_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_claude_code_doctor"))
-
-    openclaw_parser = adapter_subparsers.add_parser("openclaw", help="OpenClaw adapter commands.")
-    openclaw_subparsers = openclaw_parser.add_subparsers(dest="openclaw_command", required=True)
-    openclaw_install_parser = openclaw_subparsers.add_parser("install")
-    openclaw_install_parser.add_argument("--scope", choices=["project", "user"], default="project")
-    openclaw_install_parser.add_argument("--target", type=Path)
-    openclaw_install_parser.add_argument("--dry-run", action="store_true")
-    openclaw_install_parser.add_argument("--json", action="store_true")
-    openclaw_install_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_openclaw_install"))
-    openclaw_doctor_parser = openclaw_subparsers.add_parser("doctor")
-    openclaw_doctor_parser.add_argument("--data-dir", required=True, type=Path)
-    openclaw_doctor_parser.add_argument("--json", action="store_true")
-    openclaw_doctor_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_openclaw_doctor"))
-
-    hermes_parser = adapter_subparsers.add_parser(
-        "hermes",
-        help="Hermes adapter commands using the OpenClaw-compatible skill contract.",
-    )
-    hermes_subparsers = hermes_parser.add_subparsers(dest="hermes_command", required=True)
-    hermes_install_parser = hermes_subparsers.add_parser("install")
-    hermes_install_parser.add_argument("--scope", choices=["project", "user"], default="project")
-    hermes_install_parser.add_argument("--target", type=Path)
-    hermes_install_parser.add_argument("--dry-run", action="store_true")
-    hermes_install_parser.add_argument("--json", action="store_true")
-    hermes_install_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_hermes_install"))
-    hermes_doctor_parser = hermes_subparsers.add_parser("doctor")
-    hermes_doctor_parser.add_argument("--data-dir", required=True, type=Path)
-    hermes_doctor_parser.add_argument("--json", action="store_true")
-    hermes_doctor_parser.set_defaults(handler=_handler(handler_namespace, "_handle_adapter_hermes_doctor"))
+    for host, help_text, default_scope in (
+        ("codex", "Codex adapter commands.", "user"),
+        ("claude-code", "Claude Code adapter commands.", "project"),
+        ("openclaw", "OpenClaw adapter commands.", "project"),
+        ("hermes", "Hermes adapter commands using the OpenClaw-compatible skill contract.", "project"),
+    ):
+        host_key = host.replace("-", "_")
+        host_parser = adapter_subparsers.add_parser(host, help=help_text)
+        commands = host_parser.add_subparsers(dest=f"{host_key}_command", required=True)
+        install = commands.add_parser("install")
+        install.add_argument("--dry-run", action="store_true")
+        doctor = commands.add_parser("doctor", help="Check the adapter installed for this host.")
+        doctor.add_argument("--data-dir", required=True, type=Path)
+        for command, name in ((install, "install"), (doctor, "doctor")):
+            command.add_argument("--scope", choices=["project", "user"], default=default_scope)
+            command.add_argument("--target", type=Path, help="Base directory used for this installation.")
+            command.add_argument("--json", action="store_true")
+            command.set_defaults(handler=_handler(handler_namespace, f"_handle_adapter_{host_key}_{name}"))
 
 
 

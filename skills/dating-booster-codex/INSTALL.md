@@ -17,12 +17,11 @@ python3 -m dating_boost.cli adapter codex install --scope user --json
 python3 -m dating_boost.cli adapter codex doctor --data-dir ~/.dating-boost --json
 ```
 
-For local development from the repository root:
+For local development from the repository root, install the test dependencies and refresh the user-level skill:
 
 ```bash
 python3 -m pip install -e ".[test]"
-mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
-cp -R skills/dating-booster-codex "${CODEX_HOME:-$HOME/.codex}/skills/"
+python3 -m dating_boost.cli adapter codex install --scope user --json
 ```
 
 If you are developing inside this repository, Codex can also read the skill
@@ -30,8 +29,15 @@ directly from `skills/dating-booster-codex` without copying it.
 
 ## Startup Check
 
-Before any host agent observes visible dating app content, choose a local data
-directory and run the skill doctor:
+Before observing visible dating app content, verify the installed copy. A user installation uses the skills directory under `CODEX_HOME` (default `~/.codex`).
+
+```bash
+dating-boost adapter codex doctor --scope user --data-dir .local/dating-boost --json
+```
+
+For a project installation, use `--scope project` and the same project directory or `--target` used at install.
+
+To check a source package directly or diagnose CLI bootstrap, run the skill doctor:
 
 ```bash
 python3 skills/dating-booster-codex/scripts/doctor.py --json --data-dir .local/dating-boost

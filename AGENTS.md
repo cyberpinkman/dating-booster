@@ -30,14 +30,14 @@ Codex:
 
 ```bash
 python3 -m dating_boost.cli adapter codex install --scope user --json
-python3 -m dating_boost.cli adapter codex doctor --data-dir .local/dating-boost --json
+python3 -m dating_boost.cli adapter codex doctor --scope user --data-dir .local/dating-boost --json
 ```
 
 Claude Code:
 
 ```bash
 python3 -m dating_boost.cli adapter claude-code install --scope user --json
-python3 -m dating_boost.cli adapter claude-code doctor --data-dir .local/dating-boost --json
+python3 -m dating_boost.cli adapter claude-code doctor --scope user --data-dir .local/dating-boost --json
 ```
 
 项目级 Claude Code 安装会写入 `.claude/skills/dating-booster/`；用户级安装写入 `~/.claude/skills/dating-booster/`。
@@ -46,7 +46,7 @@ OpenClaw:
 
 ```bash
 python3 -m dating_boost.cli adapter openclaw install --scope user --json
-python3 -m dating_boost.cli adapter openclaw doctor --data-dir .local/dating-boost --json
+python3 -m dating_boost.cli adapter openclaw doctor --scope user --data-dir .local/dating-boost --json
 ```
 
 项目级 OpenClaw 安装会写入 `.openclaw/skills/dating-booster/`；用户级安装写入 `~/.openclaw/skills/dating-booster/`。
@@ -55,7 +55,7 @@ Hermes 使用 OpenClaw-compatible skill contract：
 
 ```bash
 python3 -m dating_boost.cli adapter hermes install --scope user --json
-python3 -m dating_boost.cli adapter hermes doctor --data-dir .local/dating-boost --json
+python3 -m dating_boost.cli adapter hermes doctor --scope user --data-dir .local/dating-boost --json
 ```
 
 更新 source checkout 后必须重新运行 editable install 和对应 adapter install；只 `git pull` 不会更新已复制到 host skill 目录里的内容。
@@ -68,12 +68,13 @@ Codex skill 的细节在 `skills/dating-booster-codex/INSTALL.md`。
 明确的故障诊断；它不再是每次 ManagedRun 日常启动的同步热路径。需要完整检查时运行：
 
 ```bash
-python3 -m dating_boost.cli adapter codex doctor --data-dir .local/dating-boost --json
+python3 -m dating_boost.cli adapter codex doctor --scope user --data-dir .local/dating-boost --json
 python3 -m dating_boost.cli release doctor --json
 python3 -m dating_boost.cli data doctor --data-dir .local/dating-boost --json
 python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost
 ```
 
+以上命令检查用户级安装。项目级安装使用 `--scope project`，如安装时指定了 `--target`，检查时传入相同的目录。
 示例使用 Codex；其他 host 把 `codex` 替换为 `claude-code`、`openclaw` 或
 `hermes`。
 

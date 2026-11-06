@@ -19,7 +19,8 @@ from dating_boost.apps.tashuo.standalone_production_runtime import _provider_ide
 
 
 @pytest.fixture(autouse=True)
-def _local_test_key(monkeypatch):
+def _local_test_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "uninstalled-host"))
     monkeypatch.setenv("DATING_BOOST_KEY_PROVIDER", "local")
     monkeypatch.setenv("DATING_BOOST_TEST_KEY", "production-preflight-test-key")
     monkeypatch.setenv("MINIMAX_API_KEY", "provider-preflight-key")
@@ -62,11 +63,6 @@ def _provider(_config, _credential):
 
 def _patch_host_checks(monkeypatch, *, clean: bool = True):
     monkeypatch.setattr(runner_module, "release_doctor", lambda: {"status": "ok"})
-    monkeypatch.setattr(
-        runner_module,
-        "run_codex_adapter_doctor",
-        lambda _data_dir: {"status": "ok"},
-    )
     monkeypatch.setattr(
         runner_module,
         "build_capabilities",
@@ -145,6 +141,8 @@ def test_default_preflight_pins_non_gui_environment_and_runtime_scope(tmp_path, 
     assert result["status"] == "ok", result
     assert result["checks"]["runtime_scope"] == "tashuo/mac-ios-app"
     assert result["checks"]["direct_harness_scope"] == "executor_internal_only"
+    assert result["checks"]["skill_doctor"] == "ok"
+    assert not (tmp_path / "uninstalled-host").exists()
     assert result["environment_fingerprint"]["execution"]["clean"] is True
     assert result["environment_fingerprint"]["model"]["response_model_identifier"] == "MiniMax-M3"
     assert result["environment_fingerprint"]["credential_fingerprint"] != "provider-preflight-key"

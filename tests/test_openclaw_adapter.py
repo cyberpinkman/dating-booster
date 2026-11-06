@@ -105,17 +105,19 @@ class OpenClawAdapterTests(unittest.TestCase):
 
     def test_adapter_openclaw_doctor_reports_ok(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "host install"
+            install_exit, installed = self._run_cli(["adapter", "openclaw", "install", "--target", str(target), "--json"])
+            self.assertEqual(install_exit, 0)
             exit_code, payload = self._run_cli([
-                "adapter",
-                "openclaw",
-                "doctor",
-                "--data-dir",
-                temp_dir,
-                "--json",
+                "adapter", "openclaw", "doctor", "--target", str(target),
+                "--data-dir", str(Path(temp_dir) / "data"), "--json",
             ])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["scope"], "project")
+        self.assertEqual(payload["target_path"], installed["target_path"])
+        self.assertEqual(payload["installation"]["status"], "ok")
         self.assertEqual(payload["target_host"], "openclaw")
         self.assertEqual(payload["compatibility_target"], "openclaw")
         self.assertEqual(payload["adapter_package"], str(ADAPTER_PACKAGE.resolve()))
@@ -125,17 +127,19 @@ class OpenClawAdapterTests(unittest.TestCase):
 
     def test_adapter_hermes_doctor_reports_openclaw_compatible_ok(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "host install"
+            install_exit, installed = self._run_cli(["adapter", "hermes", "install", "--target", str(target), "--json"])
+            self.assertEqual(install_exit, 0)
             exit_code, payload = self._run_cli([
-                "adapter",
-                "hermes",
-                "doctor",
-                "--data-dir",
-                temp_dir,
-                "--json",
+                "adapter", "hermes", "doctor", "--target", str(target),
+                "--data-dir", str(Path(temp_dir) / "data"), "--json",
             ])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["scope"], "project")
+        self.assertEqual(payload["target_path"], installed["target_path"])
+        self.assertEqual(payload["installation"]["status"], "ok")
         self.assertEqual(payload["target_host"], "hermes")
         self.assertEqual(payload["compatibility_target"], "openclaw")
         self.assertEqual(payload["adapter_package"], str(ADAPTER_PACKAGE.resolve()))

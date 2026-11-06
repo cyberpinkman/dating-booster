@@ -11,21 +11,22 @@ Use this skill when the user asks Codex to assist with dating-app workflows thro
 
 Before the first visible-app workflow after installation, source/adapter update,
 data migration, or macOS permission change, choose a local data directory.
-Prefer `.local/dating-boost` unless the user gives another path. Run this
-package's doctor:
+Prefer `.local/dating-boost` unless the user gives another path. Verify the copy
+Codex loads. Use the scope and target from installation. For a user installation, run:
 
 ```bash
-dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json
+dating-boost adapter codex doctor --scope user --data-dir .local/dating-boost --json
 ```
 
-If doctor returns `needs_bootstrap` and you are running from the installed skill
-directory, run the package-relative bootstrap script:
+If the installation check reports missing or changed files, reinstall at the
+same scope and target and repeat the check. For a source-package compatibility
+check, use `dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json`.
+If that check returns `needs_bootstrap`, run the package-relative bootstrap
+script from the skill directory, then repeat the adapter check:
 
 ```bash
 python3 scripts/bootstrap_cli.py
 ```
-
-Then run `dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json` again. Continue only when doctor returns `status: ok`.
 
 Finally run:
 

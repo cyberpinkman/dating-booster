@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextlib import nullcontext
 from importlib import resources
 import json
+import shlex
+import stat
 import shutil
 import tempfile
 from pathlib import Path
@@ -26,6 +28,7 @@ def install_claude_code_adapter(*, scope: str, target: Path | None, dry_run: boo
     target_path = _claude_skill_target_path(scope=scope, target=target)
     planned_files = _claude_install_files(target_path)
     adapter_root = _claude_code_adapter_dir()
+    doctor = _doctor_arguments("claude-code", scope, target)
     payload = {
         "schema_version": 1,
         "status": "dry_run" if dry_run else "ok",
@@ -41,9 +44,9 @@ def install_claude_code_adapter(*, scope: str, target: Path | None, dry_run: boo
             }
             for source, destination in planned_files
         ],
-        "next_action": "run dating-boost adapter claude-code doctor --data-dir .local/dating-boost --json",
+        "next_action": f"run dating-boost {doctor}",
         "startup_commands": [
-            "python3 -m dating_boost.cli adapter claude-code doctor --data-dir .local/dating-boost --json",
+            f"python3 -m dating_boost.cli {doctor}",
             "python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost",
         ],
         "managed_live_send_guidance": managed_live_send_guidance(),
@@ -66,6 +69,7 @@ def install_openclaw_adapter(
     target_path = _openclaw_skill_target_path(scope=scope, target=target)
     planned_files = _openclaw_install_files(target_path)
     adapter_root = _openclaw_adapter_dir()
+    doctor = _doctor_arguments(target_host, scope, target)
     payload = {
         "schema_version": 1,
         "status": "dry_run" if dry_run else "ok",
@@ -83,11 +87,9 @@ def install_openclaw_adapter(
             }
             for source, destination in planned_files
         ],
-        "next_action": (
-            f"run dating-boost adapter {target_host} doctor --data-dir .local/dating-boost --json"
-        ),
+        "next_action": f"run dating-boost {doctor}",
         "startup_commands": [
-            f"python3 -m dating_boost.cli adapter {target_host} doctor --data-dir .local/dating-boost --json",
+            f"python3 -m dating_boost.cli {doctor}",
             "python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost",
         ],
         "managed_live_send_guidance": managed_live_send_guidance(),
@@ -103,6 +105,7 @@ def install_codex_adapter(*, scope: str, target: Path | None, dry_run: bool) -> 
     target_path = _codex_skill_target_path(scope=scope, target=target)
     planned_files = _codex_install_files(target_path)
     skill_root = _codex_skill_dir()
+    doctor = _doctor_arguments("codex", scope, target)
     payload = {
         "schema_version": 1,
         "status": "dry_run" if dry_run else "ok",
@@ -118,9 +121,9 @@ def install_codex_adapter(*, scope: str, target: Path | None, dry_run: bool) -> 
             }
             for source, destination in planned_files
         ],
-        "next_action": "run dating-boost adapter codex doctor --data-dir .local/dating-boost --json",
+        "next_action": f"run dating-boost {doctor}",
         "startup_commands": [
-            "python3 -m dating_boost.cli adapter codex doctor --data-dir .local/dating-boost --json",
+            f"python3 -m dating_boost.cli {doctor}",
             "python3 -m dating_boost.cli capabilities --json --data-dir .local/dating-boost",
         ],
         "managed_live_send_guidance": managed_live_send_guidance(),
@@ -132,6 +135,14 @@ def install_codex_adapter(*, scope: str, target: Path | None, dry_run: bool) -> 
     return payload
 
 
+def _doctor_arguments(host: str, scope: str, target: Path | None) -> str:
+    args = ["adapter", host, "doctor", "--scope", scope]
+    if target is not None or scope == "project":
+        base = target.expanduser().absolute() if target is not None else Path.cwd()
+        args.extend(["--target", str(base)])
+    return shlex.join([*args, "--data-dir", ".local/dating-boost", "--json"])
+
+
 def _write_clean_install(target_path: Path, planned_files: list[tuple[Any, Path]]) -> None:
     if target_path.exists():
         shutil.rmtree(target_path)
@@ -140,7 +151,9 @@ def _write_clean_install(target_path: Path, planned_files: list[tuple[Any, Path]
         destination.write_bytes(source.read_bytes())
 
 
-def run_openclaw_adapter_doctor(data_dir: Path, *, target_host: str = "openclaw") -> dict[str, Any]:
+def run_openclaw_adapter_doctor(
+    data_dir: Path, *, target_host: str = "openclaw", scope: str = "project", target: Path | None = None,
+) -> dict[str, Any]:
     package_source = _openclaw_adapter_package()
     with _adapter_package_path(package_source) as package_path:
         skill_doctor = run_skill_doctor(package_path, data_dir)
@@ -165,6 +178,10 @@ def run_openclaw_adapter_doctor(data_dir: Path, *, target_host: str = "openclaw"
         if "hermes" not in set(agent_caps.get("host_agent_adapters") or []):
             issues.append("hermes_host_agent_adapter_missing")
 
+    target_path = _openclaw_skill_target_path(scope=scope, target=target)
+    installation = _inspect_installation(target_path, _openclaw_install_files(target_path))
+    if installation["status"] != "ok":
+        issues.append("adapter_installation_" + installation["status"])
     status = "ok" if not issues else "blocked"
     return {
         "schema_version": 1,
@@ -173,6 +190,9 @@ def run_openclaw_adapter_doctor(data_dir: Path, *, target_host: str = "openclaw"
         "compatibility_target": "openclaw",
         "compatibility_mode": "openclaw_skill",
         "adapter_package": _display_resource_path(package_source),
+        "scope": scope,
+        "target_path": str(target_path),
+        "installation": installation,
         "data_dir": str(data_dir.resolve()),
         "skill_doctor": skill_doctor,
         "issues": issues,
@@ -191,7 +211,9 @@ def run_openclaw_adapter_doctor(data_dir: Path, *, target_host: str = "openclaw"
     }
 
 
-def run_claude_code_adapter_doctor(data_dir: Path) -> dict[str, Any]:
+def run_claude_code_adapter_doctor(
+    data_dir: Path, *, scope: str = "project", target: Path | None = None,
+) -> dict[str, Any]:
     package_source = _claude_code_adapter_package()
     with _adapter_package_path(package_source) as package_path:
         skill_doctor = run_skill_doctor(package_path, data_dir)
@@ -209,12 +231,19 @@ def run_claude_code_adapter_doctor(data_dir: Path) -> dict[str, Any]:
     if "claude_code" not in set(agent_caps.get("host_agent_adapters") or []):
         issues.append("host_agent_adapter_missing")
 
+    target_path = _claude_skill_target_path(scope=scope, target=target)
+    installation = _inspect_installation(target_path, _claude_install_files(target_path))
+    if installation["status"] != "ok":
+        issues.append("adapter_installation_" + installation["status"])
     status = "ok" if not issues else "blocked"
     return {
         "schema_version": 1,
         "status": status,
         "target_host": "claude_code",
         "adapter_package": _display_resource_path(package_source),
+        "scope": scope,
+        "target_path": str(target_path),
+        "installation": installation,
         "data_dir": str(data_dir.resolve()),
         "skill_doctor": skill_doctor,
         "issues": issues,
@@ -230,7 +259,21 @@ def run_claude_code_adapter_doctor(data_dir: Path) -> dict[str, Any]:
     }
 
 
-def run_codex_adapter_doctor(data_dir: Path) -> dict[str, Any]:
+def run_codex_adapter_doctor(
+    data_dir: Path, *, scope: str = "user", target: Path | None = None,
+) -> dict[str, Any]:
+    report = check_codex_adapter_package(data_dir)
+    target_path = _codex_skill_target_path(scope=scope, target=target)
+    installation = _inspect_installation(target_path, _codex_install_files(target_path))
+    report.update(scope=scope, target_path=str(target_path), installation=installation)
+    if installation["status"] != "ok":
+        report["issues"].append("adapter_installation_" + installation["status"])
+        report.update(status="blocked", next_action="stop")
+    return report
+
+
+def check_codex_adapter_package(data_dir: Path) -> dict[str, Any]:
+    """Check the distribution's skill contract used by both host and standalone preflight."""
     package_source = _codex_skill_package()
     with _adapter_package_path(package_source) as package_path:
         skill_doctor = run_skill_doctor(package_path, data_dir)
@@ -269,6 +312,74 @@ def run_codex_adapter_doctor(data_dir: Path) -> dict[str, Any]:
     }
 
 
+def _ignored_install_entry(name: str) -> bool:
+    return name in {"__pycache__", ".DS_Store"} or name.endswith(".pyc")
+
+
+def _inspect_installation(target: Path, planned_files: list[tuple[Any, Path]]) -> dict[str, Any]:
+    expected = {destination.relative_to(target).as_posix(): source for source, destination in planned_files}
+    seen: set[str] = set()
+    changed: list[str] = []
+    unreadable: list[str] = []
+    extra: list[str] = []
+    status = "ok"
+
+    def inspect_directory(directory: Path) -> None:
+        try:
+            entries = list(directory.iterdir())
+        except OSError:
+            unreadable.append(directory.relative_to(target).as_posix())
+            return
+        for entry in entries:
+            if _ignored_install_entry(entry.name):
+                continue
+            relative = entry.relative_to(target).as_posix()
+            try:
+                mode = entry.lstat().st_mode
+                if stat.S_ISDIR(mode):
+                    inspect_directory(entry)
+                    continue
+                seen.add(relative)
+                if relative not in expected:
+                    extra.append(relative)
+                elif not stat.S_ISREG(mode):
+                    # Copy-based installs contain regular files. Never dereference
+                    # a foreign link or read a device/FIFO while inspecting them.
+                    unreadable.append(relative)
+                else:
+                    source = expected[relative].read_bytes()
+                    with entry.open("rb") as installed:
+                        if installed.read(len(source) + 1) != source:
+                            changed.append(relative)
+            except OSError:
+                unreadable.append(relative)
+
+    try:
+        if stat.S_ISDIR(target.lstat().st_mode):
+            inspect_directory(target)
+        else:
+            unreadable.append(".")
+    except FileNotFoundError:
+        status = "missing"
+    except OSError:
+        unreadable.append(".")
+    missing = sorted(expected.keys() - seen)
+    if unreadable:
+        status = "unreadable"
+    elif status != "missing":
+        if missing:
+            status = "partial"
+        elif changed or extra:
+            status = "stale"
+    return {
+        "status": status,
+        "missing_files": missing,
+        "changed_files": sorted(changed),
+        "extra_files": sorted(extra),
+        "unreadable_files": sorted(unreadable),
+    }
+
+
 def _claude_skill_target_path(*, scope: str, target: Path | None) -> Path:
     if target is None:
         base = Path.cwd() if scope == "project" else Path.home()
@@ -281,12 +392,9 @@ def _claude_skill_target_path(*, scope: str, target: Path | None) -> Path:
 
 
 def _codex_skill_target_path(*, scope: str, target: Path | None) -> Path:
-    if target is None:
-        base = Path.cwd() if scope == "project" else Path(
-            str(_codex_home())
-        )
-    else:
-        base = target
+    if target is None and scope == "user":
+        return _codex_home().absolute() / "skills" / "dating-booster-codex"
+    base = target if target is not None else Path.cwd()
     base = base.expanduser().absolute()
     if base.name == ".codex":
         return base / "skills" / "dating-booster-codex"
@@ -385,7 +493,7 @@ def _resource_tree_files(root: Any, relative_root: Path | None = None) -> list[t
     relative_root = relative_root or Path()
     files: list[tuple[Any, Path]] = []
     for child in sorted(root.iterdir(), key=lambda item: item.name):
-        if child.name == "__pycache__" or child.name.endswith(".pyc"):
+        if _ignored_install_entry(child.name):
             continue
         relative_path = relative_root / child.name
         if child.is_dir():
