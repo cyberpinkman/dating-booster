@@ -45,20 +45,46 @@ data dir after support session start and before support bundle export.
 The native harness is stage/navigation-first. It may diagnose iPhone Mirroring,
 capture a screenshot/OCR artifact, navigate Tinder, Bumble, and TaShuo through
 bounded profile/chat reading chains, and stage dry-run send checks. Real
-managed sends must enter through `managed-session` or `dating-boost-host-loop`;
+managed sends use flagship `ManagedRun` for TaShuo mac-ios-app, or the existing
+`managed-session` / `dating-boost-host-loop` compatibility executor;
 direct `harness <app> send-message --authorization --action-request` is
 executor-internal only and must consume system-generated work items or
 confirmation-flow hashes. Do not handcraft action requests. Bumble and TaShuo
 ordinary chat managed sends require the same authorization, target-specific
 binding, exact staged-text verification, and post-send evidence gates. For
-TaShuo mac-ios-app, exact verification may use Accessibility text evidence plus
-visual state; iPhone Mirroring still defaults to OCR/text evidence. Visual
-UI-affordance or bubble evidence alone is not exact-text verification. Bumble
+ManagedRun mac-ios-app, AX verifies the composer and structured before/after
+vision verifies the target and exact new outbound text; the compatibility path
+keeps its existing evidence gates. iPhone Mirroring still defaults to OCR/text
+evidence. A visible UI affordance or bubble alone is not exact-text verification. Bumble
 must not like, pass, SuperSwipe, unmatch, report, edit profile data, or purchase
 Premium. TaShuo must not like, pass, start a 飞行 chat, unmatch, report, edit
 profile data, purchase Premium, or make question-gate decisions. TaShuo ordinary
 chat sends with Return after exact staged-text verification; do not click or plan
 a Send-button action for TaShuo.
+
+For an unknown ManagedRun result, `manage reconcile --data-dir <dir> --run-id <id>
+--json` verifies existing receipt evidence only; use `--decision-key` to select
+among multiple attempts. It does not stage, send, refund budget, or resume an
+unsent tail. Successful reconciliation preserves the original unknown record
+and counts confirmation once. The run remains stopped/paused; after explicitly
+resuming a paused run, the host must restart `manage run --wait` for that run.
+Never clear unknown with a success flag, expected-text input, or deleted state.
+New sends persist encrypted pre/receipt/post evidence digests. Legacy imports
+must record host-reviewed original capture provenance and pass the same evidence
+checks, without claiming a manifest existed at the original click.
+
+The emoticon fallback applies only when ordinary text
+is identical and differences are limited to at most three U+1F600–U+1F64F
+emoticons. Exact AX input and paired-image proof of the same conversation and
+new outbound bubble are prerequisites. One additional BEFORE-composer versus
+AFTER-bubble comparison receives no expected string; both must be fully
+readable and the verdict must be `identical` with `high` confidence. This is
+combined evidence, not Unicode equivalence. Persist negative and uncertain
+frame-pair verdicts too; do not repeatedly query until a result passes. One
+legacy attempt has been reconciled from host-reviewed original captures and
+explicitly imported existing comparison results; a repeated call was idempotent.
+Its unknown audit, stopped status, and cancelled tail remain. This does not
+qualify recovery from arbitrary files or continuous live sending.
 
 For Bumble chat-list planning, use `prepare-message-page` first. It returns
 from a conversation or Opening Move page to the chat list, or taps the chats tab
