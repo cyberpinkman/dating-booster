@@ -87,7 +87,8 @@ def _naturalness_requirements() -> str:
         [
             "- The reply must sound like a real person in Chinese private chat, not a report or assistant output.",
             "- Prefer one clear conversational move; question is optional and at most one short question.",
-            "- If multiple bubbles are more natural, use message_sequence and make each bubble serve a distinct job.",
+            "- If multiple bubbles are more natural, use message_sequence with 2–3 short messages, planned together; "
+            "make each bubble serve a distinct job. A single natural reply does not need splitting.",
             "- Do not mechanically split punctuation, stack labels, repeat known facts as hooks, or ask the match to decide after they delegated choice.",
             "- Avoid abstract planning words, survey-style A/B interrogation, and stale current-state assumptions.",
             "- The final bubble must carry the conversational push or landing handle when message_sequence is used.",

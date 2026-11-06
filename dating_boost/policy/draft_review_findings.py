@@ -246,6 +246,8 @@ def _naturalness_findings(
     if len(messages) > 1:
         mechanical = [text for text in texts if text.endswith(("，", ",", "、", "。")) or len(_normalized_strategy_text(text)) < 4]
         if mechanical:
+            # Punctuation and length also match complete Chinese sentences and
+            # short acknowledgements; they can advise style, not prohibit send.
             findings.append(
                 _finding(
                     "message_sequence_mechanical_split",
@@ -253,7 +255,7 @@ def _naturalness_findings(
                     "medium",
                     "message_sequence appears mechanically split instead of bubble-by-bubble.",
                     "每个气泡要有独立作用，不要只按标点切分。",
-                    blocks_managed_send=True,
+                    blocks_managed_send=False,
                 )
             )
         final_text = texts[-1] if texts else ""

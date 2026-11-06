@@ -158,6 +158,21 @@ class DraftReviewTests(unittest.TestCase):
                         {finding.code for finding in review.findings},
                     )
 
+    def test_review_checks_normalized_outgoing_sequence_instead_of_safe_summary(self):
+        cases = (
+            (["明晚八点", "我们见面吧"], [], "content_managed_handoff_required"),
+            (["I'm", "25."], [{"label": "user_hard_facts", "content": {"age": 30}}], "content_hard_fact"),
+        )
+        for messages, items, expected_code in cases:
+            with self.subTest(messages=messages):
+                review = review_draft(
+                    _draft_payload(message_sequence=messages),
+                    _context_pack(items=items),
+                    mode="managed_live",
+                )
+                self.assertFalse(review.allowed_for_managed_send)
+                self.assertIn(expected_code, {finding.code for finding in review.findings})
+
     def test_display_mode_reports_naturalness_revision_without_blocking_display(self):
         review = review_draft(
             _draft_payload(best_reply="下次我得听听 ESFP 夜猫子的放松路线：咖啡、电影、听歌你会先选哪个？"),
@@ -267,7 +282,7 @@ class DraftReviewTests(unittest.TestCase):
                 self.assertFalse(review.allowed_for_managed_send)
                 self.assertIn(expected_code, {finding.code for finding in review.findings})
 
-    def test_message_sequence_hash_count_and_mechanical_split_rules(self):
+    def test_message_sequence_hash_count_and_mechanical_split_advice(self):
         review = review_draft(
             _draft_payload(
                 best_reply="慢热联盟可以成立\n狼人杀我也一般先观察\n熟了再开麦会比较自然",
@@ -283,8 +298,56 @@ class DraftReviewTests(unittest.TestCase):
         self.assertEqual(review.payload_format, "message_sequence")
         self.assertEqual(review.message_count, 3)
         self.assertEqual(len(review.payload_hash), 64)
-        self.assertIn("message_sequence_mechanical_split", {finding.code for finding in review.findings})
+        finding = next(finding for finding in review.findings if finding.code == "message_sequence_mechanical_split")
+        self.assertEqual(finding.category, "naturalness")
+        self.assertTrue(finding.revision_hint)
+        self.assertFalse(finding.blocks_display)
+        self.assertFalse(finding.blocks_stage)
+        self.assertFalse(finding.blocks_managed_send)
+        self.assertFalse(finding.requires_user_confirmation)
+        self.assertTrue(review.allowed_for_managed_send)
+        self.assertEqual(review.status, "ok")
+        self.assertEqual(review.primary_reason, "passed")
+
+    def test_complete_sentences_and_short_chinese_bubbles_do_not_block_managed_send(self):
+        cases = (
+            ["这个听起来还挺有意思。", "你平时喜欢听什么歌？"],
+            ["好呀", "你平时喜欢听什么歌？"],
+            ["有道理", "好呀", "你平时喜欢听什么歌？"],
+        )
+        for messages in cases:
+            with self.subTest(messages=messages):
+                review = review_draft(
+                    _draft_payload(
+                        best_reply="\n".join(messages),
+                        message_sequence=messages,
+                        selected_hook="听歌",
+                        strategic_delta="从当前话题聊到喜欢听的歌。",
+                    ),
+                    _context_pack(),
+                    mode="managed_live",
+                )
+
+                self.assertTrue(review.allowed_for_managed_send)
+                self.assertEqual(review.status, "ok")
+                self.assertEqual(review.primary_reason, "passed")
+                self.assertFalse(review.requires_user_confirmation)
+
+    def test_mechanical_split_advice_does_not_override_other_naturalness_blocks(self):
+        review = review_draft(
+            _draft_payload(
+                best_reply="好呀\n你喜欢什么放松方式？",
+                message_sequence=["好呀", "你喜欢什么放松方式？"],
+            ),
+            _context_pack(),
+            mode="managed_live",
+        )
+
+        findings = {finding.code: finding for finding in review.findings}
+        self.assertFalse(findings["message_sequence_mechanical_split"].blocks_managed_send)
+        self.assertTrue(findings["naturalness_abstract_wording"].blocks_managed_send)
         self.assertFalse(review.allowed_for_managed_send)
+        self.assertEqual(review.primary_reason, "naturalness_abstract_wording")
 
     def test_disclosure_policy_modes(self):
         material_profile = {
