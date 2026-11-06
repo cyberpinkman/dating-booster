@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import math
+
+from .ax_main_window import (
+    AX_MAIN_WINDOW_HANDLERS, AX_MAIN_WINDOW_SELECTION,
+    MIN_MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_HEIGHT, window_selection_failure,
+)
+
 from .runtime_common import (
     annotations, copy, hashlib, json,
     Path, re, Any, uuid4,
@@ -24,7 +31,7 @@ from .runtime_common import (
 )
 
 def _tashuo_ax_text_area_value(session: Any) -> dict[str, Any]:
-    script = r'''
+    script = AX_MAIN_WINDOW_HANDLERS + r'''
 -- DATING_BOOST_AX_TEXT_AREA_VALUE
 on findTextAreaValue(e, depth)
   tell application "System Events"
@@ -45,7 +52,8 @@ end findTextAreaValue
 
 tell application "System Events"
   tell process "她说"
-    set found to my findTextAreaValue(window 1, 0)
+    __SELECT_MAIN_WINDOW__
+    set found to my findTextAreaValue(targetWindow, 0)
     if found is missing value then
       return "__DATING_BOOST_TEXT_AREA_NOT_FOUND__"
     end if
@@ -53,7 +61,11 @@ tell application "System Events"
   end tell
 end tell
 '''
+    script = script.replace("__SELECT_MAIN_WINDOW__", AX_MAIN_WINDOW_SELECTION)
     result = session.runner.run(["osascript", "-e", script])
+    selection_failure = window_selection_failure(result.stdout)
+    if selection_failure is not None:
+        return selection_failure
     if result.returncode != 0:
         return {
             "status": "blocked",
@@ -68,71 +80,7 @@ end tell
     return {"status": "ok", "value": value, "input_backend": "macos_accessibility"}
 
 
-def _tashuo_ax_static_text_values(session: Any) -> dict[str, Any]:
-    script = r'''
--- DATING_BOOST_AX_STATIC_TEXT_VALUES
-on collectStaticTexts(e, depth)
-  set foundValues to {}
-  tell application "System Events"
-    try
-      if role of e is "AXStaticText" then
-        try
-          set v to value of e as text
-          if v is not "" then set end of foundValues to v
-        end try
-      end if
-      if depth < 24 then
-        repeat with child in UI elements of e
-          set childValues to my collectStaticTexts(child, depth + 1)
-          repeat with itemValue in childValues
-            set end of foundValues to itemValue as text
-          end repeat
-        end repeat
-      end if
-    end try
-  end tell
-  return foundValues
-end collectStaticTexts
-
-tell application "System Events"
-  tell process "她说"
-    set valuesList to my collectStaticTexts(window 1, 0)
-    set AppleScript's text item delimiters to linefeed
-    return valuesList as text
-  end tell
-end tell
-'''
-    result = session.runner.run(["osascript", "-e", script])
-    if result.returncode != 0:
-        return {
-            "status": "blocked",
-            "reason": "tashuo_ax_static_text_read_failed",
-            "stderr": platform._short(result.stderr),
-        }
-    raw = str(result.stdout or "").strip()
-    values: list[str] = []
-    if raw:
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, list):
-            values = [str(item).strip() for item in parsed if _tashuo_ax_text_value_is_useful(str(item))]
-        else:
-            values = [line.strip() for line in raw.splitlines() if _tashuo_ax_text_value_is_useful(line)]
-    return {
-        "status": "ok",
-        "value_count": len(values),
-        "values": values,
-        "input_backend": "macos_accessibility",
-    }
-
-
-def _tashuo_ax_conversation_snapshot(session: Any) -> dict[str, Any]:
-    """Read static conversation text and the composer in one AX traversal."""
-
-    script = r'''
--- DATING_BOOST_AX_CONVERSATION_SNAPSHOT
+_AX_JSON_HANDLERS = r'''
 on replaceText(sourceText, searchText, replacementText)
   set previousDelimiters to AppleScript's text item delimiters
   set AppleScript's text item delimiters to searchText
@@ -164,7 +112,187 @@ on jsonArray(valuesList)
   set AppleScript's text item delimiters to previousDelimiters
   return "[" & encodedText & "]"
 end jsonArray
+'''
 
+
+def _ax_static_values(payload: Any) -> list[str] | None:
+    """Keep AX element boundaries, including line breaks inside one element."""
+    raw_values = payload.get("values") if isinstance(payload, dict) else payload
+    if not isinstance(raw_values, list) or any(not isinstance(item, str) for item in raw_values):
+        return None
+    return [item.strip() for item in raw_values if _tashuo_ax_text_value_is_useful(item)]
+
+
+def _tashuo_ax_composer_geometry(session: Any) -> dict[str, Any]:
+    """Read the composer's bounds and its window's bounds without text or focus."""
+    script = _AX_JSON_HANDLERS + AX_MAIN_WINDOW_HANDLERS + r'''
+-- DATING_BOOST_AX_COMPOSER_GEOMETRY
+on findComposer(e, depth)
+  tell application "System Events"
+    if role of e is "AXTextArea" then return e
+    if depth < 24 then
+      repeat with child in UI elements of e
+        set foundComposer to my findComposer(child, depth + 1)
+        if foundComposer is not missing value then return foundComposer
+      end repeat
+    end if
+  end tell
+  return missing value
+end findComposer
+
+on jsonNumber(numberValue)
+  if class of numberValue is not integer and class of numberValue is not real then error
+  return my replaceText(numberValue as text, ",", ".")
+end jsonNumber
+
+on jsonPair(pairValue)
+  if (count of pairValue) is not 2 then error
+  return "[" & my jsonNumber(item 1 of pairValue) & "," & my jsonNumber(item 2 of pairValue) & "]"
+end jsonPair
+
+tell application "System Events"
+  try
+    if not (exists process "她说") then return "{\"error\":\"process_not_found\"}"
+    tell process "她说"
+      __SELECT_MAIN_WINDOW__
+      set composer to my findComposer(targetWindow, 0)
+      if composer is missing value then return "{\"error\":\"composer_not_found\"}"
+      set composerPosition to position of composer
+      set composerSize to size of composer
+      set windowPosition to position of targetWindow
+      set windowSize to size of targetWindow
+      return "{\"composer_position\":" & my jsonPair(composerPosition) & ",\"composer_size\":" & my jsonPair(composerSize) & ",\"window_position\":" & my jsonPair(windowPosition) & ",\"window_size\":" & my jsonPair(windowSize) & "}"
+    end tell
+  on error
+    return "{\"error\":\"read_failed\"}"
+  end try
+end tell
+'''
+    read_failed = {"status": "blocked", "reason": "tashuo_ax_composer_geometry_read_failed"}
+    invalid = {"status": "blocked", "reason": "tashuo_ax_composer_geometry_invalid"}
+    try:
+        script = script.replace("__SELECT_MAIN_WINDOW__", AX_MAIN_WINDOW_SELECTION)
+        result = session.runner.run(["osascript", "-e", script])
+    except Exception:  # noqa: BLE001 - subprocess failures must not expose AX data.
+        return read_failed
+    selection_failure = window_selection_failure(result.stdout)
+    if selection_failure is not None:
+        return selection_failure
+    if result.returncode != 0:
+        return read_failed
+
+    def unique_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in fields:
+                raise ValueError("duplicate_geometry_field")
+            fields[key] = value
+        return fields
+
+    try:
+        payload = json.loads(result.stdout or "", object_pairs_hook=unique_fields)
+    except (TypeError, ValueError):
+        return invalid
+    if not isinstance(payload, dict):
+        return invalid
+    if set(payload) == {"error"}:
+        reasons = {
+            "process_not_found": "tashuo_ax_composer_geometry_process_not_found",
+            "window_not_found": "tashuo_ax_composer_geometry_window_not_found",
+            "composer_not_found": "tashuo_ax_text_area_not_found",
+            "read_failed": "tashuo_ax_composer_geometry_read_failed",
+        }
+        error = payload["error"]
+        return {"status": "blocked", "reason": reasons.get(error, invalid["reason"])} if isinstance(error, str) else invalid
+    keys = {"composer_position", "composer_size", "window_position", "window_size"}
+    if set(payload) != keys:
+        return invalid
+    for pair in payload.values():
+        if not isinstance(pair, list) or len(pair) != 2 or any(type(value) not in (int, float) for value in pair):
+            return invalid
+        try:
+            if not all(math.isfinite(value) for value in pair):
+                return invalid
+        except OverflowError:
+            return invalid
+    cx, cy = payload["composer_position"]
+    cw, ch = payload["composer_size"]
+    wx, wy = payload["window_position"]
+    ww, wh = payload["window_size"]
+    if ww < MIN_MAIN_WINDOW_WIDTH or wh < MIN_MAIN_WINDOW_HEIGHT:
+        return invalid
+    if min(cw, ch, ww, wh) <= 0 or not (0 <= cx - wx <= ww - cw and 0 <= cy - wy <= wh - ch):
+        return invalid
+    return {"status": "ok", **payload}
+
+
+def _tashuo_ax_static_text_values(session: Any) -> dict[str, Any]:
+    script = _AX_JSON_HANDLERS + AX_MAIN_WINDOW_HANDLERS + r'''
+-- DATING_BOOST_AX_STATIC_TEXT_VALUES
+on collectStaticTexts(e, depth)
+  set foundValues to {}
+  tell application "System Events"
+    try
+      if role of e is "AXStaticText" then
+        try
+          set v to value of e as text
+          if v is not "" then set end of foundValues to v
+        end try
+      end if
+      if depth < 24 then
+        repeat with child in UI elements of e
+          set childValues to my collectStaticTexts(child, depth + 1)
+          repeat with itemValue in childValues
+            set end of foundValues to itemValue as text
+          end repeat
+        end repeat
+      end if
+    end try
+  end tell
+  return foundValues
+end collectStaticTexts
+
+tell application "System Events"
+  tell process "她说"
+    __SELECT_MAIN_WINDOW__
+    set valuesList to my collectStaticTexts(targetWindow, 0)
+    return "{\"values\":" & my jsonArray(valuesList) & "}"
+  end tell
+end tell
+'''
+    script = script.replace("__SELECT_MAIN_WINDOW__", AX_MAIN_WINDOW_SELECTION)
+    result = session.runner.run(["osascript", "-e", script])
+    selection_failure = window_selection_failure(result.stdout)
+    if selection_failure is not None:
+        return selection_failure
+    if result.returncode != 0:
+        return {
+            "status": "blocked",
+            "reason": "tashuo_ax_static_text_read_failed",
+            "stderr": platform._short(result.stderr),
+        }
+    try:
+        payload = json.loads(str(result.stdout or "").strip())
+    except (json.JSONDecodeError, TypeError):
+        payload = None
+    # Legacy fixture runners emit a JSON array; both shapes are lossless. Plain
+    # line-delimited output is ambiguous and must never become revision evidence.
+    values = _ax_static_values(payload)
+    if values is None:
+        return {"status": "blocked", "reason": "tashuo_ax_static_text_values_invalid"}
+    return {
+        "status": "ok",
+        "value_count": len(values),
+        "values": values,
+        "input_backend": "macos_accessibility",
+    }
+
+
+def _tashuo_ax_conversation_snapshot(session: Any) -> dict[str, Any]:
+    """Read static conversation text and the composer in one AX traversal."""
+
+    script = _AX_JSON_HANDLERS + AX_MAIN_WINDOW_HANDLERS + r'''
+-- DATING_BOOST_AX_CONVERSATION_SNAPSHOT
 on collectConversation(e, depth)
   set foundValues to {}
   set foundComposer to missing value
@@ -201,7 +329,8 @@ end collectConversation
 
 tell application "System Events"
   tell process "她说"
-    set snapshot to my collectConversation(window 1, 0)
+    __SELECT_MAIN_WINDOW__
+    set snapshot to my collectConversation(targetWindow, 0)
     set valuesList to item 1 of snapshot
     set composerValue to item 2 of snapshot
     if composerValue is missing value then
@@ -211,7 +340,11 @@ tell application "System Events"
   end tell
 end tell
 '''
+    script = script.replace("__SELECT_MAIN_WINDOW__", AX_MAIN_WINDOW_SELECTION)
     result = session.runner.run(["osascript", "-e", script])
+    selection_failure = window_selection_failure(result.stdout)
+    if selection_failure is not None:
+        return selection_failure
     if result.returncode != 0:
         return {
             "status": "blocked",
@@ -222,13 +355,9 @@ end tell
         payload = json.loads(str(result.stdout or "").strip())
     except (json.JSONDecodeError, TypeError):
         payload = None
-    if not isinstance(payload, dict) or not isinstance(payload.get("values"), list):
+    values = _ax_static_values(payload)
+    if not isinstance(payload, dict) or values is None:
         return {"status": "blocked", "reason": "tashuo_ax_conversation_snapshot_invalid"}
-    values = [
-        str(item).strip()
-        for item in payload["values"]
-        if _tashuo_ax_text_value_is_useful(str(item))
-    ]
     composer_found = payload.get("composer_found") is True
     return {
         "status": "ok",
@@ -247,7 +376,7 @@ def _tashuo_ax_text_value_is_useful(value: str) -> bool:
 
 def _set_tashuo_ax_text_area_value(session: Any, text: str) -> dict[str, Any]:
     escaped_text = json.dumps(text, ensure_ascii=False)
-    script = f'''
+    script = AX_MAIN_WINDOW_HANDLERS + f'''
 -- DATING_BOOST_AX_SET_TEXT_AREA_VALUE
 on setTextAreaValue(e, depth, newValue)
   tell application "System Events"
@@ -269,7 +398,8 @@ end setTextAreaValue
 
 tell application "System Events"
   tell process "她说"
-    set changed to my setTextAreaValue(window 1, 0, {escaped_text})
+    {AX_MAIN_WINDOW_SELECTION}
+    set changed to my setTextAreaValue(targetWindow, 0, {escaped_text})
     if changed is true then
       return "set"
     end if
@@ -278,6 +408,9 @@ tell application "System Events"
 end tell
 '''
     result = session.runner.run(["osascript", "-e", script])
+    selection_failure = window_selection_failure(result.stdout)
+    if selection_failure is not None:
+        return selection_failure
     if result.returncode != 0:
         return {
             "status": "blocked",
@@ -300,7 +433,7 @@ end tell
 
 
 def _clear_tashuo_ax_text_area(session: Any) -> dict[str, Any]:
-    script = r'''
+    script = AX_MAIN_WINDOW_HANDLERS + r'''
 -- DATING_BOOST_AX_CLEAR_TEXT_AREA
 on clearTextAreas(e, depth)
   tell application "System Events"
@@ -322,7 +455,8 @@ end clearTextAreas
 
 tell application "System Events"
   tell process "她说"
-    set cleared to my clearTextAreas(window 1, 0)
+    __SELECT_MAIN_WINDOW__
+    set cleared to my clearTextAreas(targetWindow, 0)
     if cleared is true then
       return "cleared"
     end if
@@ -330,7 +464,11 @@ tell application "System Events"
   end tell
 end tell
 '''
+    script = script.replace("__SELECT_MAIN_WINDOW__", AX_MAIN_WINDOW_SELECTION)
     result = session.runner.run(["osascript", "-e", script])
+    selection_failure = window_selection_failure(result.stdout)
+    if selection_failure is not None:
+        return selection_failure
     if result.returncode != 0:
         return {
             "status": "blocked",
@@ -343,17 +481,29 @@ end tell
 
 
 def _guarded_set_tashuo_ax_text_area_if_empty(session: Any, text: str) -> dict[str, Any]:
-    script = r'''
+    script = AX_MAIN_WINDOW_HANDLERS + r'''
 -- DATING_BOOST_AX_GUARDED_SET_IF_EMPTY
 on guardedSetTextAreaValue(e, depth, newValue)
   tell application "System Events"
     try
       if role of e is "AXTextArea" then
-        set currentValue to value of e
+        try
+          set currentValue to value of e
+        on error
+          return "read_failed"
+        end try
         if currentValue is missing value then set currentValue to ""
         if currentValue is not "" then return "occupied"
-        set value of e to newValue
-        set observedValue to value of e
+        try
+          set value of e to newValue
+        on error
+          return "write_failed"
+        end try
+        try
+          set observedValue to value of e
+        on error
+          return "readback_failed"
+        end try
         if observedValue is missing value then set observedValue to ""
         if observedValue is not newValue then return "compare_failed"
         return "set"
@@ -374,12 +524,17 @@ on run argv
   set newValue to item 1 of argv
   tell application "System Events"
     tell process "她说"
-      return my guardedSetTextAreaValue(window 1, 0, newValue)
+      __SELECT_MAIN_WINDOW__
+      return my guardedSetTextAreaValue(targetWindow, 0, newValue)
     end tell
   end tell
 end run
 '''
+    script = script.replace("__SELECT_MAIN_WINDOW__", AX_MAIN_WINDOW_SELECTION)
     result = session.runner.run(["osascript", "-e", script, text])
+    selection_failure = window_selection_failure(result.stdout)
+    if selection_failure is not None:
+        return selection_failure
     if result.returncode != 0:
         return {
             "status": "blocked",
@@ -399,6 +554,9 @@ end run
         "compare_failed": "tashuo_guarded_ax_set_compare_failed",
         "not_found": "tashuo_ax_text_area_not_found",
         "argument_error": "tashuo_guarded_ax_argument_invalid",
+        "read_failed": "tashuo_guarded_ax_read_failed",
+        "write_failed": "tashuo_guarded_ax_write_failed",
+        "readback_failed": "tashuo_guarded_ax_readback_failed",
     }
     return {
         "status": "blocked",
@@ -408,7 +566,7 @@ end run
 
 
 def _guarded_clear_tashuo_ax_text_area_if_exact(session: Any, expected_text: str) -> dict[str, Any]:
-    script = r'''
+    script = AX_MAIN_WINDOW_HANDLERS + r'''
 -- DATING_BOOST_AX_GUARDED_CLEAR_IF_EXACT
 on guardedClearTextAreaValue(e, depth, expectedValue)
   tell application "System Events"
@@ -439,12 +597,17 @@ on run argv
   set expectedValue to item 1 of argv
   tell application "System Events"
     tell process "她说"
-      return my guardedClearTextAreaValue(window 1, 0, expectedValue)
+      __SELECT_MAIN_WINDOW__
+      return my guardedClearTextAreaValue(targetWindow, 0, expectedValue)
     end tell
   end tell
 end run
 '''
+    script = script.replace("__SELECT_MAIN_WINDOW__", AX_MAIN_WINDOW_SELECTION)
     result = session.runner.run(["osascript", "-e", script, expected_text])
+    selection_failure = window_selection_failure(result.stdout)
+    if selection_failure is not None:
+        return selection_failure
     if result.returncode != 0:
         return {
             "status": "blocked",
@@ -493,7 +656,7 @@ __all__ = [
     'TASHUO_PROFILE_BOTTOM_MAX_SCROLLS', '_capture_tashuo_window', '_tashuo_post_action_observation_delay_seconds', '_sleep_for_tashuo_post_action_observation',
     'tashuo_guardrails_payload', '_is_mac_ios_app_session', '_tashuo_capture_prefix', '_copy_tap_ratio',
     '_applescript_literal', '_tashuo_window_missing_payload', '_tashuo_message_input_tap_ratio', '_tashuo_input_coordinate_model',
-    '_tashuo_ax_text_area_value', '_tashuo_ax_static_text_values', '_tashuo_ax_conversation_snapshot', '_tashuo_ax_text_value_is_useful', '_set_tashuo_ax_text_area_value',
+    '_tashuo_ax_text_area_value', '_tashuo_ax_composer_geometry', '_tashuo_ax_static_text_values', '_tashuo_ax_conversation_snapshot', '_tashuo_ax_text_value_is_useful', '_set_tashuo_ax_text_area_value',
     '_clear_tashuo_ax_text_area', '_guarded_set_tashuo_ax_text_area_if_empty',
     '_guarded_clear_tashuo_ax_text_area_if_exact',
 ]

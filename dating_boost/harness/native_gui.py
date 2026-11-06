@@ -21,6 +21,11 @@ from dating_boost.harness.base import (
     short as _short,
     window_from_payload as _window_from_payload,
 )
+from dating_boost.harness.window_capture import (
+    capture_window_image,
+    core_graphics_window_lookup_script as _mac_ios_core_graphics_window_lookup_script,
+    parse_core_graphics_windows,
+)
 from dating_boost.harness.input_backends import (
     click_iphone_mirroring_view_menu_item as _click_iphone_mirroring_view_menu_item_backend,
     core_graphics_click as _core_graphics_click_backend,
@@ -180,7 +185,9 @@ class NativeGuiHarness:
         if capture:
             screen = self.capture_window(output=output, window=window, ocr=ocr)
             payload["screen"] = _redacted_screen(screen)
-            if screen["state"] in {"iphone_mirroring_locked", "screen_permission_prompt"}:
+            if screen.get("status") == "blocked":
+                payload.update({"status": "blocked", "reason": screen.get("reason", "screenshot_failed")})
+            elif screen["state"] in {"iphone_mirroring_locked", "screen_permission_prompt"}:
                 payload.update({"status": "blocked", "reason": screen["state"]})
             elif screen["ocr_status"] == "unavailable":
                 payload.update({"status": "degraded", "reason": "ocr_unavailable"})
@@ -203,27 +210,12 @@ class NativeGuiHarness:
                 "ocr_status": "not_run",
             }
         output = (output or _default_screenshot_path()).resolve()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        window_id = getattr(window, "window_id", None)
-        if window_id is not None:
-            command = ["screencapture", "-x", "-l", str(window_id), str(output)]
-        else:
-            command = [
-                "screencapture",
-                "-x",
-                "-R",
-                f"{window.x},{window.y},{window.width},{window.height}",
-                str(output),
-            ]
-        result = self.runner.run(command)
-        if result.returncode != 0:
-            return {
-                "status": "blocked",
-                "reason": "screenshot_failed",
-                "stderr": _short(result.stderr),
-                "state": "unknown",
-                "ocr_status": "not_run",
-            }
+        capture = capture_window_image(
+            self.runner, window, output,
+            require_process_binding=self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND,
+        )
+        if capture["status"] != "ok":
+            return {**capture, "state": "unknown", "ocr_status": "not_run"}
         ocr_payload = self._ocr(output) if ocr else {"status": "skipped", "text": "", "error": None}
         return {
             "schema_version": GUI_HARNESS_SCHEMA_VERSION,
@@ -328,14 +320,17 @@ class NativeGuiHarness:
         process_names = self._mac_ios_process_names() if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND else [self.window_title]
         for process_name in process_names:
             for index in range(1, 5):
+                pid_field = ", unix id" if self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND else ""
                 script = (
                     f'tell application "System Events" to tell process {_applescript_string_literal(process_name)} '
-                    f"to get {{frontmost, position of window {index}, size of window {index}, name of window {index}}}"
+                    f"to get {{frontmost, position of window {index}, size of window {index}, name of window {index}{pid_field}}}"
                 )
                 result = self.runner.run(["osascript", "-e", script])
                 if result.returncode != 0:
                     continue
-                window = _parse_window_info(result.stdout)
+                window = _parse_window_info(
+                    result.stdout, include_process_pid=self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND,
+                )
                 if window is not None and self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND:
                     if _looks_like_mac_ios_app_window(window):
                         return window
@@ -380,11 +375,16 @@ class NativeGuiHarness:
 
     def _mac_ios_core_graphics_window_info(self, process_names: list[str]) -> WindowInfo | None:
         pids = self._mac_ios_process_pids(process_names)
-        script = _mac_ios_core_graphics_window_lookup_script(pids=pids, candidates=process_names)
+        if len(pids) != 1:
+            return None
+        script = _mac_ios_core_graphics_window_lookup_script(pids=pids)
         result = self.runner.run(["xcrun", "swift", "-e", script])
         if result.returncode != 0:
             return None
-        return _parse_core_graphics_window_info(result.stdout)
+        windows = parse_core_graphics_windows(result.stdout)
+        candidates = [window for window in windows or []
+                      if window.process_pid in pids and _looks_like_mac_ios_app_window(window)]
+        return candidates[0] if len(candidates) == 1 else None
 
     def _mac_ios_active_application_probe(self) -> dict[str, Any]:
         process_names = self._mac_ios_process_names()
@@ -893,29 +893,8 @@ def _parse_mac_ios_process_probe(stdout: str) -> dict[str, Any] | None:
 
 
 def _parse_core_graphics_window_info(stdout: str) -> WindowInfo | None:
-    line = stdout.strip().splitlines()[0] if stdout.strip() else ""
-    parts = line.split("\t", 5)
-    if len(parts) != 6:
-        return None
-    try:
-        x = int(parts[0])
-        y = int(parts[1])
-        width = int(parts[2])
-        height = int(parts[3])
-        window_id = int(parts[4])
-    except ValueError:
-        return None
-    if width <= 0 or height <= 0:
-        return None
-    return WindowInfo(
-        frontmost=True,
-        x=x,
-        y=y,
-        width=width,
-        height=height,
-        name=parts[5].strip() or "mac_ios_app",
-        window_id=window_id,
-    )
+    windows = parse_core_graphics_windows(stdout)
+    return windows[0] if windows is not None and len(windows) == 1 else None
 
 
 def _parse_mac_ios_active_application_probe(
@@ -1003,75 +982,10 @@ for app in NSWorkspace.shared.runningApplications {{
     let name = app.localizedName ?? ""
     let matchesBundle = !targetBundleId.isEmpty && bundle == targetBundleId
     let matchesName = candidates.contains(name.lowercased()) || candidates.contains(bundle.lowercased())
-    if matchesBundle || matchesName {{
+    if targetBundleId.isEmpty ? matchesName : matchesBundle {{
         print("target\\t\\(cleaned(name))\\t\\(cleaned(bundle))\\t\\(app.processIdentifier)\\t\\(app.isActive)\\t\\(app.isHidden)\\t\\(app.isTerminated)")
     }}
 }}
-"""
-
-
-def _mac_ios_core_graphics_window_lookup_script(*, pids: list[int], candidates: list[str]) -> str:
-    pid_literal = ", ".join(str(pid) for pid in pids)
-    candidate_literal = ", ".join(_swift_string_literal(candidate) for candidate in candidates if candidate)
-    return f"""
-import CoreGraphics
-import Foundation
-
-let targetPids = Set<Int>([{pid_literal}])
-let candidates = [{candidate_literal}].map {{ $0.lowercased() }}
-let options = CGWindowListOption(arrayLiteral: [.optionOnScreenOnly, .excludeDesktopElements])
-let windows = (CGWindowListCopyWindowInfo(options, CGWindowID(0)) as? [[String: Any]]) ?? []
-
-func intValue(_ value: Any?) -> Int {{
-    if let number = value as? NSNumber {{
-        return Int(round(number.doubleValue))
-    }}
-    if let doubleValue = value as? Double {{
-        return Int(round(doubleValue))
-    }}
-    if let intValue = value as? Int {{
-        return intValue
-    }}
-    return 0
-}}
-
-func cleaned(_ value: String) -> String {{
-    return value.replacingOccurrences(of: "\\t", with: " ").replacingOccurrences(of: "\\n", with: " ")
-}}
-
-for window in windows {{
-    let layer = intValue(window[kCGWindowLayer as String])
-    if layer != 0 {{
-        continue
-    }}
-    let pid = intValue(window[kCGWindowOwnerPID as String])
-    let owner = (window[kCGWindowOwnerName as String] as? String) ?? ""
-    let title = (window[kCGWindowName as String] as? String) ?? ""
-    let haystack = (owner + " " + title).lowercased()
-    let pidMatches = targetPids.contains(pid)
-    let nameMatches = candidates.contains {{ candidate in
-        !candidate.isEmpty && haystack.contains(candidate)
-    }}
-    if !pidMatches && !nameMatches {{
-        continue
-    }}
-    guard let bounds = window[kCGWindowBounds as String] as? [String: Any] else {{
-        continue
-    }}
-    let x = intValue(bounds["X"])
-    let y = intValue(bounds["Y"])
-    let width = intValue(bounds["Width"])
-    let height = intValue(bounds["Height"])
-    let windowNumber = intValue(window[kCGWindowNumber as String])
-    if width <= 0 || height <= 0 {{
-        continue
-    }}
-    let name = cleaned(title.isEmpty ? owner : title)
-    print("\\(x)\\t\\(y)\\t\\(width)\\t\\(height)\\t\\(windowNumber)\\t\\(name)")
-    exit(0)
-}}
-
-exit(1)
 """
 
 

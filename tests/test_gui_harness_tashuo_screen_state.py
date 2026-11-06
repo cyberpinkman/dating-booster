@@ -77,10 +77,14 @@ class GuiHarnessTashuoScreenStateTests(GuiHarnessTestCase):
             )
 
         self.assertEqual(location["status"], "ok")
-        self.assertEqual(location["location_method"], "message_list_visual_anchor_scan")
-        self.assertLess(location["visual_anchor_tap_y_delta"], 0.01)
-        self.assertAlmostEqual(location["raw_tap_ratio"]["y"], 0.821, delta=0.01)
-        self.assertAlmostEqual(location["tap_ratio"]["x"], 0.87, delta=0.001)
+        self.assertEqual(location["location_method"], "message_list_visual_anchor_current_region_tap")
+        self.assertTrue(location["current_region_verified"])
+        self.assertFalse(location["visual_anchor_scanned"])
+        self.assertEqual(location["visual_anchor_hamming_distance"], 0)
+        # Every white patch matches: preserve the prior explicit tap exactly
+        # instead of choosing another equally matching position from a scan.
+        self.assertEqual(location["raw_tap_ratio"], {"x": 0.87, "y": 0.821})
+        self.assertEqual(location["tap_ratio"], location["raw_tap_ratio"])
         self.assertGreater(location["tap_ratio"]["y"], row_region["y1"])
         self.assertLess(location["tap_ratio"]["y"], row_region["y2"])
 

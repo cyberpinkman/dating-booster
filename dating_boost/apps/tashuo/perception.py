@@ -30,7 +30,7 @@ MESSAGE_LIST_SCHEMA = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["tap_ratio", "visual_anchor_hash", "confidence"],
+                "required": ["tap_ratio", "visual_anchor_hash", "confidence", "timestamp_cue", "unread_cue"],
                 "properties": {
                     "tap_ratio": {
                         "type": "object",
@@ -51,6 +51,8 @@ MESSAGE_LIST_SCHEMA = {
                     },
                     "visible_name": {"type": "string"},
                     "latest_preview": {"type": "string"},
+                    "timestamp_cue": {"type": "string"},
+                    "unread_cue": {"type": "string", "enum": ["present", "absent", "reply_badge", "unknown"]},
                     "visual_anchor_hash": {"type": "string"},
                     "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
                 },
@@ -126,7 +128,16 @@ def analyze_tashuo_message_list(observation: dict[str, Any], *, backend: VisionB
     result = _analyze_image_structured_with_retry(
         backend=backend,
         system_prompt="Analyze the TaShuo message list screenshot. Return visible message-list rows with precise tap ratios and row visual anchor regions. Include promotional, Likes You, VIP/paywall, question-gate, and pending-answer rows when they are visible so row positions remain auditable; the host will filter unsafe non-chat rows.",
-        user_prompt="Extract visible message-list rows in top-to-bottom order. Include ordinary chat rows and visible non-chat gate/promo rows such as '有人/女生喜欢了你', '查看谁喜欢我', VIP/paywall prompts, and pending-answer/question-gate items. Include visual_anchor_region as normalized x1/y1/x2/y2 bounds for each visible row anchor. Do not infer hidden rows. If no clear visible row exists, return an empty rows array.",
+        user_prompt=(
+            "Extract visible message-list rows in top-to-bottom order. Include ordinary chat rows and visible "
+            "non-chat gate/promo rows such as '有人/女生喜欢了你', '查看谁喜欢我', VIP/paywall prompts, and "
+            "pending-answer/question-gate items. Include visual_anchor_region as normalized x1/y1/x2/y2 bounds "
+            "for each visible row anchor. Copy the row's visible activity time/date label exactly into timestamp_cue; "
+            "use an empty string when it is absent or unreadable. Do not infer activity time from message-preview text. "
+            "Set unread_cue to present only for a visible unread indicator, reply_badge for a visible '去回复' badge, "
+            "absent when clearly no such indicator is present, or unknown when unclear. Never infer unread status or "
+            "freshness from the preview. Do not infer hidden rows. If no clear visible row exists, return an empty rows array."
+        ),
         screen_path=screen_path,
         schema=MESSAGE_LIST_SCHEMA,
         failure_reason="tashuo_message_list_structured_json_invalid",
@@ -339,11 +350,15 @@ def _normalize_row(raw: Any, *, screen_path: Path) -> dict[str, Any]:
     if not anchor:
         anchor = _row_hash(raw)
         anchor_source = "row_text_hash"
+    timestamp_cue = raw.get("timestamp_cue")
+    unread_cue = str(raw.get("unread_cue") or "unknown").strip().lower()
     row = {
         "candidate_key": f"tashuo_visual_{anchor}",
         "tap_ratio": ratio,
         "visible_name": str(raw.get("visible_name") or "").strip() or None,
         "latest_preview": str(raw.get("latest_preview") or "").strip() or None,
+        "timestamp_cue": timestamp_cue.strip() if isinstance(timestamp_cue, str) else "",
+        "unread_cue": unread_cue if unread_cue in {"present", "absent", "reply_badge", "unknown"} else "unknown",
         "visual_anchor_hash": anchor,
         "confidence": str(raw.get("confidence") or "medium"),
     }

@@ -3,11 +3,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from dating_boost.apps.tashuo.standalone import (
     TaShuoMacIosStageExecutor, TaShuoMacIosStandaloneObservationProvider, TaShuoStandalonePrecheckHarness, TaShuoStandaloneTargetCache,
-    _correct_tashuo_message_list_tap_ratios,
 )
 from dating_boost.core.scan_authoring import validate_scan_batch
 from dating_boost.core.storage import JsonStorage
@@ -67,6 +66,34 @@ class TimeoutOnceVisionBackend:
 
 
 class TaShuoStandaloneProviderTests(unittest.TestCase):
+    def test_managed_thread_reuses_the_exact_interpreted_capture(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            screen = root / "immutable.png"
+            screen.write_bytes(b"png")
+            frame = {
+                "status": "ok", "path": str(screen), "frame_id": "immutable_1",
+                "state": "tashuo_conversation", "captured_at": "2026-09-20T01:00:00Z",
+            }
+            capture = Mock(return_value=frame)
+            backend = Mock()
+            backend.analyze_image_structured.return_value = {
+                "status": "ok", "visible_name": "Ada", "visual_anchor_hash": "threadhash",
+                "visible_messages": [{"direction": "inbound", "text": "你好呀", "confidence": "high"}],
+            }
+            adapter_factory = Mock(side_effect=AssertionError("must reuse managed capture"))
+            provider = TaShuoMacIosStandaloneObservationProvider(
+                root=root / "data", output_dir=root / "harness", vision_backend=backend,
+                adapter_factory=adapter_factory, thread_capture=capture,
+            )
+            payload = provider.observe_current_thread(app_id="tashuo", candidate_key="row_ada")
+            self.assertEqual(payload["status"], "ok")
+            self.assertIs(payload["managed_visual_frame"], frame)
+            capture.assert_called_once_with()
+            adapter_factory.assert_not_called()
+            backend.analyze_image_structured.assert_called_once()
+            self.assertEqual(backend.analyze_image_structured.call_args.args[2], screen)
+
     def test_message_list_skips_all_messages_section_header(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             screen = Path(temp_dir) / "screen.png"
@@ -109,159 +136,7 @@ class TaShuoStandaloneProviderTests(unittest.TestCase):
         )
         self.assertEqual(payload["skipped_candidates"][0]["reason"], "non_chat_gate")
 
-    def test_corrected_tap_ratios_keep_visual_anchor_region_on_same_row(self):
-        rows = [
-            {
-                "candidate_key": "tashuo_visual_blurred_avatar_new_badge",
-                "visible_name": "有个优秀的女生想认识你",
-                "latest_preview": "她毕业于知名院校，是个学霸",
-                "tap_ratio": {"x": 0.5, "y": 0.53},
-                "visual_anchor_hash": "blurred_avatar_new_badge",
-                "visual_anchor_region": {"x1": 0.04, "y1": 0.49, "x2": 0.96, "y2": 0.6},
-            },
-            {
-                "candidate_key": "tashuo_visual_row2_letty_outdoor_photo_draft_badge",
-                "visible_name": "Letty",
-                "latest_preview": "[草稿] 嗨Letty，我也没想到真的能…",
-                "tap_ratio": {"x": 0.5, "y": 0.77},
-                "visual_anchor_hash": "row2_letty_outdoor_photo_draft_badge",
-                "visual_anchor_region": {"x1": 0.04, "y1": 0.708, "x2": 0.96, "y2": 0.819},
-            },
-        ]
-
-        corrected = _correct_tashuo_message_list_tap_ratios(rows)
-        letty = corrected[1]
-
-        self.assertEqual(letty["tap_ratio"]["y"], 0.647)
-        self.assertLessEqual(letty["visual_anchor_region"]["y1"], letty["tap_ratio"]["y"])
-        self.assertGreaterEqual(letty["visual_anchor_region"]["y2"], letty["tap_ratio"]["y"])
-        self.assertEqual(letty["visual_anchor_region"], {"x1": 0.04, "y1": 0.5915, "x2": 0.96, "y2": 0.7025})
-
-    def test_corrected_tap_ratios_use_likes_row_as_all_messages_anchor(self):
-        rows = [
-            {
-                "candidate_key": "tashuo_visual_msg_likes_43",
-                "visible_name": "43人喜欢了你",
-                "latest_preview": "哇！她们是谁？？",
-                "tap_ratio": {"x": 0.5, "y": 0.534},
-                "visual_anchor_hash": "msg_likes_43",
-                "visual_anchor_region": {"x1": 0.063, "y1": 0.451, "x2": 0.938, "y2": 0.617},
-            },
-            {
-                "candidate_key": "tashuo_visual_msg_letty",
-                "visible_name": "Letty",
-                "latest_preview": "你们已经可以进行会话了",
-                "tap_ratio": {"x": 0.5, "y": 0.635},
-                "visual_anchor_hash": "msg_letty",
-                "visual_anchor_region": {"x1": 0.063, "y1": 0.582, "x2": 0.938, "y2": 0.688},
-            },
-            {
-                "candidate_key": "tashuo_visual_msg_yvaine",
-                "visible_name": "Yvaine",
-                "latest_preview": "哈喽",
-                "tap_ratio": {"x": 0.5, "y": 0.694},
-                "visual_anchor_hash": "msg_yvaine",
-                "visual_anchor_region": {"x1": 0.063, "y1": 0.641, "x2": 0.938, "y2": 0.746},
-            },
-            {
-                "candidate_key": "tashuo_visual_msg_xiaoyaowanr",
-                "visible_name": "小药丸儿",
-                "latest_preview": "我工作时间没办法哈哈哈 但我也喜…",
-                "tap_ratio": {"x": 0.5, "y": 0.757},
-                "visual_anchor_hash": "msg_xiaoyaowanr",
-                "visual_anchor_region": {"x1": 0.063, "y1": 0.704, "x2": 0.938, "y2": 0.81},
-            },
-        ]
-
-        corrected = _correct_tashuo_message_list_tap_ratios(rows)
-        xiaoyaowan = corrected[3]
-
-        self.assertEqual(corrected[0]["tap_ratio"]["y"], 0.455)
-        self.assertEqual(corrected[1]["tap_ratio"]["y"], 0.577)
-        self.assertEqual(corrected[2]["tap_ratio"]["y"], 0.699)
-        self.assertEqual(xiaoyaowan["tap_ratio"]["y"], 0.821)
-        self.assertLessEqual(xiaoyaowan["visual_anchor_region"]["y1"], xiaoyaowan["tap_ratio"]["y"])
-        self.assertGreaterEqual(xiaoyaowan["visual_anchor_region"]["y2"], xiaoyaowan["tap_ratio"]["y"])
-
-    def test_corrected_tap_ratios_click_action_area_when_anchor_is_avatar_region(self):
-        rows = [
-            {
-                "candidate_key": "tashuo_visual_liked_44_row",
-                "visible_name": "44人喜欢了你",
-                "latest_preview": "哇！她们是谁？？",
-                "tap_ratio": {"x": 0.205, "y": 0.455},
-                "visual_anchor_hash": "liked_44_row",
-                "visual_anchor_region": {"x1": 0.041, "y1": 0.405, "x2": 0.37, "y2": 0.505},
-            },
-            {
-                "candidate_key": "tashuo_visual_avatar_girl_selfie",
-                "visible_name": "Yvaine",
-                "latest_preview": "哈喽",
-                "tap_ratio": {"x": 0.205, "y": 0.577},
-                "visual_anchor_hash": "avatar_girl_selfie",
-                "visual_anchor_region": {"x1": 0.041, "y1": 0.527, "x2": 0.37, "y2": 0.627},
-            },
-            {
-                "candidate_key": "tashuo_visual_avatar_hiker_seaside",
-                "visible_name": "Letty",
-                "latest_preview": "你们已经可以进行会话了",
-                "tap_ratio": {"x": 0.205, "y": 0.699},
-                "visual_anchor_hash": "avatar_hiker_seaside",
-                "visual_anchor_region": {"x1": 0.041, "y1": 0.649, "x2": 0.37, "y2": 0.749},
-            },
-            {
-                "candidate_key": "tashuo_visual_avatar_bw_dark",
-                "visible_name": "小药丸儿",
-                "latest_preview": "我工作时间没办法哈哈哈 但我也喜…",
-                "tap_ratio": {"x": 0.205, "y": 0.821},
-                "visual_anchor_hash": "avatar_bw_dark",
-                "visual_anchor_region": {"x1": 0.041, "y1": 0.7705, "x2": 0.37, "y2": 0.8715},
-            },
-        ]
-
-        corrected = _correct_tashuo_message_list_tap_ratios(rows)
-        xiaoyaowan = corrected[3]
-
-        self.assertEqual(xiaoyaowan["tap_ratio"], {"x": 0.87, "y": 0.821})
-        self.assertEqual(xiaoyaowan["tap_ratio_source"], "corrected_all_messages_row_action")
-        self.assertEqual(xiaoyaowan["visual_anchor_region"]["x1"], 0.041)
-        self.assertEqual(xiaoyaowan["visual_anchor_region"]["x2"], 0.37)
-
-    def test_corrected_tap_ratios_infer_top_message_grid_when_promo_anchor_missing(self):
-        rows = [
-            {
-                "candidate_key": "tashuo_visual_yvaine",
-                "visible_name": "Yvaine",
-                "latest_preview": "哈喽",
-                "tap_ratio": {"x": 0.55, "y": 0.605},
-                "visual_anchor_hash": "yvaine_row",
-                "visual_anchor_region": {"x1": 0.06, "y1": 0.555, "x2": 0.95, "y2": 0.685},
-            },
-            {
-                "candidate_key": "tashuo_visual_letty",
-                "visible_name": "Letty",
-                "latest_preview": "你们已经可以进行会话了",
-                "tap_ratio": {"x": 0.87, "y": 0.635},
-                "visual_anchor_hash": "letty_row",
-                "visual_anchor_region": {"x1": 0.06, "y1": 0.57, "x2": 0.95, "y2": 0.7},
-            },
-            {
-                "candidate_key": "tashuo_visual_xiaoyaowan",
-                "visible_name": "小药丸儿",
-                "latest_preview": "我工作时间没办法哈哈哈 但我也喜...",
-                "tap_ratio": {"x": 0.87, "y": 0.757},
-                "visual_anchor_hash": "xiaoyaowan_row",
-                "visual_anchor_region": {"x1": 0.06, "y1": 0.6945, "x2": 0.95, "y2": 0.8195},
-            },
-        ]
-
-        corrected = _correct_tashuo_message_list_tap_ratios(rows)
-
-        self.assertEqual([row["tap_ratio"]["y"] for row in corrected], [0.577, 0.699, 0.821])
-        self.assertEqual([row["tap_ratio"]["x"] for row in corrected], [0.87, 0.87, 0.87])
-        self.assertEqual(corrected[2]["visual_anchor_region"], {"x1": 0.06, "y1": 0.7585, "x2": 0.95, "y2": 0.8835})
-
-    def test_message_list_skips_action_artifact_without_shifting_grid(self):
+    def test_message_list_skips_action_artifact_without_shifting_visual_rows(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             screen = Path(temp_dir) / "screen.png"
             screen.write_bytes(b"png")
@@ -579,7 +454,7 @@ class TaShuoStandaloneProviderTests(unittest.TestCase):
         self.assertEqual(payload["skipped_candidates"][0]["reason"], "tashuo_message_row_tap_ratio_required")
         self.assertEqual([entry["candidate_key"] for entry in payload["message_list_snapshot"]["entries"]], ["tashuo_visual_ada_row"])
 
-    def test_message_list_observation_uses_grid_fallback_when_model_only_reports_non_chat_rows(self):
+    def test_message_list_observation_never_invents_chat_rows_when_model_only_reports_non_chat_rows(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             screen = Path(temp_dir) / "screen.png"
             screen.write_bytes(b"png")
@@ -622,19 +497,13 @@ class TaShuoStandaloneProviderTests(unittest.TestCase):
                 ),
             )
             payload = provider.observe_message_list(app_id="tashuo", scan_cursor={})
-            cache = TaShuoStandaloneTargetCache(Path(temp_dir) / "data")
             entries = payload["message_list_snapshot"]["entries"]
-            cached_first = cache.get(entries[0]["candidate_key"])
 
         self.assertEqual(payload["status"], "ok")
         self.assertIn("tashuo_message_list_visual_row_skipped", payload["warnings"])
-        self.assertIn("tashuo_message_list_grid_fallback_used", payload["warnings"])
-        self.assertEqual(len(entries), 3)
-        self.assertEqual([entry["message_list_evidence"]["tap_ratio"]["y"] for entry in entries], [0.577, 0.699, 0.821])
-        self.assertTrue(entries[0]["visible_name"].startswith("TaShuo visible chat row"))
-        self.assertEqual(entries[0]["message_list_evidence"]["selection_method"], "standalone_visual_message_list_grid_fallback")
-        self.assertIsNotNone(cached_first)
-        self.assertEqual(cached_first["selection_method"], "standalone_visual_message_list_grid_fallback")
+        self.assertNotIn("tashuo_message_list_grid_fallback_used", payload["warnings"])
+        self.assertEqual(entries, [])
+        self.assertEqual(payload["candidates"], [])
 
     def test_message_list_observation_dedupes_same_visible_name_and_preview(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -721,6 +590,7 @@ class TaShuoStandaloneProviderTests(unittest.TestCase):
                             },
                             {
                                 "tap_ratio": {"x": 0.36, "y": 0.787},
+                                "visual_anchor_region": {"x1": 0.1, "y1": 0.737, "x2": 0.8, "y2": 0.837},
                                 "visible_name": "Letty",
                                 "latest_preview": "你们已经可以进行会话了",
                                 "visual_anchor_hash": "male_hiker_avatar_purple_button",
@@ -748,7 +618,7 @@ class TaShuoStandaloneProviderTests(unittest.TestCase):
             [item["reason"] for item in payload["skipped_candidates"]],
             ["non_chat_gate", "non_chat_gate", "non_chat_gate", "non_chat_gate"],
         )
-        self.assertEqual(payload["candidates"][0]["tap_ratio"]["y"], 0.577)
+        self.assertEqual(payload["candidates"][0]["tap_ratio"]["y"], 0.787)
         self.assertIsNone(answer_pending_cached)
         self.assertIsNone(pending_question_cached)
         self.assertIsNone(anonymous_question_cached)

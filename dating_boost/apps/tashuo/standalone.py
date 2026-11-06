@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any, Callable
 
 from dating_boost.apps.registry import create_adapter
+from dating_boost.apps.tashuo.message_list_grounding import ground_message_list_rows
+from dating_boost.apps.tashuo.message_list_anchor_selection import _same_image, resolve_native_anchor_misses
 from dating_boost.apps.tashuo.perception import analyze_tashuo_conversation
 from dating_boost.apps.tashuo.standalone_common import (
     TARGET_CACHE_PATH, TARGET_CACHE_MAX_AGE_SECONDS, TARGET_VISUAL_ANCHOR_CACHE_MAX_AGE_SECONDS, SYNTHETIC_MESSAGE_LIST_VISIBLE_NAME_PREFIX,
@@ -12,12 +15,11 @@ from dating_boost.apps.tashuo.standalone_common import (
     _visible_name_identity_conflict, _visual_anchor_region_from_source,
 )
 from dating_boost.apps.tashuo.standalone_message_list import (
-    _align_visual_anchor_region_to_tap_y, _all_messages_open_tap_x, _all_messages_start_y, _attach_tashuo_message_list_perceptual_anchors,
-    _candidate_type_from_visual_row, _correct_tashuo_message_list_tap_ratios, _dedupe_tashuo_message_list_rows, _fallback_first_chat_row_y,
-    _fallback_message_list_avatar_region, _fallback_message_list_row_ys, _first_all_messages_row_index, _infer_first_visible_chat_row_grid_start,
-    _looks_like_tashuo_action_artifact, _looks_like_tashuo_non_chat_gate, _message_list_entry_from_visual_row, _message_list_evidence_from_target,
-    _open_conversation_target_options, _precheck_has_tashuo_message_list_anchor, _redacted_skipped_visual_row, _redacted_step_result,
-    _screen_path_from_observation, _tap_y, _tashuo_message_list_duplicate_key, _tashuo_message_list_grid_fallback_rows,
+    _attach_tashuo_message_list_perceptual_anchors,
+    _candidate_type_from_visual_row, _dedupe_tashuo_message_list_rows,
+    _looks_like_tashuo_action_artifact, _looks_like_tashuo_non_chat_gate, _message_list_entry_from_visual_row,
+    _open_conversation_target_options, _redacted_skipped_visual_row, _redacted_step_result,
+    _screen_path_from_observation, _tashuo_message_list_duplicate_key,
     _tashuo_message_list_visual_row_skip_reason,
 )
 from dating_boost.apps.tashuo.standalone_stage_rules import (
@@ -51,11 +53,13 @@ class TaShuoMacIosStandaloneObservationProvider:
         output_dir: Path,
         vision_backend: VisionBackend,
         adapter_factory: Callable[[], Any] | None = None,
+        thread_capture: Callable[[], dict[str, Any]] | None = None,
     ):
         self.root = root
         self.output_dir = output_dir
         self.vision_backend = vision_backend
         self.adapter_factory = adapter_factory or (lambda: create_adapter("tashuo", runtime="mac-ios-app"))
+        self.thread_capture = thread_capture
         self.targets = TaShuoStandaloneTargetCache(root)
 
     def precheck_payload(self, *, app_id: str) -> dict[str, Any]:
@@ -89,18 +93,55 @@ class TaShuoMacIosStandaloneObservationProvider:
         precheck = self.precheck_payload(app_id=app_id)
         if precheck.get("status") != "ok":
             return {**precheck, "observation_type": "message_list"}
+        screen_path = _screen_path_from_observation(precheck)
+        try:
+            image_digest = hashlib.sha256(screen_path.read_bytes()).hexdigest() if screen_path is not None else None
+        except OSError:
+            return _blocked("tashuo_message_list_image_unavailable", app_id=app_id, observation_type="message_list")
         perceived = _analyze_tashuo_message_list_with_retry(precheck, backend=self.vision_backend)
         if perceived.get("status") != "ok":
             return {**perceived, "observation_type": "message_list", "app_id": app_id, "runtime": "mac-ios-app"}
-        screen_path = _screen_path_from_observation(precheck)
+        # OCR only grounds identities already extracted by vision, once for the
+        # same saved screenshot. It never discovers or reads conversations.
+        session = getattr(self.adapter_factory(), "session", None)
+        ocr_tsv = getattr(session, "_ocr_tsv", None)
+        native_ocr_tsv = getattr(session, "_native_ocr_tsv", None)
+        native_ocr_available = callable(native_ocr_tsv)
+        native_payload: dict[str, Any] | None = None
+
+        def read_native_once(path: Path) -> dict[str, Any]:
+            nonlocal native_payload
+            if not callable(native_ocr_tsv):
+                return {"status": "unavailable", "backend": "apple_vision"}
+            native_payload = native_ocr_tsv(path)
+            return native_payload
+
+        grounding = ground_message_list_rows(
+            perceived["rows"],
+            screen_path=screen_path,
+            ocr_tsv=read_native_once if native_ocr_available else (
+                (lambda path: ocr_tsv(path, segmentation_mode=6, allow_language_fallback=False)) if callable(ocr_tsv) else None
+            ),
+            sparse_ocr_tsv=(lambda path: ocr_tsv(path, segmentation_mode=11, allow_language_fallback=False)) if callable(ocr_tsv) and not native_ocr_available else None,
+        )
+        if native_ocr_available:
+            grounding = resolve_native_anchor_misses(
+                grounding, original_rows=perceived["rows"], screen_path=screen_path,
+                native_payload=native_payload, backend=self.vision_backend,
+                image_digest=image_digest,
+            )
         rows = _attach_tashuo_message_list_perceptual_anchors(
-            _correct_tashuo_message_list_tap_ratios(perceived["rows"]),
+            grounding.rows,
             screen_path=screen_path,
         )
+        # The app writes successive captures to the same path. Only publish
+        # anchors when the final pixels also belong to the initial visual read.
+        if screen_path is not None and image_digest is not None and not _same_image(screen_path, image_digest):
+            return _blocked("tashuo_message_list_image_changed", app_id=app_id, observation_type="message_list")
         rows, duplicate_rows = _dedupe_tashuo_message_list_rows(rows)
         candidates = []
         entries = []
-        skipped_rows = list(duplicate_rows)
+        skipped_rows = [*grounding.skipped, *duplicate_rows]
         provider_skipped_row = False
         warnings = [str(item) for item in perceived.get("warnings", []) if str(item).strip()] if isinstance(perceived.get("warnings"), list) else []
         if isinstance(perceived.get("skipped_rows"), list):
@@ -114,18 +155,6 @@ class TaShuoMacIosStandaloneObservationProvider:
             self.targets.put(row)
             candidates.append(row)
             entries.append(_message_list_entry_from_visual_row(row, position=index))
-        if not entries:
-            fallback_rows = _tashuo_message_list_grid_fallback_rows(
-                precheck=precheck,
-                rows=rows,
-                screen_path=screen_path,
-            )
-            if fallback_rows:
-                warnings.append("tashuo_message_list_grid_fallback_used")
-                for fallback_position, row in enumerate(fallback_rows, start=1):
-                    self.targets.put(row)
-                    candidates.append(row)
-                    entries.append(_message_list_entry_from_visual_row(row, position=fallback_position))
         result = {
             "schema_version": 1,
             "status": "ok",
@@ -136,12 +165,15 @@ class TaShuoMacIosStandaloneObservationProvider:
             "message_list_snapshot": {"entries": entries},
             "candidates": candidates,
             "provenance": {"app_id": app_id, "runtime": "mac-ios-app", "source": "standalone_live_gui"},
+            "message_list_grounding": {**grounding.summary, "backend": "apple_vision"} if native_ocr_available else grounding.summary,
         }
         if skipped_rows:
             if provider_skipped_row:
                 warnings.append("tashuo_message_list_visual_row_skipped")
             if duplicate_rows:
                 warnings.append("tashuo_message_list_duplicate_visual_row_skipped")
+            if grounding.skipped:
+                warnings.append("tashuo_message_list_ambiguous_name_location_skipped")
             result["warnings"] = list(dict.fromkeys(warnings))
             result["skipped_candidates"] = skipped_rows
         elif warnings:
@@ -193,8 +225,14 @@ class TaShuoMacIosStandaloneObservationProvider:
         candidate_key: str = "current_thread",
         cached_target: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        adapter = self.adapter_factory()
-        observed = adapter.observe(output_dir=self.output_dir)
+        frame = self.thread_capture() if self.thread_capture is not None else None
+        if frame is not None:
+            observed = {
+                **frame,
+                "screen": {"status": frame.get("status"), "path": frame.get("path"), "state": frame.get("state")},
+            }
+        else:
+            observed = self.adapter_factory().observe(output_dir=self.output_dir)
         if observed.get("status") != "ok":
             return _blocked(
                 str(observed.get("reason") or "observe_thread_failed"),
@@ -233,13 +271,16 @@ class TaShuoMacIosStandaloneObservationProvider:
             and not identity.get("visible_name")
         ):
             identity["visible_name"] = cached_target.get("visible_name")
-        return _thread_observation_from_perception(
+        result = _thread_observation_from_perception(
             app_id=app_id,
             candidate_key=candidate_key,
             identity=identity,
             visible_messages=perceived["visible_messages"],
             cached_target=cached_target,
         )
+        if frame is not None:
+            result["managed_visual_frame"] = frame
+        return result
 
 class TaShuoStandalonePrecheckHarness:
     def __init__(self, provider: TaShuoMacIosStandaloneObservationProvider, *, app_id: str, runtime: str | None):

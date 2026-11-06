@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dating_boost.harness.window_capture import capture_window_image
+
 from dating_boost.apps.iphone_targeting_common import (
     annotations, hashlib, _platform, copy,
     csv, datetime, timezone, io,
@@ -58,27 +60,12 @@ def capture_window(
             "ocr_status": "not_run",
         }
     output = (output or _default_screenshot_path()).resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    window_id = getattr(window, "window_id", None)
-    if window_id is not None:
-        command = ["screencapture", "-x", "-l", str(window_id), str(output)]
-    else:
-        command = [
-            "screencapture",
-            "-x",
-            "-R",
-            f"{window.x},{window.y},{window.width},{window.height}",
-            str(output),
-        ]
-    result = self.runner.run(command)
-    if result.returncode != 0:
-        return {
-            "status": "blocked",
-            "reason": "screenshot_failed",
-            "stderr": _short(result.stderr),
-            "state": "unknown",
-            "ocr_status": "not_run",
-        }
+    capture = capture_window_image(
+        self.runner, window, output,
+        require_process_binding=self.harness_backend == MAC_IOS_APP_HARNESS_BACKEND,
+    )
+    if capture["status"] != "ok":
+        return {**capture, "state": "unknown", "ocr_status": "not_run"}
     ocr_payload = self._ocr(output) if ocr else {"status": "skipped", "text": "", "error": None}
     app_observer = getattr(self, "app_screen_state_observer", None)
     if callable(app_observer):

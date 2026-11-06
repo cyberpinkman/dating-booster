@@ -23,7 +23,7 @@ from dating_boost.apps.tashuo.screen_state import (
     tashuo_layout_hints, tashuo_thread_cues_from_text,
 )
 from dating_boost.harness.input_backends import core_graphics_command_v, core_graphics_drag
-from dating_boost.harness.base import WindowInfo
+from dating_boost.harness.base import WindowInfo, parse_window_info
 from dating_boost.core.storage import JsonStorage
 
 
@@ -54,6 +54,8 @@ class FakeRunner:
             self.screenshot_byte_outputs = []
         self.missing_commands = missing_commands or set()
         self.window_name = window_name
+        self.window_geometry = (100, 50, 350, 760)
+        self.ax_window_seen = False
         self.commands: list[list[str]] = []
         self.command_inputs: list[tuple[list[str], str | None]] = []
         self.clipboard_text = "previous clipboard"
@@ -83,10 +85,28 @@ class FakeRunner:
         if command and command[0] == "osascript" and any("get {frontmost" in item for item in command):
             if self.window_info_outputs:
                 if len(self.window_info_outputs) > 1:
-                    return _result(stdout=self.window_info_outputs.pop(0))
-                return _result(stdout=self.window_info_outputs[0])
-            frontmost = "true" if self.frontmost else "false"
-            return _result(stdout=f"{frontmost}, 100, 50, 350, 760, {self.window_name}\n")
+                    stdout = self.window_info_outputs.pop(0)
+                else:
+                    stdout = self.window_info_outputs[0]
+            else:
+                frontmost = "true" if self.frontmost else "false"
+                stdout = f"{frontmost}, 100, 50, 350, 760, {self.window_name}\n"
+            parsed = parse_window_info(stdout)
+            if parsed is not None:
+                self.ax_window_seen = True
+                self.window_geometry = (parsed.x, parsed.y, parsed.width, parsed.height)
+                if any(", unix id}" in item for item in command):
+                    stdout = stdout.rstrip() + ", 35218\n"
+            return _result(stdout=stdout)
+        if command[:3] == ["xcrun", "swift", "-e"] and "CGWindowListCopyWindowInfo" in command[-1]:
+            if not self.ax_window_seen:
+                return _result(stdout="")
+            geometry = "\t".join(str(value) for value in self.window_geometry)
+            return _result(stdout=f"{geometry}\t1713\t35218\t{str(self.frontmost).lower()}\t{self.window_name}\n")
+        if command[:3] == ["xcrun", "swift", "-e"] and "NSWorkspace.shared.runningApplications" in command[-1]:
+            return _result(stdout=(
+                f"target\t{self.window_name}\tcom.intelcupid.tashuo\t35218\n"
+            ))
         if command and command[0] == "osascript" and any("DATING_BOOST_AX_TEXT_AREA_VALUE" in item for item in command):
             if self.ax_text_area_value is None:
                 return _result(stdout="__DATING_BOOST_TEXT_AREA_NOT_FOUND__\n")
@@ -110,7 +130,7 @@ class FakeRunner:
             if self.ax_text_area_value is None:
                 return _result(stdout="not_found\n")
             script = " ".join(command)
-            match = re.search(r'setTextAreaValue\(window 1, 0, "((?:[^"\\]|\\.)*)"\)', script)
+            match = re.search(r'setTextAreaValue\((?:window 1|targetWindow), 0, "((?:[^"\\]|\\.)*)"\)', script)
             if match:
                 try:
                     self.ax_text_area_value = json.loads(f'"{match.group(1)}"')
