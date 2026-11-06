@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import uuid
 from contextlib import contextmanager
@@ -10,10 +11,10 @@ from typing import Any, Iterator
 
 from dating_boost.core.production_store_common import PRODUCTION_DB_NAME, _is_managed_state_path
 
-try:
+if sys.platform == "win32":  # pragma: no cover - native GUI and CI use POSIX.
+    import msvcrt
+else:
     import fcntl
-except ImportError:  # pragma: no cover - Windows fallback uses the process-local lock.
-    fcntl = None  # type: ignore[assignment]
 
 
 class StorageError(RuntimeError):
@@ -33,7 +34,45 @@ class InvalidStoragePathError(StorageError):
 
 
 _LOCK_REGISTRY_GUARD = threading.Lock()
-_ROOT_LOCKS: dict[Path, threading.RLock] = {}
+_ROOT_LOCKS: dict[tuple[int, Path], threading.RLock] = {}
+_HELD_WRITES = threading.local()
+STORAGE_LOCK_FILE = ".dating_boost_storage.lock"
+
+
+@contextmanager
+def storage_write_lock(root: Path) -> Iterator[None]:
+    """Serialize a repository mutation, including any reads used to decide the write.
+
+    Locks are acquired before SQLite connections. Nested operations in the same
+    thread and data directory reuse the outer flock rather than opening a new fd.
+    """
+    root = root.resolve()
+    key = (os.getpid(), root)
+    held: set[tuple[int, Path]] = getattr(_HELD_WRITES, "keys", set())
+    if key in held:
+        yield
+        return
+    with _LOCK_REGISTRY_GUARD:
+        process_lock = _ROOT_LOCKS.setdefault(key, threading.RLock())
+    with process_lock:
+        root.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(root / STORAGE_LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            if sys.platform == "win32":  # pragma: no cover
+                msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+            else:
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+            _HELD_WRITES.keys = held | {key}
+            try:
+                yield
+            finally:
+                _HELD_WRITES.keys = held
+                if sys.platform == "win32":  # pragma: no cover
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
 
 class JsonStorage:
@@ -84,7 +123,7 @@ class JsonStorage:
 
     def write_json(self, relative_path: Path, data: dict[str, Any]) -> None:
         path = self._resolve_path(relative_path)
-        with self._write_lock():
+        with storage_write_lock(self.root):
             store = self._sqlite_store_for_write()
             if store is not None:
                 store.upsert_document(relative_path.as_posix(), data)
@@ -94,7 +133,7 @@ class JsonStorage:
 
     def append_jsonl(self, relative_path: Path, data: dict[str, Any]) -> None:
         path = self._resolve_path(relative_path)
-        with self._write_lock():
+        with storage_write_lock(self.root):
             store = self._sqlite_store_for_write()
             if store is not None:
                 store.append_audit_event(relative_path.as_posix(), data)
@@ -105,7 +144,7 @@ class JsonStorage:
 
     def write_jsonl(self, relative_path: Path, items: list[dict[str, Any]]) -> None:
         path = self._resolve_path(relative_path)
-        with self._write_lock():
+        with storage_write_lock(self.root):
             store = self._sqlite_store_for_write()
             if store is not None:
                 store.replace_audit_stream(relative_path.as_posix(), items)
@@ -146,14 +185,14 @@ class JsonStorage:
 
     def delete_json(self, relative_path: Path) -> bool:
         path = self._resolve_path(relative_path)
-        with self._write_lock():
+        with storage_write_lock(self.root):
             store = self._sqlite_store()
             deleted = store.delete_document(relative_path.as_posix()) > 0 if store is not None else False
             return self._remove_legacy_path(path) or deleted
 
     def delete_jsonl(self, relative_path: Path) -> bool:
         path = self._resolve_path(relative_path)
-        with self._write_lock():
+        with storage_write_lock(self.root):
             store = self._sqlite_store()
             deleted = store.delete_audit_stream(relative_path.as_posix()) > 0 if store is not None else False
             return self._remove_legacy_path(path) or deleted
@@ -215,19 +254,3 @@ class JsonStorage:
         path.unlink()
         self._fsync_directory(path.parent)
         return True
-
-    @contextmanager
-    def _write_lock(self) -> Iterator[None]:
-        with _LOCK_REGISTRY_GUARD:
-            thread_lock = _ROOT_LOCKS.setdefault(self.root, threading.RLock())
-        with thread_lock:
-            lock_path = self.root / ".dating_boost_storage.lock"
-            descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-            try:
-                if fcntl is not None:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX)
-                yield
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-                os.close(descriptor)

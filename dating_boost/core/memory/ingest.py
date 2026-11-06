@@ -8,11 +8,17 @@ from dating_boost.core.identity import observation_match_id, resolve_match_ident
 from dating_boost.core.memory.extractors import events_from_observation
 from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.core.repositories import MatchRepository, ObservationRepository
+from dating_boost.core.storage import storage_write_lock
 from dating_boost.perception.observations import AppObservation
 
 
 def store_observation_with_memory(root: Path, observation: AppObservation) -> dict[str, Any]:
     _validate_storage_id(observation.observation_id, "observation_id")
+    with storage_write_lock(root):
+        return _ingest_observation(root, observation)
+
+
+def _ingest_observation(root: Path, observation: AppObservation) -> dict[str, Any]:
     match_repo = MatchRepository(root)
     name = (observation.match_identity_hints.visible_name or "").strip()
     if name:

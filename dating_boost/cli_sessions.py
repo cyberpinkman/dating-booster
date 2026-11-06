@@ -407,7 +407,8 @@ def _managed_run_authorization(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("authorization_runtime_mismatch")
         authorization.setdefault("runtime", args.runtime)
         reason = live_send_authorization_block_reason(authorization, app_id=args.app_id, now=_now_iso())
-        if reason is not None:
+        # Starting creates the durable run; each tick checks the window before GUI work.
+        if reason not in {None, "authorization_quiet_hours"}:
             raise ValueError(reason)
         allowed_targets = authorization.get("allowed_target_ids", authorization.get("allowed_match_ids"))
         if not allowed_targets and authorization.get("allow_all_targets") is not True:
@@ -452,23 +453,17 @@ def _managed_run_authorization(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _manage_quiet_hours(value: Any) -> list[dict[str, str]]:
+    from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason
+
     normalized = str(value or "").strip()
     if not normalized or normalized.lower() in {"off", "none", "disabled"}:
         return []
     windows: list[dict[str, str]] = []
     for raw_window in normalized.split(","):
-        if "-" not in raw_window:
-            raise ValueError("quiet_hours_invalid")
-        start, end = (part.strip() for part in raw_window.split("-", 1))
-        for clock in (start, end):
-            try:
-                hour_text, minute_text = clock.split(":", 1)
-                hour, minute = int(hour_text), int(minute_text)
-            except (TypeError, ValueError):
-                raise ValueError("quiet_hours_invalid") from None
-            if not 0 <= hour <= 23 or not 0 <= minute <= 59:
-                raise ValueError("quiet_hours_invalid")
-        windows.append({"start": start, "end": end})
+        start, _, end = raw_window.partition("-")
+        windows.append({"start": start.strip(), "end": end.strip()})
+    if live_send_authorization_quiet_hours_block_reason(windows) is not None:
+        raise ValueError("quiet_hours_invalid")
     return windows
 
 

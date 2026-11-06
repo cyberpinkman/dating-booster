@@ -5,9 +5,10 @@ import hmac
 import json
 import math
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime
 from typing import Any, Mapping, Sequence
 
+from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason
 
 SCHEMA_VERSION = 1
 PROTOCOL_VERSION = "tashuo-standalone-stage-production-v1"
@@ -382,7 +383,7 @@ def canonicalize_authorization(payload: Mapping[str, Any], *, now: datetime) -> 
     current = now.astimezone(UTC)
     if created_at > current or expires_at <= current or expires_at <= created_at:
         raise ContractViolation("authorization_invalid", field="validity")
-    if _is_in_quiet_hours(canonical.get("quiet_hours"), current):
+    if live_send_authorization_quiet_hours_block_reason(canonical.get("quiet_hours"), now=current) is not None:
         raise ContractViolation("authorization_invalid", field="quiet_hours")
     canonical["allowed_actions"] = sorted(set(str(item) for item in allowed_actions))
     for list_field in ("allowed_match_ids", "goal_ids", "quiet_hours"):
@@ -630,27 +631,6 @@ def _parse_datetime(value: Any) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError("timezone required")
     return parsed.astimezone(UTC)
-
-
-def _is_in_quiet_hours(value: Any, now: datetime) -> bool:
-    if value in (None, []):
-        return False
-    if not isinstance(value, list):
-        return True
-    current = now.timetz().replace(tzinfo=None)
-    for item in value:
-        if not isinstance(item, dict):
-            return True
-        try:
-            start = time.fromisoformat(str(item["start"]))
-            end = time.fromisoformat(str(item["end"]))
-        except (KeyError, ValueError):
-            return True
-        if start <= end and start <= current < end:
-            return True
-        if start > end and (current >= start or current < end):
-            return True
-    return False
 
 
 def _collect_drift(expected: Any, actual: Any, *, path: str, result: list[str]) -> None:

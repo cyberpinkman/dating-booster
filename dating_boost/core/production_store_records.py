@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from dating_boost.core.storage import storage_write_lock
 from dating_boost.core.encryption import EncryptionError, payload_is_encrypted
 from dating_boost.core.production_store_common import (
     AUTOMATION_LOCK_SCHEMA_VERSION, BACKUP_RECOVERY_KEY_SCHEMA_VERSION, BLOCKED_DRAFT_TEXT_KEYS, CONFIRMATION_SCHEMA_VERSION,
@@ -18,25 +19,26 @@ __all__ = ["ProductionStoreRecordsMixin"]
 
 class ProductionStoreRecordsMixin:
     def upsert_document(self, relative_path: str, payload: dict[str, Any]) -> None:
-        self.ensure_schema()
-        schema_version = payload.get("schema_version")
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO documents (path, schema_version, payload_json, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(path) DO UPDATE SET
-                    schema_version = excluded.schema_version,
-                    payload_json = excluded.payload_json,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    relative_path,
-                    schema_version,
-                    self._encode_document(relative_path, _redact_if_blocked(payload)),
-                    _now_iso(),
-                ),
-            )
+        with storage_write_lock(self.root):
+            self.ensure_schema()
+            schema_version = payload.get("schema_version")
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO documents (path, schema_version, payload_json, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(path) DO UPDATE SET
+                        schema_version = excluded.schema_version,
+                        payload_json = excluded.payload_json,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        relative_path,
+                        schema_version,
+                        self._encode_document(relative_path, _redact_if_blocked(payload)),
+                        _now_iso(),
+                    ),
+                )
 
     def append_audit_event(self, relative_path: str, payload: dict[str, Any]) -> None:
         self.ensure_schema()
@@ -105,9 +107,10 @@ class ProductionStoreRecordsMixin:
         return row is not None
 
     def delete_document(self, relative_path: str) -> int:
-        self.ensure_schema()
-        with self._connect() as conn:
-            return int(conn.execute("DELETE FROM documents WHERE path = ?", (relative_path,)).rowcount)
+        with storage_write_lock(self.root):
+            self.ensure_schema()
+            with self._connect() as conn:
+                return int(conn.execute("DELETE FROM documents WHERE path = ?", (relative_path,)).rowcount)
 
     def list_documents(self, *, prefix: str) -> list[dict[str, Any]]:
         self.ensure_schema()
@@ -168,14 +171,16 @@ class ProductionStoreRecordsMixin:
 
     def delete_documents_with_prefix(self, prefix: str) -> int:
         _validate_match_local_prefix(prefix)
-        self.ensure_schema()
-        with self._connect() as conn:
-            return int(
-                conn.execute(
-                    "DELETE FROM documents WHERE substr(path, 1, ?) = ?",
-                    (len(prefix), prefix),
-                ).rowcount
-            )
+        with storage_write_lock(self.root):
+            self.ensure_schema()
+            with self._connect() as conn:
+                return int(
+                    conn.execute(
+                        "DELETE FROM documents WHERE substr(path, 1, ?) = ?",
+                        (len(prefix), prefix),
+                    ).rowcount
+                )
+
     def delete_audit_events_with_stream_prefix(self, prefix: str) -> int:
         _validate_match_local_prefix(prefix)
         self.ensure_schema()

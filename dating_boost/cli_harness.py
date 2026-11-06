@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 
 from dating_boost.apps.registry import create_adapter as _registry_create_adapter
+from dating_boost.core.live_send_contract import send_quiet_hours_scope
 from dating_boost.cli_ops import (
     annotations, argparse, datetime, timezone,
     hashlib, json, os, sys,
@@ -392,8 +393,9 @@ def _handle_harness_app_stage_draft(args: argparse.Namespace) -> int:
 def _handle_harness_app_send_message(args: argparse.Namespace) -> int:
     draft_text = args.text_file.read_text(encoding="utf-8")
     action_request: dict[str, Any] | None = None
+    authorization: dict[str, Any] = {}
     if not args.dry_run:
-        block_payload = _live_send_cli_block_payload(args, app_id=args.app_id, draft_text=draft_text)
+        authorization, action_request, block_payload = _validated_live_send_inputs(args, app_id=args.app_id, draft_text=draft_text)
         if block_payload is not None:
             _record_support_harness_action(
                 args.data_dir,
@@ -405,7 +407,6 @@ def _handle_harness_app_send_message(args: argparse.Namespace) -> int:
             )
             _print_json(block_payload)
             return 2
-        action_request = _read_json_object(args.action_request)
     block_payload = _runtime_scope_block_payload(args, args.app_id, getattr(args, "runtime", None))
     if block_payload is not None:
         _record_support_harness_action(
@@ -418,12 +419,13 @@ def _handle_harness_app_send_message(args: argparse.Namespace) -> int:
         )
         _print_json(block_payload)
         return 2
-    payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).send_message(
-        draft_text,
-        dry_run=args.dry_run,
-        output_dir=args.output_dir,
-        target_binding=action_request.get("target_binding") if isinstance(action_request, dict) else None,
-    )
+    with send_quiet_hours_scope(authorization.get("quiet_hours"), _now_iso):
+        payload = _create_harness_adapter(args.app_id, args.window_title, runtime=getattr(args, "runtime", None)).send_message(
+            draft_text,
+            dry_run=args.dry_run,
+            output_dir=args.output_dir,
+            target_binding=action_request.get("target_binding") if isinstance(action_request, dict) else None,
+        )
     _record_support_harness_action(
         args.data_dir,
         app_id=args.app_id,
@@ -437,8 +439,14 @@ def _handle_harness_app_send_message(args: argparse.Namespace) -> int:
 
 
 def _live_send_cli_block_payload(args: argparse.Namespace, *, app_id: str, draft_text: str) -> dict[str, Any] | None:
+    return _validated_live_send_inputs(args, app_id=app_id, draft_text=draft_text)[2]
+
+
+def _validated_live_send_inputs(
+    args: argparse.Namespace, *, app_id: str, draft_text: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
     if args.data_dir is None:
-        return {
+        return {}, None, {
             "schema_version": 1,
             "status": "blocked",
             "app_id": app_id,
@@ -447,7 +455,7 @@ def _live_send_cli_block_payload(args: argparse.Namespace, *, app_id: str, draft
             "next_host_action": "rerun_with_data_dir_or_use_dry_run",
         }
     if args.authorization is None:
-        return {
+        return {}, None, {
             "schema_version": 1,
             "status": "blocked",
             "app_id": app_id,
@@ -456,7 +464,7 @@ def _live_send_cli_block_payload(args: argparse.Namespace, *, app_id: str, draft
             "next_host_action": "provide_explicit_live_send_authorization",
         }
     if SafetyRepository(args.data_dir).is_paused():
-        return {
+        return {}, None, {
             "schema_version": 1,
             "status": "blocked",
             "app_id": app_id,
@@ -466,7 +474,7 @@ def _live_send_cli_block_payload(args: argparse.Namespace, *, app_id: str, draft
         }
     if args.action_request is None:
         guidance = managed_live_send_guidance("action_request_required_for_live_send")
-        return {
+        return {}, None, {
             "schema_version": 1,
             "status": "blocked",
             "app_id": app_id,
@@ -488,7 +496,7 @@ def _live_send_cli_block_payload(args: argparse.Namespace, *, app_id: str, draft
     )
     if reason is not None:
         guidance = managed_live_send_guidance(reason)
-        return {
+        return {}, None, {
             "schema_version": 1,
             "status": "blocked",
             "app_id": app_id,
@@ -499,7 +507,7 @@ def _live_send_cli_block_payload(args: argparse.Namespace, *, app_id: str, draft
             "recovery_commands": guidance["recovery_commands"],
             "forbidden_actions": guidance["forbidden_actions"],
         }
-    return None
+    return authorization, action_request, None
 
 
 def _wechat_live_send_authorization_block_reason(authorization: dict[str, Any]) -> str | None:

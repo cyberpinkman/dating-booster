@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -99,6 +101,8 @@ def managed_live_send_guidance(reason: str | None = None) -> dict[str, Any]:
 def live_send_next_host_action(reason: str | None) -> str:
     if reason is None:
         return "ready"
+    if reason == "authorization_quiet_hours":
+        return "wait_until_quiet_hours_end"
     if reason.startswith("authorization_") or reason == "live_send_authorization_required":
         return "provide_explicit_live_send_authorization"
     if reason == "confirmation_hashes_required":
@@ -124,6 +128,10 @@ def live_send_next_host_action(reason: str | None) -> str:
 
 
 def _live_send_recovery_commands(next_host_action: str) -> list[str]:
+    if next_host_action == "wait_until_quiet_hours_end":
+        return []
+    if next_host_action == "wait_until_quiet_hours_end":
+        return ["wait until local quiet hours end, then recheck authorization and current thread state"]
     if next_host_action == "provide_explicit_live_send_authorization":
         return [
             "create or update auth.json with live_send true, autonomous_send true, send_message allowed, and a valid expiry",
@@ -170,8 +178,9 @@ def live_send_authorization_block_reason(
     app_id: str,
     now: str | None = None,
 ) -> str | None:
-    quiet_hours_reason = live_send_authorization_quiet_hours_block_reason(authorization.get("quiet_hours"))
-    if quiet_hours_reason is not None:
+    current_time = now or _now_iso()
+    quiet_hours_reason = live_send_authorization_quiet_hours_block_reason(authorization.get("quiet_hours"), now=current_time)
+    if quiet_hours_reason == "authorization_quiet_hours_invalid":
         return quiet_hours_reason
     if authorization.get("scope") != "send_chat_messages":
         return "authorization_scope_not_send_chat_messages"
@@ -183,7 +192,7 @@ def live_send_authorization_block_reason(
     if isinstance(expires_at, str):
         try:
             expires = _parse_iso(expires_at)
-            current = _parse_iso(now or _now_iso())
+            current = _parse_iso(current_time)
             if expires <= current:
                 return "authorization_expired"
         except ValueError:
@@ -198,16 +207,39 @@ def live_send_authorization_block_reason(
         return "authorization_action_not_allowed"
     if authorization.get("requires_post_action_verification") is not True:
         return "authorization_requires_post_action_verification"
-    return None
+    return quiet_hours_reason
 
 
-def live_send_authorization_quiet_hours_block_reason(value: Any) -> str | None:
-    """Validate every configured quiet-hours window without silently skipping bad input."""
+_SEND_TIME_CHECK = ContextVar[Callable[[], str | None] | None]("send_time_check", default=None)
+
+
+@contextmanager
+def send_quiet_hours_scope(windows: Any, clock: Callable[[], datetime | str]) -> Iterator[None]:
+    """Bind the checked authorization and its clock to this synchronous GUI dispatch."""
+    token = _SEND_TIME_CHECK.set(lambda: live_send_authorization_quiet_hours_block_reason(windows, now=clock()))
+    try:
+        yield
+    finally:
+        _SEND_TIME_CHECK.reset(token)
+
+
+def pre_send_time_block() -> dict[str, Any] | None:
+    """Check after slow GUI verification, immediately before Return or the send-button tap."""
+    check = _SEND_TIME_CHECK.get()
+    reason = check() if check is not None else None
+    if reason is None:
+        return None
+    return {"status": "blocked", "reason": reason, "send_action_executed": False}
+
+
+def live_send_authorization_quiet_hours_block_reason(value: Any, *, now: datetime | str | None = None) -> str | None:
+    """Validate all windows. At execution, apply [start, end) in the host's local time."""
 
     if value is None:
         return None
     if not isinstance(value, (list, tuple)):
         return "authorization_quiet_hours_invalid"
+    windows: list[tuple[int, int]] = []
     for item in value:
         if isinstance(item, Mapping):
             start_value = item.get("start") if "start" in item else item.get("start_time")
@@ -220,6 +252,20 @@ def live_send_authorization_quiet_hours_block_reason(value: Any) -> str | None:
         end = _strict_clock_minutes(end_value)
         if start is None or end is None or start == end:
             return "authorization_quiet_hours_invalid"
+        windows.append((start, end))
+    if not windows or now is None:
+        return None
+    try:
+        instant = _parse_iso(now) if isinstance(now, str) else now
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        local_time = instant.astimezone()
+    except (ValueError, OverflowError, OSError):
+        return "authorization_quiet_hours_invalid"
+    minute = local_time.hour * 60 + local_time.minute
+    for start, end in windows:
+        if (start < end and start <= minute < end) or (start > end and (minute >= start or minute < end)):
+            return "authorization_quiet_hours"
     return None
 
 
@@ -314,7 +360,7 @@ def _strict_clock_minutes(value: Any) -> int | None:
     parts = value.strip().split(":")
     if len(parts) != 2 or len(parts[0]) != 2 or len(parts[1]) != 2:
         return None
-    if not parts[0].isdigit() or not parts[1].isdigit():
+    if not parts[0].isdecimal() or not parts[1].isdecimal():
         return None
     hour, minute = int(parts[0]), int(parts[1])
     if not 0 <= hour <= 23 or not 0 <= minute <= 59:

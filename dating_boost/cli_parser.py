@@ -928,7 +928,7 @@ def _add_manage_commands(subparsers: argparse._SubParsersAction, handler_namespa
     manage_start_parser.add_argument(
         "--quiet-hours",
         default="23:00-08:00",
-        help="Local quiet window as HH:MM-HH:MM; use 'off' to disable.",
+        help="Host-local quiet hours as HH:MM-HH:MM. Sending can resume at the end minute. Use 'off' to disable.",
     )
     manage_start_parser.add_argument(
         "--nudge",

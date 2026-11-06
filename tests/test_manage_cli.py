@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from argparse import Namespace
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -258,12 +259,15 @@ class ManageCliTests(unittest.TestCase):
             nudge=False,
             management_mode="conservative",
         )
-        with patch.dict(os.environ, {"DATING_BOOST_NOW": "2026-08-27T04:00:00Z"}):
+        # This case exercises an allowed send in the host's local daytime.
+        issued = datetime(2026, 8, 27, 12).astimezone(timezone.utc)
+        issued_iso = issued.isoformat().replace("+00:00", "Z")
+        with patch.dict(os.environ, {"DATING_BOOST_NOW": issued_iso}):
             authorization = _managed_run_authorization(args)
 
         self.assertEqual(authorization["scope"], "send_chat_messages")
-        self.assertEqual(authorization["created_at"], "2026-08-27T04:00:00Z")
-        self.assertEqual(authorization["expires_at"], "2026-08-27T05:30:00Z")
+        self.assertEqual(authorization["created_at"], issued_iso)
+        self.assertEqual(datetime.fromisoformat(authorization["expires_at"]), issued + timedelta(minutes=90))
         self.assertEqual(authorization["allowed_match_ids"], [])
         self.assertTrue(authorization["autonomous_send"])
         self.assertFalse(authorization["autonomous_nudge"])
@@ -309,7 +313,7 @@ class ManageCliTests(unittest.TestCase):
             app_id="tashuo",
             draft_text=draft_text,
             data_dir=None,
-            now="2026-08-27T04:01:00Z",
+            now=(issued + timedelta(minutes=1)).isoformat(),
         )
 
         self.assertIsNone(reason)

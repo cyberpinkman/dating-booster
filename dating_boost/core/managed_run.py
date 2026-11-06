@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterator, Mapping, Protocol, Sequence
 
-from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason
+from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason, send_quiet_hours_scope
 from dating_boost.core.storage import JsonStorage
 
 try:
@@ -144,6 +144,9 @@ class ManagedAuthorization:
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> ManagedAuthorization:
         allowed_targets = payload.get("allowed_target_ids", payload.get("allowed_match_ids", ()))
+        quiet_hours = payload.get("quiet_hours")
+        if quiet_hours is not None and not isinstance(quiet_hours, (list, tuple)):
+            raise ValueError("authorization_quiet_hours_invalid")
         return cls(
             authorization_id=str(payload.get("authorization_id") or "").strip(),
             app_id=str(payload.get("app_id") or "").strip(),
@@ -158,7 +161,7 @@ class ManagedAuthorization:
             requires_post_action_verification=payload.get("requires_post_action_verification") is True,
             revoked=payload.get("revoked_at") is not None or bool(payload.get("revoked", False)),
             expires_at=str(payload["expires_at"]) if payload.get("expires_at") else None,
-            quiet_hours=tuple(payload.get("quiet_hours") or ()),
+            quiet_hours=tuple(quiet_hours or ()),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -202,9 +205,7 @@ class ManagedAuthorization:
             return "authorization_app_mismatch"
         if self.runtime is not None and self.runtime != runtime:
             return "authorization_runtime_mismatch"
-        if _quiet_hours_active(self.quiet_hours, now):
-            return "authorization_quiet_hours"
-        return None
+        return live_send_authorization_quiet_hours_block_reason(self.quiet_hours, now=now)
 
     def block_reason(
         self,
@@ -2170,7 +2171,8 @@ class SendTransaction:
             latest.updated_at = _iso(self._now())
             self.store.save(latest)
             try:
-                receipt = self.action.click_send(candidate)
+                with send_quiet_hours_scope(latest.config.authorization.quiet_hours, self._now):
+                    receipt = self.action.click_send(candidate)
             except ManagedClickBlocked as exc:
                 return self._failed_before_click(
                     latest, candidate, decision, decision_key, "click_not_performed",
@@ -2740,44 +2742,6 @@ def _capture_freshness_reason(captured_at: str, *, not_before: str, prefix: str)
     except (TypeError, ValueError):
         return f"{prefix}_timestamp_invalid"
     return None
-
-
-def _quiet_hours_active(windows: Sequence[Any], now: datetime) -> bool:
-    if not windows:
-        return False
-    local_now = now.astimezone()
-    current = local_now.hour * 60 + local_now.minute
-    for item in windows:
-        if isinstance(item, Mapping):
-            start_value = item.get("start") or item.get("start_time")
-            end_value = item.get("end") or item.get("end_time")
-        elif isinstance(item, str) and "-" in item:
-            start_value, end_value = item.split("-", 1)
-        else:
-            continue
-        start = _clock_minutes(start_value)
-        end = _clock_minutes(end_value)
-        if start is None or end is None:
-            continue
-        if start <= end and start <= current < end:
-            return True
-        if start > end and (current >= start or current < end):
-            return True
-    return False
-
-
-def _clock_minutes(value: Any) -> int | None:
-    if not isinstance(value, str) or ":" not in value:
-        return None
-    hour_text, minute_text = value.strip().split(":", 1)
-    try:
-        hour = int(hour_text)
-        minute = int(minute_text)
-    except ValueError:
-        return None
-    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
-        return None
-    return hour * 60 + minute
 
 
 def _post_send_unknown_reason(

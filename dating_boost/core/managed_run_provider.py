@@ -19,6 +19,7 @@ from dating_boost.core.managed_run import (
     JsonManagedRunStore,
     ManagedRun,
     ManagedActionError,
+    ManagedClickBlocked,
     ManagedRunConfig,
     MessageListSnapshot,
     OpenThreadObservation,
@@ -632,6 +633,8 @@ class TaShuoMacIosManagedActionPort:
             output_dir=self.output_dir,
             **deadline_options,
         )
+        if isinstance(payload, dict) and payload.get("status") == "blocked" and payload.get("send_action_executed") is False:
+            raise ManagedClickBlocked(payload.get("reason"), fallback_reason="managed_click_not_performed")
         _require_action_ok(payload, "managed_click_result_unknown")
         receipt_id = str(payload.get("receipt_id") or "")
         clicked_at = str(payload.get("clicked_at") or "")

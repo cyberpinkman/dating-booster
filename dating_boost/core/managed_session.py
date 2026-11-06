@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from dating_boost.apps.registry import create_adapter, managed_session_policy, supported_app_ids
 from dating_boost.core.automation import AutomationRepository, HISTORICAL_THREAD_CUTOFF_DAYS
+from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason
 from dating_boost.core.operator import (
     DEFAULT_CYCLE_SEND_LIMIT,
     DEFAULT_MAX_PAGES_PER_CYCLE,
@@ -798,9 +799,7 @@ def _authorization_block_reason(authorization: dict[str, Any], now: str) -> str 
                 return "authorization_expired_or_revoked"
         except ValueError:
             return "authorization_invalid_expires_at"
-    if _quiet_hours_active(authorization.get("quiet_hours"), now):
-        return "authorization_quiet_hours"
-    return None
+    return live_send_authorization_quiet_hours_block_reason(authorization.get("quiet_hours"), now=now)
 
 
 def _live_send_start_block_reason(authorization: dict[str, Any], *, managed_gui_send: bool, app_id: str) -> str | None:
@@ -817,49 +816,6 @@ def _live_send_start_block_reason(authorization: dict[str, Any], *, managed_gui_
     if authorization.get("requires_post_action_verification") is not True:
         return "post_action_verification_required"
     return None
-
-
-def _quiet_hours_active(value: Any, now: str) -> bool:
-    if not isinstance(value, list):
-        return False
-    current = _parse_iso(now)
-    current_minutes = current.hour * 60 + current.minute
-    for item in value:
-        window = _quiet_window_minutes(item)
-        if window is None:
-            continue
-        start, end = window
-        if start <= end and start <= current_minutes < end:
-            return True
-        if start > end and (current_minutes >= start or current_minutes < end):
-            return True
-    return False
-
-
-def _quiet_window_minutes(item: Any) -> tuple[int, int] | None:
-    if not isinstance(item, dict):
-        return None
-    start = _hhmm_to_minutes(item.get("start"))
-    end = _hhmm_to_minutes(item.get("end"))
-    if start is None or end is None:
-        return None
-    return start, end
-
-
-def _hhmm_to_minutes(value: Any) -> int | None:
-    if not isinstance(value, str):
-        return None
-    parts = value.split(":")
-    if len(parts) != 2:
-        return None
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1])
-    except ValueError:
-        return None
-    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
-        return None
-    return hour * 60 + minute
 
 
 def _parse_iso(value: str) -> datetime:
