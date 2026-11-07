@@ -72,6 +72,26 @@ class ManagedClickBlocked(ManagedActionError):
     """
 
 
+class ManagedDecisionError(RuntimeError):
+    """Decision execution failed; pause without consuming the inbound revision.
+
+    Only bounded machine diagnostics cross into durable run state. Recovery
+    requires an explicit resume and a fresh observation, never a send replay.
+    """
+
+    def __init__(self, reason_code: Any, *, error_type: Any = None):
+        self.reason_code = (
+            reason_code if ManagedActionError.valid_reason_code(reason_code)
+            else "managed_draft_not_available"
+        )
+        self.error_type = (
+            error_type if isinstance(error_type, str)
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,95}", error_type) is not None
+            else "ManagedDecisionError"
+        )
+        super().__init__(self.reason_code)
+
+
 def _action_reason_details(value: Any) -> dict[str, str]:
     return {"action_reason": value} if ManagedActionError.valid_reason_code(value) else {}
 
@@ -1314,6 +1334,11 @@ class ManagedRun:
             try:
                 with self._profile_stage(profile, "decide"):
                     decision = self.decision.decide(thread, config=record.config)
+            except ManagedDecisionError as exc:
+                return self._finish_tick(
+                    record, "blocked", reason="draft_decision_failed",
+                    decision_reason=exc.reason_code, error_type=exc.error_type,
+                )
             except Exception as exc:  # noqa: BLE001
                 return self._finish_tick(record, "blocked", reason="draft_decision_failed", error_type=type(exc).__name__)
             try:

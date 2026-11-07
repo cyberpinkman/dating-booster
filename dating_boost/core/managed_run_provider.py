@@ -20,6 +20,7 @@ from dating_boost.core.managed_run import (
     ManagedRun,
     ManagedActionError,
     ManagedClickBlocked,
+    ManagedDecisionError,
     ManagedRunConfig,
     MessageListSnapshot,
     OpenThreadObservation,
@@ -432,6 +433,11 @@ class StandalonePlannerManagedDecisionPort:
         else:
             result = self.planner.draft_for_match(match_id=match_id, mode="adaptive")
         if result.get("status") != "ok" or not isinstance(result.get("draft"), dict):
+            # The planner's exception envelope is distinct from evidence or
+            # policy verdicts. An execution failure must not turn this incoming
+            # message into a durable business handoff.
+            if "error_type" in result:
+                raise ManagedDecisionError(result.get("reason"), error_type=result.get("error_type"))
             return DraftDecision(
                 decision_id=_decision_id(observation, "handoff"),
                 outcome="handoff",

@@ -16,6 +16,11 @@
 当前优化针对 TaShuo `mac-ios-app` 的 `manage run --wait`。旧的
 `managed-session` / `host-loop` 兼容入口保留原契约。
 
+草稿规划器的执行故障会暂停 run，并保留受控错误原因；该来信不会被记为已处理。
+排除故障并显式 resume 后，host 为同一 run 重新启动 `run --wait`，重新观察后
+可以处理同一条来信。普通业务 handoff/wait 仍按原去重规则记录；未知发送结果
+继续要求证据核销，不能借此重试发送。
+
 ## 重复工作的来源
 
 原 `ManagedRun` 每个 tick 都调用 `scan_message_list`，但只选择一个对象。
