@@ -914,6 +914,7 @@ class TaShuoStandaloneProviderTests(unittest.TestCase):
     def test_observe_thread_allows_slow_visual_anchor_backed_target(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir) / "data"
+            (Path(temp_dir) / "screen.png").write_bytes(b"synthetic screenshot")
             cache_path = data_dir / "standalone_session" / "tashuo_targets.json"
             cache_path.parent.mkdir(parents=True)
             observed_at = (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat().replace("+00:00", "Z")

@@ -174,6 +174,25 @@ class StandaloneObservationManagedRunPort:
         self._candidates: dict[str, ThreadCandidate] = {}
         self._opened: dict[str, _CachedThread] = {}
 
+    @property
+    def supports_split_observation(self) -> bool:
+        return all(callable(getattr(self.provider, method, None)) for method in (
+            "capture_message_list", "analyze_message_list", "publish_message_list", "capture_thread", "analyze_thread",
+        ))
+
+    def capture_message_list(self, *, run_id: str, app_id: str, runtime: str, cursor: dict[str, Any]) -> Any:
+        del run_id, runtime
+        return self.provider.capture_message_list(app_id=app_id, scan_cursor=dict(cursor))
+
+    def analyze_message_list(self, capture: Any) -> dict[str, Any]:
+        return self.provider.analyze_message_list(capture)
+
+    def publish_message_list(self, payload: dict[str, Any], *, app_id: str, runtime: str) -> MessageListSnapshot:
+        _require_ok_observation(payload, "message_list")
+        snapshot = self._map_message_list(payload, app_id=app_id, runtime=runtime)
+        self.provider.publish_message_list(payload)
+        return snapshot
+
     def scan_message_list(
         self,
         *,
@@ -183,8 +202,11 @@ class StandaloneObservationManagedRunPort:
         cursor: dict[str, Any],
     ) -> MessageListSnapshot:
         del run_id
-        self._app_id = app_id
         payload = self.provider.observe_message_list(app_id=app_id, scan_cursor=dict(cursor))
+        return self._map_message_list(payload, app_id=app_id, runtime=runtime)
+
+    def _map_message_list(self, payload: dict[str, Any], *, app_id: str, runtime: str) -> MessageListSnapshot:
+        self._app_id = app_id
         _require_ok_observation(payload, "message_list")
         payload_runtime = str(payload.get("runtime") or runtime)
         if payload_runtime != runtime:
@@ -215,6 +237,18 @@ class StandaloneObservationManagedRunPort:
             next_cursor=next_cursor,
         )
 
+    def capture_thread(self, candidate: ThreadCandidate) -> Any:
+        if self._candidates.get(candidate.candidate_key) != candidate:
+            raise ValueError("managed_candidate_not_from_latest_scan")
+        return self.provider.capture_thread(app_id=str(candidate.metadata["app_id"]), candidate_key=candidate.candidate_key)
+
+    def analyze_thread(self, capture: Any) -> dict[str, Any]:
+        return self.provider.analyze_thread(capture)
+
+    def publish_thread(self, candidate: ThreadCandidate, payload: dict[str, Any]) -> ThreadObservation:
+        _require_ok_observation(payload, "thread")
+        return self._thread_observation(self._map_thread(candidate, payload))
+
     def open_thread(self, candidate: ThreadCandidate) -> OpenThreadObservation:
         known = self._candidates.get(candidate.candidate_key)
         if known != candidate:
@@ -235,6 +269,9 @@ class StandaloneObservationManagedRunPort:
             raw = self.provider.observe_thread(app_id=str(candidate.metadata["app_id"]), candidate_key=candidate.candidate_key)
             _require_ok_observation(raw, "thread")
             cached = self._map_thread(candidate, raw)
+        return self._thread_observation(cached)
+
+    def _thread_observation(self, cached: _CachedThread) -> ThreadObservation:
         match_id = self._ingest_for_planner(cached.raw)
         context = {
             "standalone_thread_observation": cached.raw,

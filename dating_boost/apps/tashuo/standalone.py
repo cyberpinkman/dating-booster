@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -45,6 +46,30 @@ from dating_boost.core.safety import SafetyRepository
 from dating_boost.core.standalone_actions import StageOnlyActionExecutor
 from dating_boost.intelligence.vision_backends import VisionBackend
 
+
+@dataclass(frozen=True)
+class TaShuoObservationCapture:
+    """Captured pixels and navigation context; analysis performs no GUI work."""
+
+    app_id: str
+    observed: dict[str, Any]
+    image_digest: str | None
+    scan_cursor: dict[str, Any] | None = None
+    candidate_key: str = "current_thread"
+    cached_target: dict[str, Any] | None = None
+    frame: dict[str, Any] | None = None
+
+
+def _capture_image_digest(observed: dict[str, Any]) -> str | None:
+    path = _screen_path_from_observation(observed)
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path is not None else None
+
+
+def _capture_image_unchanged(capture: TaShuoObservationCapture) -> bool:
+    path = _screen_path_from_observation(capture.observed)
+    return capture.image_digest is None or (path is not None and _same_image(path, capture.image_digest))
+
+
 class TaShuoMacIosStandaloneObservationProvider:
     def __init__(
         self,
@@ -88,16 +113,29 @@ class TaShuoMacIosStandaloneObservationProvider:
         )
 
     def observe_message_list(self, *, app_id: str, scan_cursor: dict[str, Any]) -> dict[str, Any]:
+        capture = self.capture_message_list(app_id=app_id, scan_cursor=scan_cursor)
+        return self.publish_message_list(self.analyze_message_list(capture))
+
+    def capture_message_list(self, *, app_id: str, scan_cursor: dict[str, Any]) -> TaShuoObservationCapture:
         if app_id != "tashuo":
-            return _blocked("unsupported_app_for_tashuo_provider", app_id=app_id, observation_type="message_list")
-        precheck = self.precheck_payload(app_id=app_id)
+            precheck = _blocked("unsupported_app_for_tashuo_provider", app_id=app_id, observation_type="message_list")
+        else:
+            precheck = self.precheck_payload(app_id=app_id)
+        try:
+            image_digest = _capture_image_digest(precheck) if precheck.get("status") == "ok" else None
+        except OSError:
+            precheck = _blocked("tashuo_message_list_image_unavailable", app_id=app_id, observation_type="message_list")
+            image_digest = None
+        return TaShuoObservationCapture(app_id, precheck, image_digest, scan_cursor=dict(scan_cursor))
+
+    def analyze_message_list(self, capture: TaShuoObservationCapture) -> dict[str, Any]:
+        app_id, precheck = capture.app_id, capture.observed
         if precheck.get("status") != "ok":
             return {**precheck, "observation_type": "message_list"}
+        if not _capture_image_unchanged(capture):
+            return _blocked("tashuo_message_list_image_changed", app_id=app_id, observation_type="message_list")
         screen_path = _screen_path_from_observation(precheck)
-        try:
-            image_digest = hashlib.sha256(screen_path.read_bytes()).hexdigest() if screen_path is not None else None
-        except OSError:
-            return _blocked("tashuo_message_list_image_unavailable", app_id=app_id, observation_type="message_list")
+        image_digest = capture.image_digest
         perceived = _analyze_tashuo_message_list_with_retry(precheck, backend=self.vision_backend)
         if perceived.get("status") != "ok":
             return {**perceived, "observation_type": "message_list", "app_id": app_id, "runtime": "mac-ios-app"}
@@ -152,7 +190,6 @@ class TaShuoMacIosStandaloneObservationProvider:
                 provider_skipped_row = True
                 skipped_rows.append(_redacted_skipped_visual_row(row, reason=skip_reason, position=index))
                 continue
-            self.targets.put(row)
             candidates.append(row)
             entries.append(_message_list_entry_from_visual_row(row, position=index))
         result = {
@@ -161,7 +198,7 @@ class TaShuoMacIosStandaloneObservationProvider:
             "observation_type": "message_list",
             "app_id": app_id,
             "runtime": "mac-ios-app",
-            "scan_cursor": dict(scan_cursor),
+            "scan_cursor": dict(capture.scan_cursor or {}),
             "message_list_snapshot": {"entries": entries},
             "candidates": candidates,
             "provenance": {"app_id": app_id, "runtime": "mac-ios-app", "source": "standalone_live_gui"},
@@ -180,21 +217,32 @@ class TaShuoMacIosStandaloneObservationProvider:
             result["warnings"] = list(dict.fromkeys(warnings))
         return result
 
+    def publish_message_list(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Publish only after the owning ManagedRun accepts its lifecycle revision."""
+        if payload.get("status") == "ok":
+            for row in payload["candidates"]:
+                self.targets.put(row)
+        return payload
+
     def observe_thread(self, *, app_id: str, candidate_key: str) -> dict[str, Any]:
+        return self.analyze_thread(self.capture_thread(app_id=app_id, candidate_key=candidate_key))
+
+    def capture_thread(self, *, app_id: str, candidate_key: str) -> TaShuoObservationCapture:
         target = self.targets.get(candidate_key)
         if target is None:
             if _is_current_thread_candidate_key(candidate_key):
-                return self.observe_current_thread(app_id=app_id, candidate_key=candidate_key, cached_target=None)
-            return _blocked(
+                return self._capture_current_thread(app_id=app_id, candidate_key=candidate_key, cached_target=None)
+            blocked = _blocked(
                 "tashuo_standalone_target_not_found",
                 app_id=app_id,
                 observation_type="thread",
                 candidate_key=candidate_key,
             )
+            return TaShuoObservationCapture(app_id, blocked, None, candidate_key=candidate_key)
         freshness_reason = _target_freshness_block_reason(target)
         if freshness_reason:
             max_age_seconds = _target_cache_max_age_seconds(target)
-            return _blocked(
+            blocked = _blocked(
                 freshness_reason,
                 app_id=app_id,
                 observation_type="thread",
@@ -202,6 +250,7 @@ class TaShuoMacIosStandaloneObservationProvider:
                 observed_at=target.get("observed_at"),
                 max_age_seconds=max_age_seconds,
             )
+            return TaShuoObservationCapture(app_id, blocked, None, candidate_key=candidate_key)
         adapter = self.adapter_factory()
         opened = adapter.run_action(
             "open-conversation",
@@ -210,13 +259,14 @@ class TaShuoMacIosStandaloneObservationProvider:
             **_open_conversation_target_options(target),
         )
         if opened.get("status") != "ok":
-            return _blocked(
+            blocked = _blocked(
                 str(opened.get("reason") or "open_thread_failed"),
                 app_id=app_id,
                 observation_type="thread",
                 candidate_key=candidate_key,
             )
-        return self.observe_current_thread(app_id=app_id, candidate_key=candidate_key, cached_target=target)
+            return TaShuoObservationCapture(app_id, blocked, None, candidate_key=candidate_key)
+        return self._capture_current_thread(app_id=app_id, candidate_key=candidate_key, cached_target=target)
 
     def observe_current_thread(
         self,
@@ -225,6 +275,13 @@ class TaShuoMacIosStandaloneObservationProvider:
         candidate_key: str = "current_thread",
         cached_target: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        return self.analyze_thread(self._capture_current_thread(
+            app_id=app_id, candidate_key=candidate_key, cached_target=cached_target,
+        ))
+
+    def _capture_current_thread(
+        self, *, app_id: str, candidate_key: str, cached_target: dict[str, Any] | None,
+    ) -> TaShuoObservationCapture:
         frame = self.thread_capture() if self.thread_capture is not None else None
         if frame is not None:
             observed = {
@@ -233,6 +290,18 @@ class TaShuoMacIosStandaloneObservationProvider:
             }
         else:
             observed = self.adapter_factory().observe(output_dir=self.output_dir)
+        try:
+            image_digest = _capture_image_digest(observed) if observed.get("status") == "ok" else None
+        except OSError:
+            observed = _blocked("tashuo_thread_image_unavailable", app_id=app_id, observation_type="thread")
+            image_digest = None
+        return TaShuoObservationCapture(
+            app_id, observed, image_digest, candidate_key=candidate_key, cached_target=cached_target, frame=frame,
+        )
+
+    def analyze_thread(self, capture: TaShuoObservationCapture) -> dict[str, Any]:
+        app_id, candidate_key = capture.app_id, capture.candidate_key
+        observed, cached_target, frame = capture.observed, capture.cached_target, capture.frame
         if observed.get("status") != "ok":
             return _blocked(
                 str(observed.get("reason") or "observe_thread_failed"),
@@ -240,7 +309,11 @@ class TaShuoMacIosStandaloneObservationProvider:
                 observation_type="thread",
                 candidate_key=candidate_key,
             )
+        if not _capture_image_unchanged(capture):
+            return _blocked("tashuo_thread_image_changed", app_id=app_id, observation_type="thread", candidate_key=candidate_key)
         perceived = _analyze_tashuo_conversation_with_retry(observed, backend=self.vision_backend)
+        if not _capture_image_unchanged(capture):
+            return _blocked("tashuo_thread_image_changed", app_id=app_id, observation_type="thread", candidate_key=candidate_key)
         if perceived.get("status") != "ok":
             return {**perceived, "observation_type": "thread", "app_id": app_id, "runtime": "mac-ios-app", "candidate_key": candidate_key}
         identity = dict(perceived["identity"])

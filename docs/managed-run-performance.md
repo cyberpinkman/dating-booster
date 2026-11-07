@@ -63,6 +63,12 @@ TaShuo live provider 启用最多 120 秒的进程内待处理队列。队列在
 Host 应持有同一个 `manage run --wait` 进程。逐个从外部调用 `manage tick`
 会重建运行时，无法复用进程内队列；逐次由 Codex 读图、分析、点按也不是这条热路径。
 
+TaShuo 的列表与会话观察分为 GUI 捕获、离线模型分析和结果写入。捕获与写入持有
+短生命周期锁，模型请求期间释放锁，让 pause/stop 能更新状态。写入前重新核对
+run 的生命周期版本；暂停、停止或暂停后恢复产生的旧结果和迟到异常均丢弃。
+旧的组合观察端口仍保留原锁边界。文本与视觉 SDK 默认关闭隐式重试，单次 I/O
+超时为 45 秒；现有视觉层的显式重试另行保留，这不是整轮运行的硬时限。
+
 ## 2–3 条短消息连续发送
 
 原 writer 已能生成 `message_sequence`，但 ManagedRun decision adapter 只提取
@@ -232,8 +238,8 @@ python3 -m pytest tests/test_managed_run.py tests/test_managed_run_provider.py t
 | `stage_ms` 字段 | 当前 TaShuo provider 的工作 |
 | --- | --- |
 | `scan` | 准备列表、截图、列表视觉模型 |
-| `open_thread` | 按锚点进入会话、会话视觉模型、目标与 inbound 证据 |
-| `observe_thread` | 复用刚读取的会话，写入本地记忆 |
+| `open_thread` | 按锚点进入会话、会话视觉模型、目标与 inbound 证据、接受后写入本地记忆 |
+| `observe_thread` | 分段观察端口复用 `open_thread` 的完整结果，记为 0；兼容端口仍单独计时 |
 | `decide` | 可选 Jev 分流、需要时起草与策略检查 |
 | `send` | staging、精确文本验证、click checkpoint 与 fresh post-send 验证 |
 
