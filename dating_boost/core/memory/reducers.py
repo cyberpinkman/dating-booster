@@ -33,7 +33,9 @@ def reduce_match_memory(match_id: str, events: list[MemoryEvent]) -> MatchMemory
             continue
         if matched_at is None:
             matched_at = event.created_at
-        updated_at = event.created_at
+        # Legacy user events may be backdated. Replaying their causal order must
+        # not move the projection's latest known evidence time backwards.
+        updated_at = max(updated_at, event.created_at)
         last_event_id = event.event_id
 
         if event.event_type == MemoryEventType.MATCH_IDENTITY_ASSESSED:

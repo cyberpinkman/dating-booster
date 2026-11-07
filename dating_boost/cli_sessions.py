@@ -998,14 +998,20 @@ def _record_feedback(
         draft_id=draft_id,
         mode=mode,
         label=label,
-        created_at=MVP_TIMESTAMP,
+        created_at=_now_iso(),
         referenced_memory_ids=referenced_memory_ids,
         conversation_move=conversation_move,
         hook_source=hook_source,
         edited_text_ref=edited_text_ref,
         user_confirmed_style_promotion=True if user_confirmed_style_promotion else None,
     )
-    JsonMemoryRepository(data_dir).append_feedback_event(match_id, event)
+    feedback_repo = JsonMemoryRepository(data_dir)
+    existing = next((item for item in feedback_repo.load_feedback_events(match_id)
+                     if item.get("event_id") == event["event_id"]), None)
+    if existing is not None:
+        event = existing
+    else:
+        feedback_repo.append_feedback_event(match_id, event)
     memory_event = MemoryEvent(
         event_id=str(event["event_id"]),
         event_type=MemoryEventType.FEEDBACK_RECORDED,
