@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.encryption import EncryptionError
+from dating_boost.core.storage import storage_write_lock
 from dating_boost.core.production_store_common import (
     AUTOMATION_LOCK_SCHEMA_VERSION, BACKUP_RECOVERY_KEY_SCHEMA_VERSION, BLOCKED_DRAFT_TEXT_KEYS, CONFIRMATION_SCHEMA_VERSION,
     DATA_STORE_SCHEMA_VERSION, DIAGNOSTIC_BUNDLE_SCHEMA_VERSION, ENCRYPTED_PAYLOAD_SCHEMA_VERSION, KEYCHAIN_BINDING_SCHEMA_VERSION,
@@ -220,6 +221,12 @@ class ProductionStoreBackupMixin:
         }
 
     def rekey(self) -> dict[str, Any]:
+        # Key rotation must exclude repository operations that still hold the old
+        # provider/key, across both payload rewrites and the final WAL checkpoint.
+        with storage_write_lock(self.root):
+            return self._rekey_locked()
+
+    def _rekey_locked(self) -> dict[str, Any]:
         self.ensure_schema()
         old_key = self._cipher.provider.load_or_create_key()
         with self._connect() as conn:

@@ -3,11 +3,12 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any
 
 from dating_boost.core.encryption import EncryptionError, LOCAL_KEY_NAME, payload_is_encrypted
+from dating_boost.core.storage import storage_write_lock
 from dating_boost.core.production_store_common import (
     AUTOMATION_LOCK_SCHEMA_VERSION, BACKUP_RECOVERY_KEY_SCHEMA_VERSION, BLOCKED_DRAFT_TEXT_KEYS, CONFIRMATION_SCHEMA_VERSION,
     DATA_STORE_SCHEMA_VERSION, DIAGNOSTIC_BUNDLE_SCHEMA_VERSION, ENCRYPTED_PAYLOAD_SCHEMA_VERSION, KEYCHAIN_BINDING_SCHEMA_VERSION,
@@ -23,8 +24,36 @@ __all__ = ["ProductionStoreSchemaMixin"]
 
 class ProductionStoreSchemaMixin:
     def ensure_schema(self) -> None:
+        if self._schema_is_current():
+            return
+        with storage_write_lock(self.root):
+            # Another process may have completed initialization while we waited.
+            if not self._schema_is_current():
+                self._initialize_schema()
+
+    def _schema_is_current(self) -> bool:
+        if not self.db_path.exists():
+            return False
+        # Opening an existing store for validation must not acquire SQLite's writer
+        # lock. In particular, metadata upserts here defeat WAL readers entirely.
+        with closing(sqlite3.connect(self.db_path.as_uri() + "?mode=ro", uri=True, timeout=30.0)) as conn:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if not {"metadata", "documents", "audit_events", "locks", "idempotency", "confirmations"}.issubset(tables):
+                return False
+            metadata = dict(conn.execute("SELECT key, value FROM metadata"))
+            return (
+                metadata.get("data_store_schema_version") == str(DATA_STORE_SCHEMA_VERSION)
+                and metadata.get("storage_backend") == "sqlite"
+                and metadata.get("encrypted_payload_schema_version") == str(ENCRYPTED_PAYLOAD_SCHEMA_VERSION)
+                and metadata.get("keychain_binding_schema_version") == str(KEYCHAIN_BINDING_SCHEMA_VERSION)
+                and metadata.get("encryption") == "enabled"
+                and metadata.get("encryption_provider") in {"local", "keychain"}
+            )
+
+    def _initialize_schema(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode = WAL")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS metadata (
@@ -305,7 +334,6 @@ class ProductionStoreSchemaMixin:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 30000")
-        conn.execute("PRAGMA journal_mode = WAL")
         try:
             yield conn
             conn.commit()

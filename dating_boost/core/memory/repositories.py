@@ -10,7 +10,7 @@ from dating_boost.core.memory.reducers import reduce_match_memory
 from dating_boost.core.memory.review_queue import ReviewQueueRepository
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.repositories import MatchRepository
-from dating_boost.core.storage import JsonStorage, storage_write_lock
+from dating_boost.core.storage import JsonStorage, storage_operation, storage_write_lock
 from dating_boost.perception.observations import AppObservation
 
 
@@ -24,13 +24,27 @@ class MemoryRepository:
         self._storage = JsonStorage(root)
 
     def append_event(self, match_id: str, event: MemoryEvent) -> None:
+        self.append_events(match_id, [event])
+
+    @storage_operation()
+    def append_events(self, match_id: str, events: list[MemoryEvent]) -> None:
         _validate_match_id(match_id)
-        if event.match_id != match_id:
-            raise ValueError("event.match_id must match repository match_id")
-        events = self.load_events(match_id)
-        if any(existing.event_id == event.event_id for existing in events):
-            return
-        self._storage.append_jsonl(self._events_path(match_id), event.to_dict())
+        for event in events:
+            if event.match_id != match_id:
+                raise ValueError("event.match_id must match repository match_id")
+        with storage_write_lock(self._storage.root):
+            self._storage.append_jsonl_batch(self._events_path(match_id), [event.to_dict() for event in events])
+
+    @storage_operation()
+    def append_events_and_rebuild(self, match_id: str, events: list[MemoryEvent]) -> tuple[MatchMemoryProjection, int]:
+        with storage_write_lock(self._storage.root):
+            existing = self.load_events(match_id)
+            self.append_events(match_id, events)
+            by_id = {event.event_id: event for event in existing}
+            for event in events:
+                by_id.setdefault(event.event_id, event)
+            combined = list(by_id.values())
+            return self._save_projection_from_events(match_id, combined), len(combined)
 
     def replace_events(self, match_id: str, events: list[MemoryEvent]) -> None:
         _validate_match_id(match_id)
@@ -133,22 +147,27 @@ class MemoryRepository:
         matches_dir = self._storage.root / "matches"
         if not matches_dir.exists():
             return []
-        match_ids: list[str] = []
+        legacy_match_ids: list[str] = []
         for child in sorted(matches_dir.iterdir(), key=lambda item: item.name):
             if not child.is_dir():
                 continue
             if not (child / "observations.json").exists():
                 continue
             _validate_match_id(child.name)
-            match_ids.append(child.name)
-        return match_ids
+            legacy_match_ids.append(child.name)
+        return legacy_match_ids
 
+    @storage_operation()
     def rebuild_projection(self, match_id: str) -> MatchMemoryProjection:
-        events = self.load_events(match_id)
+        with storage_write_lock(self._storage.root):
+            return self._save_projection_from_events(match_id, self.load_events(match_id))
+
+    def _save_projection_from_events(self, match_id: str, events: list[MemoryEvent]) -> MatchMemoryProjection:
         projection = self._guard_app_scope(reduce_match_memory(match_id, events))
         self.save_projection(match_id, projection)
         return projection
 
+    @storage_operation()
     def rebuild_projection_from_observations(
         self,
         match_id: str,
@@ -156,6 +175,16 @@ class MemoryRepository:
         *,
         identity_confidence: str | None = None,
         requires_user_confirmation: bool | None = None,
+    ) -> MatchMemoryProjection:
+        with storage_write_lock(self._storage.root):
+            return self._rebuild_projection_from_observations_locked(
+                match_id, observations, identity_confidence=identity_confidence,
+                requires_user_confirmation=requires_user_confirmation,
+            )
+
+    def _rebuild_projection_from_observations_locked(
+        self, match_id: str, observations: list[AppObservation], *,
+        identity_confidence: str | None, requires_user_confirmation: bool | None,
     ) -> MatchMemoryProjection:
         _validate_match_id(match_id)
         if MatchRepository(self._storage.root).app_scope_requires_review(match_id):
@@ -188,8 +217,9 @@ class MemoryRepository:
             else:
                 replay_events.append(event)
         replay_events.extend(generated_by_id.values())
-        self.replace_events(match_id, _order_fact_dependencies(replay_events))
-        return self.rebuild_projection(match_id)
+        ordered = _order_fact_dependencies(replay_events)
+        self.replace_events(match_id, ordered)
+        return self._save_projection_from_events(match_id, ordered)
 
     def _events_path(self, match_id: str) -> Path:
         _validate_match_id(match_id)

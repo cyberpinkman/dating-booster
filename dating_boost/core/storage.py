@@ -6,6 +6,7 @@ import sys
 import threading
 import uuid
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -37,6 +38,20 @@ _LOCK_REGISTRY_GUARD = threading.Lock()
 _ROOT_LOCKS: dict[tuple[int, Path], threading.RLock] = {}
 _HELD_WRITES = threading.local()
 STORAGE_LOCK_FILE = ".dating_boost_storage.lock"
+_OPERATION_STORES: ContextVar[dict | None] = ContextVar("storage_operation_stores", default=None)
+
+
+@contextmanager
+def storage_operation() -> Iterator[None]:
+    """Reuse providers for one synchronous repository operation, never across calls."""
+    if _OPERATION_STORES.get() is not None:
+        yield
+        return
+    token = _OPERATION_STORES.set({})
+    try:
+        yield
+    finally:
+        _OPERATION_STORES.reset(token)
 
 
 @contextmanager
@@ -142,6 +157,30 @@ class JsonStorage:
             existing = path.read_text(encoding="utf-8") if path.exists() else ""
             self._write_text_atomically(path, existing + json.dumps(data, sort_keys=True) + "\n")
 
+    def append_jsonl_batch(self, relative_path: Path, items: list[dict[str, Any]]) -> None:
+        """Atomically append immutable events, retaining the first payload for each ID."""
+        path = self._resolve_path(relative_path)
+        for item in items:
+            if not isinstance(item.get("event_id"), str) or not item["event_id"]:
+                raise ValueError("batch events require an event_id")
+        if not items:
+            return
+        with storage_write_lock(self.root):
+            store = self._sqlite_store_for_write()
+            if store is not None:
+                store.append_audit_events(relative_path.as_posix(), items)
+                self._remove_legacy_path(path)
+                return
+            existing = path.read_text(encoding="utf-8") if path.exists() else ""
+            seen = {item["event_id"] for item in self.read_jsonl(relative_path)}
+            additions: list[str] = []
+            for item in items:
+                if item["event_id"] not in seen:
+                    additions.append(json.dumps(item, sort_keys=True) + "\n")
+                    seen.add(item["event_id"])
+            if additions:
+                self._write_text_atomically(path, existing + "".join(additions))
+
     def write_jsonl(self, relative_path: Path, items: list[dict[str, Any]]) -> None:
         path = self._resolve_path(relative_path)
         with storage_write_lock(self.root):
@@ -202,7 +241,14 @@ class JsonStorage:
             return None
         from dating_boost.core.production_store import ProductionDataStore
 
-        return ProductionDataStore(self.root)
+        cache = _OPERATION_STORES.get()
+        if cache is None:
+            return ProductionDataStore(self.root)
+        stat = (self.root / PRODUCTION_DB_NAME).stat()
+        key = (os.getpid(), threading.get_ident(), self.root, stat.st_dev, stat.st_ino)
+        if key not in cache:
+            cache[key] = ProductionDataStore(self.root)
+        return cache[key]
 
     def _sqlite_store_for_write(self):
         store = self._sqlite_store()
