@@ -3,21 +3,26 @@
 All host agents should treat Dating Booster as the dating-specific local tool
 layer:
 
-1. Complete the adapter/skill doctor, release doctor, data doctor/migration,
+1. After installation, updates, migration, permission changes, or for explicit
+   diagnostics, complete the adapter/skill doctor, release doctor, data doctor/migration,
    and capabilities sequence in
    `agent_adapters/shared/references/contracts.md#startup` before observing app
    content.
-2. Start a support session after the app is known, and keep the selected
+2. For real-GUI Canary, explicit diagnostics, or a support bundle, start a
+   support session after the app is known, and keep the selected
    app/runtime fixed for that data dir.
 3. Use app profiles as the source of app support truth.
 4. Use CLI JSON contracts instead of copying core logic into a host adapter.
 5. Keep raw screenshots and OCR text private; normal diagnostics should use
    redacted layout hints.
-6. Draft in the host agent, then run Dating Booster policy checks and action
-   audit.
-7. Use managed live send only through explicit authorization, policy-checked
-   action requests, target binding, staged-text verification, and post-action
-   verification.
+6. For ordinary draft assistance, draft in the host agent, then run Dating
+   Booster policy checks and action audit. ManagedRun owns its model calls.
+7. For TaShuo mac-ios-app full management, use flagship ManagedRun from
+   `references/workflows.md`: `manage start` followed by the host-held
+   `manage run --wait`. Its four-part action executor requires explicit bounded
+   authorization, target binding, exact staging, and post-send verification.
+   Other apps/runtimes and existing compatibility workflows use managed-session
+   or host-loop with system-generated, policy-checked action requests.
 
 Minimum machine-readable startup gate:
 

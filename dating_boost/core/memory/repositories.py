@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import heapq
 from pathlib import Path
 from typing import Any
 
 from dating_boost.core.memory.extractors import events_from_observation
-from dating_boost.core.memory.models import IdentityTrustStatus, MemoryEvent, MemoryEventType, MatchMemoryProjection
+from dating_boost.core.memory.models import IdentityTrustStatus, MemoryEvent, MemoryEventType, MemoryFact, MatchMemoryProjection
 from dating_boost.core.memory.reducers import reduce_match_memory
 from dating_boost.core.memory.review_queue import ReviewQueueRepository
 from dating_boost.core.production_store import ProductionDataStore
 from dating_boost.core.repositories import MatchRepository
-from dating_boost.core.storage import JsonStorage, storage_write_lock
+from dating_boost.core.storage import JsonStorage, storage_operation, storage_write_lock
 from dating_boost.perception.observations import AppObservation
 
 
@@ -23,13 +24,27 @@ class MemoryRepository:
         self._storage = JsonStorage(root)
 
     def append_event(self, match_id: str, event: MemoryEvent) -> None:
+        self.append_events(match_id, [event])
+
+    @storage_operation()
+    def append_events(self, match_id: str, events: list[MemoryEvent]) -> None:
         _validate_match_id(match_id)
-        if event.match_id != match_id:
-            raise ValueError("event.match_id must match repository match_id")
-        events = self.load_events(match_id)
-        if any(existing.event_id == event.event_id for existing in events):
-            return
-        self._storage.append_jsonl(self._events_path(match_id), event.to_dict())
+        for event in events:
+            if event.match_id != match_id:
+                raise ValueError("event.match_id must match repository match_id")
+        with storage_write_lock(self._storage.root):
+            self._storage.append_jsonl_batch(self._events_path(match_id), [event.to_dict() for event in events])
+
+    @storage_operation()
+    def append_events_and_rebuild(self, match_id: str, events: list[MemoryEvent]) -> tuple[MatchMemoryProjection, int]:
+        with storage_write_lock(self._storage.root):
+            existing = self.load_events(match_id)
+            self.append_events(match_id, events)
+            by_id = {event.event_id: event for event in existing}
+            for event in events:
+                by_id.setdefault(event.event_id, event)
+            combined = list(by_id.values())
+            return self._save_projection_from_events(match_id, combined), len(combined)
 
     def replace_events(self, match_id: str, events: list[MemoryEvent]) -> None:
         _validate_match_id(match_id)
@@ -38,8 +53,8 @@ class MemoryRepository:
             if event.match_id != match_id:
                 raise ValueError("event.match_id must match repository match_id")
             deduped[event.event_id] = event
-        ordered = sorted(deduped.values(), key=lambda event: (event.created_at, event.event_id))
-        self._storage.write_jsonl(self._events_path(match_id), [event.to_dict() for event in ordered])
+        # The supplied log order carries causality; wall-clock timestamps and IDs do not.
+        self._storage.write_jsonl(self._events_path(match_id), [event.to_dict() for event in deduped.values()])
 
     def load_events(self, match_id: str) -> list[MemoryEvent]:
         _validate_match_id(match_id)
@@ -132,22 +147,27 @@ class MemoryRepository:
         matches_dir = self._storage.root / "matches"
         if not matches_dir.exists():
             return []
-        match_ids: list[str] = []
+        legacy_match_ids: list[str] = []
         for child in sorted(matches_dir.iterdir(), key=lambda item: item.name):
             if not child.is_dir():
                 continue
             if not (child / "observations.json").exists():
                 continue
             _validate_match_id(child.name)
-            match_ids.append(child.name)
-        return match_ids
+            legacy_match_ids.append(child.name)
+        return legacy_match_ids
 
+    @storage_operation()
     def rebuild_projection(self, match_id: str) -> MatchMemoryProjection:
-        events = self.load_events(match_id)
+        with storage_write_lock(self._storage.root):
+            return self._save_projection_from_events(match_id, self.load_events(match_id))
+
+    def _save_projection_from_events(self, match_id: str, events: list[MemoryEvent]) -> MatchMemoryProjection:
         projection = self._guard_app_scope(reduce_match_memory(match_id, events))
         self.save_projection(match_id, projection)
         return projection
 
+    @storage_operation()
     def rebuild_projection_from_observations(
         self,
         match_id: str,
@@ -155,6 +175,16 @@ class MemoryRepository:
         *,
         identity_confidence: str | None = None,
         requires_user_confirmation: bool | None = None,
+    ) -> MatchMemoryProjection:
+        with storage_write_lock(self._storage.root):
+            return self._rebuild_projection_from_observations_locked(
+                match_id, observations, identity_confidence=identity_confidence,
+                requires_user_confirmation=requires_user_confirmation,
+            )
+
+    def _rebuild_projection_from_observations_locked(
+        self, match_id: str, observations: list[AppObservation], *,
+        identity_confidence: str | None, requires_user_confirmation: bool | None,
     ) -> MatchMemoryProjection:
         _validate_match_id(match_id)
         if MatchRepository(self._storage.root).app_scope_requires_review(match_id):
@@ -176,13 +206,20 @@ class MemoryRepository:
                     ),
                 )
             )
-        preserved_events = [
-            event
-            for event in existing_events
-            if event.evidence is None or event.evidence.source_type != "observation"
-        ]
-        self.replace_events(match_id, [*preserved_events, *generated_events])
-        return self.rebuild_projection(match_id)
+        generated_by_id = {event.event_id: event for event in generated_events}
+        replay_events: list[MemoryEvent] = []
+        for event in existing_events:
+            if event.evidence is not None and event.evidence.source_type == "observation":
+                # Refresh extraction in place, omitting stale observation-derived events.
+                replacement = generated_by_id.pop(event.event_id, None)
+                if replacement is not None:
+                    replay_events.append(replacement)
+            else:
+                replay_events.append(event)
+        replay_events.extend(generated_by_id.values())
+        ordered = _order_fact_dependencies(replay_events)
+        self.replace_events(match_id, ordered)
+        return self._save_projection_from_events(match_id, ordered)
 
     def _events_path(self, match_id: str) -> Path:
         _validate_match_id(match_id)
@@ -209,6 +246,74 @@ class MemoryRepository:
             for observation in observations
             if isinstance(observation, dict)
         ]
+
+
+def _order_fact_dependencies(events: list[MemoryEvent]) -> list[MemoryEvent]:
+    """Repair explicit fact dependencies without inventing historical timestamps.
+
+    Earlier rebuilds sorted by timestamp/ID, including backdated legacy feedback.
+    Keep the stored order whenever possible, but a fact must exist before an event
+    can correct or reject it. Unknown references cannot establish an ordering.
+    """
+    creators: dict[str, int] = {}
+    creator_counts: dict[str, int] = {}
+    coalesced_values: dict[tuple[str, str], set[str]] = {}
+    coalesced_keys: dict[str, tuple[str, str]] = {}
+    fact_events = {
+        MemoryEventType.PROFILE_FACT_OBSERVED, MemoryEventType.CONVERSATION_FACT_OBSERVED,
+        MemoryEventType.INFERENCE_RECORDED, MemoryEventType.FACT_CORRECTED,
+    }
+    for index, event in enumerate(events):
+        fact = event.payload.get("fact")
+        if event.event_type in fact_events and isinstance(fact, dict) and fact.get("fact_id"):
+            fact_id = str(fact["fact_id"])
+            creators.setdefault(fact_id, index)
+            creator_counts[fact_id] = creator_counts.get(fact_id, 0) + 1
+            # The reducer coalesces these observations into the first fact ID.
+            # A previously reordered log can lose which ID was canonical and when
+            # the same value was observed again relative to a user's rejection.
+            if ((event.event_type == MemoryEventType.FACT_CORRECTED or (
+                    event.event_type in {MemoryEventType.PROFILE_FACT_OBSERVED, MemoryEventType.CONVERSATION_FACT_OBSERVED}
+                    and fact.get("fact_type") not in {"inference", "photo_cue"}))):
+                normalized = MemoryFact.from_dict(fact)
+                key = (str(normalized.normalized_key), str(normalized.normalized_value))
+                coalesced_keys[fact_id] = key
+                coalesced_values.setdefault(key, set()).add(fact_id)
+
+    dependencies: list[set[int]] = [set() for _ in events]
+    dependents: list[list[int]] = [[] for _ in events]
+    for index, event in enumerate(events):
+        references: list[str] = []
+        if event.event_type in {MemoryEventType.FACT_CORRECTED, MemoryEventType.FACT_REJECTED, MemoryEventType.FACT_ARCHIVED}:
+            references.append(str(event.payload.get("target_fact_id") or ""))
+        elif event.event_type == MemoryEventType.FEEDBACK_RECORDED and event.payload.get("label") == "wrong_assumption":
+            value = event.payload.get("referenced_memory_ids") or []
+            references.extend(str(item) for item in (value if isinstance(value, list) else [value]))
+        for reference in references:
+            if (creators.get(reference, -1) > index and (
+                    creator_counts[reference] > 1 or (reference in coalesced_keys
+                    and len(coalesced_values[coalesced_keys[reference]]) > 1))):
+                # Moving all repeated observations before the user action could
+                # erase a legitimate later observation. Preserve evidence for review.
+                raise ValueError("memory_fact_reference_order_ambiguous")
+        dependencies[index] = {creators[reference] for reference in references if reference in creators}
+        for dependency in dependencies[index]:
+            dependents[dependency].append(index)
+
+    ready = [index for index, required in enumerate(dependencies) if not required]
+    heapq.heapify(ready)
+    ordered: list[MemoryEvent] = []
+    while ready:
+        index = heapq.heappop(ready)
+        ordered.append(events[index])
+        for dependent in dependents[index]:
+            dependencies[dependent].remove(index)
+            if not dependencies[dependent]:
+                heapq.heappush(ready, dependent)
+    if len(ordered) != len(events):
+        # Refuse the replacement so the original evidence remains available for review.
+        raise ValueError("memory_fact_dependency_cycle")
+    return ordered
 
 
 def _identity_assessments_by_observation_id(events: list[MemoryEvent]) -> dict[str, dict[str, object]]:

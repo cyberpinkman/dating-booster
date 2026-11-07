@@ -86,6 +86,27 @@ class ProductionStoreRecordsMixin:
                     ),
                 )
 
+    def append_audit_events(self, relative_path: str, payloads: list[dict[str, Any]]) -> None:
+        """Append one immutable batch in a transaction; ordinary audit upserts stay separate."""
+        for payload in payloads:
+            if not isinstance(payload.get("event_id"), str) or not payload["event_id"]:
+                raise ValueError("batch events require an event_id")
+        with storage_write_lock(self.root):
+            self.ensure_schema()
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                for payload in payloads:
+                    event_id = payload["event_id"]
+                    if conn.execute("SELECT 1 FROM audit_events WHERE stream = ? AND event_id = ?",
+                                    (relative_path, event_id)).fetchone() is not None:
+                        continue
+                    conn.execute(
+                        "INSERT INTO audit_events (stream, event_id, target_match_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                        (relative_path, event_id, payload.get("target_match_id"),
+                         self._encode_audit_event(relative_path, event_id, _redact_if_blocked(payload)),
+                         str(payload.get("created_at") or _now_iso())),
+                    )
+
     def get_document(self, relative_path: str, *, require_encrypted: bool = False) -> dict[str, Any] | None:
         self.ensure_schema()
         with self._connect() as conn:

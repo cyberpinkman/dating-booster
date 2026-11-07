@@ -85,6 +85,8 @@ class OpenAIBackend:
                 "`pip install 'dating-booster[models]'` or `pip install 'openai>=2,<3'`."
             ) from exc
 
+        client_kwargs.setdefault("timeout", MINIMAX_DEFAULT_REQUEST_TIMEOUT_SECONDS)
+        client_kwargs.setdefault("max_retries", 0)
         self._client = OpenAI(**client_kwargs)
         self._model = model
         self.last_response_identity: dict[str, str | None] | None = None
@@ -160,7 +162,10 @@ class MiniMaxBackend:
             resolved_api_key = os.environ.get("MINIMAX_SUBSCRIPTION_KEY")
         if not resolved_api_key:
             raise RuntimeError(f"MiniMaxBackend requires {self._api_key_env}, MINIMAX_CN_API_KEY, or MINIMAX_SUBSCRIPTION_KEY.")
-        self._client = OpenAI(api_key=resolved_api_key, base_url=self._base_url, timeout=self._timeout_seconds)
+        self._client = OpenAI(
+            api_key=resolved_api_key, base_url=self._base_url,
+            timeout=self._timeout_seconds, max_retries=0,
+        )
 
     @property
     def capabilities(self) -> Collection[BackendCapability]:

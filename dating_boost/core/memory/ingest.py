@@ -8,10 +8,11 @@ from dating_boost.core.identity import observation_match_id, resolve_match_ident
 from dating_boost.core.memory.extractors import events_from_observation
 from dating_boost.core.memory.repositories import MemoryRepository
 from dating_boost.core.repositories import MatchRepository, ObservationRepository
-from dating_boost.core.storage import storage_write_lock
+from dating_boost.core.storage import storage_operation, storage_write_lock
 from dating_boost.perception.observations import AppObservation
 
 
+@storage_operation()
 def store_observation_with_memory(root: Path, observation: AppObservation) -> dict[str, Any]:
     _validate_storage_id(observation.observation_id, "observation_id")
     with storage_write_lock(root):
@@ -51,9 +52,7 @@ def _ingest_observation(root: Path, observation: AppObservation) -> dict[str, An
         identity_confidence=identity.confidence.value,
         requires_user_confirmation=identity.requires_user_confirmation,
     )
-    for event in events:
-        memory_repo.append_event(identity.match_id, event)
-    projection = memory_repo.rebuild_projection(identity.match_id)
+    projection, event_count = memory_repo.append_events_and_rebuild(identity.match_id, events)
     ConversationThreadRepository(root).overwrite_from_observation(identity.match_id, observation)
     LatestTurnRepository(root).overwrite_from_observation(identity.match_id, observation)
 
@@ -63,7 +62,7 @@ def _ingest_observation(root: Path, observation: AppObservation) -> dict[str, An
         "confidence": identity.confidence.value,
         "requires_user_confirmation": identity.requires_user_confirmation,
         "observation_id": observation.observation_id,
-        "memory_event_count": len(memory_repo.load_events(identity.match_id)),
+        "memory_event_count": event_count,
         "projection_updated": True,
         "identity_status": projection.identity_status.value,
         "trusted_for_context": projection.trusted_for_context,

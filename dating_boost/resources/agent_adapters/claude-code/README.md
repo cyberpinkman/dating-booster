@@ -48,14 +48,17 @@ the target path and files before writing.
 
 ## Runtime Contract
 
-- Run `dating-boost adapter claude-code doctor --data-dir <data-dir> --json`
-  before observing visible dating app content.
-- Run release doctor and data doctor/migration before capabilities. After the
-  target app is known, start a `--host claude-code` support session and select
-  the matching app/runtime in the same data dir; stop the session when the task
-  ends.
-- Read `agent_adapters/shared/references/contracts.md` and
-  `agent_adapters/shared/references/workflows.md`.
+- Run adapter doctor, release doctor, data doctor/migration, and capabilities
+  after installation, updates, migration, permission changes, or for diagnostics.
+  Match the adapter installation's scope and target. Daily ManagedRun reuses the
+  verified environment and begins with `manage start`.
+- Select the matching app/runtime in the same data dir on first use or explicit
+  target change. Use a `--host claude-code` support session for real-GUI Canary,
+  explicit diagnostics, or support bundles, and stop it when that task ends.
+- Read `references/contracts.md` and `references/workflows.md` inside the
+  installed skill. TaShuo mac-ios-app full management uses flagship ManagedRun:
+  start, then immediately hold `manage run --wait`; status/pause/resume/stop
+  operate on that same run. Other apps/runtimes retain compatibility executors.
 - Use `dating-boost capabilities --json --data-dir <data-dir>` as the
   machine-readable startup contract.
 - If the installed `.claude/skills/dating-booster/` content does not match

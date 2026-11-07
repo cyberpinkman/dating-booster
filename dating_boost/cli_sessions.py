@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dating_boost.core.managed_run_commands import MANAGED_RUN_COMMANDS
+from dating_boost.core.storage import storage_operation, storage_write_lock
 from dating_boost.cli_ops import (
     annotations, argparse, datetime, timezone,
     hashlib, json, os, sys,
@@ -979,6 +980,7 @@ def _handle_replay_latest(args: argparse.Namespace) -> int:
     return 0 if payload["status"] == "ok" else 2
 
 
+@storage_operation()
 def _record_feedback(
     *,
     data_dir: Path,
@@ -992,45 +994,51 @@ def _record_feedback(
     edited_text_ref: str | None = None,
     user_confirmed_style_promotion: bool = False,
 ) -> dict[str, Any]:
-    event = create_feedback_event(
-        event_id=f"feedback_{match_id}_{draft_id}_{label}",
-        match_id=match_id,
-        draft_id=draft_id,
-        mode=mode,
-        label=label,
-        created_at=MVP_TIMESTAMP,
-        referenced_memory_ids=referenced_memory_ids,
-        conversation_move=conversation_move,
-        hook_source=hook_source,
-        edited_text_ref=edited_text_ref,
-        user_confirmed_style_promotion=True if user_confirmed_style_promotion else None,
-    )
-    JsonMemoryRepository(data_dir).append_feedback_event(match_id, event)
-    memory_event = MemoryEvent(
-        event_id=str(event["event_id"]),
-        event_type=MemoryEventType.FEEDBACK_RECORDED,
-        match_id=match_id,
-        scope=MemoryScope.FEEDBACK_PREFERENCE,
-        created_at=str(event["created_at"]),
-        payload=dict(event),
-        evidence=EvidenceRef(
-            source_type="user_feedback",
-            evidence_text="User recorded feedback for a generated draft.",
-            confidence="user_confirmed",
-        ),
-    )
-    memory_repo = MemoryRepository(data_dir)
-    memory_repo.append_event(match_id, memory_event)
-    projection = memory_repo.rebuild_projection(match_id)
-    return {
-        "status": "ok",
-        "match_id": match_id,
-        "event_id": event["event_id"],
-        "draft_id": draft_id,
-        "label": label,
-        "projection_updated": True,
-        "identity_status": projection.identity_status.value,
-    }
+    with storage_write_lock(data_dir):
+        event = create_feedback_event(
+            event_id=f"feedback_{match_id}_{draft_id}_{label}",
+            match_id=match_id,
+            draft_id=draft_id,
+            mode=mode,
+            label=label,
+            created_at=_now_iso(),
+            referenced_memory_ids=referenced_memory_ids,
+            conversation_move=conversation_move,
+            hook_source=hook_source,
+            edited_text_ref=edited_text_ref,
+            user_confirmed_style_promotion=True if user_confirmed_style_promotion else None,
+        )
+        feedback_repo = JsonMemoryRepository(data_dir)
+        existing = next((item for item in feedback_repo.load_feedback_events(match_id)
+                         if item.get("event_id") == event["event_id"]), None)
+        if existing is not None:
+            event = existing
+        else:
+            feedback_repo.append_feedback_event(match_id, event)
+        memory_event = MemoryEvent(
+            event_id=str(event["event_id"]),
+            event_type=MemoryEventType.FEEDBACK_RECORDED,
+            match_id=match_id,
+            scope=MemoryScope.FEEDBACK_PREFERENCE,
+            created_at=str(event["created_at"]),
+            payload=dict(event),
+            evidence=EvidenceRef(
+                source_type="user_feedback",
+                evidence_text="User recorded feedback for a generated draft.",
+                confidence="user_confirmed",
+            ),
+        )
+        memory_repo = MemoryRepository(data_dir)
+        projection, _ = memory_repo.append_events_and_rebuild(match_id, [memory_event])
+        return {
+            "status": "ok",
+            "match_id": match_id,
+            "event_id": event["event_id"],
+            "draft_id": draft_id,
+            "label": label,
+            "projection_updated": True,
+            "identity_status": projection.identity_status.value,
+        }
 
 
 def _derive_run_id(scan_batch: dict[str, Any]) -> str:

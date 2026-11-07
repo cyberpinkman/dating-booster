@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
 from dating_boost.intelligence.backends import (
+    MINIMAX_DEFAULT_REQUEST_TIMEOUT_SECONDS,
     MINIMAX_STRUCTURED_TOOL_NAME,
     MiniMaxBackend,
     _extract_minimax_tool_payload,
@@ -89,6 +90,8 @@ class OpenAIVisionBackend:
                 "`pip install 'dating-booster[models]'` or `pip install 'openai>=2,<3'`."
             ) from exc
 
+        client_kwargs.setdefault("timeout", MINIMAX_DEFAULT_REQUEST_TIMEOUT_SECONDS)
+        client_kwargs.setdefault("max_retries", 0)
         self._client = OpenAI(**client_kwargs)
         self._model = model
         self.last_response_identity: dict[str, str | None] | None = None

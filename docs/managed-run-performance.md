@@ -16,6 +16,11 @@
 当前优化针对 TaShuo `mac-ios-app` 的 `manage run --wait`。旧的
 `managed-session` / `host-loop` 兼容入口保留原契约。
 
+草稿规划器的执行故障会暂停 run，并保留受控错误原因；该来信不会被记为已处理。
+排除故障并显式 resume 后，host 为同一 run 重新启动 `run --wait`，重新观察后
+可以处理同一条来信。普通业务 handoff/wait 仍按原去重规则记录；未知发送结果
+继续要求证据核销，不能借此重试发送。
+
 ## 重复工作的来源
 
 原 `ManagedRun` 每个 tick 都调用 `scan_message_list`，但只选择一个对象。
@@ -57,6 +62,12 @@ TaShuo live provider 启用最多 120 秒的进程内待处理队列。队列在
 
 Host 应持有同一个 `manage run --wait` 进程。逐个从外部调用 `manage tick`
 会重建运行时，无法复用进程内队列；逐次由 Codex 读图、分析、点按也不是这条热路径。
+
+TaShuo 的列表与会话观察分为 GUI 捕获、离线模型分析和结果写入。捕获与写入持有
+短生命周期锁，模型请求期间释放锁，让 pause/stop 能更新状态。写入前重新核对
+run 的生命周期版本；暂停、停止或暂停后恢复产生的旧结果和迟到异常均丢弃。
+旧的组合观察端口仍保留原锁边界。文本与视觉 SDK 默认关闭隐式重试，单次 I/O
+超时为 45 秒；现有视觉层的显式重试另行保留，这不是整轮运行的硬时限。
 
 ## 2–3 条短消息连续发送
 
@@ -115,6 +126,11 @@ GUI 前暂停。不能通过 stop/start 或候选标识变化绕过核对，也�
 不能靠拆开“明晚八点 / 我们见面吧”绕过具体邀约 handoff。
 
 ## 未知结果的证据恢复
+
+单条消息若停在已经持久化的 `prepared_to_click`，重启后会重新观察目标、来信版本
+和输入框。原草稿逐字匹配时，视觉适配器恢复该草稿的运行内状态，再经过授权与
+Return 前检查。输入被清空或修改时停止该次尝试。回归覆盖了全新进程对象、加密
+检查点和输入变化，实机恢复须在授权窗口内验证。
 
 ```bash
 dating-boost manage reconcile --data-dir .local/dating-boost --run-id <run_id> --json
@@ -227,8 +243,8 @@ python3 -m pytest tests/test_managed_run.py tests/test_managed_run_provider.py t
 | `stage_ms` 字段 | 当前 TaShuo provider 的工作 |
 | --- | --- |
 | `scan` | 准备列表、截图、列表视觉模型 |
-| `open_thread` | 按锚点进入会话、会话视觉模型、目标与 inbound 证据 |
-| `observe_thread` | 复用刚读取的会话，写入本地记忆 |
+| `open_thread` | 按锚点进入会话、会话视觉模型、目标与 inbound 证据、接受后写入本地记忆 |
+| `observe_thread` | 分段观察端口复用 `open_thread` 的完整结果，记为 0；兼容端口仍单独计时 |
 | `decide` | 可选 Jev 分流、需要时起草与策略检查 |
 | `send` | staging、精确文本验证、click checkpoint 与 fresh post-send 验证 |
 

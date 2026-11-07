@@ -82,6 +82,14 @@ class TaShuoVisualManagedActionPort:
         state.frame = fresh
         return self._composer(candidate, str(observed.get("value") or ""), fresh)
 
+    def restore_prepared(self, candidate: ThreadCandidate, text: str) -> ComposerObservation:
+        """Rebind a durable single-message draft after fresh, read-only verification."""
+        self._require_unpaused()
+        observed = self.observe_composer(candidate)
+        if text and observed.text == text:
+            self._state(candidate).staged_text = text
+        return observed
+
     def stage_text(self, candidate: ThreadCandidate, text: str) -> ComposerObservation:
         self._require_unpaused()
         state = self._state(candidate)

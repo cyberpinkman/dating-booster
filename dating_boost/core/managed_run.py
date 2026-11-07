@@ -15,7 +15,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, ContextManager, Iterator, Mapping, Protocol, Sequence
+from typing import Any, Callable, ContextManager, Iterator, Mapping, Protocol, Sequence, cast
 
 from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason, send_quiet_hours_scope
 from dating_boost.core.storage import JsonStorage
@@ -70,6 +70,26 @@ class ManagedClickBlocked(ManagedActionError):
 
     Errors after invoking the irreversible primitive must never use this type.
     """
+
+
+class ManagedDecisionError(RuntimeError):
+    """Decision execution failed; pause without consuming the inbound revision.
+
+    Only bounded machine diagnostics cross into durable run state. Recovery
+    requires an explicit resume and a fresh observation, never a send replay.
+    """
+
+    def __init__(self, reason_code: Any, *, error_type: Any = None):
+        self.reason_code = (
+            reason_code if ManagedActionError.valid_reason_code(reason_code)
+            else "managed_draft_not_available"
+        )
+        self.error_type = (
+            error_type if isinstance(error_type, str)
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,95}", error_type) is not None
+            else "ManagedDecisionError"
+        )
+        super().__init__(self.reason_code)
 
 
 def _action_reason_details(value: Any) -> dict[str, str]:
@@ -395,6 +415,24 @@ class ManagedObservationPort(Protocol):
 
     def observe_thread(self, candidate: ThreadCandidate) -> ThreadObservation:
         raise NotImplementedError
+
+
+class SplitManagedObservationPort(Protocol):
+    """Optional seam: capture under the lifecycle lock, analyze without it,
+    then publish only after the captured lifecycle generation is accepted.
+    """
+
+    def capture_message_list(self, *, run_id: str, app_id: str, runtime: str, cursor: dict[str, Any]) -> Any: ...
+
+    def analyze_message_list(self, capture: Any) -> Any: ...
+
+    def publish_message_list(self, payload: Any, *, app_id: str, runtime: str) -> MessageListSnapshot: ...
+
+    def capture_thread(self, candidate: ThreadCandidate) -> Any: ...
+
+    def analyze_thread(self, capture: Any) -> Any: ...
+
+    def publish_thread(self, candidate: ThreadCandidate, payload: Any) -> ThreadObservation: ...
 
 
 class ManagedDecisionPort(Protocol):
@@ -735,6 +773,12 @@ class _DiscoveryBatch:
     started_monotonic: float
     candidates: tuple[ThreadCandidate, ...]
     expected_state: str
+
+
+class _ObservationDiscarded(Exception):
+    def __init__(self, result: dict[str, Any]):
+        self.result = result
+        super().__init__(result.get("reason"))
 
 
 class ManagedRun:
@@ -1230,9 +1274,13 @@ class ManagedRun:
         if record.attempted_send_count >= record.config.max_sends_per_run:
             return self.stop(record.run_id, reason="send_budget_exhausted")
 
+        split_port = self._split_observation_port()
+        split_observation = split_port is not None
         try:
-            with self.store.state_lease(record.run_id):
-                latest_before_scan = self.store.load(record.run_id) or record
+            # Legacy ports can combine navigation and model work. Only ports
+            # with the explicit capture/analyze/publish seam release this lock.
+            with nullcontext() if split_observation else self.store.state_lease(record.run_id):
+                latest_before_scan = record if split_observation else (self.store.load(record.run_id) or record)
                 if latest_before_scan.status == "active" and _has_unresolved_send(latest_before_scan, self.store):
                     return self.pause(latest_before_scan.run_id, reason="unknown_after_click")
                 if latest_before_scan.status != "active":
@@ -1244,7 +1292,13 @@ class ManagedRun:
                         run_id=latest_before_scan.run_id,
                     )
                 candidates = self._discover_candidates(latest_before_scan, profile)
-                record = latest_before_scan
+                if split_observation:
+                    with self.store.state_lease(record.run_id):
+                        record = self._observation_generation(latest_before_scan)
+                else:
+                    record = latest_before_scan
+        except _ObservationDiscarded as exc:
+            return exc.result
         except Exception as exc:  # noqa: BLE001 - a port failure is a managed wait point.
             return self._finish_tick(record, "blocked", reason="message_list_observation_failed", **_action_exception_details(exc))
 
@@ -1270,18 +1324,31 @@ class ManagedRun:
             )
 
         try:
-            with self.store.state_lease(record.run_id):
-                latest_before_open = self.store.load(record.run_id) or record
-                if latest_before_open.status != "active":
-                    return _result(
-                        latest_before_open.status,
-                        reason=latest_before_open.pause_reason
-                        or latest_before_open.stop_reason
-                        or "managed_run_not_active",
-                        run_id=latest_before_open.run_id,
-                    )
+            if split_port is not None:
+                captured_candidate = candidate
                 with self._profile_stage(profile, "open_thread"):
-                    opened = self.observation.open_thread(candidate)
+                    thread = self._split_observation(
+                        record,
+                        capture=lambda: split_port.capture_thread(captured_candidate),
+                        analyze=split_port.analyze_thread,
+                        publish=lambda latest, payload: split_port.publish_thread(captured_candidate, payload),
+                    )
+                opened = OpenThreadObservation(thread.target_id, thread.target_binding, thread.captured_at)
+            else:
+                with self.store.state_lease(record.run_id):
+                    latest_before_open = self.store.load(record.run_id) or record
+                    if latest_before_open.status != "active":
+                        return _result(
+                            latest_before_open.status,
+                            reason=latest_before_open.pause_reason
+                            or latest_before_open.stop_reason
+                            or "managed_run_not_active",
+                            run_id=latest_before_open.run_id,
+                        )
+                    with self._profile_stage(profile, "open_thread"):
+                        opened = self.observation.open_thread(candidate)
+        except _ObservationDiscarded as exc:
+            return exc.result
         except Exception as exc:  # noqa: BLE001
             return self._finish_tick(record, "blocked", reason="open_thread_failed", **_action_exception_details(exc))
         target_reason = _target_evidence_block_reason(candidate, opened.target_id, opened.target_binding)
@@ -1289,8 +1356,9 @@ class ManagedRun:
             return self._finish_candidate_tick(record, candidate, reason=target_reason)
 
         try:
-            with self._profile_stage(profile, "observe_thread"):
-                thread = self.observation.observe_thread(candidate)
+            if not split_observation:
+                with self._profile_stage(profile, "observe_thread"):
+                    thread = self.observation.observe_thread(candidate)
         except Exception as exc:  # noqa: BLE001
             return self._finish_tick(record, "blocked", reason="thread_observation_failed", **_action_exception_details(exc))
         target_reason = _target_evidence_block_reason(candidate, thread.target_id, thread.target_binding)
@@ -1314,6 +1382,11 @@ class ManagedRun:
             try:
                 with self._profile_stage(profile, "decide"):
                     decision = self.decision.decide(thread, config=record.config)
+            except ManagedDecisionError as exc:
+                return self._finish_tick(
+                    record, "blocked", reason="draft_decision_failed",
+                    decision_reason=exc.reason_code, error_type=exc.error_type,
+                )
             except Exception as exc:  # noqa: BLE001
                 return self._finish_tick(record, "blocked", reason="draft_decision_failed", error_type=type(exc).__name__)
             try:
@@ -1355,6 +1428,41 @@ class ManagedRun:
         finally:
             profile["stage_ms"][stage] = round(max(0.0, self._monotonic() - started) * 1000, 3)
 
+    def _observation_generation(self, record: ManagedRunRecord) -> ManagedRunRecord:
+        """Called under state_lease before GUI capture and before publication."""
+        latest = self.store.load(record.run_id)
+        if latest is None:
+            raise _ObservationDiscarded(_result("not_found", reason="managed_run_not_started", run_id=record.run_id))
+        if latest.status != "active":
+            raise _ObservationDiscarded(_result(
+                latest.status, reason=latest.pause_reason or latest.stop_reason or "managed_run_not_active", run_id=latest.run_id,
+            ))
+        if latest.run_id != record.run_id or latest.lifecycle_revision != record.lifecycle_revision:
+            raise _ObservationDiscarded(_result("blocked", reason="managed_run_lifecycle_changed", run_id=latest.run_id))
+        return latest
+
+    def _split_observation_port(self) -> SplitManagedObservationPort | None:
+        if getattr(self.observation, "supports_split_observation", False) is True:
+            return cast(SplitManagedObservationPort, self.observation)
+        return None
+
+    def _split_observation(
+        self, record: ManagedRunRecord, *, capture: Callable[[], Any], analyze: Callable[[Any], Any],
+        publish: Callable[[ManagedRunRecord, Any], Any],
+    ) -> Any:
+        with self.store.state_lease(record.run_id):
+            self._observation_generation(record)
+            captured = capture()
+        try:
+            analyzed = analyze(captured)
+        except Exception:  # noqa: BLE001 - a late failure must not overwrite a lifecycle change.
+            with self.store.state_lease(record.run_id):
+                self._observation_generation(record)
+            raise
+        with self.store.state_lease(record.run_id):
+            latest = self._observation_generation(record)
+            return publish(latest, analyzed)
+
     def _valid_discovery_batch(self, record: ManagedRunRecord) -> _DiscoveryBatch | None:
         batch = self._discovery_batch
         if batch is None:
@@ -1386,12 +1494,28 @@ class ManagedRun:
         self._discovery_batch = None
         started = self._monotonic()
         with self._profile_stage(profile, "scan"):
-            snapshot = self.observation.scan_message_list(
-                run_id=record.run_id,
-                app_id=record.config.app_id,
-                runtime=record.config.runtime,
-                cursor=dict(record.scan_cursor),
-            )
+            arguments: dict[str, Any] = {
+                "run_id": record.run_id, "app_id": record.config.app_id,
+                "runtime": record.config.runtime, "cursor": dict(record.scan_cursor),
+            }
+            split_port = self._split_observation_port()
+            if split_port is not None:
+                def publish(latest: ManagedRunRecord, payload: Any) -> Sequence[ThreadCandidate]:
+                    snapshot = split_port.publish_message_list(
+                        payload, app_id=latest.config.app_id, runtime=latest.config.runtime,
+                    )
+                    return self._publish_discovery(latest, snapshot, started=started)
+
+                return self._split_observation(
+                    record, capture=lambda: split_port.capture_message_list(**arguments),
+                    analyze=split_port.analyze_message_list, publish=publish,
+                )
+            snapshot = self.observation.scan_message_list(**arguments)
+        return self._publish_discovery(record, snapshot, started=started)
+
+    def _publish_discovery(
+        self, record: ManagedRunRecord, snapshot: MessageListSnapshot, *, started: float,
+    ) -> Sequence[ThreadCandidate]:
         record.scan_cursor = dict(snapshot.next_cursor)
         record.cycle_count += 1
         record.updated_at = _iso(self._now())
@@ -1682,6 +1806,12 @@ class ManagedRun:
     def _finish_tick(self, record: ManagedRunRecord, status: str, *, reason: str, **extra: Any) -> dict[str, Any]:
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
+            if latest.lifecycle_revision != record.lifecycle_revision:
+                return _result(
+                    latest.status if latest.status != "active" else "blocked",
+                    reason=latest.pause_reason or latest.stop_reason or "managed_run_lifecycle_changed", run_id=latest.run_id,
+                    **extra,
+                )
             if latest.status != "active":
                 effective_status = latest.status
                 effective_reason = latest.pause_reason or latest.stop_reason or reason
@@ -2096,7 +2226,11 @@ class SendTransaction:
         if active_reason is not None:
             return self._gate_result(latest, candidate, decision, decision_key, active_reason)
         try:
-            staged = self.action.observe_composer(candidate)
+            # Stateful ports may need to rebind the durable text after a process
+            # restart. This optional seam observes only; the checks below and
+            # the click boundary still own target, text and authorization gates.
+            restore = getattr(self.action, "restore_prepared", None)
+            staged = restore(candidate, decision.text) if callable(restore) else self.action.observe_composer(candidate)
         except Exception as exc:  # noqa: BLE001
             return self._failed_before_click(
                 latest,

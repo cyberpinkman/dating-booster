@@ -2,6 +2,10 @@
 
 Use these user-facing prompts to trigger the stable Codex-host workflows.
 
+For TaShuo mac-ios-app full management, follow the flagship ManagedRun section
+in `workflows.md`: confirm the scope, call `manage start`, then hold the same
+run's `manage run --wait`. The host-loop prompts below are compatibility flows.
+
 ## Tinder Stage Loop
 
 “开始 Tinder host loop，默认 stage 模式。”
@@ -23,7 +27,7 @@ Expected host behavior:
 2. Use `dating-boost-host-loop resume` if a session is active or recoverable.
 3. Do not rely on Codex conversation memory; use local state, replay, and reports.
 
-## Live Ordinary Sends
+## Live Ordinary Sends (Compatibility)
 
 “进入 live 模式，但只发送普通聊天消息。”
 

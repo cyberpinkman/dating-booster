@@ -6,19 +6,22 @@ design provenance, not current operating instructions. Files in this directory
 are short host-agent references and must stay compatible with
 `skill-package.json`.
 
-Required startup sequence:
+Compatibility checks after installation, updates, migration, permission changes,
+or for explicit diagnostics (match the original adapter scope and target):
 
 ```bash
-dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json
+dating-boost adapter codex doctor --scope user --data-dir .local/dating-boost --json
 dating-boost release doctor --json
 dating-boost data doctor --data-dir .local/dating-boost --json
 dating-boost capabilities --json --data-dir .local/dating-boost
 ```
 
-Migrate before the support session if data doctor returns `needs_migration`.
-After the target app is known, start a support session and select its
-app/runtime. Stop before viewing dating-app content if any compatibility check
-fails.
+Migrate before a support session if data doctor returns `needs_migration`.
+Select app/runtime on first use or explicit target change. Support sessions are
+for real-GUI Canary, diagnostics, or support bundles. Stop before viewing app
+content if compatibility fails. Daily ManagedRun reuses the verified setup;
+start with `manage start`, then hold `manage run --wait` as described in
+`workflows.md`.
 
 Reference files:
 

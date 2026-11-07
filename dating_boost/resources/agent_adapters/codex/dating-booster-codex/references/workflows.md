@@ -6,8 +6,13 @@ profiles, shared contracts, core code, or tests.
 
 ## Startup
 
+Run the full checks after installation, source/adapter updates, data migration,
+permission changes, or explicit diagnostics. Daily ManagedRun reuses its verified
+setup; start with `manage start` and act on its specific blocked reason. Support
+sessions are for real-GUI Canary, explicit diagnostics, or support bundles.
+
 1. Choose a data directory, usually `.local/dating-boost`.
-2. Run `dating-boost skill doctor --package skills/dating-booster-codex/skill-package.json --data-dir .local/dating-boost --json`.
+2. Run `dating-boost adapter codex doctor --scope user --data-dir .local/dating-boost --json`; match the original install scope and custom target. The package-relative `skill doctor` remains available for bootstrap/package compatibility.
 3. If doctor returns `needs_bootstrap` and you are running from the installed skill directory, run the package-relative `python3 scripts/bootstrap_cli.py`, then run doctor again.
 4. Run `dating-boost release doctor --json`.
 5. Run `dating-boost data doctor --data-dir .local/dating-boost --json`.
@@ -18,14 +23,14 @@ profiles, shared contracts, core code, or tests.
 9. Stop before viewing dating app content if compatibility fails.
 10. Warn, but do not automatically stop, if `source_spec_commit` differs while
    version, schema, and command checks pass.
-11. After the target app id is known, run `dating-boost support session start --data-dir .local/dating-boost --host codex --app-id <app-id> --json` and keep `session_id`. If host-loop runs with a different `--data-dir`, start a separate support session for that host-loop data dir before `dating-boost-host-loop run`.
+11. When support logging is needed and the target app id is known, run `dating-boost support session start --data-dir .local/dating-boost --host codex --app-id <app-id> --json` and keep `session_id`. If host-loop runs with a different `--data-dir`, start a separate support session for that host-loop data dir before `dating-boost-host-loop run`.
 12. Select exactly one target app/runtime for the data dir, then run its harness doctor. For example, real Tinder uses `dating-boost runtime select --data-dir .local/dating-boost --app-id tinder --runtime default --json`, followed by `dating-boost harness doctor --app-id tinder --data-dir .local/dating-boost --json`.
 13. For Tinder, use `dating-boost harness tinder launch --dry-run --data-dir .local/dating-boost --json`,
     `dating-boost harness tinder open-profile --dry-run --data-dir .local/dating-boost --json`, and the
     relevant `harness tinder action/workflow --dry-run --json` before executing
     Tinder navigation.
 14. After runtime selection, every harness, host-loop, and managed-session command must use the same `--data-dir` and matching app/runtime. For real macOS WeChat work, select `--app-id wechat --runtime default`, then run the WeChat harness commands with `--data-dir .local/dating-boost` before staging any draft.
-15. Before ending, run `dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json`.
+15. If a support session was started, before ending run `dating-boost support session stop --data-dir .local/dating-boost --session-id <session_id> --json`.
 
 For manual diagnostics, write a redacted payload JSON and optional sensitive
 payload JSON, then run `dating-boost support record-event --data-dir
@@ -39,6 +44,56 @@ For bug reports, run `dating-boost support bundle --data-dir .local/dating-boost
 
 Do not run `dating-boost data migrate` or `dating-boost data delete` on the same
 data dir after support session start and before support bundle export.
+
+## ManagedRun (TaShuo mac-ios-app)
+
+For Codex, Claude Code, OpenClaw, and Hermes, the flagship fully managed route
+is `ManagedRun` for TaShuo `mac-ios-app`. Other apps/runtimes and existing
+managed-session workflows use the compatibility path below. Host-native remains
+the default; use `standalone-session` only when the user explicitly requests it.
+
+Before the first run, complete the applicable installation checks, select
+`tashuo/mac-ios-app` in the same data dir, require autonomous `user readiness`,
+and make the MiniMax model dependencies and key available. The user confirms
+duration, ordinary-chat scope, send budget, quiet hours, and nudge once.
+Translate that scope into flags; no authorization, goal, availability, or provider
+JSON is needed for this product path. Do not silently reduce full management to
+drafting or stage-only, and do not require per-message confirmation.
+
+```bash
+dating-boost manage start --data-dir .local/dating-boost --app-id tashuo --runtime mac-ios-app --duration-minutes 120 --send-budget 5 --no-nudge --quiet-hours 23:00-08:00 --json
+dating-boost manage run --data-dir .local/dating-boost --wait --poll-interval 30 --json
+```
+
+`start` creates a durable run; it does not scan, open the GUI, or spawn a worker.
+After a successful start, the host immediately holds the foreground `run --wait`
+loop. The host/task/process must remain alive; there is no background daemon.
+Do not expose the second command as another user setup step.
+
+The user-facing lifecycle is `manage start`, `manage status`, `manage pause`,
+`manage resume`, and `manage stop`. Pause/stop take effect before the next GUI
+mutation; pending model analysis cannot publish a stale result after a lifecycle
+change. Resume restores the same run; the host must restart `manage run --wait`
+with the same data dir and run id. Stop returns `relationship_progress_report`.
+`run`/`tick` remain public CLI commands; their host-only presentation is not
+an access-control boundary.
+
+Model execution errors or observation failures pause the run with a concrete reason. Correct that
+reason, then explicitly resume the same run and restart its wait loop. A saved
+`prepared_to_click` checkpoint may recover only through the existing fresh
+target/binding and exact staged-text checks; do not retype or clear the composer
+to force recovery. An `unknown_after_click` blocks start/resume and must use
+`manage reconcile` to verify existing evidence. Never resend an unknown attempt;
+reconciliation does not send, refund its budget, or restore an unsent tail.
+
+ManagedRun owns the model calls and durable decision/send-attempt checkpoints.
+Its live action has four parts: composer observation, exact staging, Return-only
+click, and fresh post-send observation. AX verifies the composer; vision verifies
+the target and exact new outbound text. It does not consume handcrafted action
+requests or call the legacy all-in-one `send_message`. Like/pass, question-gate,
+concrete invitations, contact exchange, profile edits, calls, and payments remain
+handoff actions. Direct harness send remains executor-internal only.
+
 
 ## Native GUI Harness
 
@@ -126,8 +181,8 @@ skip the gate, accept the male reply, or reject it. On a male user's account,
 drafting a question-gate reply is allowed for user review, but the current
 harness does not stage or send question-gate replies.
 TaShuo mac-ios-app supports launch/observe/prepare-message-page/stage-draft and
-ordinary-chat managed live send. Live send must run through host-loop or
-through a managed-session wait point resumed by host-loop with
+ordinary-chat managed live send. Prefer ManagedRun above for the flagship;
+the compatibility executor runs through host-loop or a managed-session wait point with
 `--managed-gui-send --harness-runtime mac-ios-app`,
 `current_thread_visual_identity` binding, exact staged-text verification, and
 post-send exact-text/input-cleared verification. Do not use message-list row
@@ -300,7 +355,7 @@ private draft text is not written into shell history or process arguments. Real
 staging must include `--data-dir` so the global safety pause can block paste.
 Use it only after the draft has passed `policy check-draft`.
 
-For explicitly authorized fully managed sends, use `managed-session` or
+For explicitly authorized compatibility managed sends, use `managed-session` or
 `dating-boost-host-loop run --app-id <app> --send-mode live
 --managed-gui-send ...`. Direct `harness <app> send-message --authorization
 --action-request` is executor-internal only: it may consume only a `send_message`
@@ -527,16 +582,17 @@ toward a goal such as meeting in person.
     `dating-boost operator report latest --data-dir .local/dating-boost --format md`.
 14. Resume later by reading `dating-boost operator report latest --data-dir .local/dating-boost` and continuing from local state.
 
-## Session-scoped Managed Runner
+## Session-scoped Managed Runner (Compatibility)
 
-Use this when the user wants a bounded managed window without keeping the host
+Use this for other apps/runtimes or existing compatibility workflows; prefer
+ManagedRun above for TaShuo mac-ios-app. Use this when the user wants a bounded managed window without keeping the host
 agent active between events. The local runner performs tokenless checks and
 returns only when host work is needed, paused, blocked, or stopped.
 Do not reinterpret this as a requirement for an always-on background agent:
 `managed_session_global_background=false` is the intended safety boundary for
 this Codex workflow. Do not add a repo-level Computer Use execution backend;
 Computer Use is a host capability when available, while Dating Booster's
-managed-send contract stays in `managed-session`/`host-loop`.
+compatibility managed-send contract stays in `managed-session`/`host-loop`.
 Multi-thread management is global: managed-session/operator serially chooses
 the next candidate by opportunity priority, and app runtimes execute only the
 current work item. High-throughput is an explicit testing mode, not the

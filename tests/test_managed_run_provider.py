@@ -14,6 +14,7 @@ from dating_boost.core.managed_run import (
     JsonManagedRunStore,
     ManagedAuthorization,
     ManagedActionError,
+    ManagedDecisionError,
     ManagedRun,
     ManagedRunConfig,
     MessageListSnapshot,
@@ -162,6 +163,129 @@ class _Planner:
         assert match_id
         assert mode == "adaptive"
         return {"status": "ok", "draft": {"best_reply": "可以，周日下午怎么样？"}}
+
+
+@pytest.mark.parametrize("reason,error_type", [
+    ("draft_generation_failed", "APITimeoutError"),
+    ("draft_review_failed", "RuntimeError"),
+])
+def test_planner_execution_failure_pauses_without_consuming_incoming_and_resumes_fresh(tmp_path, reason, error_type):
+    from tests.test_managed_run import Clock, FixtureAction, FixtureObservation, _candidate, _config
+
+    clock = Clock()
+    candidate = _candidate()
+    observation = FixtureObservation(clock, [candidate], thread_context={"match_id": candidate.target_id})
+    action = FixtureAction(clock, candidate)
+    planner = Mock()
+    planner.draft_for_match.return_value = {
+        "status": "blocked", "reason": reason, "error_type": error_type,
+        "error": "PRIVATE raw backend diagnostic",
+    }
+    store = JsonManagedRunStore(tmp_path)
+    runtime = ManagedRun(store, observation, StandalonePlannerManagedDecisionPort(planner), action, now=clock)
+    runtime.start(_config(), run_id="recoverable_decision")
+
+    result = runtime.tick()
+
+    assert result["status"] == "paused"
+    assert result["reason"] == "draft_decision_failed"
+    assert result["decision_reason"] == reason
+    assert result["error_type"] == error_type
+    saved = store.load("recoverable_decision")
+    assert saved.status == "paused"
+    assert saved.thread_states == saved.send_attempts == {}
+    assert saved.attempted_send_count == saved.confirmed_send_count == 0
+    assert saved.last_result == result
+    events = store.events("recoverable_decision")
+    assert any(event.get("decision_reason") == reason and event.get("error_type") == error_type for event in events)
+    assert "PRIVATE" not in str((result, saved.to_dict(), events))
+    assert action.calls == []
+    assert runtime.tick()["status"] == "paused"
+    assert planner.draft_for_match.call_count == 1
+    assert observation.calls == ["scan", "open", "observe"]
+
+    # Rebuild the runtime as a new CLI invocation would; resume is explicit and
+    # neither the old thread observation nor a failed draft is reused.
+    planner.draft_for_match.return_value = {"status": "ok", "draft": {"best_reply": "听起来挺有趣的"}}
+    restored = ManagedRun(JsonManagedRunStore(tmp_path), observation, StandalonePlannerManagedDecisionPort(planner), action, now=clock)
+    assert restored.resume()["status"] == "active"
+    assert restored.tick()["status"] == "confirmed"
+    assert observation.calls == ["scan", "open", "observe"] * 2
+    assert planner.draft_for_match.call_count == 2
+    assert action.click_count == 1
+    assert restored.tick()["status"] == "no_work"
+    assert action.click_count == 1
+
+
+@pytest.mark.parametrize("lifecycle", ["pause", "stop"])
+def test_planner_failure_preserves_concurrent_lifecycle_transition(lifecycle):
+    from tests.test_managed_run import Clock, FixtureObservation, _candidate, _config, _runtime
+
+    observation = FixtureObservation(Clock(), [_candidate()], thread_context={"match_id": "match_alice"})
+    planner = Mock()
+    runtime, store, _, _, action, _ = _runtime(
+        observation=observation, decision=StandalonePlannerManagedDecisionPort(planner),
+    )
+
+    def fail_after_lifecycle_change(**kwargs):
+        getattr(runtime, lifecycle)(reason="user_request")
+        return {"status": "blocked", "reason": "draft_generation_failed", "error_type": "APITimeoutError"}
+
+    planner.draft_for_match.side_effect = fail_after_lifecycle_change
+    runtime.start(_config(), run_id="lifecycle")
+    result = runtime.tick()
+
+    assert result["status"] == ("paused" if lifecycle == "pause" else "stopped")
+    assert result["reason"] == "user_request"
+    assert result["decision_reason"] == "draft_generation_failed"
+    saved = store.load("lifecycle")
+    assert saved.status == result["status"]
+    assert saved.thread_states == saved.send_attempts == {}
+    assert action.calls == []
+
+
+@pytest.mark.parametrize("reason,error_type,expected_reason,expected_type", [
+    ("draft_generation_failed", "APITimeoutError", "draft_generation_failed", "APITimeoutError"),
+    ("PRIVATE raw diagnostic", "PRIVATE raw error", "managed_draft_not_available", "ManagedDecisionError"),
+    (None, {"private": "raw diagnostic"}, "managed_draft_not_available", "ManagedDecisionError"),
+])
+def test_planner_execution_error_exposes_only_bounded_diagnostics(reason, error_type, expected_reason, expected_type):
+    planner = Mock()
+    planner.draft_for_match.return_value = {
+        "status": "blocked", "reason": reason, "error_type": error_type, "error": "PRIVATE raw backend diagnostic",
+    }
+    with pytest.raises(ManagedDecisionError) as caught:
+        StandalonePlannerManagedDecisionPort(planner).decide(ThreadObservation(
+            target_id="target", target_binding="binding", inbound_revision="inbound",
+            captured_at="2026-09-20T04:00:00Z", context={"match_id": "match"},
+        ), config=_config())
+    assert caught.value.reason_code == expected_reason
+    assert caught.value.error_type == expected_type
+    assert "PRIVATE" not in str(caught.value)
+
+
+def test_planner_business_handoff_still_consumes_the_incoming():
+    from tests.test_managed_run import Clock, FixtureObservation, _candidate, _config, _runtime
+
+    observation = FixtureObservation(Clock(), [_candidate()], thread_context={"match_id": "match_alice"})
+    planner = Mock()
+    planner.draft_for_match.return_value = {
+        "status": "blocked", "reason": "requires_user_confirmation",
+        "draft_review": {"requires_user_confirmation": True},
+    }
+    runtime, store, _, _, action, _ = _runtime(
+        observation=observation, decision=StandalonePlannerManagedDecisionPort(planner),
+    )
+    runtime.start(_config(), run_id="business_handoff")
+
+    result = runtime.tick()
+
+    assert result["status"] == "handoff"
+    assert result["reason"] == "requires_user_confirmation"
+    assert store.load("business_handoff").status == "active"
+    assert runtime.tick()["status"] == "no_work"
+    assert planner.draft_for_match.call_count == 1
+    assert action.calls == []
 
 
 @pytest.mark.parametrize("messages", [[], ["哈哈，是有点"], ["哈哈，是有点", "你后来怎么处理的？"], ["哈哈", "这个画面感", "你后来怎么处理的？"]])
