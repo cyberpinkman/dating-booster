@@ -2226,7 +2226,11 @@ class SendTransaction:
         if active_reason is not None:
             return self._gate_result(latest, candidate, decision, decision_key, active_reason)
         try:
-            staged = self.action.observe_composer(candidate)
+            # Stateful ports may need to rebind the durable text after a process
+            # restart. This optional seam observes only; the checks below and
+            # the click boundary still own target, text and authorization gates.
+            restore = getattr(self.action, "restore_prepared", None)
+            staged = restore(candidate, decision.text) if callable(restore) else self.action.observe_composer(candidate)
         except Exception as exc:  # noqa: BLE001
             return self._failed_before_click(
                 latest,

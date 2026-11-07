@@ -127,6 +127,11 @@ GUI 前暂停。不能通过 stop/start 或候选标识变化绕过核对，也�
 
 ## 未知结果的证据恢复
 
+单条消息若停在已经持久化的 `prepared_to_click`，重启后会重新观察目标、来信版本
+和输入框。原草稿逐字匹配时，视觉适配器恢复该草稿的运行内状态，再经过授权与
+Return 前检查。输入被清空或修改时停止该次尝试。回归覆盖了全新进程对象、加密
+检查点和输入变化，实机恢复须在授权窗口内验证。
+
 ```bash
 dating-boost manage reconcile --data-dir .local/dating-boost --run-id <run_id> --json
 ```
