@@ -236,8 +236,10 @@ class AgentNativeLaunchDocsTests(unittest.TestCase):
         self.assertIn("skills/dating-booster-codex", codex_text)
         self.assertIn("dating-boost adapter claude-code install", claude_text)
         self.assertIn(".claude/skills/dating-booster", claude_text)
-        self.assertIn("agent_adapters/shared/references/contracts.md", claude_text)
-        self.assertIn("agent_adapters/shared/references/workflows.md", claude_text)
+        self.assertIn("`references/contracts.md`", claude_text)
+        self.assertIn("`references/workflows.md`", claude_text)
+        self.assertIn("installed skill", claude_text)
+        self.assertNotIn("agent_adapters/shared/references/", claude_text)
         self.assertIn("reuse", claude_text)
 
     def test_observation_authoring_guide_covers_screen_to_json_rules(self):

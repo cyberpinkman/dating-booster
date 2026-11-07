@@ -51,7 +51,9 @@ dating-boost-host-loop doctor --adapter-package agent_adapters/openclaw/adapter-
 ```
 
 If data doctor returns `needs_migration`, migrate before any support session,
-then rerun data doctor and capabilities. Once the target app is known, start a
-support session with `--host openclaw` or `--host hermes`, select the matching
-app/runtime in the same data dir, and stop the support session when the task
-ends.
+then rerun data doctor and capabilities. Select the matching app/runtime on first
+use or an explicit target change. Use a `--host openclaw` or `--host hermes`
+support session for real-GUI Canary, diagnostics, or support bundles, and stop
+it afterward. Daily ManagedRun reuses the verified setup: follow the installed
+`references/workflows.md` flagship route, starting with `manage start` and then
+holding `manage run --wait` for that same run.

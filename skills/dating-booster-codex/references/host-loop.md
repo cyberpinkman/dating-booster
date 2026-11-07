@@ -1,4 +1,9 @@
-# App Host Loop
+# App Host Loop (Compatibility)
+
+Use this for existing host-loop workflows and apps/runtimes outside the flagship.
+For TaShuo mac-ios-app full management, prefer the ManagedRun section in
+`workflows.md`; the authorization/action-request rules below are specific to
+this compatibility executor.
 
 Use this workflow when the user wants Codex to run a real Tinder, Bumble, or
 TaShuo host loop with iPhone Mirroring, or the TaShuo mac-ios-app runtime.

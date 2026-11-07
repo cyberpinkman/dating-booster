@@ -14,7 +14,13 @@ Hermes is supported through this OpenClaw-compatible skill contract. Use
 `dating-boost adapter hermes doctor` when the running host is Hermes. Do not
 claim a separate Hermes-native adapter unless a Hermes-specific package exists.
 
-## Mandatory Startup
+## Installation Checks And Daily Startup
+
+Run the full checks below after first installation, source/adapter updates,
+data migration, permission changes, or for explicit diagnostics. Daily
+ManagedRun reuses the verified environment: begin with `manage start` and follow
+its specific recovery reason. Support sessions are only for real-GUI Canary,
+explicit diagnostics, or support-bundle collection.
 
 Before observing any visible dating app content, screenshots, profile text,
 conversation text, or generated drafts, choose a local data directory. Prefer
@@ -51,8 +57,8 @@ migration, or capabilities fails; if required schemas or commands are missing;
 or if `agent_native_capabilities.openclaw_adapter` is not true. In Hermes mode,
 also require `agent_native_capabilities.hermes_openclaw_compatible_adapter`.
 
-After startup checks pass and the target app id is known, start a local support
-session before observing dating-app content:
+When support logging is needed and the target app is known, start a local support
+session:
 
 ```bash
 dating-boost support session start --data-dir .local/dating-boost --host openclaw --app-id tinder --json
@@ -85,8 +91,8 @@ Normal diagnostics should use redacted counts, hashes, layout hints, schema
 versions, and machine reports rather than private message text.
 
 Dating Booster stores local memory, context, policy decisions, feedback, and
-host-executed action audit records. It does not own the LLM call in this
-workflow.
+host-executed action audit records. The host owns ordinary draft-assistance model calls; ManagedRun calls its
+configured model inside the local execution loop.
 
 For user bug reports, export a strict support bundle by default:
 
@@ -101,7 +107,23 @@ action outcomes. Use `--redaction full-with-consent --include-sensitive ...
 --confirm export-sensitive:<session_id>` only when the user explicitly asks to
 export sensitive evidence; never use it as the default.
 
-## Core Workflow
+## ManagedRun (TaShuo mac-ios-app)
+
+For fully managed ordinary TaShuo chat, use the flagship `ManagedRun` route on
+`mac-ios-app`. Follow [ManagedRun in the shared workflows](references/workflows.md#managedrun-tashuo-mac-ios-app)
+for readiness, confirmed scope, startup, and recovery. After `manage start`,
+immediately hold the foreground `manage run --wait` loop for the same data dir;
+start alone does not launch a worker. Use `manage status`, `manage pause`,
+`manage resume`, and `manage stop`. Resume only restores durable state; the
+host restarts that same run's `manage run --wait` loop. Stop returns `relationship_progress_report`.
+
+ManagedRun owns the model calls and the four-part composer/stage/Return/post-send
+boundary. Do not ask for authorization/goal/availability JSON or handcraft an
+action request for this route. Other apps/runtimes and existing workflows retain
+`managed-session` / `dating-boost-host-loop` as compatibility paths below.
+`standalone-session` remains explicit opt-in and its GUI executor is stage-only.
+
+## Core Workflow (Draft Assistance And Compatibility)
 
 1. Run `dating-boost capabilities --json --data-dir .local/dating-boost`.
 2. Confirm the app id is listed in `supported_app_profiles`.
@@ -245,7 +267,7 @@ Bumble live send is limited to ordinary chat messages. Opening Move is role-sens
 If `current_thread_visual_identity` mismatches before stage/send and the same target binding includes `message_list_evidence` with a row visual anchor, the harness can return to chats, relocate that row by visual anchor, reopen it, and retry target verification before staging.
 Use `harness bumble stage-draft` for stage-only review: it verifies staged input text and must not click Send.
 
-## Managed Live-Send
+## Managed Live-Send (Compatibility)
 
 Managed live-send is allowed only for ordinary chat messages and only after
 explicit authorization. It is never a bypass for app rules, rate limits,
@@ -261,7 +283,7 @@ Before any live send, require all of these:
 - exact staged text verification
 - post-action verification
 
-For Tinder, Bumble, TaShuo, and WeChat, the agent-facing managed live-send path is
+For compatibility workflows on Tinder, Bumble, TaShuo, and WeChat, use
 `managed-session` or `dating-boost-host-loop`; do not handcraft
 `action_request.json`.
 
@@ -284,8 +306,8 @@ The host-loop route is an alternative managed executor:
 dating-boost-host-loop run --adapter-package agent_adapters/openclaw/adapter-package.json --data-dir .local/dating-boost --authorization auth.json --goal goal.json --availability availability.json --app-id <app_id> --send-mode live --managed-gui-send --work-dir .local/dating-boost-host-loop --json
 ```
 
-TaShuo mac-ios-app is a managed live-send runtime for ordinary chat messages
-only. Use `--harness-runtime mac-ios-app` with host-loop/managed-session, and
+For the TaShuo mac-ios-app compatibility executor, ordinary chat messages
+require `--harness-runtime mac-ios-app` with host-loop/managed-session, and
 require `current_thread_visual_identity` structural target binding plus exact
 staged and post-send verification before recording a successful action result.
 Do not use message-list row position or header OCR as mac-ios-app binding
@@ -300,9 +322,10 @@ step`, or a confirmed confirmation flow with hashes. Do not handcraft
 post-send evidence is missing, block or return `needs_verification`. Do not
 manually click Send around the gate.
 
-## Session-scoped Managed Runner
+## Session-scoped Managed Runner (Compatibility)
 
-Use this when the user explicitly starts a bounded managed window. It is not a
+Use this for other apps/runtimes or existing compatibility workflows; prefer
+ManagedRun above for TaShuo mac-ios-app. Use this when the user explicitly starts a bounded managed window. It is not a
 global background agent. Tinder stops when iPhone Mirroring is unavailable;
 WeChat runs until user stop and pauses while unreadable. `run --wait` is local
 and tokenless while idle; when it returns `host_work_required`, process the
@@ -358,7 +381,7 @@ Only add `--send-mode live --managed-gui-send` when authorization permits live
 ordinary message sends; all target binding, staged text, and post-send gates
 still apply.
 
-## Host Loop
+## Host Loop (Compatibility)
 
 Use the host loop when the host agent should act as the executor for queued
 work items:
@@ -372,5 +395,5 @@ dating-boost support session stop --data-dir .local/dating-boost --session-id <s
 dating-boost support bundle --data-dir .local/dating-boost --session-id <session_id> --output dating-boost-support.zip --redaction strict --json
 ```
 
-For fully managed sends, add `--send-mode live --managed-gui-send` only when
+For compatibility managed sends, add `--send-mode live --managed-gui-send` only when
 the authorization and action request are valid.

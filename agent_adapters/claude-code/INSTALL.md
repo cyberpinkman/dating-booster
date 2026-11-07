@@ -63,7 +63,9 @@ If data doctor reports `needs_migration`, run:
 dating-boost data migrate --data-dir .local/dating-boost --json
 ```
 
-Rerun data doctor and capabilities after migration. Once the target app is
-known, start a `--host claude-code` support session and select the matching
-app/runtime before observing visible content. Stop the support session when the
-task ends.
+Rerun data doctor and capabilities after migration. Select the matching
+app/runtime on first use or an explicit target change. Use a `--host claude-code`
+support session for real-GUI Canary, diagnostics, or support bundles, and stop
+it afterward. Daily ManagedRun reuses the verified setup: follow the installed
+`references/workflows.md` flagship route, starting with `manage start` and then
+holding `manage run --wait` for that same run.

@@ -2,7 +2,8 @@
 
 This package is the Codex-first Dating Booster workflow. It lets Codex use the
 local `dating-boost` CLI for memory, context, policy, feedback, and action audit
-while the host agent owns the LLM and any computer-use interaction.
+while the host agent owns ordinary draft assistance. TaShuo mac-ios-app
+ManagedRun uses the configured model and four-part action executor under host supervision.
 
 ## Install
 
@@ -29,7 +30,11 @@ directly from `skills/dating-booster-codex` without copying it.
 
 ## Startup Check
 
-Before observing visible dating app content, verify the installed copy. A user installation uses the skills directory under `CODEX_HOME` (default `~/.codex`).
+Run the full checks after installation, updates, migration, permission changes,
+or for explicit diagnostics. Daily ManagedRun reuses the verified setup and
+starts with `manage start`; follow the flagship section in `references/workflows.md`.
+
+When these checks are due, verify the installed copy before observing visible dating app content. A user installation uses the skills directory under `CODEX_HOME` (default `~/.codex`).
 
 ```bash
 dating-boost adapter codex doctor --scope user --data-dir .local/dating-boost --json
@@ -67,7 +72,7 @@ Then compare the output with `skills/dating-booster-codex/skill-package.json`:
 - Public production requires encrypted storage. Data doctor should report
   `encryption.status: encrypted`; on macOS the production key provider is
   Keychain.
-- For managed sessions, check `dating-boost daemon status --data-dir .local/dating-boost --json`
+- For compatibility managed sessions, check `dating-boost daemon status --data-dir .local/dating-boost --json`
   and use `dating-boost safety status --data-dir .local/dating-boost --json`.
 - A different `source_spec_commit` is a warning if version, schema, and command
   checks pass.
@@ -109,10 +114,12 @@ verification artifacts.
 - The local daemon supervises locks, heartbeat, recovery, and safety state; it
   does not observe or click apps.
 - Diagnostics are local redacted bundles only; there is no network telemetry.
-- Live send is not the default. It requires `--send-mode live`, `live_send: true`
-  in authorization, an unpaused safety switch, staged-text verification, and
-  post-action verification. Agent-facing live sends must use `managed-session`
-  or `dating-boost-host-loop` with `--managed-gui-send`. The direct
+- Live send requires explicit bounded authorization, an unpaused safety switch,
+  exact staged-text verification, and post-action verification. TaShuo mac-ios-app
+  full management uses flagship ManagedRun; the host immediately follows
+  `manage start` with `manage run --wait` for the same run.
+  Compatibility sends use `managed-session` or `dating-boost-host-loop` with
+  `--send-mode live --managed-gui-send` and `live_send: true` in authorization. The direct
   `harness <app> send-message --authorization --action-request` command is
   executor-internal only; do not handcraft action requests.
 
@@ -121,19 +128,20 @@ verification artifacts.
 1. Run the startup check.
 2. Ask the user to confirm the target app and that Codex may process its visible
    content.
-3. Start a support session for Codex and that app, then select the app/runtime
-   in the same data dir.
+3. Select the app/runtime in the same data dir. Start a support session only for
+   a real-GUI Canary, explicit diagnostics, or support-bundle collection.
 4. Convert visible profile/chat content into the observation contract in
    `references/observation-authoring.md`.
 5. Run `dating-boost memory ingest-observation --data-dir .local/dating-boost --input observation.json`.
 6. Run `dating-boost context build --data-dir .local/dating-boost --match-id MATCH_ID --mode adaptive` and save the context JSON.
 7. Draft in the host agent and save the draft JSON.
 8. Run `dating-boost policy check-draft --input draft.json --context context.json`.
-9. Default to stage-only. Agent-facing live send must use managed-session or
-   host-loop; direct harness send is executor-internal and action requests must
-   not be handcrafted.
+9. This manual draft-assistance flow defaults to stage-only. For explicit full
+   management use ManagedRun on TaShuo mac-ios-app, or managed-session/host-loop
+   for compatibility workflows; direct harness send is executor-internal and
+   action requests must not be handcrafted.
 10. Record stage-only evidence with `dating-boost operator record-stage-result`,
     or record a verified managed live-send result with
     `dating-boost action record-result`.
-11. Stop the support session and export a strict support bundle only when
-    diagnostics are needed.
+11. If a support session was started, stop it; export a strict support bundle
+    only when diagnostics are needed.

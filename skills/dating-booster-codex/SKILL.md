@@ -154,6 +154,8 @@ explicitly changes the target.
 
 ## Experimental Full-Managed TaShuo Path
 
+Follow [ManagedRun in the shared workflow contract](references/workflows.md#managedrun-tashuo-mac-ios-app) for the host-neutral lifecycle and recovery rules.
+
 When the user explicitly asks for full management, prefer the single flagship
 path: TaShuo `mac-ios-app` through `ManagedRun`. Do not silently reduce the
 request to drafting or stage-only. The user confirms the bounded product scope
@@ -791,7 +793,7 @@ If capabilities report `managed_session_global_background=false`, treat that as
 the intended safety boundary for this workflow, not as a request to implement a
 persistent daemon. Dating Booster also must not add a repo-level Computer Use
 execution backend: Computer Use is a host-agent capability when a host exposes
-it, while managed live send remains the `managed-session`/`host-loop`
+it, while compatibility live send remains the `managed-session`/`host-loop`
 contract with target binding, staged-text verification, and post-action
 verification.
 Compatibility-path full-object management lives in the global

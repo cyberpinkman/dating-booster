@@ -34,14 +34,19 @@ consuming the OpenClaw-compatible skill package.
 ## Boundaries
 
 - Do not fork memory, policy, planner, app-profile, harness, or audit logic.
-- Run adapter doctor, release doctor, data doctor, and capabilities before
-  observing dating app content.
-- After the target app is known, start a `--host openclaw` or `--host hermes`
-  support session and select the matching app/runtime in the same data dir.
-  Stop the support session when the task ends.
-- Use managed live-send only through `managed-session` or
-  `dating-boost-host-loop` with explicit authorization, target binding, staged
-  text verification, and post-action verification. Direct harness send is
-  executor-internal; do not handcraft action requests.
+- Run adapter doctor, release doctor, data doctor, and capabilities after
+  installation, updates, migration, permission changes, or for diagnostics;
+  match the original adapter scope and target. Daily ManagedRun reuses the
+  verified setup and begins with `manage start`.
+- Select the matching app/runtime in the same data dir on first use or an
+  explicit target change. Use a `--host openclaw` or `--host hermes` support
+  session for real-GUI Canary, diagnostics, or a support bundle; stop it afterward.
+- TaShuo mac-ios-app full management uses flagship ManagedRun for both hosts:
+  start, then immediately hold `manage run --wait`; status/pause/resume/stop
+  operate on that same run. Read the installed `references/workflows.md`.
+- Other apps/runtimes and existing workflows use the `managed-session` /
+  `dating-boost-host-loop` compatibility path with explicit authorization,
+  target binding, staged-text verification, and post-action verification.
+  Direct harness send is executor-internal; do not handcraft action requests.
 - Keep private screenshots, OCR text, drafts, and app content local to the
   active task.
