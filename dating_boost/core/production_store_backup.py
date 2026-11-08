@@ -10,6 +10,7 @@ from typing import Any
 
 from dating_boost.core.encryption import EncryptionError
 from dating_boost.core.storage import storage_write_lock
+from dating_boost.core.storage_lifecycle import storage_lifecycle_lease
 from dating_boost.core.production_store_common import (
     AUTOMATION_LOCK_SCHEMA_VERSION, BACKUP_RECOVERY_KEY_SCHEMA_VERSION, BLOCKED_DRAFT_TEXT_KEYS, CONFIRMATION_SCHEMA_VERSION,
     DATA_STORE_SCHEMA_VERSION, DIAGNOSTIC_BUNDLE_SCHEMA_VERSION, ENCRYPTED_PAYLOAD_SCHEMA_VERSION, KEYCHAIN_BINDING_SCHEMA_VERSION,
@@ -132,6 +133,12 @@ class ProductionStoreBackupMixin:
                 "reason": "confirm_token_mismatch",
                 "required_confirm_token": "restore",
             }
+        with storage_lifecycle_lease(self.root, exclusive=True, blocking=False) as acquired:
+            if not acquired:
+                return {"schema_version": DATA_STORE_SCHEMA_VERSION, "status": "blocked", "reason": "data_store_busy"}
+            return self._restore_locked(input_path, recovery_passphrase=recovery_passphrase)
+
+    def _restore_locked(self, input_path: Path, *, recovery_passphrase: str | None) -> dict[str, Any]:
         input_path = input_path.resolve()
         with zipfile.ZipFile(input_path) as archive:
             manifest = json.loads(archive.read("manifest.json").decode("utf-8"))

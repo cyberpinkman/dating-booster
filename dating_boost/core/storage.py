@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from dating_boost.core.production_store_common import PRODUCTION_DB_NAME, _is_managed_state_path
+from dating_boost.core.storage_lifecycle import storage_lifecycle_lease
 
 if sys.platform == "win32":  # pragma: no cover - native GUI and CI use POSIX.
     import msvcrt
@@ -56,6 +57,14 @@ def storage_operation() -> Iterator[None]:
 
 @contextmanager
 def storage_write_lock(root: Path) -> Iterator[None]:
+    # Root replacement must be excluded before acquiring any lock inside root.
+    with storage_lifecycle_lease(root):
+        with _storage_write_lock(root):
+            yield
+
+
+@contextmanager
+def _storage_write_lock(root: Path) -> Iterator[None]:
     """Serialize a repository mutation, including any reads used to decide the write.
 
     Locks are acquired before SQLite connections. Nested operations in the same
@@ -100,7 +109,8 @@ class JsonStorage:
 
     def __init__(self, root: Path):
         self.root = root.resolve()
-        self.root.mkdir(parents=True, exist_ok=True)
+        with storage_lifecycle_lease(self.root):
+            self.root.mkdir(parents=True, exist_ok=True)
 
     def _resolve_path(self, relative_path: Path) -> Path:
         path = (self.root / relative_path).resolve()
@@ -116,6 +126,10 @@ class JsonStorage:
             os.close(directory_fd)
 
     def read_json(self, relative_path: Path, *, expected_schema_version: int) -> dict[str, Any]:
+        with storage_lifecycle_lease(self.root):
+            return self._read_json(relative_path, expected_schema_version=expected_schema_version)
+
+    def _read_json(self, relative_path: Path, *, expected_schema_version: int) -> dict[str, Any]:
         path = self._resolve_path(relative_path)
         store = self._sqlite_store()
         if store is not None:
@@ -193,6 +207,10 @@ class JsonStorage:
             self._write_text_atomically(path, content)
 
     def read_jsonl(self, relative_path: Path) -> list[dict[str, Any]]:
+        with storage_lifecycle_lease(self.root):
+            return self._read_jsonl(relative_path)
+
+    def _read_jsonl(self, relative_path: Path) -> list[dict[str, Any]]:
         path = self._resolve_path(relative_path)
         store = self._sqlite_store()
         if store is not None:
@@ -214,6 +232,10 @@ class JsonStorage:
         return items
 
     def exists(self, relative_path: Path) -> bool:
+        with storage_lifecycle_lease(self.root):
+            return self._exists(relative_path)
+
+    def _exists(self, relative_path: Path) -> bool:
         path = self._resolve_path(relative_path)
         store = self._sqlite_store()
         if store is not None:

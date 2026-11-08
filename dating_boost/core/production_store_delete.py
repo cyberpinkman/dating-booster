@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from dating_boost.core.storage import STORAGE_LOCK_FILE, storage_write_lock
+from dating_boost.core.storage_lifecycle import storage_lifecycle_lease
 from dating_boost.core.production_store_common import (
     AUTOMATION_LOCK_SCHEMA_VERSION, BACKUP_RECOVERY_KEY_SCHEMA_VERSION, BLOCKED_DRAFT_TEXT_KEYS, CONFIRMATION_SCHEMA_VERSION,
     DATA_STORE_SCHEMA_VERSION, DIAGNOSTIC_BUNDLE_SCHEMA_VERSION, ENCRYPTED_PAYLOAD_SCHEMA_VERSION, KEYCHAIN_BINDING_SCHEMA_VERSION,
@@ -29,6 +30,13 @@ class ProductionStoreDeleteMixin:
                 "reason": "confirm_token_mismatch",
                 "required_confirm_token": required,
             }
+        if scope == "all":
+            # Acquire before storage_write_lock: upgrading a held shared lease is forbidden.
+            with storage_lifecycle_lease(self.root, exclusive=True, blocking=False) as acquired:
+                if not acquired:
+                    return {"schema_version": DATA_STORE_SCHEMA_VERSION, "status": "blocked", "reason": "data_store_busy"}
+                with storage_write_lock(self.root):
+                    return self._delete_locked(scope, match_id)
         with storage_write_lock(self.root):
             return self._delete_locked(scope, match_id)
 

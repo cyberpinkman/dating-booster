@@ -19,6 +19,7 @@ from typing import Any, Callable, ContextManager, Iterator, Mapping, Protocol, S
 
 from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason, send_time_scope
 from dating_boost.core.storage import JsonStorage
+from dating_boost.core.storage_lifecycle import storage_lifecycle_lease
 
 try:
     import fcntl
@@ -688,6 +689,15 @@ class JsonManagedRunStore:
 
     @contextmanager
     def execution_lease(self, run_id: str) -> Iterator[bool]:
+        with storage_lifecycle_lease(self._storage.root, blocking=False) as available:
+            if not available:
+                yield False
+                return
+            with self._execution_lease_under_lifecycle(run_id) as acquired:
+                yield acquired
+
+    @contextmanager
+    def _execution_lease_under_lifecycle(self, run_id: str) -> Iterator[bool]:
         lock_path = self._lease_path(run_id)
         with _LEASE_REGISTRY_GUARD:
             process_lease = _LEASE_LOCKS.setdefault(lock_path, threading.Lock())
@@ -721,6 +731,12 @@ class JsonManagedRunStore:
 
     @contextmanager
     def state_lease(self, run_id: str) -> Iterator[bool]:
+        with storage_lifecycle_lease(self._storage.root):
+            with self._state_lease_under_lifecycle(run_id) as acquired:
+                yield acquired
+
+    @contextmanager
+    def _state_lease_under_lifecycle(self, run_id: str) -> Iterator[bool]:
         lock_path = self._state_lease_path(run_id)
         held_paths: set[Path] = getattr(_STATE_LEASE_LOCAL, "held_paths", set())
         if lock_path in held_paths:

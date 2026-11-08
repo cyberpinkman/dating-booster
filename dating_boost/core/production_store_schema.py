@@ -9,6 +9,7 @@ from typing import Any
 
 from dating_boost.core.encryption import EncryptionError, LOCAL_KEY_NAME, payload_is_encrypted
 from dating_boost.core.storage import storage_write_lock
+from dating_boost.core.storage_lifecycle import storage_lifecycle_lease
 from dating_boost.core.production_store_common import (
     AUTOMATION_LOCK_SCHEMA_VERSION, BACKUP_RECOVERY_KEY_SCHEMA_VERSION, BLOCKED_DRAFT_TEXT_KEYS, CONFIRMATION_SCHEMA_VERSION,
     DATA_STORE_SCHEMA_VERSION, DIAGNOSTIC_BUNDLE_SCHEMA_VERSION, ENCRYPTED_PAYLOAD_SCHEMA_VERSION, KEYCHAIN_BINDING_SCHEMA_VERSION,
@@ -330,6 +331,12 @@ class ProductionStoreSchemaMixin:
 
     @contextmanager
     def _connect(self):
+        with storage_lifecycle_lease(self.root):
+            with self._connect_under_lifecycle_lease() as conn:
+                yield conn
+
+    @contextmanager
+    def _connect_under_lifecycle_lease(self):
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
