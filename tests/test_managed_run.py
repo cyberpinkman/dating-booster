@@ -2100,8 +2100,11 @@ def test_discovery_batch_is_invalidated_by_a_lifecycle_change_during_decision() 
     holder: dict[str, ManagedRun] = {}
 
     class InterleavedLifecycle(FixtureDecision):
+        changed = False
+
         def decide(self, observation, *, config):
-            if observation.target_id == "match_0":
+            if observation.target_id == "match_0" and not self.changed:
+                self.changed = True
                 holder["controller"].pause()
                 holder["controller"].resume()
             return super().decide(observation, config=config)
@@ -2109,7 +2112,8 @@ def test_discovery_batch_is_invalidated_by_a_lifecycle_change_during_decision() 
     runtime, store, observation, action, clock = _batch_fixture(decision=InterleavedLifecycle())
     holder["controller"] = ManagedRun(store, observation, FixtureDecision(), action, now=clock)
 
-    assert runtime.tick()["status"] == "confirmed"
+    assert runtime.tick()["reason"] == "managed_run_lifecycle_changed"
+    assert action.click_count == 0
     assert runtime.tick()["status"] == "confirmed"
     assert observation.calls.count("scan") == 2
 
@@ -2354,7 +2358,7 @@ def test_burst_obeys_each_message_budget_lifecycle_and_unknown_gates(interruptio
     action.after_post = interrupt_after_first
     result = runtime.tick()
 
-    expected = {"budget": "stopped", "pause": "paused", "lifecycle": "failed_before_click", "unknown": "unknown_after_click"}
+    expected = {"budget": "stopped", "pause": "paused", "lifecycle": "blocked", "unknown": "unknown_after_click"}
     assert result["status"] == expected[interruption]
     assert result["completed_message_count"] == 1
     assert result["unknown_message_count"] == (1 if interruption == "unknown" else 0)

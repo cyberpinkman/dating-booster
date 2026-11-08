@@ -1570,6 +1570,9 @@ class ManagedRun:
         })
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
+            changed = _lifecycle_change_result(latest, record.lifecycle_revision)
+            if changed is not None:
+                return changed
             if burst_id in latest.send_bursts:
                 previous = latest.send_bursts[burst_id]
                 return _result(
@@ -1771,6 +1774,9 @@ class ManagedRun:
     ) -> dict[str, Any]:
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
+            changed = _lifecycle_change_result(latest, record.lifecycle_revision)
+            if changed is not None:
+                return changed
             if latest.status != "active":
                 return _result(
                     latest.status,
@@ -1843,6 +1849,9 @@ class ManagedRun:
     ) -> dict[str, Any]:
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
+            changed = _lifecycle_change_result(latest, record.lifecycle_revision)
+            if changed is not None:
+                return changed
             if latest.status != "active":
                 return _result(
                     latest.status,
@@ -1896,6 +1905,9 @@ class ManagedRun:
 
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
+            changed = _lifecycle_change_result(latest, record.lifecycle_revision)
+            if changed is not None:
+                return changed
             if latest.status != "active":
                 return _result(
                     latest.status,
@@ -2065,6 +2077,17 @@ class ManagedRun:
         return None
 
 
+def _lifecycle_change_result(record: ManagedRunRecord, expected_revision: int | None) -> dict[str, Any] | None:
+    """Discard work from before a lifecycle change without consuming its inbound."""
+    if expected_revision is None or record.lifecycle_revision == expected_revision:
+        return None
+    return _result(
+        record.status if record.status != "active" else "blocked",
+        reason=record.pause_reason or record.stop_reason or "managed_run_lifecycle_changed",
+        run_id=record.run_id,
+    )
+
+
 class SendTransaction:
     """Atomic managed send protocol around the irreversible click boundary."""
 
@@ -2080,6 +2103,7 @@ class SendTransaction:
         self.action = action
         self._now = now
         self._before_click = before_click
+        self._expected_lifecycle_revision: int | None = None
 
     def prepared_decision(
         self,
@@ -2122,6 +2146,10 @@ class SendTransaction:
         thread: ThreadObservation,
         decision: DraftDecision,
     ) -> dict[str, Any]:
+        # Reloading durable state must not rebase an older decision onto a
+        # resumed run. A fresh tick may recover a known-unsent checkpoint only
+        # after its own new thread observation.
+        self._expected_lifecycle_revision = record.lifecycle_revision
         decision_key = _decision_key(record.run_id, decision)
         latest = self.store.load(record.run_id) or record
         existing = latest.send_attempts.get(decision_key)
@@ -2385,6 +2413,8 @@ class SendTransaction:
         candidate: ThreadCandidate,
         decision: DraftDecision,
     ) -> str | None:
+        if _lifecycle_change_result(record, self._expected_lifecycle_revision) is not None:
+            return "managed_run_lifecycle_changed"
         if record.status == "paused":
             return "managed_run_paused"
         if record.status == "stopped":
@@ -2413,6 +2443,9 @@ class SendTransaction:
     ) -> dict[str, Any]:
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
+            changed = _lifecycle_change_result(latest, self._expected_lifecycle_revision)
+            if changed is not None:
+                return changed
             if reason == "managed_run_paused":
                 result = _result(
                     "paused",
@@ -2532,6 +2565,10 @@ class SendTransaction:
             latest = self.store.load(record.run_id) or record
             previous = latest.send_attempts.get(decision_key, {})
             previous_status = str(previous.get("status") or "")
+            if status == "failed_before_click" and previous_status not in {"click_started", "click_committed"}:
+                changed = _lifecycle_change_result(latest, self._expected_lifecycle_revision)
+                if changed is not None:
+                    return changed
             latest.send_attempts[decision_key] = {
                 **previous,
                 "decision_key": decision_key,
