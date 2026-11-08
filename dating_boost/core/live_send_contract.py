@@ -216,7 +216,14 @@ _SEND_TIME_CHECK = ContextVar[Callable[[], str | None] | None]("send_time_check"
 @contextmanager
 def send_quiet_hours_scope(windows: Any, clock: Callable[[], datetime | str]) -> Iterator[None]:
     """Bind the checked authorization and its clock to this synchronous GUI dispatch."""
-    token = _SEND_TIME_CHECK.set(lambda: live_send_authorization_quiet_hours_block_reason(windows, now=clock()))
+    with send_time_scope(lambda: live_send_authorization_quiet_hours_block_reason(windows, now=clock())):
+        yield
+
+
+@contextmanager
+def send_time_scope(check: Callable[[], str | None]) -> Iterator[None]:
+    """Recheck the owning workflow's current time limits at the physical submit."""
+    token = _SEND_TIME_CHECK.set(check)
     try:
         yield
     finally:

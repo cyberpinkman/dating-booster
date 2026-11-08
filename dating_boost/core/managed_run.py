@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterator, Mapping, Protocol, Sequence, cast
 
-from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason, send_quiet_hours_scope
+from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason, send_time_scope
 from dating_boost.core.storage import JsonStorage
 
 try:
@@ -2183,6 +2183,15 @@ class SendTransaction:
         block_reason = self._pre_stage_block_reason(latest, candidate, thread, decision)
         if block_reason is not None:
             return self._gate_result(latest, candidate, decision, decision_key, block_reason)
+        preparation = None
+        split = getattr(self.action, "supports_split_preparation", False) is True
+        if split:
+            try:
+                preparation, interrupted = self._prepare_action(latest, candidate, decision, decision_key, phase="stage")
+            except Exception as exc:  # noqa: BLE001 - no stage write has occurred.
+                return self._failed_before_click(latest, candidate, decision, decision_key, "staging_failed", **_action_exception_details(exc))
+            if interrupted is not None:
+                return interrupted
         # Lifecycle changes and real GUI mutations share this lease. A pause or
         # stop either wins before staging, or returns only after staging has
         # completed and the prepared checkpoint is durable.
@@ -2192,7 +2201,10 @@ class SendTransaction:
             if active_reason is not None:
                 return self._gate_result(latest, candidate, decision, decision_key, active_reason)
             try:
-                staged = self.action.stage_text(candidate, decision.text)
+                staged = (
+                    getattr(self.action, "stage_prepared")(candidate, decision.text, preparation)
+                    if split else self.action.stage_text(candidate, decision.text)
+                )
             except Exception as exc:  # noqa: BLE001
                 return self._failed_before_click(
                     latest,
@@ -2239,6 +2251,32 @@ class SendTransaction:
             if active_reason is not None:
                 return self._gate_result(latest, candidate, decision, decision_key, active_reason)
         return self._click_and_verify(latest, candidate, decision, decision_key, attempt)
+
+    def _prepare_action(
+        self, record: ManagedRunRecord, candidate: ThreadCandidate, decision: DraftDecision,
+        decision_key: str, *, phase: str,
+    ) -> tuple[Any, dict[str, Any] | None]:
+        # Only an explicit split port promises that analyze_preparation contains
+        # no GUI mutations. Legacy ports keep their original guarded call.
+        with self.store.state_lease(record.run_id):
+            latest = self.store.load(record.run_id) or record
+            reason = self._active_block_reason(latest, candidate, decision)
+            if reason is not None:
+                return None, self._gate_result(latest, candidate, decision, decision_key, reason)
+            captured = (
+                getattr(self.action, "capture_stage")(candidate, decision.text) if phase == "stage"
+                else getattr(self.action, "capture_click")(candidate)
+            )
+        try:
+            return getattr(self.action, "analyze_preparation")(captured), None
+        except Exception:
+            with self.store.state_lease(record.run_id):
+                latest = self.store.load(record.run_id) or record
+                reason = self._active_block_reason(latest, candidate, decision)
+                if reason is not None:
+                    return None, self._gate_result(latest, candidate, decision, decision_key, reason)
+                getattr(self.action, "reject_preparation")(captured)
+            raise
 
     def _resume_prepared(
         self,
@@ -2310,6 +2348,15 @@ class SendTransaction:
         decision_key: str,
         attempt: dict[str, Any],
     ) -> dict[str, Any]:
+        preparation = None
+        split = getattr(self.action, "supports_split_preparation", False) is True
+        if split:
+            try:
+                preparation, interrupted = self._prepare_action(record, candidate, decision, decision_key, phase="click")
+            except Exception as exc:  # noqa: BLE001 - interpretation precedes the click checkpoint.
+                return self._failed_before_click(record, candidate, decision, decision_key, "click_not_performed", **_action_exception_details(exc))
+            if interrupted is not None:
+                return interrupted
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id)
             if latest is None:
@@ -2333,8 +2380,11 @@ class SendTransaction:
             latest.updated_at = _iso(self._now())
             self.store.save(latest)
             try:
-                with send_quiet_hours_scope(latest.config.authorization.quiet_hours, self._now):
-                    receipt = self.action.click_send(candidate)
+                with send_time_scope(lambda: self._submission_time_block_reason(latest, candidate, decision)):
+                    receipt = (
+                        getattr(self.action, "click_prepared")(candidate, preparation)
+                        if split else self.action.click_send(candidate)
+                    )
             except ManagedClickBlocked as exc:
                 return self._failed_before_click(
                     latest, candidate, decision, decision_key, "click_not_performed",
@@ -2431,6 +2481,22 @@ class SendTransaction:
             target_id=candidate.target_id,
             action=decision.action,
             now=self._now(),
+        )
+
+    def _submission_time_block_reason(
+        self, record: ManagedRunRecord, candidate: ThreadCandidate, decision: DraftDecision,
+    ) -> str | None:
+        # The current attempt has already reserved its budget. Recheck all time
+        # gates after slow AX/GUI work without counting that reservation twice.
+        if (self._now() - _parse_iso(record.started_at)).total_seconds() >= record.config.duration_minutes * 60:
+            return "managed_run_duration_elapsed"
+        if self._before_click is not None:
+            reason = self._before_click()
+            if reason is not None:
+                return reason
+        return record.config.authorization.block_reason(
+            app_id=record.config.app_id, runtime=record.config.runtime,
+            target_id=candidate.target_id, action=decision.action, now=self._now(),
         )
 
     def _gate_result(
