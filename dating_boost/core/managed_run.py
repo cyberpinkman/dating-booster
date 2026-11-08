@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterator, Mapping, Protocol, Sequence, cast
 
 from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason, send_time_scope
-from dating_boost.core.storage import JsonStorage
+from dating_boost.core.storage import JsonStorage, storage_operation, storage_write_lock
 from dating_boost.core.storage_lifecycle import storage_lifecycle_lease
 
 try:
@@ -537,6 +537,10 @@ class ManagedRunRecord:
 
 
 class ManagedRunStore(Protocol):
+    def database_operation(self) -> ContextManager[None]:
+        """Reuse database providers only during a short storage-only operation."""
+        raise NotImplementedError
+
     def create(self, record: ManagedRunRecord) -> None:
         raise NotImplementedError
 
@@ -576,6 +580,9 @@ class InMemoryManagedRunStore:
         self._lease_locks: dict[str, threading.Lock] = {}
         self._runner_locks: dict[str, threading.Lock] = {}
         self._state_locks: dict[str, threading.RLock] = {}
+
+    def database_operation(self) -> ContextManager[None]:
+        return nullcontext()
 
     def create(self, record: ManagedRunRecord) -> None:
         if record.run_id in self._runs:
@@ -644,6 +651,13 @@ class JsonManagedRunStore:
     def __init__(self, root: Path):
         self._storage = JsonStorage(root)
 
+    @contextmanager
+    def database_operation(self) -> Iterator[None]:
+        # Rekey shares the root write lock. Discard these providers before any
+        # GUI/model call, and reacquire them for the next database operation.
+        with storage_write_lock(self._storage.root), storage_operation():
+            yield
+
     def create(self, record: ManagedRunRecord) -> None:
         path = self._run_path(record.run_id)
         if self._storage.exists(path):
@@ -690,9 +704,10 @@ class JsonManagedRunStore:
 
     def save(self, record: ManagedRunRecord) -> None:
         path = self._run_path(record.run_id)
-        if not self._storage.exists(path):
-            raise FileNotFoundError(record.run_id)
-        self._storage.write_json(path, record.to_dict())
+        with self.database_operation():
+            if not self._storage.exists(path):
+                raise FileNotFoundError(record.run_id)
+            self._storage.write_json(path, record.to_dict())
 
     def current_run_id(self) -> str | None:
         try:
@@ -938,15 +953,16 @@ class ManagedRun:
         )
 
     def status(self, run_id: str | None = None) -> dict[str, Any]:
-        record = self._resolve_record(run_id)
-        if record is None:
-            return _result("not_found", reason="managed_run_not_started")
-        return _result(
-            record.status,
-            run_id=record.run_id,
-            run=record.to_dict(),
-            relationship_progress_snapshot=_progress_snapshot(record, self.store),
-        )
+        with self.store.database_operation():
+            record = self._resolve_record(run_id)
+            if record is None:
+                return _result("not_found", reason="managed_run_not_started")
+            return _result(
+                record.status,
+                run_id=record.run_id,
+                run=record.to_dict(),
+                relationship_progress_snapshot=_progress_snapshot(record, self.store),
+            )
 
     def current_run_id(self) -> str | None:
         return self.store.current_run_id()
@@ -1331,34 +1347,36 @@ class ManagedRun:
                     profile["visual_verification"] = drain_action_metrics()
             except Exception:  # noqa: BLE001 - optional diagnostics never change a completed action.
                 pass
-            latest = self.store.load(normalized_run_id)
-            if latest is not None:
-                self._event(
-                    latest,
-                    "tick_profile",
-                    total_ms=round(max(0.0, self._monotonic() - started) * 1000, 3),
-                    **profile,
-                )
+            with self.store.database_operation():
+                latest = self.store.load(normalized_run_id)
+                if latest is not None:
+                    self._event(
+                        latest,
+                        "tick_profile",
+                        total_ms=round(max(0.0, self._monotonic() - started) * 1000, 3),
+                        **profile,
+                    )
             return result
 
     def _tick_with_lease(
         self, run_id: str, *, profile: dict[str, Any], expected_lifecycle_revision: int | None = None,
     ) -> dict[str, Any]:
-        record = self.store.load(run_id)
-        if record is None:
-            return _result("not_found", reason="managed_run_not_started")
-        changed = _lifecycle_change_result(record, expected_lifecycle_revision)
-        if changed is not None:
-            return changed
-        unfinished_click = self._reconcile_unfinished_click(record)
-        interrupted_burst = self._reconcile_interrupted_bursts(record)
-        record = self.store.load(run_id) or record
-        changed = _lifecycle_change_result(record, expected_lifecycle_revision)
-        if changed is not None:
-            return changed
-        unknown_pause = None
-        if record.status == "active" and _has_unresolved_send(record, self.store):
-            unknown_pause = self.pause(record.run_id, reason="unknown_after_click")
+        with self.store.state_lease(run_id), self.store.database_operation():
+            record = self.store.load(run_id)
+            if record is None:
+                return _result("not_found", reason="managed_run_not_started")
+            changed = _lifecycle_change_result(record, expected_lifecycle_revision)
+            if changed is not None:
+                return changed
+            unfinished_click = self._reconcile_unfinished_click(record)
+            interrupted_burst = self._reconcile_interrupted_bursts(record)
+            record = self.store.load(run_id) or record
+            changed = _lifecycle_change_result(record, expected_lifecycle_revision)
+            if changed is not None:
+                return changed
+            unknown_pause = None
+            if record.status == "active" and _has_unresolved_send(record, self.store):
+                unknown_pause = self.pause(record.run_id, reason="unknown_after_click")
         if unfinished_click is not None:
             if interrupted_burst is not None:
                 return {
@@ -1531,12 +1549,13 @@ class ManagedRun:
                 if len(decision.message_sequence) > 1
                 else transaction.execute(record, candidate, thread, decision)
             )
-        latest = self.store.load(record.run_id) or record
-        state = latest.thread_states.get(candidate.target_id)
-        self._event(latest, "send_transaction_finished", **_event_result_fields(result))
-        payload = {**result, "run_id": latest.run_id}
-        if state is not None:
-            payload["thread_state"] = dict(state)
+        with self.store.database_operation():
+            latest = self.store.load(record.run_id) or record
+            state = latest.thread_states.get(candidate.target_id)
+            self._event(latest, "send_transaction_finished", **_event_result_fields(result))
+            payload = {**result, "run_id": latest.run_id}
+            if state is not None:
+                payload["thread_state"] = dict(state)
         return payload
 
     @contextmanager
@@ -1891,7 +1910,7 @@ class ManagedRun:
         thread: ThreadObservation,
         decision: DraftDecision,
     ) -> dict[str, Any]:
-        with self.store.state_lease(record.run_id):
+        with self.store.state_lease(record.run_id), self.store.database_operation():
             latest = self.store.load(record.run_id) or record
             changed = _lifecycle_change_result(latest, record.lifecycle_revision)
             if changed is not None:
@@ -1929,7 +1948,7 @@ class ManagedRun:
         return result
 
     def _finish_tick(self, record: ManagedRunRecord, status: str, *, reason: str, **extra: Any) -> dict[str, Any]:
-        with self.store.state_lease(record.run_id):
+        with self.store.state_lease(record.run_id), self.store.database_operation():
             latest = self.store.load(record.run_id) or record
             if latest.lifecycle_revision != record.lifecycle_revision:
                 return _result(
@@ -2343,29 +2362,30 @@ class SendTransaction:
             if staged_reason is not None:
                 return self._failed_before_click(latest, candidate, decision, decision_key, staged_reason)
 
-            loaded = self.store.load(record.run_id)
-            if loaded is None:
-                return _result("failed_before_click", reason="managed_run_missing_before_click", decision_key=decision_key)
-            latest = loaded
-            attempt = {
-                "decision_key": decision_key,
-                "decision_id": decision.decision_id,
-                "candidate_key": candidate.candidate_key,
-                "target_id": candidate.target_id,
-                "target_binding": candidate.target_binding,
-                "discovery_revision": candidate.discovery_revision,
-                "inbound_revision": thread.inbound_revision,
-                "action": decision.action,
-                "exact_text": decision.text,
-                "payload_hash": decision.payload_hash,
-                "status": "prepared_to_click",
-                "prepared_at": _iso(self._now()),
-                "reason": None,
-                **({"burst_id": decision.burst_id, "message_index": decision.message_index} if decision.burst_id else {}),
-            }
-            latest.send_attempts[decision_key] = attempt
-            latest.updated_at = _iso(self._now())
-            self.store.save(latest)  # Durable checkpoint must complete before the irreversible click.
+            with self.store.database_operation():
+                loaded = self.store.load(record.run_id)
+                if loaded is None:
+                    return _result("failed_before_click", reason="managed_run_missing_before_click", decision_key=decision_key)
+                latest = loaded
+                attempt = {
+                    "decision_key": decision_key,
+                    "decision_id": decision.decision_id,
+                    "candidate_key": candidate.candidate_key,
+                    "target_id": candidate.target_id,
+                    "target_binding": candidate.target_binding,
+                    "discovery_revision": candidate.discovery_revision,
+                    "inbound_revision": thread.inbound_revision,
+                    "action": decision.action,
+                    "exact_text": decision.text,
+                    "payload_hash": decision.payload_hash,
+                    "status": "prepared_to_click",
+                    "prepared_at": _iso(self._now()),
+                    "reason": None,
+                    **({"burst_id": decision.burst_id, "message_index": decision.message_index} if decision.burst_id else {}),
+                }
+                latest.send_attempts[decision_key] = attempt
+                latest.updated_at = _iso(self._now())
+                self.store.save(latest)  # Durable checkpoint must complete before the irreversible click.
             active_reason = self._active_block_reason(latest, candidate, decision)
             if active_reason is not None:
                 return self._gate_result(latest, candidate, decision, decision_key, active_reason)
@@ -2526,10 +2546,11 @@ class SendTransaction:
                     "clicked_at": receipt.clicked_at,
                 }
             )
-            committed = self.store.load(record.run_id) or latest
-            committed.send_attempts[decision_key] = attempt
-            committed.updated_at = _iso(self._now())
-            self.store.save(committed)
+            with self.store.database_operation():
+                committed = self.store.load(record.run_id) or latest
+                committed.send_attempts[decision_key] = attempt
+                committed.updated_at = _iso(self._now())
+                self.store.save(committed)
         return self._verify_post_send(committed, candidate, decision, decision_key, receipt)
 
     def _verify_post_send(
@@ -2746,7 +2767,7 @@ class SendTransaction:
             decision_key=decision_key,
             **extra,
         )
-        with self.store.state_lease(record.run_id):
+        with self.store.state_lease(record.run_id), self.store.database_operation():
             latest = self.store.load(record.run_id) or record
             previous = latest.send_attempts.get(decision_key, {})
             previous_status = str(previous.get("status") or "")
