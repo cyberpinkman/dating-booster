@@ -36,9 +36,9 @@ class EncryptionStatus:
 
 
 class PayloadCipher:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, key_provider: str | None = None):
         self.root = root.resolve()
-        self.provider = DataKeyProvider(self.root)
+        self.provider = DataKeyProvider(self.root, provider_name=key_provider)
 
     def status(self) -> EncryptionStatus:
         key = self.provider.load_or_create_key()
@@ -131,10 +131,12 @@ class PayloadCipher:
 
 
 class DataKeyProvider:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, provider_name: str | None = None):
         self.root = root.resolve()
         self.account = hashlib.sha256(str(self.root).encode("utf-8")).hexdigest()
-        self.provider_name = self._provider_name()
+        if provider_name is not None and provider_name not in {"local", "keychain"}:
+            raise ValueError("unsupported data key provider")
+        self.provider_name = provider_name or self._provider_name()
         self._existing_key_loaded = False
         self._existing_key: bytes | None = None
 
@@ -206,6 +208,22 @@ class DataKeyProvider:
             return base64.b64decode(path.read_text(encoding="utf-8").strip())
         except Exception as exc:  # noqa: BLE001
             raise EncryptionError("local data key is unreadable") from exc
+
+    def delete_key(self) -> None:
+        if self.provider_name == "keychain" and not os.environ.get("DATING_BOOST_TEST_KEY"):
+            self._delete_keychain_key()
+        else:
+            (self.root / LOCAL_KEY_NAME).unlink(missing_ok=True)
+        self._existing_key_loaded = True
+        self._existing_key = None
+
+    def _delete_keychain_key(self) -> None:
+        result = _run_security_command(
+            ["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", self.account],
+            timeout_message="keychain data key removal timed out",
+        )
+        if result.returncode not in {0, 44}:  # errSecItemNotFound is already the desired state.
+            raise EncryptionError("keychain data key removal failed")
 
     def _load_keychain_key(self) -> bytes | None:
         result = _run_security_command(

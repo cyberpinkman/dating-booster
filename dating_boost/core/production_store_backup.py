@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sqlite3
 import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any
 
-from dating_boost.core.encryption import EncryptionError
+from dating_boost.core.encryption import DataKeyProvider, EncryptionError, LOCAL_KEY_NAME
 from dating_boost.core.storage import storage_write_lock
 from dating_boost.core.storage_lifecycle import storage_lifecycle_lease
 from dating_boost.core.production_store_common import (
@@ -23,6 +24,11 @@ from dating_boost.core.production_store_common import (
 )
 
 __all__ = ["ProductionStoreBackupMixin"]
+
+
+class _RestorePublicationError(RuntimeError):
+    pass
+
 
 class ProductionStoreBackupMixin:
     def export(self, output: Path) -> dict[str, Any]:
@@ -197,7 +203,8 @@ class ProductionStoreBackupMixin:
         with tempfile.TemporaryDirectory(prefix=f".{self.root.name}.restore-", dir=temp_parent) as temp_dir:
             temp_root = Path(temp_dir) / "data"
             temp_root.mkdir(parents=True, exist_ok=True)
-            temp_store = type(self)(temp_root)
+            # Validation must not create Keychain entries bound to disposable paths.
+            temp_store = type(self)(temp_root, key_provider="local")
             if restored_key is not None:
                 temp_store._cipher.store_raw_key(restored_key)
             temp_store.db_path.write_bytes(db_bytes)
@@ -217,7 +224,15 @@ class ProductionStoreBackupMixin:
                     "input": str(input_path),
                     "doctor": doctor,
                 }
-            self._replace_root_with(temp_root)
+            try:
+                self._replace_root_with(temp_root)
+            except _RestorePublicationError as exc:
+                return {
+                    "schema_version": DATA_STORE_SCHEMA_VERSION,
+                    "status": "blocked",
+                    "reason": "restore_publication_failed",
+                    "error_type": str(exc),
+                }
         return {
             "schema_version": DATA_STORE_SCHEMA_VERSION,
             "status": "ok",
@@ -316,15 +331,47 @@ class ProductionStoreBackupMixin:
 
     def _replace_root_with(self, source_root: Path) -> None:
         self.root.parent.mkdir(parents=True, exist_ok=True)
+        restored_key = DataKeyProvider(source_root, provider_name="local").load_existing_key()
+        provider_name = self._cipher.provider.provider_name
+        destination_provider = DataKeyProvider(self.root, provider_name=provider_name)
+        keychain_destination = provider_name == "keychain" and not os.environ.get("DATING_BOOST_TEST_KEY")
+        previous_key = destination_provider.load_existing_key() if keychain_destination else None
         backup_root = self.root.parent / f".{self.root.name}.restore-backup-{_digest({'root': str(self.root), 'at': _now_iso()})[:12]}"
         had_existing = self.root.exists()
         if had_existing:
             self.root.rename(backup_root)
+        published = False
+        key_may_have_changed = False
         try:
             source_root.rename(self.root)
-        except Exception:
-            if had_existing and backup_root.exists() and not self.root.exists():
-                backup_root.rename(self.root)
-            raise
+            published = True
+            if keychain_destination:
+                if restored_key is None:
+                    raise EncryptionError("restored data key is unavailable")
+                key_may_have_changed = True
+                destination_provider.store_key(restored_key)
+                (self.root / LOCAL_KEY_NAME).unlink(missing_ok=True)
+            # Verify through the final path and a fresh provider, not the temporary
+            # validator or an instance that may have cached the destination's old key.
+            final_store = type(self)(self.root, key_provider=provider_name)
+            with final_store._connect() as conn:
+                final_store._set_metadata(conn, "encryption_provider", provider_name)
+            if final_store.doctor().get("status") != "ok":
+                raise EncryptionError("restored store validation failed")
+        except Exception as exc:
+            try:
+                if published:
+                    self.root.rename(source_root)
+                if had_existing and backup_root.exists():
+                    backup_root.rename(self.root)
+                if key_may_have_changed:
+                    if previous_key is None:
+                        destination_provider.delete_key()
+                    else:
+                        destination_provider.store_key(previous_key)
+            except Exception as rollback_exc:
+                raise RuntimeError("restore_rollback_failed") from rollback_exc
+            raise _RestorePublicationError(type(exc).__name__) from exc
+        self._cipher = final_store._cipher
         if had_existing and backup_root.exists():
             _remove_path_if_exists(backup_root)
