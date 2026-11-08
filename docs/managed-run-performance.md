@@ -69,6 +69,13 @@ run 的生命周期版本；暂停、停止或暂停后恢复产生的旧结果�
 旧的组合观察端口仍保留原锁边界。文本与视觉 SDK 默认关闭隐式重试，单次 I/O
 超时为 45 秒；现有视觉层的显式重试另行保留，这不是整轮运行的硬时限。
 
+持久化状态的连续读取与写入只在短数据库操作内复用 provider：覆盖 tick 前置恢复、
+结果/计时记录和发送 checkpoint，离开该操作即丢弃缓存。数据库写锁和 provider
+缓存不跨观察、决策、GUI 或模型请求，也不覆盖整个 tick/state lease。合成 Darwin
+路径中，空轮询的密钥查询由 13 次降为 8 次，单条确认发送由 24 次降为 16 次；
+这是 mock 调用计数，不是实机耗时。范围、探测计数与 rekey/restore 验证见
+[存储性能说明](storage-performance.md#managedrun-database-operations)。
+
 ## 2–3 条短消息连续发送
 
 原 writer 已能生成 `message_sequence`，但 ManagedRun decision adapter 只提取

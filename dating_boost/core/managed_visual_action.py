@@ -9,10 +9,10 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, NoReturn
 
 from dating_boost.apps.tashuo.managed_send_evidence import ManagedSendEvidenceStore
 from dating_boost.apps.tashuo.managed_visual_evidence import ManagedVisualVerifier, VisualFrame, VisualTransition, same_body
@@ -42,7 +42,22 @@ class _Receipt:
     clicked_at: str
 
 
+@dataclass(frozen=True)
+class _VisualPreparation:
+    candidate_key: str
+    identity_digest: str
+    bound_revision: str
+    baseline: VisualFrame
+    frame: VisualFrame
+    phase: str
+    text: str
+    accepted: bool = False
+    refresh_required: bool = False
+
+
 class TaShuoVisualManagedActionPort:
+    supports_split_preparation = True
+
     def __init__(
         self, root: Path, *, io: Any, verifier: ManagedVisualVerifier,
         sleeper: Callable[[float], None] = time.sleep,
@@ -91,14 +106,58 @@ class TaShuoVisualManagedActionPort:
         return observed
 
     def stage_text(self, candidate: ThreadCandidate, text: str) -> ComposerObservation:
+        return self.stage_prepared(candidate, text, self.analyze_preparation(self.capture_stage(candidate, text)))
+
+    def capture_stage(self, candidate: ThreadCandidate, text: str) -> _VisualPreparation:
         self._require_unpaused()
         state = self._state(candidate)
         # Focus may expand the composer, but never writes text. Verify the
         # resulting target and conversation once before the atomic write.
         self._require_ok(self.io.prepare_composer(), "managed_composer_prepare_failed")
-        # Expanding an input can move the messages. Prove that transition once;
-        # normal same-layout steps reuse their interpretation by exact pixels.
-        focused = self._unchanged(state.frame, self._capture())
+        return _VisualPreparation(candidate.candidate_key, state.identity_digest, state.bound_revision,
+                                  state.frame, self._capture(), "stage", text)
+
+    def analyze_preparation(self, preparation: _VisualPreparation) -> _VisualPreparation:
+        """Interpret immutable pixels only; the owner releases its state lease here."""
+        try:
+            if self._same_body(preparation.baseline, preparation.frame):
+                self._metrics["pixel_reuses"] = int(self._metrics.get("pixel_reuses", 0)) + 1
+                return replace(preparation, accepted=True)
+            if not self._compare(preparation.baseline, preparation.frame).unchanged:
+                raise ManagedActionError("managed_visual_conversation_changed")
+            return replace(preparation, accepted=True, refresh_required=True)
+        except Exception as exc:
+            if preparation.phase == "click":
+                code = exc.reason_code if isinstance(exc, ManagedActionError) else "managed_visual_pre_click_failed"
+                raise ManagedClickBlocked(code) from exc
+            raise
+
+    def reject_preparation(self, preparation: _VisualPreparation) -> None:
+        """Called only after the owner accepts the failed analysis's lifecycle."""
+        if preparation.phase == "click":
+            self._pause_for_unresolved_draft()
+
+    def _accept_preparation(self, candidate: ThreadCandidate, preparation: _VisualPreparation, *, phase: str, text: str) -> VisualFrame:
+        state = self._state(candidate)
+        if (not preparation.accepted or preparation.phase != phase or preparation.text != text
+                or preparation.candidate_key != candidate.candidate_key
+                or preparation.identity_digest != state.identity_digest
+                or preparation.bound_revision != state.bound_revision
+                or preparation.baseline.file_digest != state.frame.file_digest):
+            raise ManagedActionError("managed_visual_preparation_invalid")
+        preparation.baseline.assert_unchanged()
+        preparation.frame.assert_unchanged()
+        if preparation.refresh_required:
+            fresh = self._capture()
+            if not self._same_body(preparation.frame, fresh):
+                raise ManagedActionError("managed_visual_changed_during_verification")
+            return fresh
+        return preparation.frame
+
+    def stage_prepared(self, candidate: ThreadCandidate, text: str, preparation: _VisualPreparation) -> ComposerObservation:
+        self._require_unpaused()
+        state = self._state(candidate)
+        focused = self._accept_preparation(candidate, preparation, phase="stage", text=text)
         attempted_stage = False
         try:
             attempted_stage = True
@@ -128,6 +187,32 @@ class TaShuoVisualManagedActionPort:
         return self._composer(candidate, text, focused, captured_at=staged_at)
 
     def click_send(self, candidate: ThreadCandidate) -> ClickReceipt:
+        captured = self.capture_click(candidate)
+        try:
+            prepared = self.analyze_preparation(captured)
+        except Exception:
+            self.reject_preparation(captured)
+            raise
+        return self.click_prepared(candidate, prepared)
+
+    def capture_click(self, candidate: ThreadCandidate) -> _VisualPreparation:
+        try:
+            self._require_unpaused()
+            state = self._state(candidate)
+            if not state.staged_text:
+                raise ManagedActionError("managed_expected_composer_text_missing")
+            self._require_ok(self.io.prepare_composer(expected_text=state.staged_text), "managed_composer_focus_failed")
+            return _VisualPreparation(candidate.candidate_key, state.identity_digest, state.bound_revision,
+                                      state.frame, self._capture(), "click", state.staged_text)
+        except Exception as exc:
+            self._raise_click_blocked(exc)
+
+    def _raise_click_blocked(self, exc: Exception) -> NoReturn:
+        self._pause_for_unresolved_draft()
+        code = exc.reason_code if isinstance(exc, ManagedActionError) else "managed_visual_pre_click_failed"
+        raise ManagedClickBlocked(code) from exc
+
+    def click_prepared(self, candidate: ThreadCandidate, preparation: _VisualPreparation) -> ClickReceipt:
         # Every exception in this preflight is known to precede Return. The
         # actual IO call below is outside this exception conversion boundary.
         try:
@@ -135,19 +220,14 @@ class TaShuoVisualManagedActionPort:
             state = self._state(candidate)
             if not state.staged_text:
                 raise ManagedActionError("managed_expected_composer_text_missing")
-            self._require_ok(
-                self.io.prepare_composer(expected_text=state.staged_text), "managed_composer_focus_failed",
-            )
-            before = self._unchanged(state.frame, self._capture())
+            before = self._accept_preparation(candidate, preparation, phase="click", text=state.staged_text)
             evidence_id = self._evidence_call(lambda: self.evidence_store.prepare(
                 target_id=candidate.target_id, candidate_key=candidate.candidate_key,
                 target_binding=candidate.target_binding, inbound_revision=str(candidate.inbound_revision),
                 payload_hash=hashlib.sha256(state.staged_text.encode("utf-8")).hexdigest(), before=before,
             ))
         except Exception as exc:
-            self._pause_for_unresolved_draft()
-            code = exc.reason_code if isinstance(exc, ManagedActionError) else "managed_visual_pre_click_failed"
-            raise ManagedClickBlocked(code) from exc
+            self._raise_click_blocked(exc)
         result = self.io.click_return(
             state.staged_text, deadline_at=candidate.metadata.get("managed_burst_click_deadline_at"),
         )

@@ -5,6 +5,7 @@ import stat
 import struct
 import zlib
 from copy import deepcopy
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -482,6 +483,34 @@ def test_run_rechecks_quiet_hours_after_slow_gui_preflight_before_return(setup, 
     result = runtime.tick("timing")
     adapter.session._press_return_key.assert_not_called()
     assert result["action_reason"] == "authorization_quiet_hours"
+    assert store.load("timing").attempted_send_count == 0
+
+
+@pytest.mark.parametrize("boundary", ["authorization", "duration"])
+def test_return_rechecks_the_full_send_window_after_ax_latency(setup, monkeypatch, boundary):
+    io, adapter, read, *_ = setup
+    runtime, store, _, _, action, clock = _runtime()
+    expiry = clock.value + timedelta(minutes=1)
+    config = _config(duration_minutes=1 if boundary == "duration" else 120)
+    if boundary == "authorization":
+        config = replace(config, authorization=replace(config.authorization, expires_at=expiry.isoformat()))
+    runtime.start(config, run_id="timing")
+
+    def slow_snapshot(*args, **kwargs):
+        clock.value = expiry
+        return _snapshot(action.composer_text)
+
+    def click(candidate):
+        result = io.click_return(action.composer_text)
+        if result["status"] == "blocked":
+            raise ManagedClickBlocked(result["reason"])
+        raise AssertionError("Return crossed an expired window")
+
+    read.side_effect = slow_snapshot
+    monkeypatch.setattr(action, "click_send", click)
+    result = runtime.tick("timing")
+    adapter.session._press_return_key.assert_not_called()
+    assert result["action_reason"] == {"authorization": "authorization_expired", "duration": "managed_run_duration_elapsed"}[boundary]
     assert store.load("timing").attempted_send_count == 0
 
 

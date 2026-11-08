@@ -29,7 +29,7 @@ class ProductionDataStore(
     ProductionStoreConfirmationMixin,
     ProductionStoreDeleteMixin,
 ):
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, key_provider: str | None = None):
         self.root = root.resolve()
         self.db_path = self.root / PRODUCTION_DB_NAME
-        self._cipher = PayloadCipher(self.root)
+        self._cipher = PayloadCipher(self.root, key_provider=key_provider)

@@ -17,8 +17,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, ContextManager, Iterator, Mapping, Protocol, Sequence, cast
 
-from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason, send_quiet_hours_scope
-from dating_boost.core.storage import JsonStorage
+from dating_boost.core.live_send_contract import live_send_authorization_quiet_hours_block_reason, send_time_scope
+from dating_boost.core.storage import JsonStorage, storage_operation, storage_write_lock
+from dating_boost.core.storage_lifecycle import storage_lifecycle_lease
 
 try:
     import fcntl
@@ -536,6 +537,10 @@ class ManagedRunRecord:
 
 
 class ManagedRunStore(Protocol):
+    def database_operation(self) -> ContextManager[None]:
+        """Reuse database providers only during a short storage-only operation."""
+        raise NotImplementedError
+
     def create(self, record: ManagedRunRecord) -> None:
         raise NotImplementedError
 
@@ -557,6 +562,10 @@ class ManagedRunStore(Protocol):
     def execution_lease(self, run_id: str) -> ContextManager[bool]:
         raise NotImplementedError
 
+    def runner_lease(self, run_id: str) -> ContextManager[bool]:
+        """Own the foreground wait loop, including time between ticks."""
+        raise NotImplementedError
+
     def state_lease(self, run_id: str) -> ContextManager[bool]:
         """Serialize lifecycle changes with durable send-state mutations."""
         raise NotImplementedError
@@ -569,7 +578,11 @@ class InMemoryManagedRunStore:
         self._events: list[dict[str, Any]] = []
         self._lease_guard = threading.Lock()
         self._lease_locks: dict[str, threading.Lock] = {}
+        self._runner_locks: dict[str, threading.Lock] = {}
         self._state_locks: dict[str, threading.RLock] = {}
+
+    def database_operation(self) -> ContextManager[None]:
+        return nullcontext()
 
     def create(self, record: ManagedRunRecord) -> None:
         if record.run_id in self._runs:
@@ -607,6 +620,17 @@ class InMemoryManagedRunStore:
                 lease.release()
 
     @contextmanager
+    def runner_lease(self, run_id: str) -> Iterator[bool]:
+        with self._lease_guard:
+            lease = self._runner_locks.setdefault(run_id, threading.Lock())
+        acquired = lease.acquire(blocking=False)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                lease.release()
+
+    @contextmanager
     def state_lease(self, run_id: str) -> Iterator[bool]:
         with self._lease_guard:
             lease = self._state_locks.setdefault(run_id, threading.RLock())
@@ -627,6 +651,13 @@ class JsonManagedRunStore:
     def __init__(self, root: Path):
         self._storage = JsonStorage(root)
 
+    @contextmanager
+    def database_operation(self) -> Iterator[None]:
+        # Rekey shares the root write lock. Discard these providers before any
+        # GUI/model call, and reacquire them for the next database operation.
+        with storage_write_lock(self._storage.root), storage_operation():
+            yield
+
     def create(self, record: ManagedRunRecord) -> None:
         path = self._run_path(record.run_id)
         if self._storage.exists(path):
@@ -642,15 +673,23 @@ class JsonManagedRunStore:
         try:
             self._storage.write_json(path, record.to_dict())
         except Exception:
-            # Ordinary write failures restore a usable index. A hard process
-            # death is recovered by ManagedRun.start when the target is absent.
-            self._storage.write_json(
-                MANAGED_RUN_INDEX_PATH,
-                {
-                    "schema_version": MANAGED_RUN_SCHEMA_VERSION,
-                    "current_run_id": previous_current_run_id,
-                },
-            )
+            # Atomic replacement / SQLite commit can succeed before a later
+            # fsync or legacy cleanup fails. Never unindex a committed active
+            # run. If even its existence is unknown, retain the published
+            # pointer and original error; start can recover an absent target.
+            absent = False
+            try:
+                absent = not self._storage.exists(path)
+            except Exception:
+                pass
+            if absent:
+                self._storage.write_json(
+                    MANAGED_RUN_INDEX_PATH,
+                    {
+                        "schema_version": MANAGED_RUN_SCHEMA_VERSION,
+                        "current_run_id": previous_current_run_id,
+                    },
+                )
             raise
 
     def load(self, run_id: str) -> ManagedRunRecord | None:
@@ -665,9 +704,10 @@ class JsonManagedRunStore:
 
     def save(self, record: ManagedRunRecord) -> None:
         path = self._run_path(record.run_id)
-        if not self._storage.exists(path):
-            raise FileNotFoundError(record.run_id)
-        self._storage.write_json(path, record.to_dict())
+        with self.database_operation():
+            if not self._storage.exists(path):
+                raise FileNotFoundError(record.run_id)
+            self._storage.write_json(path, record.to_dict())
 
     def current_run_id(self) -> str | None:
         try:
@@ -687,7 +727,55 @@ class JsonManagedRunStore:
         return [event for event in self._storage.read_jsonl(MANAGED_RUN_EVENTS_PATH) if event.get("run_id") == run_id]
 
     @contextmanager
+    def runner_lease(self, run_id: str) -> Iterator[bool]:
+        # An idle runner must keep its data directory alive without holding the
+        # execution or state locks needed by tick/pause/stop.
+        with storage_lifecycle_lease(self._storage.root, blocking=False) as available:
+            if not available:
+                yield False
+                return
+            digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
+            lock_path = self._storage.root / "managed_run" / "locks" / f"{digest}.runner.lock"
+            with _LEASE_REGISTRY_GUARD:
+                process_lease = _LEASE_LOCKS.setdefault(lock_path, threading.Lock())
+            acquired_in_process = process_lease.acquire(blocking=False)
+            if not acquired_in_process:
+                yield False
+                return
+            descriptor = -1
+            file_lease_acquired = False
+            try:
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+                os.fchmod(descriptor, 0o600)
+                if fcntl is not None:
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        file_lease_acquired = True
+                    except OSError as exc:
+                        if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                            raise
+                        yield False
+                        return
+                yield True
+            finally:
+                if descriptor >= 0:
+                    if file_lease_acquired and fcntl is not None:
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    os.close(descriptor)
+                process_lease.release()
+
+    @contextmanager
     def execution_lease(self, run_id: str) -> Iterator[bool]:
+        with storage_lifecycle_lease(self._storage.root, blocking=False) as available:
+            if not available:
+                yield False
+                return
+            with self._execution_lease_under_lifecycle(run_id) as acquired:
+                yield acquired
+
+    @contextmanager
+    def _execution_lease_under_lifecycle(self, run_id: str) -> Iterator[bool]:
         lock_path = self._lease_path(run_id)
         with _LEASE_REGISTRY_GUARD:
             process_lease = _LEASE_LOCKS.setdefault(lock_path, threading.Lock())
@@ -721,6 +809,12 @@ class JsonManagedRunStore:
 
     @contextmanager
     def state_lease(self, run_id: str) -> Iterator[bool]:
+        with storage_lifecycle_lease(self._storage.root):
+            with self._state_lease_under_lifecycle(run_id) as acquired:
+                yield acquired
+
+    @contextmanager
+    def _state_lease_under_lifecycle(self, run_id: str) -> Iterator[bool]:
         lock_path = self._state_lease_path(run_id)
         held_paths: set[Path] = getattr(_STATE_LEASE_LOCAL, "held_paths", set())
         if lock_path in held_paths:
@@ -859,15 +953,16 @@ class ManagedRun:
         )
 
     def status(self, run_id: str | None = None) -> dict[str, Any]:
-        record = self._resolve_record(run_id)
-        if record is None:
-            return _result("not_found", reason="managed_run_not_started")
-        return _result(
-            record.status,
-            run_id=record.run_id,
-            run=record.to_dict(),
-            relationship_progress_snapshot=_progress_snapshot(record, self.store),
-        )
+        with self.store.database_operation():
+            record = self._resolve_record(run_id)
+            if record is None:
+                return _result("not_found", reason="managed_run_not_started")
+            return _result(
+                record.status,
+                run_id=record.run_id,
+                run=record.to_dict(),
+                relationship_progress_snapshot=_progress_snapshot(record, self.store),
+            )
 
     def current_run_id(self) -> str | None:
         return self.store.current_run_id()
@@ -1117,6 +1212,22 @@ class ManagedRun:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds_must_be_positive")
         normalized_run_id = run_id or self.store.current_run_id()
+        if normalized_run_id is None:
+            return _result("not_found", reason="managed_run_not_started")
+        with self.store.runner_lease(normalized_run_id) as acquired:
+            if not acquired:
+                return _result("blocked", reason="managed_run_busy", run_id=normalized_run_id)
+            record = self.store.load(normalized_run_id)
+            if record is None:
+                return _result("not_found", reason="managed_run_not_started")
+            return self._run_wait_loop_under_lease(
+                normalized_run_id, poll_interval_seconds=poll_interval_seconds,
+                lifecycle_revision=record.lifecycle_revision,
+            )
+
+    def _run_wait_loop_under_lease(
+        self, normalized_run_id: str, *, poll_interval_seconds: float, lifecycle_revision: int,
+    ) -> dict[str, Any]:
         # `max_steps` caps retained diagnostics, not the duration of a wait
         # run. A two-hour session should not accumulate thousands of idle
         # payloads in memory or print them all at shutdown.
@@ -1124,7 +1235,7 @@ class ManagedRun:
         processed_count = 0
         poll_count = 0
         while True:
-            result = self.tick(normalized_run_id)
+            result = self.tick(normalized_run_id, expected_lifecycle_revision=lifecycle_revision)
             results.append(result)
             status = str(result.get("status") or "")
             reason = str(result.get("reason") or "")
@@ -1142,6 +1253,7 @@ class ManagedRun:
                 interrupted = self._wait_sleep_result(
                     normalized_run_id,
                     poll_interval_seconds,
+                    lifecycle_revision=lifecycle_revision,
                 )
                 if interrupted is not None:
                     results.append(interrupted)
@@ -1154,6 +1266,7 @@ class ManagedRun:
                 interrupted = self._wait_sleep_result(
                     normalized_run_id,
                     poll_interval_seconds,
+                    lifecycle_revision=lifecycle_revision,
                 )
                 if interrupted is not None:
                     results.append(interrupted)
@@ -1175,21 +1288,33 @@ class ManagedRun:
 
     def _wait_sleep_result(
         self,
-        run_id: str | None,
+        run_id: str,
         poll_interval_seconds: float,
+        *,
+        lifecycle_revision: int,
     ) -> dict[str, Any] | None:
+        details: dict[str, Any] = {}
         try:
             self._sleep(poll_interval_seconds)
         except KeyboardInterrupt:
-            return self.pause(run_id, reason="managed_run_interrupted")
+            reason = "managed_run_interrupted"
         except Exception as exc:  # noqa: BLE001 - an unusable wait loop must not remain active.
-            return {
-                **self.pause(run_id, reason="managed_run_wait_sleep_failed"),
-                "error_type": type(exc).__name__,
-            }
-        return None
+            reason = "managed_run_wait_sleep_failed"
+            details["error_type"] = type(exc).__name__
+        else:
+            return None
+        with self.store.state_lease(run_id):
+            latest = self.store.load(run_id)
+            if latest is None:
+                return _result("not_found", reason="managed_run_not_started")
+            changed = _lifecycle_change_result(latest, lifecycle_revision)
+            if changed is not None:
+                return changed
+            return {**self.pause(run_id, reason=reason), **details}
 
-    def tick(self, run_id: str | None = None) -> dict[str, Any]:
+    def tick(
+        self, run_id: str | None = None, *, expected_lifecycle_revision: int | None = None,
+    ) -> dict[str, Any]:
         normalized_run_id = run_id or self.store.current_run_id()
         if normalized_run_id is None:
             self._discovery_batch = None
@@ -1209,7 +1334,9 @@ class ManagedRun:
             }
             initial = self.store.load(normalized_run_id)
             try:
-                result = self._tick_with_lease(normalized_run_id, profile=profile)
+                result = self._tick_with_lease(
+                    normalized_run_id, profile=profile, expected_lifecycle_revision=expected_lifecycle_revision,
+                )
             except BaseException:
                 self._discovery_batch = None
                 raise
@@ -1220,26 +1347,36 @@ class ManagedRun:
                     profile["visual_verification"] = drain_action_metrics()
             except Exception:  # noqa: BLE001 - optional diagnostics never change a completed action.
                 pass
-            latest = self.store.load(normalized_run_id)
-            if latest is not None:
-                self._event(
-                    latest,
-                    "tick_profile",
-                    total_ms=round(max(0.0, self._monotonic() - started) * 1000, 3),
-                    **profile,
-                )
+            with self.store.database_operation():
+                latest = self.store.load(normalized_run_id)
+                if latest is not None:
+                    self._event(
+                        latest,
+                        "tick_profile",
+                        total_ms=round(max(0.0, self._monotonic() - started) * 1000, 3),
+                        **profile,
+                    )
             return result
 
-    def _tick_with_lease(self, run_id: str, *, profile: dict[str, Any]) -> dict[str, Any]:
-        record = self.store.load(run_id)
-        if record is None:
-            return _result("not_found", reason="managed_run_not_started")
-        unfinished_click = self._reconcile_unfinished_click(record)
-        interrupted_burst = self._reconcile_interrupted_bursts(record)
-        record = self.store.load(run_id) or record
-        unknown_pause = None
-        if record.status == "active" and _has_unresolved_send(record, self.store):
-            unknown_pause = self.pause(record.run_id, reason="unknown_after_click")
+    def _tick_with_lease(
+        self, run_id: str, *, profile: dict[str, Any], expected_lifecycle_revision: int | None = None,
+    ) -> dict[str, Any]:
+        with self.store.state_lease(run_id), self.store.database_operation():
+            record = self.store.load(run_id)
+            if record is None:
+                return _result("not_found", reason="managed_run_not_started")
+            changed = _lifecycle_change_result(record, expected_lifecycle_revision)
+            if changed is not None:
+                return changed
+            unfinished_click = self._reconcile_unfinished_click(record)
+            interrupted_burst = self._reconcile_interrupted_bursts(record)
+            record = self.store.load(run_id) or record
+            changed = _lifecycle_change_result(record, expected_lifecycle_revision)
+            if changed is not None:
+                return changed
+            unknown_pause = None
+            if record.status == "active" and _has_unresolved_send(record, self.store):
+                unknown_pause = self.pause(record.run_id, reason="unknown_after_click")
         if unfinished_click is not None:
             if interrupted_burst is not None:
                 return {
@@ -1412,12 +1549,13 @@ class ManagedRun:
                 if len(decision.message_sequence) > 1
                 else transaction.execute(record, candidate, thread, decision)
             )
-        latest = self.store.load(record.run_id) or record
-        state = latest.thread_states.get(candidate.target_id)
-        self._event(latest, "send_transaction_finished", **_event_result_fields(result))
-        payload = {**result, "run_id": latest.run_id}
-        if state is not None:
-            payload["thread_state"] = dict(state)
+        with self.store.database_operation():
+            latest = self.store.load(record.run_id) or record
+            state = latest.thread_states.get(candidate.target_id)
+            self._event(latest, "send_transaction_finished", **_event_result_fields(result))
+            payload = {**result, "run_id": latest.run_id}
+            if state is not None:
+                payload["thread_state"] = dict(state)
         return payload
 
     @contextmanager
@@ -1570,6 +1708,9 @@ class ManagedRun:
         })
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
+            changed = _lifecycle_change_result(latest, record.lifecycle_revision)
+            if changed is not None:
+                return changed
             if burst_id in latest.send_bursts:
                 previous = latest.send_bursts[burst_id]
                 return _result(
@@ -1769,8 +1910,11 @@ class ManagedRun:
         thread: ThreadObservation,
         decision: DraftDecision,
     ) -> dict[str, Any]:
-        with self.store.state_lease(record.run_id):
+        with self.store.state_lease(record.run_id), self.store.database_operation():
             latest = self.store.load(record.run_id) or record
+            changed = _lifecycle_change_result(latest, record.lifecycle_revision)
+            if changed is not None:
+                return changed
             if latest.status != "active":
                 return _result(
                     latest.status,
@@ -1804,7 +1948,7 @@ class ManagedRun:
         return result
 
     def _finish_tick(self, record: ManagedRunRecord, status: str, *, reason: str, **extra: Any) -> dict[str, Any]:
-        with self.store.state_lease(record.run_id):
+        with self.store.state_lease(record.run_id), self.store.database_operation():
             latest = self.store.load(record.run_id) or record
             if latest.lifecycle_revision != record.lifecycle_revision:
                 return _result(
@@ -1843,6 +1987,9 @@ class ManagedRun:
     ) -> dict[str, Any]:
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
+            changed = _lifecycle_change_result(latest, record.lifecycle_revision)
+            if changed is not None:
+                return changed
             if latest.status != "active":
                 return _result(
                     latest.status,
@@ -1896,6 +2043,9 @@ class ManagedRun:
 
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
+            changed = _lifecycle_change_result(latest, record.lifecycle_revision)
+            if changed is not None:
+                return changed
             if latest.status != "active":
                 return _result(
                     latest.status,
@@ -2065,6 +2215,17 @@ class ManagedRun:
         return None
 
 
+def _lifecycle_change_result(record: ManagedRunRecord, expected_revision: int | None) -> dict[str, Any] | None:
+    """Discard work from before a lifecycle change without consuming its inbound."""
+    if expected_revision is None or record.lifecycle_revision == expected_revision:
+        return None
+    return _result(
+        record.status if record.status != "active" else "blocked",
+        reason=record.pause_reason or record.stop_reason or "managed_run_lifecycle_changed",
+        run_id=record.run_id,
+    )
+
+
 class SendTransaction:
     """Atomic managed send protocol around the irreversible click boundary."""
 
@@ -2080,6 +2241,7 @@ class SendTransaction:
         self.action = action
         self._now = now
         self._before_click = before_click
+        self._expected_lifecycle_revision: int | None = None
 
     def prepared_decision(
         self,
@@ -2122,6 +2284,10 @@ class SendTransaction:
         thread: ThreadObservation,
         decision: DraftDecision,
     ) -> dict[str, Any]:
+        # Reloading durable state must not rebase an older decision onto a
+        # resumed run. A fresh tick may recover a known-unsent checkpoint only
+        # after its own new thread observation.
+        self._expected_lifecycle_revision = record.lifecycle_revision
         decision_key = _decision_key(record.run_id, decision)
         latest = self.store.load(record.run_id) or record
         existing = latest.send_attempts.get(decision_key)
@@ -2155,6 +2321,15 @@ class SendTransaction:
         block_reason = self._pre_stage_block_reason(latest, candidate, thread, decision)
         if block_reason is not None:
             return self._gate_result(latest, candidate, decision, decision_key, block_reason)
+        preparation = None
+        split = getattr(self.action, "supports_split_preparation", False) is True
+        if split:
+            try:
+                preparation, interrupted = self._prepare_action(latest, candidate, decision, decision_key, phase="stage")
+            except Exception as exc:  # noqa: BLE001 - no stage write has occurred.
+                return self._failed_before_click(latest, candidate, decision, decision_key, "staging_failed", **_action_exception_details(exc))
+            if interrupted is not None:
+                return interrupted
         # Lifecycle changes and real GUI mutations share this lease. A pause or
         # stop either wins before staging, or returns only after staging has
         # completed and the prepared checkpoint is durable.
@@ -2164,7 +2339,10 @@ class SendTransaction:
             if active_reason is not None:
                 return self._gate_result(latest, candidate, decision, decision_key, active_reason)
             try:
-                staged = self.action.stage_text(candidate, decision.text)
+                staged = (
+                    getattr(self.action, "stage_prepared")(candidate, decision.text, preparation)
+                    if split else self.action.stage_text(candidate, decision.text)
+                )
             except Exception as exc:  # noqa: BLE001
                 return self._failed_before_click(
                     latest,
@@ -2184,33 +2362,60 @@ class SendTransaction:
             if staged_reason is not None:
                 return self._failed_before_click(latest, candidate, decision, decision_key, staged_reason)
 
-            loaded = self.store.load(record.run_id)
-            if loaded is None:
-                return _result("failed_before_click", reason="managed_run_missing_before_click", decision_key=decision_key)
-            latest = loaded
-            attempt = {
-                "decision_key": decision_key,
-                "decision_id": decision.decision_id,
-                "candidate_key": candidate.candidate_key,
-                "target_id": candidate.target_id,
-                "target_binding": candidate.target_binding,
-                "discovery_revision": candidate.discovery_revision,
-                "inbound_revision": thread.inbound_revision,
-                "action": decision.action,
-                "exact_text": decision.text,
-                "payload_hash": decision.payload_hash,
-                "status": "prepared_to_click",
-                "prepared_at": _iso(self._now()),
-                "reason": None,
-                **({"burst_id": decision.burst_id, "message_index": decision.message_index} if decision.burst_id else {}),
-            }
-            latest.send_attempts[decision_key] = attempt
-            latest.updated_at = _iso(self._now())
-            self.store.save(latest)  # Durable checkpoint must complete before the irreversible click.
+            with self.store.database_operation():
+                loaded = self.store.load(record.run_id)
+                if loaded is None:
+                    return _result("failed_before_click", reason="managed_run_missing_before_click", decision_key=decision_key)
+                latest = loaded
+                attempt = {
+                    "decision_key": decision_key,
+                    "decision_id": decision.decision_id,
+                    "candidate_key": candidate.candidate_key,
+                    "target_id": candidate.target_id,
+                    "target_binding": candidate.target_binding,
+                    "discovery_revision": candidate.discovery_revision,
+                    "inbound_revision": thread.inbound_revision,
+                    "action": decision.action,
+                    "exact_text": decision.text,
+                    "payload_hash": decision.payload_hash,
+                    "status": "prepared_to_click",
+                    "prepared_at": _iso(self._now()),
+                    "reason": None,
+                    **({"burst_id": decision.burst_id, "message_index": decision.message_index} if decision.burst_id else {}),
+                }
+                latest.send_attempts[decision_key] = attempt
+                latest.updated_at = _iso(self._now())
+                self.store.save(latest)  # Durable checkpoint must complete before the irreversible click.
             active_reason = self._active_block_reason(latest, candidate, decision)
             if active_reason is not None:
                 return self._gate_result(latest, candidate, decision, decision_key, active_reason)
         return self._click_and_verify(latest, candidate, decision, decision_key, attempt)
+
+    def _prepare_action(
+        self, record: ManagedRunRecord, candidate: ThreadCandidate, decision: DraftDecision,
+        decision_key: str, *, phase: str,
+    ) -> tuple[Any, dict[str, Any] | None]:
+        # Only an explicit split port promises that analyze_preparation contains
+        # no GUI mutations. Legacy ports keep their original guarded call.
+        with self.store.state_lease(record.run_id):
+            latest = self.store.load(record.run_id) or record
+            reason = self._active_block_reason(latest, candidate, decision)
+            if reason is not None:
+                return None, self._gate_result(latest, candidate, decision, decision_key, reason)
+            captured = (
+                getattr(self.action, "capture_stage")(candidate, decision.text) if phase == "stage"
+                else getattr(self.action, "capture_click")(candidate)
+            )
+        try:
+            return getattr(self.action, "analyze_preparation")(captured), None
+        except Exception:
+            with self.store.state_lease(record.run_id):
+                latest = self.store.load(record.run_id) or record
+                reason = self._active_block_reason(latest, candidate, decision)
+                if reason is not None:
+                    return None, self._gate_result(latest, candidate, decision, decision_key, reason)
+                getattr(self.action, "reject_preparation")(captured)
+            raise
 
     def _resume_prepared(
         self,
@@ -2282,6 +2487,15 @@ class SendTransaction:
         decision_key: str,
         attempt: dict[str, Any],
     ) -> dict[str, Any]:
+        preparation = None
+        split = getattr(self.action, "supports_split_preparation", False) is True
+        if split:
+            try:
+                preparation, interrupted = self._prepare_action(record, candidate, decision, decision_key, phase="click")
+            except Exception as exc:  # noqa: BLE001 - interpretation precedes the click checkpoint.
+                return self._failed_before_click(record, candidate, decision, decision_key, "click_not_performed", **_action_exception_details(exc))
+            if interrupted is not None:
+                return interrupted
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id)
             if latest is None:
@@ -2305,8 +2519,11 @@ class SendTransaction:
             latest.updated_at = _iso(self._now())
             self.store.save(latest)
             try:
-                with send_quiet_hours_scope(latest.config.authorization.quiet_hours, self._now):
-                    receipt = self.action.click_send(candidate)
+                with send_time_scope(lambda: self._submission_time_block_reason(latest, candidate, decision)):
+                    receipt = (
+                        getattr(self.action, "click_prepared")(candidate, preparation)
+                        if split else self.action.click_send(candidate)
+                    )
             except ManagedClickBlocked as exc:
                 return self._failed_before_click(
                     latest, candidate, decision, decision_key, "click_not_performed",
@@ -2329,10 +2546,11 @@ class SendTransaction:
                     "clicked_at": receipt.clicked_at,
                 }
             )
-            committed = self.store.load(record.run_id) or latest
-            committed.send_attempts[decision_key] = attempt
-            committed.updated_at = _iso(self._now())
-            self.store.save(committed)
+            with self.store.database_operation():
+                committed = self.store.load(record.run_id) or latest
+                committed.send_attempts[decision_key] = attempt
+                committed.updated_at = _iso(self._now())
+                self.store.save(committed)
         return self._verify_post_send(committed, candidate, decision, decision_key, receipt)
 
     def _verify_post_send(
@@ -2385,6 +2603,8 @@ class SendTransaction:
         candidate: ThreadCandidate,
         decision: DraftDecision,
     ) -> str | None:
+        if _lifecycle_change_result(record, self._expected_lifecycle_revision) is not None:
+            return "managed_run_lifecycle_changed"
         if record.status == "paused":
             return "managed_run_paused"
         if record.status == "stopped":
@@ -2403,6 +2623,22 @@ class SendTransaction:
             now=self._now(),
         )
 
+    def _submission_time_block_reason(
+        self, record: ManagedRunRecord, candidate: ThreadCandidate, decision: DraftDecision,
+    ) -> str | None:
+        # The current attempt has already reserved its budget. Recheck all time
+        # gates after slow AX/GUI work without counting that reservation twice.
+        if (self._now() - _parse_iso(record.started_at)).total_seconds() >= record.config.duration_minutes * 60:
+            return "managed_run_duration_elapsed"
+        if self._before_click is not None:
+            reason = self._before_click()
+            if reason is not None:
+                return reason
+        return record.config.authorization.block_reason(
+            app_id=record.config.app_id, runtime=record.config.runtime,
+            target_id=candidate.target_id, action=decision.action, now=self._now(),
+        )
+
     def _gate_result(
         self,
         record: ManagedRunRecord,
@@ -2413,6 +2649,9 @@ class SendTransaction:
     ) -> dict[str, Any]:
         with self.store.state_lease(record.run_id):
             latest = self.store.load(record.run_id) or record
+            changed = _lifecycle_change_result(latest, self._expected_lifecycle_revision)
+            if changed is not None:
+                return changed
             if reason == "managed_run_paused":
                 result = _result(
                     "paused",
@@ -2528,10 +2767,14 @@ class SendTransaction:
             decision_key=decision_key,
             **extra,
         )
-        with self.store.state_lease(record.run_id):
+        with self.store.state_lease(record.run_id), self.store.database_operation():
             latest = self.store.load(record.run_id) or record
             previous = latest.send_attempts.get(decision_key, {})
             previous_status = str(previous.get("status") or "")
+            if status == "failed_before_click" and previous_status not in {"click_started", "click_committed"}:
+                changed = _lifecycle_change_result(latest, self._expected_lifecycle_revision)
+                if changed is not None:
+                    return changed
             latest.send_attempts[decision_key] = {
                 **previous,
                 "decision_key": decision_key,

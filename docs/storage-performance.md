@@ -22,13 +22,20 @@ history with repeated facts and its dependencies cannot be recovered uniquely,
 original evidence and projection; rebuild cannot automatically repair every
 historical ambiguity.
 
-Store/provider reuse is limited to a synchronous ingest, feedback or rebuild
-operation. Nested repository calls share it; the outer operation discards it.
+Store/provider reuse is limited to a synchronous database operation. Ingest,
+feedback and rebuild share it across nested repository calls; the outer
+operation discards it. ManagedRun also uses short scopes for status snapshots,
+tick recovery, result/telemetry recording, non-send state updates and send checkpoints. When a
+state lease is required, it is acquired before the database write lock.
+Observation, decision and action ports execute outside these scopes; neither a
+whole tick nor a whole state lease becomes a database operation. No SQLite
+connection or root write lock is retained across GUI/model work.
+
 There is no process-lifetime key cache. A later operation rediscovers the store
-and key after maintenance such as rekey or delete. Rekey holds the same root
-write lock through key rotation, payload rewrites and WAL checkpoint, so it
-cannot rotate a key while an ingest is still using it. The operation cache also
-keys stores by database file identity.
+and key after maintenance such as rekey, restore or delete. Rekey holds the same
+root write lock through key rotation, payload rewrites and WAL checkpoint, so it
+cannot rotate a key while a database operation is still using it. The operation
+cache also keys stores by database file identity.
 
 ## Synthetic measurements
 
@@ -53,6 +60,27 @@ checks from 32 to 14, and metadata upserts from 192 to 0. With the Darwin provid
 path mocked, availability probes and key lookups each fell from 32 to 1. These
 are call counts, not measured real Keychain latency.
 
+### ManagedRun database operations
+
+On 2026-11-08, the same temporary-store ManagedRun fixtures were measured before
+and after adding short database scopes. The Darwin availability probe and key
+lookup were mocked; all observation, decision and action ports were synthetic.
+These counts do not measure real Keychain latency or end-to-end GUI performance.
+
+| Synthetic tick | Availability probes before | After | Key lookups before | After |
+| --- | ---: | ---: | ---: | ---: |
+| No eligible thread | 15 | 8 | 13 | 8 |
+| One confirmed message | 29 | 16 | 24 | 16 |
+
+A status snapshot uses one availability probe and one key lookup, down from two
+of each. The next status call obtains a fresh provider.
+
+The confirmed case performs one fixture click. The observation/model/action
+boundaries still discard cached providers, so the next database scope loads the
+current key. A concurrent rekey can complete while the synthetic model is
+blocked; the same tick then finishes using the new key. Reusing the same store
+object after rekey or restore also performs a fresh lookup.
+
 With another SQLite connection holding `BEGIN IMMEDIATE`, the old `get_document`
 was still blocked after 250 ms and returned only after the writer released its
 transaction. The updated read completed in 0.20 ms while the writer remained
@@ -63,6 +91,7 @@ open. The regression also exercises list and exists operations under that lock.
 ```bash
 DATING_BOOST_KEY_PROVIDER=local .venv/bin/python -m pytest -q \
   tests/test_memory_storage_performance.py tests/test_memory_replay_order.py \
+  tests/test_managed_storage_operations.py tests/test_managed_run.py \
   tests/test_storage.py tests/test_match_storage_concurrency.py \
   tests/test_production_data.py tests/test_production_reliability.py
 ```
@@ -76,6 +105,11 @@ and delete. The added feedback race test checks both event streams and a single
 projection count. A mocked Keychain race initially allowed rekey to complete
 inside a repository operation using the previous key; its regression now proves
 that rotation waits and both existing and newly written rows remain decryptable.
+
+The ManagedRun regression initially measured 13 and 24 key lookups for the two
+ticks above. It now enforces budgets of 8 and 16, checks that GUI/model/action
+ports receive no operation cache, and verifies fresh providers after concurrent
+rekey and between-operation restore.
 
 Batch atomicity does not make the whole multi-document ingest a single database
 transaction. A crash between its durable steps still requires the existing
