@@ -558,6 +558,10 @@ class ManagedRunStore(Protocol):
     def execution_lease(self, run_id: str) -> ContextManager[bool]:
         raise NotImplementedError
 
+    def runner_lease(self, run_id: str) -> ContextManager[bool]:
+        """Own the foreground wait loop, including time between ticks."""
+        raise NotImplementedError
+
     def state_lease(self, run_id: str) -> ContextManager[bool]:
         """Serialize lifecycle changes with durable send-state mutations."""
         raise NotImplementedError
@@ -570,6 +574,7 @@ class InMemoryManagedRunStore:
         self._events: list[dict[str, Any]] = []
         self._lease_guard = threading.Lock()
         self._lease_locks: dict[str, threading.Lock] = {}
+        self._runner_locks: dict[str, threading.Lock] = {}
         self._state_locks: dict[str, threading.RLock] = {}
 
     def create(self, record: ManagedRunRecord) -> None:
@@ -600,6 +605,17 @@ class InMemoryManagedRunStore:
     def execution_lease(self, run_id: str) -> Iterator[bool]:
         with self._lease_guard:
             lease = self._lease_locks.setdefault(run_id, threading.Lock())
+        acquired = lease.acquire(blocking=False)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                lease.release()
+
+    @contextmanager
+    def runner_lease(self, run_id: str) -> Iterator[bool]:
+        with self._lease_guard:
+            lease = self._runner_locks.setdefault(run_id, threading.Lock())
         acquired = lease.acquire(blocking=False)
         try:
             yield acquired
@@ -694,6 +710,45 @@ class JsonManagedRunStore:
 
     def events(self, run_id: str) -> list[dict[str, Any]]:
         return [event for event in self._storage.read_jsonl(MANAGED_RUN_EVENTS_PATH) if event.get("run_id") == run_id]
+
+    @contextmanager
+    def runner_lease(self, run_id: str) -> Iterator[bool]:
+        # An idle runner must keep its data directory alive without holding the
+        # execution or state locks needed by tick/pause/stop.
+        with storage_lifecycle_lease(self._storage.root, blocking=False) as available:
+            if not available:
+                yield False
+                return
+            digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
+            lock_path = self._storage.root / "managed_run" / "locks" / f"{digest}.runner.lock"
+            with _LEASE_REGISTRY_GUARD:
+                process_lease = _LEASE_LOCKS.setdefault(lock_path, threading.Lock())
+            acquired_in_process = process_lease.acquire(blocking=False)
+            if not acquired_in_process:
+                yield False
+                return
+            descriptor = -1
+            file_lease_acquired = False
+            try:
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+                os.fchmod(descriptor, 0o600)
+                if fcntl is not None:
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        file_lease_acquired = True
+                    except OSError as exc:
+                        if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                            raise
+                        yield False
+                        return
+                yield True
+            finally:
+                if descriptor >= 0:
+                    if file_lease_acquired and fcntl is not None:
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    os.close(descriptor)
+                process_lease.release()
 
     @contextmanager
     def execution_lease(self, run_id: str) -> Iterator[bool]:
@@ -1141,6 +1196,22 @@ class ManagedRun:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds_must_be_positive")
         normalized_run_id = run_id or self.store.current_run_id()
+        if normalized_run_id is None:
+            return _result("not_found", reason="managed_run_not_started")
+        with self.store.runner_lease(normalized_run_id) as acquired:
+            if not acquired:
+                return _result("blocked", reason="managed_run_busy", run_id=normalized_run_id)
+            record = self.store.load(normalized_run_id)
+            if record is None:
+                return _result("not_found", reason="managed_run_not_started")
+            return self._run_wait_loop_under_lease(
+                normalized_run_id, poll_interval_seconds=poll_interval_seconds,
+                lifecycle_revision=record.lifecycle_revision,
+            )
+
+    def _run_wait_loop_under_lease(
+        self, normalized_run_id: str, *, poll_interval_seconds: float, lifecycle_revision: int,
+    ) -> dict[str, Any]:
         # `max_steps` caps retained diagnostics, not the duration of a wait
         # run. A two-hour session should not accumulate thousands of idle
         # payloads in memory or print them all at shutdown.
@@ -1148,7 +1219,7 @@ class ManagedRun:
         processed_count = 0
         poll_count = 0
         while True:
-            result = self.tick(normalized_run_id)
+            result = self.tick(normalized_run_id, expected_lifecycle_revision=lifecycle_revision)
             results.append(result)
             status = str(result.get("status") or "")
             reason = str(result.get("reason") or "")
@@ -1166,6 +1237,7 @@ class ManagedRun:
                 interrupted = self._wait_sleep_result(
                     normalized_run_id,
                     poll_interval_seconds,
+                    lifecycle_revision=lifecycle_revision,
                 )
                 if interrupted is not None:
                     results.append(interrupted)
@@ -1178,6 +1250,7 @@ class ManagedRun:
                 interrupted = self._wait_sleep_result(
                     normalized_run_id,
                     poll_interval_seconds,
+                    lifecycle_revision=lifecycle_revision,
                 )
                 if interrupted is not None:
                     results.append(interrupted)
@@ -1199,21 +1272,33 @@ class ManagedRun:
 
     def _wait_sleep_result(
         self,
-        run_id: str | None,
+        run_id: str,
         poll_interval_seconds: float,
+        *,
+        lifecycle_revision: int,
     ) -> dict[str, Any] | None:
+        details: dict[str, Any] = {}
         try:
             self._sleep(poll_interval_seconds)
         except KeyboardInterrupt:
-            return self.pause(run_id, reason="managed_run_interrupted")
+            reason = "managed_run_interrupted"
         except Exception as exc:  # noqa: BLE001 - an unusable wait loop must not remain active.
-            return {
-                **self.pause(run_id, reason="managed_run_wait_sleep_failed"),
-                "error_type": type(exc).__name__,
-            }
-        return None
+            reason = "managed_run_wait_sleep_failed"
+            details["error_type"] = type(exc).__name__
+        else:
+            return None
+        with self.store.state_lease(run_id):
+            latest = self.store.load(run_id)
+            if latest is None:
+                return _result("not_found", reason="managed_run_not_started")
+            changed = _lifecycle_change_result(latest, lifecycle_revision)
+            if changed is not None:
+                return changed
+            return {**self.pause(run_id, reason=reason), **details}
 
-    def tick(self, run_id: str | None = None) -> dict[str, Any]:
+    def tick(
+        self, run_id: str | None = None, *, expected_lifecycle_revision: int | None = None,
+    ) -> dict[str, Any]:
         normalized_run_id = run_id or self.store.current_run_id()
         if normalized_run_id is None:
             self._discovery_batch = None
@@ -1233,7 +1318,9 @@ class ManagedRun:
             }
             initial = self.store.load(normalized_run_id)
             try:
-                result = self._tick_with_lease(normalized_run_id, profile=profile)
+                result = self._tick_with_lease(
+                    normalized_run_id, profile=profile, expected_lifecycle_revision=expected_lifecycle_revision,
+                )
             except BaseException:
                 self._discovery_batch = None
                 raise
@@ -1254,13 +1341,21 @@ class ManagedRun:
                 )
             return result
 
-    def _tick_with_lease(self, run_id: str, *, profile: dict[str, Any]) -> dict[str, Any]:
+    def _tick_with_lease(
+        self, run_id: str, *, profile: dict[str, Any], expected_lifecycle_revision: int | None = None,
+    ) -> dict[str, Any]:
         record = self.store.load(run_id)
         if record is None:
             return _result("not_found", reason="managed_run_not_started")
+        changed = _lifecycle_change_result(record, expected_lifecycle_revision)
+        if changed is not None:
+            return changed
         unfinished_click = self._reconcile_unfinished_click(record)
         interrupted_burst = self._reconcile_interrupted_bursts(record)
         record = self.store.load(run_id) or record
+        changed = _lifecycle_change_result(record, expected_lifecycle_revision)
+        if changed is not None:
+            return changed
         unknown_pause = None
         if record.status == "active" and _has_unresolved_send(record, self.store):
             unknown_pause = self.pause(record.run_id, reason="unknown_after_click")
