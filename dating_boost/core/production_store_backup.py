@@ -6,10 +6,11 @@ import os
 import sqlite3
 import tempfile
 import zipfile
+from contextlib import closing, nullcontext
 from pathlib import Path
 from typing import Any
 
-from dating_boost.core.encryption import DataKeyProvider, EncryptionError, LOCAL_KEY_NAME
+from dating_boost.core.encryption import DataKeyProvider, EncryptionError, LOCAL_KEY_NAME, PayloadCipher
 from dating_boost.core.storage import storage_write_lock
 from dating_boost.core.storage_lifecycle import storage_lifecycle_lease
 from dating_boost.core.production_store_common import (
@@ -90,39 +91,51 @@ class ProductionStoreBackupMixin:
         }
 
     def backup(self, output: Path, *, recovery_passphrase: str | None = None) -> dict[str, Any]:
-        migration_status = self._migration_status()
-        if migration_status.get("status") != "ok":
-            return {
-                "schema_version": DATA_STORE_SCHEMA_VERSION,
-                "status": "blocked",
-                "reason": "needs_migration",
-                "db_path": str(self.db_path),
-            }
-        if not recovery_passphrase:
-            return {
-                "schema_version": DATA_STORE_SCHEMA_VERSION,
-                "status": "blocked",
-                "reason": "recovery_passphrase_required",
-                "db_path": str(self.db_path),
-            }
         output = output.resolve()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as conn:
-            conn.execute("PRAGMA wal_checkpoint(FULL)")
-            metadata = dict(conn.execute("SELECT key, value FROM metadata").fetchall())
-        manifest = {
-            "schema_version": DATA_STORE_SCHEMA_VERSION,
-            "backup_format": "dating_boost_sqlite_zip",
-            "created_at": _now_iso(),
-            "encrypted": True,
-            "db_file": PRODUCTION_DB_NAME,
-            "metadata": metadata,
-            "key_recovery": "passphrase",
-            "recovery_key": self._cipher.encrypt_recovery_key(recovery_passphrase),
-        }
-        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
-            archive.write(self.db_path, PRODUCTION_DB_NAME)
+        # The snapshot lives outside the replaceable root. Only capture holds the
+        # root write/lifecycle lease; compression can proceed during maintenance.
+        with tempfile.TemporaryDirectory(prefix="dating-boost-backup-") as temp_dir:
+            snapshot_path = Path(temp_dir) / PRODUCTION_DB_NAME
+            with storage_write_lock(self.root):
+                migration_status = self._migration_status()
+                if migration_status.get("status") != "ok":
+                    return {
+                        "schema_version": DATA_STORE_SCHEMA_VERSION,
+                        "status": "blocked",
+                        "reason": "needs_migration",
+                        "db_path": str(self.db_path),
+                    }
+                if not recovery_passphrase:
+                    return {
+                        "schema_version": DATA_STORE_SCHEMA_VERSION,
+                        "status": "blocked",
+                        "reason": "recovery_passphrase_required",
+                        "db_path": str(self.db_path),
+                    }
+                # A caller's provider may have cached a key before waiting for a
+                # concurrent rekey. Bind anew inside the same epoch as the DB copy.
+                cipher = PayloadCipher(self.root, key_provider=self._cipher.provider.provider_name)
+                with self._connect() as conn, closing(sqlite3.connect(snapshot_path)) as snapshot:
+                    conn.backup(snapshot)
+                    metadata = dict(snapshot.execute("SELECT key, value FROM metadata").fetchall())
+                manifest = {
+                    "schema_version": DATA_STORE_SCHEMA_VERSION,
+                    "backup_format": "dating_boost_sqlite_zip",
+                    "created_at": _now_iso(),
+                    "encrypted": True,
+                    "db_file": PRODUCTION_DB_NAME,
+                    "metadata": metadata,
+                    "key_recovery": "passphrase",
+                    "recovery_key": cipher.encrypt_recovery_key(recovery_passphrase),
+                }
+            # An archive placed inside the store must not be unlinked by root
+            # replacement while open. This shared lease still permits rekey.
+            output_lease = storage_lifecycle_lease(self.root) if output.is_relative_to(self.root) else nullcontext()
+            with output_lease:
+                output.parent.mkdir(parents=True, exist_ok=True)
+                with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                    archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
+                    archive.write(snapshot_path, PRODUCTION_DB_NAME)
         return {
             "schema_version": DATA_STORE_SCHEMA_VERSION,
             "status": "ok",
