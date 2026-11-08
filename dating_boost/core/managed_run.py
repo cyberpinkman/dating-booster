@@ -643,15 +643,23 @@ class JsonManagedRunStore:
         try:
             self._storage.write_json(path, record.to_dict())
         except Exception:
-            # Ordinary write failures restore a usable index. A hard process
-            # death is recovered by ManagedRun.start when the target is absent.
-            self._storage.write_json(
-                MANAGED_RUN_INDEX_PATH,
-                {
-                    "schema_version": MANAGED_RUN_SCHEMA_VERSION,
-                    "current_run_id": previous_current_run_id,
-                },
-            )
+            # Atomic replacement / SQLite commit can succeed before a later
+            # fsync or legacy cleanup fails. Never unindex a committed active
+            # run. If even its existence is unknown, retain the published
+            # pointer and original error; start can recover an absent target.
+            absent = False
+            try:
+                absent = not self._storage.exists(path)
+            except Exception:
+                pass
+            if absent:
+                self._storage.write_json(
+                    MANAGED_RUN_INDEX_PATH,
+                    {
+                        "schema_version": MANAGED_RUN_SCHEMA_VERSION,
+                        "current_run_id": previous_current_run_id,
+                    },
+                )
             raise
 
     def load(self, run_id: str) -> ManagedRunRecord | None:
